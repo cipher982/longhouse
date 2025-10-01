@@ -13,6 +13,7 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
+from zerg.schemas.workflow import ExecutionStatusResponse, ExecutionLogsResponse
 from zerg.services.workflow_engine import workflow_engine
 from zerg.services.workflow_scheduler import workflow_scheduler
 from zerg.utils.time import utc_now_naive
@@ -38,7 +39,7 @@ class ScheduleWorkflowPayload(BaseModel):
     trigger_config: dict = Field(default_factory=dict)
 
 
-@router.post("/by-workflow/{workflow_id}/reserve")
+@router.post("/by-workflow/{workflow_id}/reserve", response_model=ExecutionStatusResponse)
 async def reserve_workflow_execution(
     workflow_id: int,
     db: Session = Depends(get_db),
@@ -55,10 +56,14 @@ async def reserve_workflow_execution(
     # Create execution record with "waiting" phase (reserved for execution)
     execution = crud.create_workflow_execution(db, workflow_id=workflow_id, phase="waiting", triggered_by="manual")
 
-    return {"execution_id": execution.id, "phase": "waiting", "result": None}
+    return ExecutionStatusResponse(
+        execution_id=execution.id,
+        phase="waiting",
+        result=None
+    )
 
 
-@router.post("/by-workflow/{workflow_id}/start")
+@router.post("/by-workflow/{workflow_id}/start", response_model=ExecutionStatusResponse)
 async def start_workflow_execution(
     workflow_id: int,
     db: Session = Depends(get_db),
@@ -75,10 +80,14 @@ async def start_workflow_execution(
     # Execute workflow with LangGraph engine (non-blocking)
     execution_id = await workflow_engine.execute_workflow(workflow_id)
 
-    return {"execution_id": execution_id, "phase": "running", "result": None}
+    return ExecutionStatusResponse(
+        execution_id=execution_id,
+        phase="running",
+        result=None
+    )
 
 
-@router.post("/executions/{execution_id}/start")
+@router.post("/executions/{execution_id}/start", response_model=ExecutionStatusResponse)
 async def start_reserved_execution(
     execution_id: int,
     db: Session = Depends(get_db),
@@ -104,7 +113,11 @@ async def start_reserved_execution(
     # Start execution using the proper task tracking
     workflow_engine.start_workflow_in_background(execution.workflow_id, execution_id)
 
-    return {"execution_id": execution_id, "phase": "running", "result": None}
+    return ExecutionStatusResponse(
+        execution_id=execution_id,
+        phase="running",
+        result=None
+    )
 
 
 # Backward compatibility - DEPRECATED (place after specific routes to avoid conflicts)
@@ -138,7 +151,7 @@ async def start_workflow_execution_deprecated(
     return await start_workflow_execution(workflow_id, db, current_user)
 
 
-@router.get("/{execution_id}/status")
+@router.get("/{execution_id}/status", response_model=ExecutionStatusResponse)
 def get_execution_status(
     execution_id: int,
     db: Session = Depends(get_db),
@@ -150,7 +163,11 @@ def get_execution_status(
     execution = crud.get_workflow_execution(db, execution_id)
     if not execution or execution.workflow.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Execution not found")
-    return {"phase": execution.phase, "result": execution.result}
+    return ExecutionStatusResponse(
+        execution_id=execution.id,
+        phase=execution.phase,
+        result=execution.result
+    )
 
 
 @router.post("/{execution_id}/await")
@@ -189,7 +206,7 @@ async def await_execution_completion(
     return {"execution_id": execution_id, "phase": execution.phase, "result": execution.result, "completed": True}
 
 
-@router.get("/{execution_id}/logs")
+@router.get("/{execution_id}/logs", response_model=ExecutionLogsResponse)
 def get_execution_logs(
     execution_id: int,
     db: Session = Depends(get_db),
@@ -201,7 +218,7 @@ def get_execution_logs(
     execution = crud.get_workflow_execution(db, execution_id)
     if not execution or execution.workflow.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Execution not found")
-    return {"logs": execution.log}
+    return ExecutionLogsResponse(logs=execution.log or "")
 
 
 @router.get("/history/{workflow_id}")

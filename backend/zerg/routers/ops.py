@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.models.models import User as UserModel
+from zerg.schemas.ops import OpsSummary, TimeSeriesResponse, TopAgentsResponse
 from zerg.services.ops_service import get_summary as svc_get_summary
 from zerg.services.ops_service import get_timeseries as svc_get_timeseries
 from zerg.services.ops_service import get_top_agents as svc_get_top_agents
@@ -18,13 +19,13 @@ from zerg.services.ops_service import get_top_agents as svc_get_top_agents
 router = APIRouter(prefix="/ops", tags=["ops"], dependencies=[Depends(require_admin)])
 
 
-@router.get("/summary")
+@router.get("/summary", response_model=OpsSummary)
 def get_summary(current_user: UserModel = Depends(require_admin), db: Session = Depends(get_db)):
     """Return primary KPIs for the Ops dashboard (admin-only)."""
     return svc_get_summary(db, current_user)
 
 
-@router.get("/timeseries")
+@router.get("/timeseries", response_model=TimeSeriesResponse)
 def get_timeseries(
     metric: str = Query(
         ...,
@@ -34,12 +35,13 @@ def get_timeseries(
     db: Session = Depends(get_db),
 ):
     try:
-        return svc_get_timeseries(db, metric=metric, window=window)
+        series_data = svc_get_timeseries(db, metric=metric, window=window)
+        return TimeSeriesResponse(series=series_data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/top")
+@router.get("/top", response_model=TopAgentsResponse)
 def get_top(
     kind: str = Query("agents", pattern="^agents$"),
     window: str = Query("today", pattern="^(today|7d|30d)$"),
@@ -49,6 +51,7 @@ def get_top(
     if kind != "agents":
         raise HTTPException(status_code=400, detail="Only kind=agents supported")
     try:
-        return svc_get_top_agents(db, window=window, limit=limit)
+        top_agents = svc_get_top_agents(db, window=window, limit=limit)
+        return TopAgentsResponse(top_agents=top_agents)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -9,12 +9,26 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Literal
+from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
+
+
+# Workflow Execution Response Models
+class ExecutionStatusResponse(BaseModel):
+    """Response for workflow execution status."""
+    execution_id: int
+    phase: str
+    result: Optional[Any] = None
+
+
+class ExecutionLogsResponse(BaseModel):
+    """Response for workflow execution logs."""
+    logs: str
 
 
 class Position(BaseModel):
