@@ -80,16 +80,16 @@ services:
           memory: 512M
           cpus: '0.25'
 
-  # Frontend Service
+  # Frontend Service - React UI (switched from Rust/WASM)
   frontend:
     build:
-      context: frontend
-      dockerfile: ../docker/frontend.dockerfile
+      context: frontend-web
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'AI Agent Platform' && curl -f http://localhost:80/agent_platform_frontend.js > /dev/null"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'AI Agent Platform'"]
       interval: 30s
       timeout: 10s
       retries: 3
