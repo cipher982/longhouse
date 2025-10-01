@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useWebSocket } from "../lib/useWebSocket";
 import {
   ReactFlow,
   Background,
@@ -23,12 +24,18 @@ import {
   fetchAgents,
   fetchCurrentWorkflow,
   updateWorkflowCanvas,
+  startWorkflowExecution,
+  getExecutionStatus,
+  getExecutionLogs,
+  cancelExecution,
   type AgentSummary,
   type Workflow,
   type WorkflowData,
   type WorkflowDataInput,
   type WorkflowNode,
   type WorkflowEdge,
+  type ExecutionStatus,
+  type ExecutionLogs,
 } from "../services/api";
 
 // Custom node component for agents
@@ -122,6 +129,11 @@ export default function CanvasPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Execution state
+  const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
+  const [executionLogs, setExecutionLogs] = useState<string>("");
+  const [showLogs, setShowLogs] = useState(false);
+
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
     queryKey: ["agents", { scope: "my" }],
@@ -172,6 +184,67 @@ export default function CanvasPage() {
   React.useEffect(() => {
     debouncedSave(nodes, edges);
   }, [nodes, edges, debouncedSave]);
+
+  // Workflow execution mutations
+  const executeWorkflowMutation = useMutation({
+    mutationFn: async () => {
+      if (!workflow?.id) {
+        throw new Error("No workflow loaded");
+      }
+      return startWorkflowExecution(workflow.id);
+    },
+    onSuccess: (execution) => {
+      setCurrentExecution(execution);
+      toast.success("Workflow execution started!");
+      setShowLogs(true);
+    },
+    onError: (error: any) => {
+      toast.error(`Failed to start workflow: ${error.message || "Unknown error"}`);
+    },
+  });
+
+  const cancelExecutionMutation = useMutation({
+    mutationFn: async () => {
+      if (!currentExecution?.execution_id) {
+        throw new Error("No execution to cancel");
+      }
+      return cancelExecution(currentExecution.execution_id, "Cancelled by user");
+    },
+    onSuccess: () => {
+      toast.success("Workflow execution cancelled");
+      setCurrentExecution(null);
+    },
+    onError: (error: any) => {
+      toast.error(`Failed to cancel execution: ${error.message || "Unknown error"}`);
+    },
+  });
+
+  // WebSocket for real-time execution updates
+  useWebSocket(currentExecution?.execution_id != null, {
+    includeAuth: true,
+    invalidateQueries: [],
+    onMessage: async () => {
+      // Fetch updated execution status when we receive WebSocket messages
+      if (currentExecution?.execution_id) {
+        try {
+          const updatedStatus = await getExecutionStatus(currentExecution.execution_id);
+          setCurrentExecution(updatedStatus);
+
+          // If execution is finished, fetch logs
+          if (updatedStatus.phase === 'finished' || updatedStatus.phase === 'cancelled') {
+            try {
+              const logs = await getExecutionLogs(currentExecution.execution_id);
+              setExecutionLogs(logs.logs);
+            } catch (error) {
+              console.error("Failed to fetch execution logs:", error);
+            }
+          }
+        } catch (error) {
+          console.error("Failed to fetch execution status:", error);
+        }
+      }
+    },
+  });
 
   // Handle connection creation
   const onConnect: OnConnect = useCallback(
@@ -268,6 +341,54 @@ export default function CanvasPage() {
         </div>
 
         <div className="main-content-area">
+          {/* Execution Controls */}
+          <div className="execution-controls">
+            <div className="execution-buttons">
+              <button
+                className={`run-button ${executeWorkflowMutation.isPending ? 'loading' : ''}`}
+                onClick={() => executeWorkflowMutation.mutate()}
+                disabled={executeWorkflowMutation.isPending || !workflow?.id || (currentExecution?.phase === 'running')}
+                title="Run Workflow"
+              >
+                {executeWorkflowMutation.isPending ? '⏳' : '▶️'} Run
+              </button>
+
+              {currentExecution?.phase === 'running' && (
+                <button
+                  className="cancel-button"
+                  onClick={() => cancelExecutionMutation.mutate()}
+                  disabled={cancelExecutionMutation.isPending}
+                  title="Cancel Execution"
+                >
+                  ⏹️ Cancel
+                </button>
+              )}
+
+              {currentExecution && (
+                <button
+                  className="logs-button"
+                  onClick={() => setShowLogs(!showLogs)}
+                  title="Toggle Execution Logs"
+                >
+                  📋 Logs {showLogs ? '▼' : '▶️'}
+                </button>
+              )}
+            </div>
+
+            {/* Execution Status */}
+            {currentExecution && (
+              <div className={`execution-status execution-status--${currentExecution.phase}`}>
+                <span className="execution-phase">
+                  {currentExecution.phase === 'waiting' && '⏳ Waiting'}
+                  {currentExecution.phase === 'running' && '🔄 Running'}
+                  {currentExecution.phase === 'finished' && '✅ Finished'}
+                  {currentExecution.phase === 'cancelled' && '❌ Cancelled'}
+                </span>
+                <span className="execution-id">ID: {currentExecution.execution_id}</span>
+              </div>
+            )}
+          </div>
+
           <div className="canvas-workspace" data-testid="canvas-workspace">
             <div style={{ width: '100%', height: '100%', minHeight: '600px' }}>
               <ReactFlow
@@ -323,6 +444,39 @@ export default function CanvasPage() {
           </div>
         </div>
       </div>
+
+      {/* Execution Logs Panel */}
+      {showLogs && currentExecution && (
+        <div className="execution-logs-panel">
+          <div className="logs-header">
+            <h4>Execution Logs</h4>
+            <button
+              className="close-logs"
+              onClick={() => setShowLogs(false)}
+              title="Close Logs"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="logs-content">
+            <div className="execution-info">
+              <div>Execution ID: {currentExecution.execution_id}</div>
+              <div>Status: {currentExecution.phase}</div>
+              {currentExecution.result !== undefined && currentExecution.result !== null && (
+                <div>
+                  Result: <pre>{String(JSON.stringify(currentExecution.result, null, 2) || 'null')}</pre>
+                </div>
+              )}
+            </div>
+            <div className="logs-output">
+              <h5>Logs:</h5>
+              <pre className="logs-text">
+                {executionLogs || "No logs available yet..."}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
 
       {(isLoading || saveWorkflowMutation.isPending) && (
         <div className="saving-indicator">

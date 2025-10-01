@@ -34,6 +34,28 @@ export type WorkflowDataInput = Schemas["WorkflowData-Input"];
 export type WorkflowNode = Schemas["WorkflowNode"];
 export type WorkflowEdge = Schemas["WorkflowEdge"];
 
+// Workflow Execution Types
+export interface WorkflowExecution {
+  id: number;
+  workflow_id: number;
+  phase: 'waiting' | 'running' | 'finished' | 'cancelled';
+  result?: unknown;
+  log?: string;
+  started_at?: string;
+  finished_at?: string;
+  triggered_by?: string;
+}
+
+export interface ExecutionStatus {
+  execution_id: number;
+  phase: string;
+  result?: unknown;
+}
+
+export interface ExecutionLogs {
+  logs: string;
+}
+
 type AgentCreate = Schemas["AgentCreate"];
 type AgentUpdate = Schemas["AgentUpdate"];
 type ThreadCreate = Schemas["ThreadCreate"];
@@ -307,4 +329,42 @@ export async function updateWorkflowCanvas(canvas: WorkflowDataInput): Promise<U
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+// Workflow Execution API functions
+export async function reserveWorkflowExecution(workflowId: number): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>(`/workflow-executions/by-workflow/${workflowId}/reserve`, {
+    method: "POST",
+  });
+}
+
+export async function startWorkflowExecution(workflowId: number): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>(`/workflow-executions/by-workflow/${workflowId}/start`, {
+    method: "POST",
+  });
+}
+
+export async function startReservedExecution(executionId: number): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>(`/workflow-executions/executions/${executionId}/start`, {
+    method: "POST",
+  });
+}
+
+export async function getExecutionStatus(executionId: number): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>(`/workflow-executions/${executionId}/status`);
+}
+
+export async function getExecutionLogs(executionId: number): Promise<ExecutionLogs> {
+  return request<ExecutionLogs>(`/workflow-executions/${executionId}/logs`);
+}
+
+export async function cancelExecution(executionId: number, reason: string): Promise<void> {
+  return request<void>(`/workflow-executions/${executionId}/cancel`, {
+    method: "PATCH",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function getExecutionHistory(workflowId: number): Promise<WorkflowExecution[]> {
+  return request<WorkflowExecution[]>(`/workflow-executions/history/${workflowId}`);
 }

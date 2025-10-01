@@ -4,8 +4,18 @@ import Layout from "../components/Layout";
 import DashboardPage from "../pages/DashboardPage";
 import ChatPage from "../pages/ChatPage";
 import CanvasPage from "../pages/CanvasPage";
+import ProfilePage from "../pages/ProfilePage";
+import AdminPage from "../pages/AdminPage";
+import { AuthGuard } from "../lib/auth";
+import { ErrorBoundary } from "../components/ErrorBoundary";
+import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
+import config from "../lib/config";
 
 export default function App() {
+  // Performance monitoring
+  usePerformanceMonitoring('App');
+  useBundleSizeWarning();
+
   useEffect(() => {
     // Signal to Playwright/legacy helpers that the React app finished booting.
     if (typeof window !== "undefined") {
@@ -14,11 +24,62 @@ export default function App() {
   }, []);
 
   const routes = useRoutes([
-    { path: "/dashboard", element: <DashboardPage /> },
-    { path: "/canvas", element: <CanvasPage /> },
-    { path: "/chat/:agentId?/:threadId?", element: <ChatPage /> },
-    { path: "*", element: <DashboardPage /> },
+    {
+      path: "/dashboard",
+      element: (
+        <ErrorBoundary>
+          <DashboardPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/canvas",
+      element: (
+        <ErrorBoundary>
+          <CanvasPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/chat/:agentId?/:threadId?",
+      element: (
+        <ErrorBoundary>
+          <ChatPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/profile",
+      element: (
+        <ErrorBoundary>
+          <ProfilePage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/admin",
+      element: (
+        <ErrorBoundary>
+          <AdminPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "*",
+      element: (
+        <ErrorBoundary>
+          <DashboardPage />
+        </ErrorBoundary>
+      )
+    },
   ]);
 
-  return <Layout>{routes}</Layout>;
+  // Get Google Client ID from environment or use default from .env
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "REDACTED_OAUTH_CLIENT.apps.googleusercontent.com";
+
+  return (
+    <AuthGuard clientId={googleClientId}>
+      <Layout>{routes}</Layout>
+    </AuthGuard>
+  );
 }

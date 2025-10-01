@@ -14,7 +14,11 @@ import {
   Thread,
   ThreadMessage,
   updateThread,
+  fetchWorkflows,
+  startWorkflowExecution,
+  type Workflow,
 } from "../services/api";
+import { useWebSocket } from "../lib/useWebSocket";
 
 function useRequiredNumber(param?: string): number | null {
   if (!param) return null;
@@ -95,6 +99,10 @@ export default function ChatPage() {
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
 
+  // Advanced features state
+  const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
+  const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
+
   useEffect(() => {
     if (threadIdParam !== selectedThreadId) {
       setSelectedThreadId(threadIdParam ?? null);
@@ -121,6 +129,13 @@ export default function ChatPage() {
       return fetchThreads(agentId);
     },
     enabled: agentId != null,
+  });
+
+  // Fetch workflows for execution in chat
+  const workflowsQuery = useQuery<Workflow[]>({
+    queryKey: ["workflows"],
+    queryFn: fetchWorkflows,
+    staleTime: 60000, // Cache for 1 minute
   });
 
   const effectiveThreadId = useMemo(() => {
@@ -210,6 +225,25 @@ export default function ChatPage() {
     },
   });
 
+  // Workflow execution mutation
+  const executeWorkflowMutation = useMutation({
+    mutationFn: ({ workflowId }: { workflowId: number }) => startWorkflowExecution(workflowId),
+    onSuccess: (result) => {
+      toast.success(`Workflow execution started! ID: ${result.execution_id}`);
+      setShowWorkflowPanel(false);
+      // Send a message to the chat about the workflow execution
+      if (effectiveThreadId) {
+        sendMutation.mutate({
+          threadId: effectiveThreadId,
+          content: `🔄 Started workflow execution #${result.execution_id} (Phase: ${result.phase})`,
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to execute workflow: ${error.message}`);
+    },
+  });
+
   const [draft, setDraft] = useState("");
 
   const renameThreadMutation = useMutation<
@@ -284,28 +318,22 @@ export default function ChatPage() {
     }
   }, [navigate]);
 
-  useEffect(() => {
-    const base = resolveWsBase();
-    const url = new URL("/api/ws", base);
-    const token = localStorage.getItem("zerg_jwt");
-    if (token) {
-      url.searchParams.set("token", token);
+  // Use unified WebSocket hook for real-time chat updates
+  const wsQueries = useMemo(() => {
+    const queries = [];
+    if (agentId != null) {
+      queries.push(["threads", agentId]);
     }
-    const workerId = window.__TEST_WORKER_ID__;
-    if (workerId !== undefined) {
-      url.searchParams.set("worker", String(workerId));
+    if (effectiveThreadId != null) {
+      queries.push(["thread-messages", effectiveThreadId]);
     }
-    const ws = new WebSocket(url.toString());
-    ws.onmessage = () => {
-      queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
-      if (effectiveThreadId != null) {
-        queryClient.invalidateQueries({ queryKey: ["thread-messages", effectiveThreadId] });
-      }
-    };
-    return () => {
-      ws.close();
-    };
-  }, [agentId, effectiveThreadId, queryClient]);
+    return queries;
+  }, [agentId, effectiveThreadId]);
+
+  useWebSocket(agentId != null, {
+    includeAuth: true,
+    invalidateQueries: wsQueries,
+  });
 
   useEffect(() => {
     if (agentId != null && effectiveThreadId != null) {
@@ -435,6 +463,51 @@ export default function ChatPage() {
     } catch (error) {
       // Error handling is now done in the mutation's onError callback
     }
+  };
+
+  // Message action handlers
+  const handleCopyMessage = (message: ThreadMessage) => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      toast.success("Message copied to clipboard");
+    }).catch(() => {
+      toast.error("Failed to copy message");
+    });
+  };
+
+  const handleExportChat = () => {
+    if (messages.length === 0) {
+      toast.error("No messages to export");
+      return;
+    }
+
+    const chatHistory = messages
+      .filter(msg => msg.role !== "system")
+      .map(msg => {
+        const timestamp = new Date(msg.timestamp || msg.created_at || "").toLocaleString();
+        return `[${timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`;
+      })
+      .join("\n\n");
+
+    const blob = new Blob([chatHistory], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `chat-history-${effectiveThreadId || 'unknown'}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success("Chat history exported");
+  };
+
+  // Workflow execution handler
+  const handleExecuteWorkflow = () => {
+    if (!selectedWorkflow) {
+      toast.error("Please select a workflow");
+      return;
+    }
+    executeWorkflowMutation.mutate({ workflowId: selectedWorkflow });
   };
 
   // Scroll to bottom when messages change
@@ -631,7 +704,19 @@ export default function ChatPage() {
                         data-role={`chat-message-${msg.role}`}
                       >
                         <div className="message-content preserve-whitespace">{msg.content}</div>
-                        <div className="message-time">{formatTimestamp(msg.timestamp)}</div>
+                        <div className="message-footer">
+                          <div className="message-time">{formatTimestamp(msg.timestamp)}</div>
+                          <div className="message-actions">
+                            <button
+                              type="button"
+                              className="message-action-btn"
+                              onClick={() => handleCopyMessage(msg)}
+                              title="Copy message"
+                            >
+                              📋
+                            </button>
+                          </div>
+                        </div>
                       </article>
                     </div>
                     {msg.role === "assistant" && toolMessages?.map(toolMsg => (
@@ -650,25 +735,107 @@ export default function ChatPage() {
         </section>
       </div>
 
-      <form className="chat-input-area" onSubmit={handleSend}>
-        <input
-          type="text"
-          value={draft}
-          onChange={(evt) => setDraft(evt.target.value)}
-          placeholder={effectiveThreadId ? "Type your message..." : "Select a thread to start chatting"}
-          className="chat-input"
-          data-testid="chat-input"
-          disabled={!effectiveThreadId}
-        />
-        <button
-          type="submit"
-          className={clsx("send-button", { disabled: !effectiveThreadId })}
-          disabled={sendMutation.isPending || !draft.trim() || !effectiveThreadId}
-          data-testid="send-message-btn"
-        >
-          {sendMutation.isPending ? "Sending…" : "Send"}
-        </button>
-      </form>
+      {/* Enhanced Chat Input Area */}
+      <div className="chat-input-wrapper">
+        {/* Chat Tools Bar */}
+        <div className="chat-tools">
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={() => setShowWorkflowPanel(!showWorkflowPanel)}
+            title="Execute Workflow"
+          >
+            🔧 Workflows
+          </button>
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={handleExportChat}
+            disabled={messages.length === 0}
+            title="Export Chat History"
+          >
+            📄 Export
+          </button>
+        </div>
+
+        <form className="chat-input-area" onSubmit={handleSend}>
+          <input
+            type="text"
+            value={draft}
+            onChange={(evt) => setDraft(evt.target.value)}
+            placeholder={effectiveThreadId ? "Type your message..." : "Select a thread to start chatting"}
+            className="chat-input"
+            data-testid="chat-input"
+            disabled={!effectiveThreadId}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend(e as any);
+              }
+            }}
+          />
+          <button
+            type="submit"
+            className={clsx("send-button", { disabled: !effectiveThreadId })}
+            disabled={sendMutation.isPending || !draft.trim() || !effectiveThreadId}
+            data-testid="send-message-btn"
+          >
+            {sendMutation.isPending ? "Sending…" : "Send"}
+          </button>
+        </form>
+
+        {/* Workflow Execution Panel */}
+        {showWorkflowPanel && (
+          <div className="workflow-panel">
+            <div className="workflow-panel-header">
+              <h4>Execute Workflow</h4>
+              <button
+                type="button"
+                className="close-panel-btn"
+                onClick={() => setShowWorkflowPanel(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="workflow-panel-content">
+              {workflowsQuery.isLoading ? (
+                <div>Loading workflows...</div>
+              ) : workflowsQuery.data?.length ? (
+                <>
+                  <div className="workflow-selector">
+                    <label htmlFor="workflow-select">Select Workflow:</label>
+                    <select
+                      id="workflow-select"
+                      value={selectedWorkflow || ""}
+                      onChange={(e) => setSelectedWorkflow(Number(e.target.value) || null)}
+                    >
+                      <option value="">Choose a workflow...</option>
+                      {workflowsQuery.data.map((workflow) => (
+                        <option key={workflow.id} value={workflow.id}>
+                          {workflow.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    className="execute-workflow-btn"
+                    onClick={handleExecuteWorkflow}
+                    disabled={!selectedWorkflow || executeWorkflowMutation.isPending}
+                  >
+                    {executeWorkflowMutation.isPending ? "Executing..." : "▶️ Execute"}
+                  </button>
+                </>
+              ) : (
+                <div className="no-workflows">
+                  <p>No workflows available</p>
+                  <small>Create workflows in the Canvas Editor to execute them here</small>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

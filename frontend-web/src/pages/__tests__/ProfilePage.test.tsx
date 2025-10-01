@@ -1,0 +1,147 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import ProfilePage from "../ProfilePage";
+
+// Mock the auth hook
+const mockUser = {
+  id: 1,
+  email: "test@example.com",
+  display_name: "Test User",
+  avatar_url: "https://example.com/avatar.jpg",
+  is_active: true,
+  created_at: "2024-01-01T00:00:00Z",
+  last_login: "2024-01-02T00:00:00Z",
+};
+
+const mockAuth = {
+  user: mockUser,
+  isAuthenticated: true,
+  isLoading: false,
+  login: vi.fn(),
+  logout: vi.fn(),
+  getToken: vi.fn(() => "mock-token"),
+};
+
+vi.mock("../../lib/auth", () => ({
+  useAuth: () => mockAuth,
+}));
+
+// Mock fetch for API calls
+const mockFetch = vi.fn();
+global.fetch = mockFetch;
+
+function renderProfilePage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ProfilePage />
+    </QueryClientProvider>
+  );
+}
+
+describe("ProfilePage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Mock successful update response
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ...mockUser, display_name: "Updated Name" }),
+    });
+  });
+
+  it("renders user profile form with current data", async () => {
+    renderProfilePage();
+
+    expect(screen.getByText("User Profile")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Test User")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("test@example.com")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("https://example.com/avatar.jpg")).toBeInTheDocument();
+  });
+
+  it("allows updating display name", async () => {
+    renderProfilePage();
+    const user = userEvent.setup();
+
+    const displayNameInput = screen.getByDisplayValue("Test User");
+    await user.clear(displayNameInput);
+    await user.type(displayNameInput, "Updated Name");
+
+    const saveButton = screen.getByText("Save Changes");
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/users/me",
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.objectContaining({
+            "Authorization": "Bearer mock-token",
+            "Content-Type": "application/json",
+          }),
+          body: JSON.stringify({
+            display_name: "Updated Name",
+          }),
+        })
+      );
+    });
+  });
+
+  it("shows account information", () => {
+    renderProfilePage();
+
+    expect(screen.getByText("Account Information")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument(); // User ID
+    expect(screen.getByText("1/1/2024")).toBeInTheDocument(); // Member since
+  });
+
+  it("handles avatar file upload", async () => {
+    renderProfilePage();
+    const user = userEvent.setup();
+
+    // Mock successful file upload
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ ...mockUser, avatar_url: "new-avatar.jpg" }),
+    });
+
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    const fileInput = screen.getByLabelText("Choose Avatar");
+
+    await user.upload(fileInput, file);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/users/me/avatar",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "Authorization": "Bearer mock-token",
+          }),
+        })
+      );
+    });
+  });
+
+  it("resets form to original values", async () => {
+    renderProfilePage();
+    const user = userEvent.setup();
+
+    const displayNameInput = screen.getByDisplayValue("Test User");
+    await user.clear(displayNameInput);
+    await user.type(displayNameInput, "Changed Name");
+
+    const resetButton = screen.getByText("Reset Changes");
+    await user.click(resetButton);
+
+    expect(displayNameInput).toHaveValue("Test User");
+  });
+});

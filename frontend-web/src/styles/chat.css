@@ -544,3 +544,206 @@
         padding: 15px;
     }
 }
+
+/* Enhanced Message Actions */
+.message-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.message-actions {
+  display: none;
+  gap: 4px;
+}
+
+.message:hover .message-actions {
+  display: flex;
+}
+
+.message-action-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #e0e0e0);
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.message-action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text, #ffffff);
+}
+
+/* Enhanced Chat Input Wrapper */
+.chat-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  background: var(--dark-card, #2a2a3a);
+  border-top: 1px solid var(--border-color, #3d3d5c);
+}
+
+.chat-tools {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--dark-lighter, #33334a);
+  border-bottom: 1px solid var(--border-color, #3d3d5c);
+}
+
+.tool-btn {
+  background: var(--dark-card, #2a2a3a);
+  border: 1px solid var(--border-color, #3d3d5c);
+  color: var(--text-secondary, #e0e0e0);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-btn:hover:not(:disabled) {
+  background: var(--dark-lighter, #33334a);
+  color: var(--text, #ffffff);
+  border-color: #4d4d6c;
+}
+
+.tool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Workflow Execution Panel */
+.workflow-panel {
+  background: var(--dark-card, #2a2a3a);
+  border-top: 1px solid var(--border-color, #3d3d5c);
+  padding: 16px;
+  animation: slideUp 0.2s ease;
+}
+
+.workflow-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.workflow-panel-header h4 {
+  color: var(--text, #ffffff);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.close-panel-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #e0e0e0);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm, 4px);
+  transition: all 0.2s ease;
+}
+
+.close-panel-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text, #ffffff);
+}
+
+.workflow-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workflow-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-selector label {
+  color: var(--text-secondary, #e0e0e0);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.workflow-selector select {
+  background: var(--dark-lighter, #33334a);
+  border: 1px solid var(--border-color, #3d3d5c);
+  color: var(--text, #ffffff);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.workflow-selector select:focus {
+  outline: none;
+  border-color: var(--primary, #64ffda);
+  box-shadow: 0 0 0 2px rgba(100, 255, 218, 0.1);
+}
+
+.execute-workflow-btn {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.execute-workflow-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(139, 92, 246, 0.3);
+}
+
+.execute-workflow-btn:disabled {
+  background: #6b7280;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.no-workflows {
+  text-align: center;
+  padding: 16px;
+  color: var(--text-secondary, #e0e0e0);
+}
+
+.no-workflows p {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+}
+
+.no-workflows small {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Animations */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
