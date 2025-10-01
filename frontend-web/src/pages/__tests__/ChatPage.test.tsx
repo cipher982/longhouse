@@ -15,6 +15,8 @@ const apiMocks = vi.hoisted(() => ({
   runThread: vi.fn(),
   createThread: vi.fn(),
   updateThread: vi.fn(),
+  fetchWorkflows: vi.fn(),
+  startWorkflowExecution: vi.fn(),
 }));
 
 vi.mock("../../services/api", () => apiMocks);
@@ -27,6 +29,8 @@ const {
   runThread: mockRunThread,
   createThread: mockCreateThread,
   updateThread: mockUpdateThread,
+  fetchWorkflows: mockFetchWorkflows,
+  startWorkflowExecution: mockStartWorkflowExecution,
 } = apiMocks;
 
 function renderChatPage(initialEntry = "/chat/1/42") {
@@ -109,6 +113,16 @@ describe("ChatPage", () => {
         threadState = { ...threadState, title: payload.title };
       }
       return Promise.resolve(threadState);
+    });
+
+    // Mock workflow functions
+    mockFetchWorkflows.mockResolvedValue([
+      { id: 1, name: "Test Workflow", description: "A test workflow", canvas: { nodes: [], edges: [] } },
+    ]);
+    mockStartWorkflowExecution.mockResolvedValue({
+      execution_id: 123,
+      phase: "running",
+      result: null,
     });
   });
 

@@ -9,6 +9,7 @@ import {
   type AgentRun,
   type AgentSummary,
 } from "../services/api";
+import { useWebSocket } from "../lib/useWebSocket";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -116,27 +117,14 @@ export default function DashboardPage() {
       });
   }, [expandedAgentId, loadingRunIds, runsByAgent]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const wsBase =
-      (window as typeof window & { WS_BASE_URL?: string }).WS_BASE_URL ||
-      window.location.origin.replace("http", "ws");
-
-    const wsUrl = new URL("/api/ws", wsBase);
-    const testWorkerHeader = window.__TEST_WORKER_ID__;
-    if (testWorkerHeader !== undefined) {
-      wsUrl.searchParams.set("worker", String(testWorkerHeader));
-    }
-
-    const ws = new WebSocket(wsUrl.toString());
-    ws.onmessage = () => {
+  // Use unified WebSocket hook for real-time updates
+  useWebSocket(true, {
+    invalidateQueries: [["agents", { scope }]],
+    onMessage: () => {
+      // Additional refetch for immediate updates
       void refetch();
-    };
-    return () => ws.close();
-  }, [refetch]);
+    },
+  });
 
   const createAgentMutation = useMutation({
     mutationFn: async () => {
