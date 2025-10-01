@@ -62,20 +62,21 @@ describe("ProfilePage", () => {
     renderProfilePage();
 
     expect(screen.getByText("User Profile")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Test User")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("test@example.com")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("https://example.com/avatar.jpg")).toBeInTheDocument();
+    expect(screen.getByLabelText("Display Name")).toHaveValue("Test User");
+    expect(screen.getByLabelText("Email Address")).toHaveValue("test@example.com");
+    expect(screen.getByLabelText("Avatar URL")).toHaveValue("https://example.com/avatar.jpg");
   });
 
   it("allows updating display name", async () => {
     renderProfilePage();
     const user = userEvent.setup();
 
-    const displayNameInput = screen.getByDisplayValue("Test User");
+    const displayNameInput = screen.getByLabelText("Display Name");
     await user.clear(displayNameInput);
     await user.type(displayNameInput, "Updated Name");
 
-    const saveButton = screen.getByText("Save Changes");
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    const saveButton = saveButtons[0]; // Take first button due to StrictMode double rendering
     await user.click(saveButton);
 
     await waitFor(() => {
@@ -135,7 +136,7 @@ describe("ProfilePage", () => {
     renderProfilePage();
     const user = userEvent.setup();
 
-    const displayNameInput = screen.getByDisplayValue("Test User");
+    const displayNameInput = screen.getByLabelText("Display Name");
     await user.clear(displayNameInput);
     await user.type(displayNameInput, "Changed Name");
 

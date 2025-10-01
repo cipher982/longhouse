@@ -33,38 +33,61 @@ global.fetch = mockFetch;
 
 const mockOpsSummary = {
   runs_today: 45,
-  errors_today: 2,
-  cost_today: 1.23,
-  runs_7d: 312,
-  errors_7d: 15,
-  cost_7d: 8.95,
-  runs_30d: 1250,
-  errors_30d: 67,
-  cost_30d: 34.56,
-  budget_used: 68.5,
-  budget_limit: 50.0,
-};
-
-const mockTopAgents = {
-  top_agents: [
+  cost_today_usd: 1.23,
+  budget_user: {
+    limit_cents: 5000,
+    used_usd: 1.23,
+    percent: 24.6,
+  },
+  budget_global: {
+    limit_cents: 10000,
+    used_usd: 3.45,
+    percent: 34.5,
+  },
+  active_users_24h: 5,
+  agents_total: 12,
+  agents_scheduled: 3,
+  latency_ms: {
+    p50: 250,
+    p95: 800,
+  },
+  errors_last_hour: 2,
+  top_agents_today: [
     {
       agent_id: 1,
-      agent_name: "Test Agent",
-      total_runs: 50,
-      success_rate: 94.2,
-      avg_cost: 0.125,
+      name: "Test Agent",
+      owner_email: "test@example.com",
+      runs: 50,
+      cost_usd: 0.125,
+      p95_ms: 300,
     },
     {
       agent_id: 2,
-      agent_name: "Helper Agent",
-      total_runs: 30,
-      success_rate: 86.7,
-      avg_cost: 0.089,
+      name: "Helper Agent",
+      owner_email: "helper@example.com",
+      runs: 30,
+      cost_usd: 0.089,
+      p95_ms: 250,
     },
   ],
 };
 
+// mockTopAgents removed - top agents included in summary
+
 function renderAdminPage() {
+  // Mock localStorage.zerg_jwt that AdminPage expects
+  Object.defineProperty(window, 'localStorage', {
+    value: {
+      getItem: vi.fn((key: string) => {
+        if (key === 'zerg_jwt') return 'mock-jwt-token';
+        return null;
+      }),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    },
+    writable: true,
+  });
+
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -83,7 +106,7 @@ describe("AdminPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Mock successful API responses
+    // Mock successful API responses - using real backend contract
     mockFetch.mockImplementation((url: string) => {
       if (url.includes("/api/ops/summary")) {
         return Promise.resolve({
@@ -91,12 +114,7 @@ describe("AdminPage", () => {
           json: () => Promise.resolve(mockOpsSummary),
         });
       }
-      if (url.includes("/api/ops/top")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(mockTopAgents),
-        });
-      }
+      // No separate /api/ops/top call - top agents included in summary
       return Promise.resolve({
         ok: false,
         text: () => Promise.resolve("Not found"),
@@ -119,9 +137,9 @@ describe("AdminPage", () => {
       expect(screen.getByText("45")).toBeInTheDocument(); // runs_today
     });
 
-    expect(screen.getByText("2")).toBeInTheDocument(); // errors_today
-    expect(screen.getByText("$1.2300")).toBeInTheDocument(); // cost_today
-    expect(screen.getByText("68.5%")).toBeInTheDocument(); // budget_used
+    expect(screen.getByText("2")).toBeInTheDocument(); // errors_last_hour
+    expect(screen.getByText("$1.2300")).toBeInTheDocument(); // cost_today_usd
+    expect(screen.getByText("24.6%")).toBeInTheDocument(); // budget_user.percent
   });
 
   it("displays top agents table", async () => {
@@ -132,8 +150,9 @@ describe("AdminPage", () => {
     });
 
     expect(screen.getByText("Helper Agent")).toBeInTheDocument();
-    expect(screen.getByText("94.2%")).toBeInTheDocument(); // success rate
-    expect(screen.getByText("$0.1250")).toBeInTheDocument(); // avg cost
+    expect(screen.getByText("test@example.com")).toBeInTheDocument(); // owner_email
+    expect(screen.getByText("$0.1250")).toBeInTheDocument(); // cost_usd
+    expect(screen.getByText("300ms")).toBeInTheDocument(); // p95_ms
   });
 
   it("allows changing time window", async () => {
