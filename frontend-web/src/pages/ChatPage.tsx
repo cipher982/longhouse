@@ -26,15 +26,7 @@ function useRequiredNumber(param?: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function resolveWsBase(): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  return (
-    (window as typeof window & { WS_BASE_URL?: string }).WS_BASE_URL ||
-    window.location.origin.replace("http", "ws")
-  );
-}
+// resolveWsBase function removed - not currently used
 
 // Helper functions
 function formatTimestamp(timestamp?: string | null): string {
@@ -770,7 +762,7 @@ export default function ChatPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                handleSend(e as any);
+                handleSend(e as React.FormEvent);
               }
             }}
           />
