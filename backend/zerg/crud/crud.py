@@ -729,7 +729,7 @@ def mark_running(db: Session, run_id: int, *, started_at: Optional[datetime] = N
 
     started_at = started_at or utc_now_naive()
     # Set to running status
-    row.status = RunStatus.running
+    row.status = RunStatus.RUNNING
     row.started_at = started_at
     db.commit()
     db.refresh(row)
@@ -754,7 +754,7 @@ def mark_finished(
         duration_ms = int((finished_at - row.started_at).total_seconds() * 1000)
 
     # Set to success status
-    row.status = RunStatus.success
+    row.status = RunStatus.SUCCESS
     row.finished_at = finished_at
     row.duration_ms = duration_ms
     row.total_tokens = total_tokens
@@ -782,7 +782,7 @@ def mark_failed(
         duration_ms = int((finished_at - row.started_at).total_seconds() * 1000)
 
     # Set to failed status
-    row.status = RunStatus.failed
+    row.status = RunStatus.FAILED
     row.finished_at = finished_at
     row.duration_ms = duration_ms
     row.error = error
