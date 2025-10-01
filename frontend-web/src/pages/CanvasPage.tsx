@@ -35,13 +35,8 @@ import {
   type ExecutionStatus,
 } from "../services/api";
 
-// Type for node config data
-interface NodeConfig {
-  text?: string;
-  agent_id?: number;
-  tool_type?: string;
-  [key: string]: unknown; // Allow additional properties
-}
+// Type for node config data - simplified to match backend schema
+type NodeConfig = Record<string, unknown>;
 
 // Custom node component for agents
 function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
@@ -109,11 +104,7 @@ function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput
     id: node.id,
     type: node.type as "agent" | "tool" | "trigger" | "conditional",
     position: { x: node.position.x, y: node.position.y },
-    config: {
-      text: node.data.label,
-      agent_id: node.data.agentId,
-      tool_type: node.data.toolType,
-    } as NodeConfig,
+    config: {} as Record<string, never>,
   }));
 
   const workflowEdges: WorkflowEdge[] = edges.map((edge) => ({
@@ -132,6 +123,7 @@ export default function CanvasPage() {
   const queryClient = useQueryClient();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
@@ -498,12 +490,12 @@ export default function CanvasPage() {
 }
 
 // Simple debounce utility function
-function debounce<T extends (...args: unknown[]) => void>(
-  func: T,
+function debounce<T extends unknown[]>(
+  func: (...args: T) => void,
   wait: number
-): (...args: Parameters<T>) => void {
+): (...args: T) => void {
   let timeout: number | undefined;
-  return (...args: Parameters<T>) => {
+  return (...args: T) => {
     clearTimeout(timeout);
     timeout = window.setTimeout(() => func(...args), wait);
   };
