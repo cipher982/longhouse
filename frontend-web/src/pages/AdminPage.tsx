@@ -3,43 +3,48 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 
-// Types for ops data
+// Types for ops data - matching actual backend contract
 interface OpsSummary {
   runs_today: number;
-  errors_today: number;
-  cost_today: number;
-  runs_7d: number;
-  errors_7d: number;
-  cost_7d: number;
-  runs_30d: number;
-  errors_30d: number;
-  cost_30d: number;
-  budget_used: number; // percentage 0-100
-  budget_limit: number;
+  cost_today_usd: number | null;
+  budget_user: {
+    limit_cents: number;
+    used_usd: number;
+    percent: number | null;
+  };
+  budget_global: {
+    limit_cents: number;
+    used_usd: number;
+    percent: number | null;
+  };
+  active_users_24h: number;
+  agents_total: number;
+  agents_scheduled: number;
+  latency_ms: {
+    p50: number;
+    p95: number;
+  };
+  errors_last_hour: number;
+  top_agents_today: OpsTopAgent[];
 }
 
 interface OpsSeriesPoint {
-  timestamp: string;
+  hour_iso: string; // Matches backend service field name
   value: number;
 }
 
 interface OpsTopAgent {
   agent_id: number;
-  agent_name: string;
-  total_runs: number;
-  success_rate: number; // percentage 0-100
-  avg_cost: number;
+  name: string;
+  owner_email: string;
+  runs: number;
+  cost_usd: number | null;
+  p95_ms: number;
 }
 
-interface TimeSeriesResponse {
-  series: OpsSeriesPoint[];
-}
+// TimeSeriesResponse interface removed - not currently used
 
-interface TopAgentsResponse {
-  top_agents: OpsTopAgent[];
-}
-
-// API functions
+// API functions (top agents are included in summary)
 async function fetchOpsSummary(): Promise<OpsSummary> {
   const token = localStorage.getItem("zerg_jwt");
   if (!token) {
@@ -60,39 +65,9 @@ async function fetchOpsSummary(): Promise<OpsSummary> {
   return response.json();
 }
 
-async function fetchTimeSeries(metric: string, window: string = "today"): Promise<TimeSeriesResponse> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
+// fetchTimeSeries removed - not currently used
 
-  const response = await fetch(`/api/ops/timeseries?metric=${metric}&window=${window}`, {
-    headers: { "Authorization": `Bearer ${token}` },
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch time series data");
-  }
-
-  return response.json();
-}
-
-async function fetchTopAgents(window: string = "today", limit: number = 5): Promise<TopAgentsResponse> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
-  const response = await fetch(`/api/ops/top?kind=agents&window=${window}&limit=${limit}`, {
-    headers: { "Authorization": `Bearer ${token}` },
-  });
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch top agents");
-  }
-
-  return response.json();
-}
+// fetchTopAgents removed - top agents are included in ops summary
 
 // Metric card component
 function MetricCard({
@@ -117,7 +92,7 @@ function MetricCard({
   );
 }
 
-// Top agents table component
+// Top agents table component - using real backend contract
 function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
   if (agents.length === 0) {
     return (
@@ -133,22 +108,24 @@ function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
         <thead>
           <tr>
             <th>Agent Name</th>
+            <th>Owner</th>
             <th>Runs</th>
-            <th>Success Rate</th>
-            <th>Avg Cost</th>
+            <th>Cost (USD)</th>
+            <th>P95 Latency</th>
           </tr>
         </thead>
         <tbody>
           {agents.map((agent) => (
             <tr key={agent.agent_id}>
-              <td className="agent-name">{agent.agent_name}</td>
-              <td className="runs-count">{agent.total_runs}</td>
-              <td className="success-rate">
-                <span className={`rate rate--${agent.success_rate >= 90 ? 'good' : agent.success_rate >= 70 ? 'ok' : 'poor'}`}>
-                  {agent.success_rate.toFixed(1)}%
-                </span>
+              <td className="agent-name">{agent.name}</td>
+              <td className="owner-email">{agent.owner_email}</td>
+              <td className="runs-count">{agent.runs}</td>
+              <td className="cost">
+                {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
               </td>
-              <td className="avg-cost">${agent.avg_cost.toFixed(4)}</td>
+              <td className="latency">
+                {agent.p95_ms}ms
+              </td>
             </tr>
           ))}
         </tbody>
@@ -161,43 +138,28 @@ function AdminPage() {
   const { user } = useAuth();
   const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
 
-  // Check if user is admin (this should be checked by the router, but let's be safe)
-  if (!user) {
-    return <div>Loading...</div>;
-  }
-
-  // Ops summary query
+  // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ["ops-summary"],
     queryFn: fetchOpsSummary,
     refetchInterval: 30000, // Refresh every 30 seconds
+    enabled: !!user, // Only run query when user is available
   });
 
-  // Top agents query
-  const { data: topAgents, isLoading: agentsLoading } = useQuery({
-    queryKey: ["top-agents", selectedWindow],
-    queryFn: () => fetchTopAgents(selectedWindow, 10),
-    refetchInterval: 60000, // Refresh every minute
-  });
-
-  // Handle permission errors
+  // Handle permission errors - FIXED: Move ALL hooks before conditional logic
   React.useEffect(() => {
     if (summaryError instanceof Error && summaryError.message.includes("Admin access required")) {
       toast.error("Admin access required to view this page");
     }
   }, [summaryError]);
 
+  // Check if user is admin (this should be checked by the router, but let's be safe)
+  if (!user) {
+    return <div>Loading...</div>;
+  }
+
   const formatCurrency = (value: number) => `$${value.toFixed(4)}`;
   const formatPercent = (value: number) => `${value.toFixed(1)}%`;
-
-  const getWindowLabel = (window: string) => {
-    switch (window) {
-      case "today": return "Today";
-      case "7d": return "7 Days";
-      case "30d": return "30 Days";
-      default: return window;
-    }
-  };
 
   return (
     <div className="admin-page">
@@ -225,78 +187,114 @@ function AdminPage() {
         </div>
       ) : summary ? (
         <>
-          {/* Key Metrics */}
+          {/* Key Metrics - using real backend data */}
           <div className="metrics-grid">
             <MetricCard
-              title="Runs"
-              value={
-                selectedWindow === "today" ? summary.runs_today :
-                selectedWindow === "7d" ? summary.runs_7d :
-                summary.runs_30d
-              }
-              subtitle={getWindowLabel(selectedWindow)}
+              title="Runs Today"
+              value={summary.runs_today}
+              subtitle="Total executions"
               color="#3b82f6"
             />
             <MetricCard
-              title="Errors"
-              value={
-                selectedWindow === "today" ? summary.errors_today :
-                selectedWindow === "7d" ? summary.errors_7d :
-                summary.errors_30d
-              }
-              subtitle={getWindowLabel(selectedWindow)}
+              title="Errors (1h)"
+              value={summary.errors_last_hour}
+              subtitle="Failed runs"
               color="#ef4444"
             />
             <MetricCard
-              title="Cost"
-              value={formatCurrency(
-                selectedWindow === "today" ? summary.cost_today :
-                selectedWindow === "7d" ? summary.cost_7d :
-                summary.cost_30d
-              )}
-              subtitle={getWindowLabel(selectedWindow)}
+              title="Cost Today"
+              value={summary.cost_today_usd !== null ? formatCurrency(summary.cost_today_usd) : "N/A"}
+              subtitle="USD spent"
               color="#10b981"
             />
             <MetricCard
-              title="Budget Used"
-              value={formatPercent(summary.budget_used)}
-              subtitle={`of ${formatCurrency(summary.budget_limit)}`}
-              color={summary.budget_used > 80 ? "#ef4444" : summary.budget_used > 60 ? "#f59e0b" : "#10b981"}
+              title="User Budget"
+              value={
+                summary.budget_user.percent !== null
+                  ? formatPercent(summary.budget_user.percent)
+                  : "No limit"
+              }
+              subtitle={
+                summary.budget_user.limit_cents > 0
+                  ? `of $${(summary.budget_user.limit_cents / 100).toFixed(2)}`
+                  : "Unlimited"
+              }
+              color={
+                summary.budget_user.percent === null ? "#6b7280" :
+                summary.budget_user.percent > 80 ? "#ef4444" :
+                summary.budget_user.percent > 60 ? "#f59e0b" : "#10b981"
+              }
+            />
+            <MetricCard
+              title="Global Budget"
+              value={
+                summary.budget_global.percent !== null
+                  ? formatPercent(summary.budget_global.percent)
+                  : "No limit"
+              }
+              subtitle={
+                summary.budget_global.limit_cents > 0
+                  ? `of $${(summary.budget_global.limit_cents / 100).toFixed(2)}`
+                  : "Unlimited"
+              }
+              color={
+                summary.budget_global.percent === null ? "#6b7280" :
+                summary.budget_global.percent > 80 ? "#ef4444" :
+                summary.budget_global.percent > 60 ? "#f59e0b" : "#10b981"
+              }
+            />
+            <MetricCard
+              title="Latency P95"
+              value={`${summary.latency_ms.p95}ms`}
+              subtitle={`P50: ${summary.latency_ms.p50}ms`}
+              color="#8b5cf6"
             />
           </div>
 
-          {/* Top Agents Section */}
+          {/* Top Agents Section - using data from summary */}
           <div className="admin-section">
-            <h3>Top Performing Agents ({getWindowLabel(selectedWindow)})</h3>
-            {agentsLoading ? (
-              <div>Loading top agents...</div>
-            ) : topAgents?.top_agents ? (
-              <TopAgentsTable agents={topAgents.top_agents} />
-            ) : (
-              <div className="empty-state">No agent data available</div>
-            )}
+            <h3>Top Performing Agents (Today)</h3>
+            <TopAgentsTable agents={summary.top_agents_today} />
           </div>
 
-          {/* System Information */}
+          {/* System Information - using real backend data */}
           <div className="admin-section">
             <h3>System Information</h3>
             <div className="system-info">
               <div className="info-grid">
                 <div className="info-item">
-                  <span className="info-label">Total Budget:</span>
-                  <span className="info-value">{formatCurrency(summary.budget_limit)}</span>
+                  <span className="info-label">Total Agents:</span>
+                  <span className="info-value">{summary.agents_total}</span>
                 </div>
                 <div className="info-item">
-                  <span className="info-label">Budget Remaining:</span>
+                  <span className="info-label">Scheduled Agents:</span>
+                  <span className="info-value">{summary.agents_scheduled}</span>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">Active Users (24h):</span>
+                  <span className="info-value">{summary.active_users_24h}</span>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">User Budget Used:</span>
                   <span className="info-value">
-                    {formatCurrency(summary.budget_limit * (1 - summary.budget_used / 100))}
+                    ${summary.budget_user.used_usd.toFixed(4)}
+                    {summary.budget_user.limit_cents > 0 && (
+                      <span> / ${(summary.budget_user.limit_cents / 100).toFixed(2)}</span>
+                    )}
                   </span>
                 </div>
                 <div className="info-item">
-                  <span className="info-label">Success Rate (30d):</span>
+                  <span className="info-label">Global Budget Used:</span>
                   <span className="info-value">
-                    {summary.runs_30d > 0 ? formatPercent((1 - summary.errors_30d / summary.runs_30d) * 100) : "N/A"}
+                    ${summary.budget_global.used_usd.toFixed(4)}
+                    {summary.budget_global.limit_cents > 0 && (
+                      <span> / ${(summary.budget_global.limit_cents / 100).toFixed(2)}</span>
+                    )}
                   </span>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">Median Latency:</span>
+                  <span className="info-value">{summary.latency_ms.p50}ms</span>
                 </div>
               </div>
             </div>
