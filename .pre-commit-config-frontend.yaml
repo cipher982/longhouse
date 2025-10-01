@@ -1,0 +1,82 @@
+# Frontend-specific pre-commit configuration
+# This configuration ensures API contract validation happens before any commit
+
+repos:
+  # 1. Standard code quality checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        files: ^frontend-web/
+      - id: end-of-file-fixer
+        files: ^frontend-web/
+      - id: check-json
+        files: ^frontend-web/.*\.json$
+
+  # 2. TypeScript and React linting
+  - repo: local
+    hooks:
+      - id: typescript-check
+        name: TypeScript Compilation Check
+        entry: bash -c 'cd frontend-web && npm run validate:types'
+        language: system
+        files: ^frontend-web/src/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: frontend-tests
+        name: Frontend Unit Tests
+        entry: bash -c 'cd frontend-web && npm test -- --run'
+        language: system
+        files: ^frontend-web/src/.*\.(ts|tsx)$
+        pass_filenames: false
+
+  # 3. CRITICAL: API Contract Validation
+  - repo: local
+    hooks:
+      - id: contract-validation
+        name: API Contract Validation
+        entry: bash -c './scripts/validate-frontend-contracts.sh'
+        language: system
+        files: ^(frontend-web/src/.*\.(ts|tsx)|backend/zerg/routers/.*\.py|openapi\.json)$
+        pass_filenames: false
+
+      - id: schema-completeness
+        name: OpenAPI Schema Completeness
+        entry: bash -c 'if grep -q "\"schema\": {}" openapi.json; then echo "❌ Empty response schemas found - type safety compromised"; exit 1; fi; echo "✅ No empty schemas found"'
+        language: system
+        files: ^openapi\.json$
+        pass_filenames: false
+
+      - id: backend-schema-sync
+        name: Backend Schema Synchronization
+        entry: bash -c 'cd backend && uv run python -c "from zerg.main import app; import json; schema = app.openapi(); print(\"✅ Schema sync validated\")" > /dev/null'
+        language: system
+        files: ^backend/zerg/.*\.py$
+        pass_filenames: false
+
+  # 4. Frontend API Usage Validation
+  - repo: local
+    hooks:
+      - id: api-usage-check
+        name: API Usage Pattern Validation
+        entry: bash -c 'cd frontend-web && if grep -r "fetch(" src/ | grep -v "catch\|onError" | grep -q .; then echo "❌ Found API calls without error handling"; exit 1; fi; echo "✅ All API calls have error handling"'
+        language: system
+        files: ^frontend-web/src/.*\.(ts|tsx)$
+        pass_filenames: false
+
+      - id: type-safety-check
+        name: Type Safety Validation
+        entry: bash -c 'cd frontend-web && if [ $(grep -c ": any\|as any" src/ || echo 0) -gt 10 ]; then echo "❌ High number of any types - type safety compromised"; exit 1; fi; echo "✅ Type safety maintained"'
+        language: system
+        files: ^frontend-web/src/.*\.(ts|tsx)$
+        pass_filenames: false
+
+  # 5. Performance and Bundle Validation
+  - repo: local
+    hooks:
+      - id: build-validation
+        name: Production Build Validation
+        entry: bash -c 'cd frontend-web && npm run build > /dev/null && echo "✅ Production build successful"'
+        language: system
+        files: ^frontend-web/.*\.(ts|tsx|css|json)$
+        pass_filenames: false
