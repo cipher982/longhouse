@@ -86,10 +86,10 @@ echo "[build-debug] generating index.html from template for ports ${BACKEND_PORT
 TIMESTAMP=$(date +%s)
 CACHE_BUST_TAG="<meta name=\"cache-bust\" content=\"${TIMESTAMP}\">"
 
-# Set backend URLs for CSP: dev allows localhost; production is same-origin only
+# Set backend URLs for CSP: dev allows localhost; production allows api.swarmlet.com
 if [[ "${BUILD_ENV}" == "production" ]]; then
-  BACKEND_URL=""
-  BACKEND_WS_URL=""
+  BACKEND_URL="https://api.swarmlet.com"
+  BACKEND_WS_URL="wss://api.swarmlet.com"
 else
   BACKEND_URL="http://localhost:${BACKEND_PORT}"
   BACKEND_WS_URL="ws://localhost:${BACKEND_PORT}"
