@@ -27,6 +27,21 @@ repos:
 
   - repo: local
     hooks:
+      # CRITICAL: Frontend Contract Validation (prevents API mismatches)
+      - id: frontend-contract-validation
+        name: Frontend API Contract Validation
+        entry: bash -c 'cd frontend-web && npm run validate:contracts'
+        language: system
+        files: ^(frontend-web/src/.*\.(ts|tsx)|backend/zerg/routers/.*\.py|openapi\.json)$
+        pass_filenames: false
+
+      - id: empty-schema-detection
+        name: Empty OpenAPI Schema Detection
+        entry: scripts/check-empty-schemas.sh
+        language: system
+        files: ^openapi\.json$
+        pass_filenames: false
+
       - id: rust-clippy
         name: "rust-clippy (frontend)"
         language: system
