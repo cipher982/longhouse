@@ -185,6 +185,24 @@ export default function DashboardPage() {
     <div id="dashboard-container" className="dashboard-container">
       <div id="dashboard" className="dashboard">
         <div className="dashboard-header">
+          <div className="scope-wrapper">
+            <span className="scope-text-label" id="scope-text">
+              {scope === "all" ? "All agents" : "My agents"}
+            </span>
+            <label className="scope-toggle">
+              <input
+                type="checkbox"
+                id="dashboard-scope-toggle"
+                data-testid="dashboard-scope-toggle"
+                checked={scope === "all"}
+                onChange={(e) => {
+                  const newScope = e.target.checked ? "all" : "my";
+                  setScope(newScope);
+                }}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
           <div className="button-container">
             <button
               id="create-agent-button"
