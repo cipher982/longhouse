@@ -14,7 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/ - commented out to allow frontend-web/src/lib/ source files
+# Only ignore build artifacts, not source code
+/lib/
+backend/lib/
+frontend/lib/
 lib64/
 parts/
 sdist/
