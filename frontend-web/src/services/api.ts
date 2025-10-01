@@ -79,7 +79,7 @@ type CreatedAgentResponse = JsonResponse<Operations["create_agent_api_agents_pos
 type UpdatedAgentResponse = JsonResponse<Operations["update_agent_api_agents__agent_id__put"], 200>;
 type WorkflowsResponse = JsonResponse<Operations["read_workflows_api_workflows__get"], 200>;
 type WorkflowResponse = JsonResponse<Operations["get_current_workflow_api_workflows_current_get"], 200>;
-type CreatedWorkflowResponse = JsonResponse<Operations["create_workflow_api_workflows__post"], 200>;
+type CreatedWorkflowResponse = JsonResponse<Operations["create_workflow_api_workflows__post"], 201>;
 type UpdatedWorkflowCanvasResponse = JsonResponse<Operations["update_current_workflow_canvas_api_workflows_current_canvas_patch"], 200>;
 
 type FetchAgentsParams = {

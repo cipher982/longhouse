@@ -324,9 +324,29 @@ export interface paths {
         };
         /**
          * Get Models
-         * @description Return available models.
+         * @description Return available models filtered for non-admins if allowlist set.
          */
         get: operations["get_models_api_models__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/super-admin-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Super Admin Status
+         * @description Check if the current user is a super admin and if password confirmation is required.
+         */
+        get: operations["get_super_admin_status_api_admin_super_admin_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -346,9 +366,52 @@ export interface paths {
         put?: never;
         /**
          * Reset Database
-         * @description Reset the database by dropping all tables and recreating them. For development only.
+         * @description Reset the database by dropping all tables and recreating them.
+         *
+         *     Requires super admin privileges (user must be in ADMIN_EMAILS).
+         *     In production environments, requires additional password confirmation.
          */
         post: operations["reset_database_api_admin_reset_database_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/migration-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Migration Log
+         * @description Get the migration log from container startup.
+         */
+        get: operations["get_migration_log_api_admin_migration_log_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/fix-database-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fix Database Schema
+         * @description Directly fix the missing updated_at column issue.
+         */
+        post: operations["fix_database_schema_api_admin_fix_database_schema_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -380,6 +443,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/email/webhook/google/pubsub": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Gmail Pubsub Webhook
+         * @description Handle Gmail push notifications via Cloud Pub/Sub.
+         *
+         *     This endpoint receives Pub/Sub push messages containing Gmail notification
+         *     data. The message includes the email address and history ID which we use
+         *     to map to the appropriate connector.
+         *
+         *     Returns:
+         *         202 Accepted with status message
+         */
+        post: operations["gmail_pubsub_webhook_api_email_webhook_google_pubsub_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Connectors */
+        get: operations["list_connectors_api_connectors__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/connectors/{connector_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Connector */
+        delete: operations["delete_connector_api_connectors__connector_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/{trigger_id}": {
         parameters: {
             query?: never;
@@ -394,11 +518,8 @@ export interface paths {
          * Delete Trigger
          * @description Delete a trigger.
          *
-         *     Special handling for *email* provider **gmail**:
-         *
-         *     • Attempts to call Gmail *stop* endpoint so push notifications are
-         *       turned off immediately on user’s mailbox.  The call is best effort –
-         *       network/auth failures are logged but do not abort the deletion.
+         *     Connector-managed providers (like Gmail) are not affected by trigger
+         *     deletion (watch lifecycle is per-connector).
          */
         delete: operations["delete_trigger_api_triggers__trigger_id__delete"];
         options?: never;
@@ -537,6 +658,7 @@ export interface paths {
         /**
          * Create Workflow
          * @description Create new workflow.
+         *     Supports template deployment via template_id or template_name.
          *     Rate limited to 100 workflows per minute per user.
          */
         post: operations["create_workflow_api_workflows__post"];
@@ -633,7 +755,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflow-executions/{workflow_id}/reserve": {
+    "/api/workflow-executions/by-workflow/{workflow_id}/reserve": {
         parameters: {
             query?: never;
             header?: never;
@@ -647,14 +769,14 @@ export interface paths {
          * @description Reserve an execution ID for a workflow without starting execution.
          *     This allows the frontend to subscribe to WebSocket messages before execution starts.
          */
-        post: operations["reserve_workflow_execution_api_workflow_executions__workflow_id__reserve_post"];
+        post: operations["reserve_workflow_execution_api_workflow_executions_by_workflow__workflow_id__reserve_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/workflow-executions/{workflow_id}/start": {
+    "/api/workflow-executions/by-workflow/{workflow_id}/start": {
         parameters: {
             query?: never;
             header?: never;
@@ -666,9 +788,9 @@ export interface paths {
         /**
          * Start Workflow Execution
          * @description Start a new execution of a workflow using LangGraph engine.
-         *     Uses the original synchronous approach.
+         *     Non-blocking: returns immediately with phase=running.
          */
-        post: operations["start_workflow_execution_api_workflow_executions__workflow_id__start_post"];
+        post: operations["start_workflow_execution_api_workflow_executions_by_workflow__workflow_id__start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -695,6 +817,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflow-executions/{workflow_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Workflow Execution Deprecated
+         * @description DEPRECATED: Use /by-workflow/{workflow_id}/start instead.
+         *     Start a new execution of a workflow.
+         */
+        post: operations["start_workflow_execution_deprecated_api_workflow_executions__workflow_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflow-executions/{execution_id}/status": {
         parameters: {
             query?: never;
@@ -709,6 +852,36 @@ export interface paths {
         get: operations["get_execution_status_api_workflow_executions__execution_id__status_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflow-executions/{execution_id}/await": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Await Execution Completion
+         * @description Wait for a workflow execution to complete (synchronous).
+         *
+         *     This endpoint blocks until the workflow completes or times out.
+         *     Useful for testing and simple synchronous workflows.
+         *
+         *     Args:
+         *         execution_id: ID of the execution to wait for
+         *         timeout: Maximum time to wait in seconds (default 30)
+         *
+         *     Returns:
+         *         Execution status when complete
+         */
+        post: operations["await_execution_completion_api_workflow_executions__execution_id__await_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -880,19 +1053,13 @@ export interface paths {
         put?: never;
         /**
          * Connect Gmail
-         * @description Store *offline* Gmail permissions for the **current** user.
+         * @description Connect Gmail via OAuth and create/update a Gmail connector.
          *
-         *     Expected body: ``{ "auth_code": "<code from OAuth consent window>" }``.
+         *     Expected body: { "auth_code": "...", "callback_url": "https://.../api/email/webhook/google" }
          *
-         *     The frontend must request the following when launching the consent screen::
-         *
-         *         scope=https://www.googleapis.com/auth/gmail.readonly
-         *         access_type=offline
-         *         prompt=consent
-         *
-         *     The *refresh token* returned by Google is stored on the user row.  The
-         *     endpoint returns a simple JSON confirmation so the client knows the
-         *     account is connected.
+         *     - Stores the encrypted refresh token in a Connector (type="email", provider="gmail").
+         *     - Optionally attempts to register a Gmail watch if ``callback_url`` is provided.
+         *     - Returns the ``connector_id``.
          */
         post: operations["connect_gmail_api_auth_google_gmail_post"];
         delete?: never;
@@ -1074,6 +1241,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Health
+         * @description Lightweight readiness probe used by E2E tests.
+         *
+         *     Returns JSON with overall status and basic subsystem stats. Keeps work
+         *     minimal to avoid impacting test performance.
+         */
+        get: operations["health_api_system_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Summary
+         * @description Return primary KPIs for the Ops dashboard (admin-only).
+         */
+        get: operations["get_summary_api_ops_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeseries */
+        get: operations["get_timeseries_api_ops_timeseries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/top": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Top */
+        get: operations["get_top_api_ops_top_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reset-database": {
         parameters: {
             query?: never;
@@ -1103,6 +1347,26 @@ export interface paths {
          * @description Return a simple message to indicate the API is working.
          */
         get: operations["read_root__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Health Check
+         * @description Health check endpoint with comprehensive system validation.
+         */
+        get: operations["health_check_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1270,6 +1534,18 @@ export interface components {
              */
             file: string;
         };
+        /**
+         * BudgetInfo
+         * @description Budget information with limit and usage.
+         */
+        BudgetInfo: {
+            /** Limit Cents */
+            limit_cents: number;
+            /** Used Usd */
+            used_usd: number;
+            /** Percent */
+            percent: number | null;
+        };
         /** CancelPayload */
         CancelPayload: {
             /** Reason */
@@ -1282,10 +1558,50 @@ export interface components {
         CanvasUpdate: {
             canvas: components["schemas"]["WorkflowData-Input"];
         };
+        /**
+         * DatabaseResetRequest
+         * @description Request model for database reset with optional password confirmation.
+         */
+        DatabaseResetRequest: {
+            /** Confirmation Password */
+            confirmation_password?: string | null;
+            /** @default clear_data */
+            reset_type: components["schemas"]["ResetType"];
+        };
+        /**
+         * ExecutionLogsResponse
+         * @description Response for workflow execution logs.
+         */
+        ExecutionLogsResponse: {
+            /** Logs */
+            logs: string;
+        };
+        /**
+         * ExecutionStatusResponse
+         * @description Response for workflow execution status.
+         */
+        ExecutionStatusResponse: {
+            /** Execution Id */
+            execution_id: number;
+            /** Phase */
+            phase: string;
+            /** Result */
+            result?: unknown | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * LatencyStats
+         * @description Latency statistics.
+         */
+        LatencyStats: {
+            /** P50 */
+            p50: number;
+            /** P95 */
+            p95: number;
         };
         /** LayoutUpdate */
         LayoutUpdate: {
@@ -1391,6 +1707,57 @@ export interface components {
             y: number;
         };
         /**
+         * OpsSeriesPoint
+         * @description Single point in a time series.
+         */
+        OpsSeriesPoint: {
+            /** Timestamp */
+            timestamp: string;
+            /** Value */
+            value: number;
+        };
+        /**
+         * OpsSummary
+         * @description Operations summary with all KPIs.
+         */
+        OpsSummary: {
+            /** Runs Today */
+            runs_today: number;
+            /** Cost Today Usd */
+            cost_today_usd: number | null;
+            budget_user: components["schemas"]["BudgetInfo"];
+            budget_global: components["schemas"]["BudgetInfo"];
+            /** Active Users 24H */
+            active_users_24h: number;
+            /** Agents Total */
+            agents_total: number;
+            /** Agents Scheduled */
+            agents_scheduled: number;
+            latency_ms: components["schemas"]["LatencyStats"];
+            /** Errors Last Hour */
+            errors_last_hour: number;
+            /** Top Agents Today */
+            top_agents_today: components["schemas"]["OpsTopAgent"][];
+        };
+        /**
+         * OpsTopAgent
+         * @description Top performing agent information.
+         */
+        OpsTopAgent: {
+            /** Agent Id */
+            agent_id: number;
+            /** Name */
+            name: string;
+            /** Owner Email */
+            owner_email: string;
+            /** Runs */
+            runs: number;
+            /** Cost Usd */
+            cost_usd: number | null;
+            /** P95 Ms */
+            p95_ms: number;
+        };
+        /**
          * Position
          * @description Node position on canvas.
          */
@@ -1401,12 +1768,13 @@ export interface components {
             y: number;
         };
         /**
+         * ResetType
+         * @description Database reset operation types.
+         * @enum {string}
+         */
+        ResetType: "clear_data" | "full_rebuild";
+        /**
          * RunStatus
-         * @description Enum-like convenience class for runtime validation.
-         *
-         *     Using a plain ``str`` subclass keeps the dependency footprint minimal
-         *     (avoids importing ``enum.Enum`` repeatedly in pydantic JSON serialisation
-         *     hot-paths) while still providing a canonical list of allowed values.
          * @enum {string}
          */
         RunStatus: "queued" | "running" | "success" | "failed";
@@ -1421,6 +1789,16 @@ export interface components {
             cron_expression: string;
             /** Trigger Config */
             trigger_config?: Record<string, never>;
+        };
+        /**
+         * SuperAdminStatusResponse
+         * @description Response model for super admin status check.
+         */
+        SuperAdminStatusResponse: {
+            /** Is Super Admin */
+            is_super_admin: boolean;
+            /** Requires Password */
+            requires_password: boolean;
         };
         /** TemplateDeployRequest */
         TemplateDeployRequest: {
@@ -1555,6 +1933,14 @@ export interface components {
             /** Thread Type */
             thread_type?: string | null;
         };
+        /**
+         * TimeSeriesResponse
+         * @description Time series response.
+         */
+        TimeSeriesResponse: {
+            /** Series */
+            series: components["schemas"]["OpsSeriesPoint"][];
+        };
         /** TokenOut */
         TokenOut: {
             /** Access Token */
@@ -1566,6 +1952,14 @@ export interface components {
             token_type: string;
             /** Expires In */
             expires_in: number;
+        };
+        /**
+         * TopAgentsResponse
+         * @description Response containing top agents list.
+         */
+        TopAgentsResponse: {
+            /** Top Agents */
+            top_agents: components["schemas"]["OpsTopAgent"][];
         };
         /** Trigger */
         Trigger: {
@@ -1701,7 +2095,11 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
-            canvas: components["schemas"]["WorkflowData-Input"];
+            canvas?: components["schemas"]["WorkflowData-Input"] | null;
+            /** Template Id */
+            template_id?: number | null;
+            /** Template Name */
+            template_name?: string | null;
         };
         /**
          * WorkflowData
@@ -2713,7 +3111,9 @@ export interface operations {
     };
     get_models_api_models__get: {
         parameters: {
-            query?: never;
+            query?: {
+                session_factory?: unknown;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2729,9 +3129,115 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_super_admin_status_api_admin_super_admin_status_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuperAdminStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     reset_database_api_admin_reset_database_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatabaseResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_migration_log_api_admin_migration_log_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fix_database_schema_api_admin_fix_database_schema_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -2790,6 +3296,99 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gmail_pubsub_webhook_api_email_webhook_google_pubsub_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_connectors_api_connectors__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_connector_api_connectors__connector_id__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                connector_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -3092,7 +3691,7 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3313,7 +3912,7 @@ export interface operations {
             };
         };
     };
-    reserve_workflow_execution_api_workflow_executions__workflow_id__reserve_post: {
+    reserve_workflow_execution_api_workflow_executions_by_workflow__workflow_id__reserve_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -3346,7 +3945,7 @@ export interface operations {
             };
         };
     };
-    start_workflow_execution_api_workflow_executions__workflow_id__start_post: {
+    start_workflow_execution_api_workflow_executions_by_workflow__workflow_id__start_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -3412,9 +4011,76 @@ export interface operations {
             };
         };
     };
+    start_workflow_execution_deprecated_api_workflow_executions__workflow_id__start_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                workflow_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_execution_status_api_workflow_executions__execution_id__status_get: {
         parameters: {
             query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                execution_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    await_execution_completion_api_workflow_executions__execution_id__await_post: {
+        parameters: {
+            query?: {
+                timeout?: number;
                 session_factory?: unknown;
             };
             header?: never;
@@ -3464,7 +4130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExecutionLogsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3774,7 +4440,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: string | number;
                     };
                 };
             };
@@ -4145,7 +4811,160 @@ export interface operations {
             };
         };
     };
+    health_api_system_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    get_summary_api_ops_summary_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpsSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeseries_api_ops_timeseries_get: {
+        parameters: {
+            query: {
+                metric: string;
+                window?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeSeriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_top_api_ops_top_get: {
+        parameters: {
+            query?: {
+                kind?: string;
+                window?: string;
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopAgentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     _legacy_reset_database_admin_reset_database_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatabaseResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_root__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4165,7 +4984,7 @@ export interface operations {
             };
         };
     };
-    read_root__get: {
+    health_check_health_get: {
         parameters: {
             query?: never;
             header?: never;
