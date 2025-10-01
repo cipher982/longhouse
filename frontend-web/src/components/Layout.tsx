@@ -117,8 +117,8 @@ export default function Layout({ children }: PropsWithChildren) {
   const isProfileRoute = location.pathname.startsWith("/profile");
   const isAdminRoute = location.pathname.startsWith("/admin");
 
-  // Check if user has admin access (you could also check user.role === 'ADMIN')
-  const isAdmin = user?.email && (user.email.includes('@admin') || user.email.includes('david'));
+  // Check if user has admin access using authoritative role field
+  const isAdmin = user?.role === 'ADMIN';
 
   const handleTabClick = (path: string) => {
     navigate(path);
