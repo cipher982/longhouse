@@ -10,7 +10,7 @@ interface UserUpdatePayload {
 }
 
 // API function for updating user profile
-async function updateUserProfile(data: UserUpdatePayload): Promise<any> {
+async function updateUserProfile(data: UserUpdatePayload): Promise<{ id: number; email: string; display_name?: string; avatar_url?: string }> {
   const token = localStorage.getItem("zerg_jwt");
   if (!token) {
     throw new Error("No auth token");
@@ -34,7 +34,7 @@ async function updateUserProfile(data: UserUpdatePayload): Promise<any> {
 }
 
 // API function for uploading avatar
-async function uploadAvatar(file: File): Promise<any> {
+async function uploadAvatar(file: File): Promise<{ id: number; email: string; display_name?: string; avatar_url?: string }> {
   const token = localStorage.getItem("zerg_jwt");
   if (!token) {
     throw new Error("No auth token");

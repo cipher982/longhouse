@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useMemo } from "react";
+import React, { useCallback, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../lib/useWebSocket";
 import {
@@ -13,8 +13,6 @@ import {
   type Edge,
   type Connection,
   type OnConnect,
-  type OnNodesChange,
-  type OnEdgesChange,
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -35,8 +33,15 @@ import {
   type WorkflowNode,
   type WorkflowEdge,
   type ExecutionStatus,
-  type ExecutionLogs,
 } from "../services/api";
+
+// Type for node config data
+interface NodeConfig {
+  text?: string;
+  agent_id?: number;
+  tool_type?: string;
+  [key: string]: unknown; // Allow additional properties
+}
 
 // Custom node component for agents
 function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
@@ -83,9 +88,9 @@ function convertToReactFlowData(workflowData: WorkflowData): { nodes: Node[]; ed
     type: node.type,
     position: { x: node.position.x, y: node.position.y },
     data: {
-      label: (node.config as any)?.text || `${node.type} node`,
-      agentId: (node.config as any)?.agent_id,
-      toolType: (node.config as any)?.tool_type,
+      label: (node.config as NodeConfig)?.text || `${node.type} node`,
+      agentId: (node.config as NodeConfig)?.agent_id,
+      toolType: (node.config as NodeConfig)?.tool_type,
     },
   }));
 
@@ -108,7 +113,7 @@ function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput
       text: node.data.label,
       agent_id: node.data.agentId,
       tool_type: node.data.toolType,
-    } as any,
+    } as NodeConfig,
   }));
 
   const workflowEdges: WorkflowEdge[] = edges.map((edge) => ({
@@ -127,7 +132,6 @@ export default function CanvasPage() {
   const queryClient = useQueryClient();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [isLoading, setIsLoading] = useState(false);
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
@@ -164,7 +168,7 @@ export default function CanvasPage() {
       toast.success("Workflow saved successfully");
       queryClient.invalidateQueries({ queryKey: ["workflow", "current"] });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       console.error("Failed to save workflow:", error);
       toast.error(`Failed to save workflow: ${error.message || "Unknown error"}`);
     },
@@ -178,6 +182,7 @@ export default function CanvasPage() {
         saveWorkflowMutation.mutate(workflowData);
       }
     }, 1000),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [saveWorkflowMutation]
   );
 
@@ -198,7 +203,7 @@ export default function CanvasPage() {
       toast.success("Workflow execution started!");
       setShowLogs(true);
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast.error(`Failed to start workflow: ${error.message || "Unknown error"}`);
     },
   });
@@ -214,7 +219,7 @@ export default function CanvasPage() {
       toast.success("Workflow execution cancelled");
       setCurrentExecution(null);
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast.error(`Failed to cancel execution: ${error.message || "Unknown error"}`);
     },
   });
@@ -228,7 +233,12 @@ export default function CanvasPage() {
       if (currentExecution?.execution_id) {
         try {
           const updatedStatus = await getExecutionStatus(currentExecution.execution_id);
-          setCurrentExecution(updatedStatus);
+
+          // CRITICAL FIX: Preserve execution_id by merging with existing state
+          setCurrentExecution(prevExecution => ({
+            ...updatedStatus,
+            execution_id: prevExecution?.execution_id || currentExecution.execution_id
+          }));
 
           // If execution is finished, fetch logs
           if (updatedStatus.phase === 'finished' || updatedStatus.phase === 'cancelled') {
@@ -488,7 +498,7 @@ export default function CanvasPage() {
 }
 
 // Simple debounce utility function
-function debounce<T extends (...args: any[]) => void>(
+function debounce<T extends (...args: unknown[]) => void>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {
