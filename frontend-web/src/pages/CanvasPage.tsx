@@ -307,17 +307,12 @@ export default function CanvasPage() {
   }, []);
 
   return (
-    <div className="canvas-page">
+    <>
       <div
-        id="canvas-container"
-        data-testid="canvas-container"
-        className="canvas-container"
+        id="agent-shelf"
+        data-testid="agent-shelf"
+        className="agent-shelf"
       >
-        <div
-          id="agent-shelf"
-          data-testid="agent-shelf"
-          className="agent-shelf"
-        >
           <h3>Agents</h3>
           <div className="agent-shelf-content">
             {agents.length === 0 ? (
@@ -342,6 +337,7 @@ export default function CanvasPage() {
           </div>
         </div>
 
+      <div id="canvas-container" className="canvas-container">
         <div className="main-content-area">
           {/* Execution Controls */}
           <div className="execution-controls">
@@ -411,38 +407,38 @@ export default function CanvasPage() {
             </div>
           </div>
         </div>
+      </div>
 
-        <div
-          id="tool-palette"
-          data-testid="tool-palette"
-          className="tool-palette"
-        >
-          <h3>Tools</h3>
-          <div className="tool-palette-content">
-            <div
-              className="tool-palette-item"
-              data-testid="tool-http-request"
-              draggable={true}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('tool-type', 'http-request');
-                e.dataTransfer.setData('tool-name', 'HTTP Request');
-              }}
-            >
-              <div className="tool-icon">🌐</div>
-              <div className="tool-name">HTTP Request</div>
-            </div>
-            <div
-              className="tool-palette-item"
-              data-testid="tool-url-fetch"
-              draggable={true}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('tool-type', 'url-fetch');
-                e.dataTransfer.setData('tool-name', 'URL Fetch');
-              }}
-            >
-              <div className="tool-icon">📡</div>
-              <div className="tool-name">URL Fetch</div>
-            </div>
+      <div
+        id="tool-palette"
+        data-testid="tool-palette"
+        className="tool-palette"
+      >
+        <h3>Tools</h3>
+        <div className="tool-palette-content">
+          <div
+            className="tool-palette-item"
+            data-testid="tool-http-request"
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('tool-type', 'http-request');
+              e.dataTransfer.setData('tool-name', 'HTTP Request');
+            }}
+          >
+            <div className="tool-icon">🌐</div>
+            <div className="tool-name">HTTP Request</div>
+          </div>
+          <div
+            className="tool-palette-item"
+            data-testid="tool-url-fetch"
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('tool-type', 'url-fetch');
+              e.dataTransfer.setData('tool-name', 'URL Fetch');
+            }}
+          >
+            <div className="tool-icon">📡</div>
+            <div className="tool-name">URL Fetch</div>
           </div>
         </div>
       </div>
@@ -485,7 +481,7 @@ export default function CanvasPage() {
           Saving workflow...
         </div>
       )}
-    </div>
+    </>
   );
 }
 

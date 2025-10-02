@@ -125,11 +125,7 @@ export default function Layout({ children }: PropsWithChildren) {
   };
 
   return (
-    <div
-      id="app-container"
-      className={clsx("app-shell", { "canvas-view": isCanvasRoute })}
-      data-testid="app-container"
-    >
+    <>
       <WelcomeHeader />
       <nav id="global-tabs-container" className="tabs-container">
         <button
@@ -162,10 +158,14 @@ export default function Layout({ children }: PropsWithChildren) {
           </button>
         )}
       </nav>
-      <main id="main-content" className="main-content-area">
+      <div
+        id="app-container"
+        className={clsx({ "canvas-view": isCanvasRoute })}
+        data-testid="app-container"
+      >
         {children}
-      </main>
+      </div>
       <StatusFooter />
-    </div>
+    </>
   );
 }
