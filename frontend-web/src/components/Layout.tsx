@@ -46,45 +46,44 @@ function WelcomeHeader() {
   };
 
   return (
-    <header className="welcome-header" data-testid="welcome-header">
-      <div className="welcome-copy">
-        <span className="welcome-greeting">Welcome, {displayName}!</span>
-        <div className="status-indicators" aria-label="System status">
-          {STATUS_ITEMS.map((item) => (
-            <span key={item.label} className="status-indicator">
-              <span className="status-label">{item.label}:</span> {item.value}
-            </span>
-          ))}
-        </div>
-      </div>
-      <div
-        className="user-avatar"
-        aria-label="User avatar"
-        role="button"
-        tabIndex={0}
-        onClick={handleAvatarClick}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            handleAvatarClick();
-          }
+    <header className="header" data-testid="welcome-header">
+      <button
+        id="shelf-toggle-btn"
+        aria-label="Open agent panel"
+        aria-controls="agent-shelf"
+        aria-expanded="false"
+        onClick={() => {
+          // TODO: Implement shelf toggle functionality
+          console.log("Shelf toggle clicked - not implemented yet");
         }}
-        style={{ cursor: 'pointer' }}
-        title="Click to log out"
       >
-        {user?.avatar_url ? (
-          <img
-            src={user.avatar_url}
-            alt="User avatar"
-            style={{
-              width: '100%',
-              height: '100%',
-              borderRadius: '50%',
-              objectFit: 'cover'
-            }}
-          />
-        ) : (
-          <span>{userInitials}</span>
-        )}
+        <i data-feather="menu"></i>
+      </button>
+      <h1 id="header-title">AI Agent Platform</h1>
+      <div className="user-menu-container">
+        <div
+          className="avatar-badge"
+          aria-label="User avatar"
+          role="button"
+          tabIndex={0}
+          onClick={handleAvatarClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              handleAvatarClick();
+            }
+          }}
+          title="Click to log out"
+        >
+          {user?.avatar_url ? (
+            <img
+              src={user.avatar_url}
+              alt="User avatar"
+              className="avatar-img"
+            />
+          ) : (
+            <span>{userInitials}</span>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -99,9 +98,10 @@ function StatusFooter() {
   });
 
   return (
-    <footer className="status-footer" data-testid="status-footer" aria-live="polite">
-      <span className="status-footer-label">Status:</span>
-      <ConnectionStatusIndicator status={connectionStatus} />
+    <footer className="status-bar" data-testid="status-footer" aria-live="polite">
+      <div className="packet-counter">
+        <ConnectionStatusIndicator status={connectionStatus} />
+      </div>
     </footer>
   );
 }
@@ -149,15 +149,6 @@ export default function Layout({ children }: PropsWithChildren) {
           onClick={() => handleTabClick("/canvas")}
         >
           Canvas Editor
-        </button>
-        <button
-          id="global-profile-tab"
-          type="button"
-          data-testid="global-profile-tab"
-          className={clsx("tab-button", { active: isProfileRoute })}
-          onClick={() => handleTabClick("/profile")}
-        >
-          Profile
         </button>
         {isAdmin && (
           <button

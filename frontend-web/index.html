@@ -9,6 +9,13 @@
   </head>
   <body>
     <div id="react-root"></div>
+
+    <!-- Global overlay portal (dropdowns, tooltips, modals that need to escape stacking contexts) -->
+    <div id="overlay-root"></div>
+
+    <!-- Particle background layer -->
+    <div class="particle-bg" aria-hidden="true"></div>
+
     <script type="module" src="/src/main.tsx"></script>
     <!-- Feather icons – lightweight SVG set -->
     <script src="https://unpkg.com/feather-icons"></script>
