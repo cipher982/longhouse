@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures';
+import { test, expect, type Page } from './fixtures';
 
 // Helper function to wait for workflow execution to complete
 async function waitForExecutionCompletion(page: Page, timeout = 30000) {

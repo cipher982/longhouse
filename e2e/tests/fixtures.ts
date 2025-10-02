@@ -1,4 +1,6 @@
-import { test as base, expect, BrowserContext } from '@playwright/test';
+import { test as base, expect, BrowserContext, type Page } from '@playwright/test';
+
+export type { Page };
 import * as fs from 'fs';
 import * as path from 'path';
 
