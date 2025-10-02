@@ -337,7 +337,11 @@ export default function CanvasPage() {
           </div>
         </div>
 
-      <div id="canvas-container" className="canvas-container">
+      <div
+        id="canvas-container"
+        data-testid="canvas-container"
+        className="canvas-container"
+      >
         <div className="main-content-area">
           {/* Execution Controls */}
           <div className="execution-controls">
