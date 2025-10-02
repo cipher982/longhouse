@@ -1,115 +1,68 @@
-.welcome-header {
+/* Layout utility classes – Phase 3 groundwork */
+
+/* Grid helpers */
+.grid {
+  display: grid;
+  gap: var(--spacing-lg);
+}
+
+.grid-2 {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.grid-4 {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+/* Flex helpers */
+.flex {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 24px;
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
-  color: #ffffff;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.welcome-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.welcome-greeting {
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.status-indicators {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 14px;
-  letter-spacing: 0.01em;
-}
-
-.status-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.15);
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.status-label {
-  opacity: 0.85;
-}
-
-.user-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
+.flex-center {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
 }
-.app-shell {
-  min-height: 100vh;
+
+.flex-column {
   display: flex;
   flex-direction: column;
-  background: var(--dark);
 }
 
-.canvas-view {
-  background: #05070d;
+/* Spacer helper */
+.spacer {
+  flex: 1 1 auto;
 }
 
-.tabs-container {
-  display: flex;
-  padding: 0 24px;
-  background: linear-gradient(135deg, var(--secondary), var(--primary));
+/* --------------------------------------------------------- */
+/* Application grid layout (header, content, status)          */
+/* --------------------------------------------------------- */
+
+/* Make the whole page a three-row grid:
+   1) Header (includes title + tabs)
+   2) Main content (views)
+   3) Status bar */
+body {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh; /* fallback */
+  height: 100dvh; /* modern mobile viewport */
+  /* Body overflow is hidden; inner content rows manage scrolling */
+  overflow: hidden;
 }
 
-.tab-button {
-  border: none;
-  padding: 12px 20px;
-  font-size: 14px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  background: transparent;
-  border-bottom: 3px solid transparent;
-  cursor: pointer;
-  transition: color 0.2s ease, background-color 0.2s ease, border-bottom-color 0.2s ease;
-}
+/* Place elements explicitly so order in DOM does not matter */
+.header { grid-row: 1; }
+.status-bar { grid-row: 3; }
 
-.tab-button:hover,
-.tab-button:focus-visible {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.12);
-  outline: none;
-}
-
-.tab-button.active {
-  color: #ffffff;
-  border-bottom-color: #ffffff;
-}
-
-.main-content-area {
-  flex: 1;
-  padding: 24px;
-}
-
-.status-footer {
-  margin-top: auto;
-  padding: 10px 24px;
-  text-align: center;
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--secondary), var(--primary));
-  font-size: 13px;
-  letter-spacing: 0.02em;
-}
-
-.status-footer-label {
-  font-weight: 600;
-  margin-right: 4px;
+/* Content containers occupy the middle row */
+#app-container {
+  grid-row: 2;
+  min-height: 0; /* allow children to size and scroll */
+  overflow: auto; /* content scrolls in the middle row */
 }

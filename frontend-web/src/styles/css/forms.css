@@ -1,0 +1,88 @@
+/* ------------------------------------------------------------------
+   Forms & Inputs – extracted from styles.css
+   ------------------------------------------------------------------ */
+
+.form-control,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+textarea,
+select {
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--dark-card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 14px;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+    box-sizing: border-box;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--text-secondary);
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+.profile-input:focus,
+.modal textarea:focus,
+.modal input[type="text"]:focus,
+.scope-select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(100, 255, 218, 0.25);
+}
+
+/* Error state */
+.input-error {
+    border-color: var(--error) !important;
+}
+
+.input-error:focus {
+    border-color: var(--error) !important;
+    box-shadow: 0 0 0 2px rgba(244, 67, 54, 0.25);
+}
+
+/* Form layout helpers */
+.form-row {
+    margin-top: 12px;
+}
+
+.form-row-sm {
+    margin-top: 8px;
+}
+
+/* -------------------------------------------------------------
+   Profile page specific
+   ------------------------------------------------------------- */
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  max-width: 420px;
+}
+
+.profile-form label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.profile-input {
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+}
+
+#sched-summary {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: var(--spacing-md);
+}
