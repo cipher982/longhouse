@@ -1,0 +1,84 @@
+:root {
+  /* --------------------------------------------------------- */
+  /* Brand colour palette (taken from branding drafts)         */
+  /* --------------------------------------------------------- */
+  --primary: #00c6ff;      /* Cyan */
+  --secondary: #0072ff;    /* Deep blue */
+  --accent: #ff6b6b;       /* Coral */
+
+  --success: #4caf50;
+  --warning: #ff9800;
+  --error: #f44336;
+
+  /* Greys / Surfaces */
+  --dark: #0a0a0f;         /* Page background */
+  --dark-lighter: #1a1a2e; /* Section background */
+  --dark-card: #2d2d44;    /* Card background */
+
+  /* Legacy background tokens still referenced by chat.css and older code */
+  --bg-dark: #252535;
+  --bg-darker: #1f1f2e;
+  --bg-hover: #32324a;
+  --bg-button: #2c2c40;
+  --bg-button-hover: #3d3d5c;
+
+  /* Border token */
+  --border-color: #3d3d5c;
+
+  /* Legacy text aliases */
+  --text-primary: #eee;
+  --text-secondary: var(--text-secondary); /* already defined, but keep alias */
+
+  /* Table helpers */
+  --table-cell-padding: 10px 14px;
+  --actions-column-width: 7.5rem;
+
+  /* Text colours */
+  --text: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.7);
+
+  /* --------------------------------------------------------- */
+  /* Legacy variable aliases – keep existing code working      */
+  /* --------------------------------------------------------- */
+  --color-primary: var(--primary);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-neutral: #95a5a6;
+
+  /* --------------------------------------------------------- */
+  /* Spacing scale                                             */
+  /* --------------------------------------------------------- */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+
+  /* Corner radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* Elevation shadows */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.2);
+
+  /* Animation timings */
+  --transition-fast: 150ms ease;
+  --transition-normal: 300ms ease;
+  --transition-slow: 500ms ease;
+
+  /* --------------------------------------------------------- */
+  /* Z-index scale                                            */
+  /* --------------------------------------------------------- */
+  --z-canvas: 10;      /* main interactive canvas layer */
+  --z-toolbar: 20;     /* workflow bar, header toolbars */
+  --z-overlay: 1000;   /* dropdowns, modals, toasts */
+
+  /* Reserved for future layout metrics */
+}

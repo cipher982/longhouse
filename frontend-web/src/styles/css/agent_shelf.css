@@ -1,0 +1,217 @@
+/* ------------------------------------------------------------------
+   Agent Shelf & Pill Styles – extracted from styles.css
+   ------------------------------------------------------------------ */
+
+#agent-shelf {
+    width: 260px;
+    flex-shrink: 0;
+    background: linear-gradient(to bottom, #2a2a3a, #252535);
+    border-right: 1px solid #3d3d5c;
+    padding: 16px;
+    box-sizing: border-box;
+    display: block;
+    overflow-y: auto;
+    height: 100%;
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Agent shelf header */
+.agent-shelf-header {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Node Palette header */
+.palette-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #F0F0F0; /* Light color for visibility */
+    margin: 0 0 16px 0; /* Match original inline margin */
+}
+
+/* Palette search input */
+.palette-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    outline: none;
+}
+
+/* Palette category header */
+.palette-category-header {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Palette node icon */
+.palette-node-icon {
+    font-size: 16px;
+    margin-right: 8px;
+}
+
+/* Palette node name */
+.palette-node-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #1e293b;
+}
+
+/* Palette node description */
+.palette-node-description {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+}
+
+/* Palette node */
+.palette-node {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    margin-bottom: 4px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    cursor: grab;
+    transition: all 0.2s ease;
+    background: #f8fafc;
+}
+
+.palette-node.hover {
+    border: 1px solid #3b82f6;
+    background: #eff6ff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Agent pills */
+.agent-pill {
+    cursor: grab;
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, #2e2e3e 0%, #2a2a3a 100%);
+    border: 1px solid #3d3d5c;
+    border-radius: var(--radius-lg);
+    font-size: 14px;
+    color: #e0e0e0;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    padding-left: 40px; /* space for icon */
+    display: flex; /* Added for alignment */
+    align-items: center; /* Added for vertical centering */
+    font-weight: 500; /* Increased font weight for better visibility */
+}
+
+.agent-pill::before {
+    content: "🤖";
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 16px;
+    opacity: 0.7;
+}
+
+.agent-pill:hover {
+    background: linear-gradient(135deg, #3a3a4a 0%, #363646 100%);
+    border-color: #4d4d6c;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.agent-pill.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: linear-gradient(135deg, #1e1e2e 0%, #1a1a2a 100%);
+    border-color: #2d2d3c;
+}
+
+.agent-pill.disabled::before { content: "⏸️"; }
+
+.agent-pill.disabled:hover {
+    background: linear-gradient(135deg, #1e1e2e 0%, #1a1a2a 100%);
+    transform: none;
+    box-shadow: var(--shadow-sm);
+}
+
+/* Loading & empty states */
+.agent-shelf-loading, .agent-shelf-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    opacity: 0.7;
+}
+
+/* Drag and drop */
+
+/* Harmonised drag ghost – token colours */
+.agent-pill.dragging {
+  opacity: 0.92;
+  background: linear-gradient(135deg, var(--secondary) 0%, var(--primary) 100%);
+  box-shadow: var(--shadow-lg);
+  transform: scale(1.05) rotate(-2deg);
+  border: 2px dashed var(--primary);
+  cursor: grabbing;
+  z-index: 1000;
+}
+
+#canvas-container.canvas-drop-target {
+    outline: 2px dashed #7f8ec0;
+    outline-offset: -2px;
+    background-color: rgba(127, 142, 192, 0.1);
+}
+
+/* Off-canvas responsive behaviour (mirrors earlier media query) */
+@media (max-width: 767px) {
+  #agent-shelf {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
+    width: 240px;
+    box-shadow: var(--shadow-lg);
+    z-index: 1500;
+  }
+
+  #agent-shelf.open { transform: translateX(0); }
+}
+
+/* Scrim overlay when shelf is open on mobile */
+.shelf-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+  z-index: 1400; /* below shelf (1500), above content */
+  display: none; /* only used on mobile */
+}
+
+body.shelf-open .shelf-scrim { opacity: 1; pointer-events: auto; }
+
+/* Disable animations for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  #agent-shelf { transition: none; }
+  .shelf-scrim { transition: none; }
+}
+
+/* Only show scrim on small screens */
+@media (max-width: 767px) {
+  .shelf-scrim { display: block; }
+}

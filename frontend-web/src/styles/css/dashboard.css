@@ -1,0 +1,473 @@
+/* ------------------------------------------------------------------
+   Dashboard & Table Styles
+   ------------------------------------------------------------------ */
+
+.run-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: var(--spacing-sm);
+    font-size: 14px;
+}
+
+.run-history-table th,
+.run-history-table td {
+    padding: 2px 6px;
+    line-height: 1.3em;
+}
+
+.run-history-table th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.run-history-table td { color: var(--text-primary); }
+
+/* Right-align numeric columns */
+.run-history-table td:nth-child(5),
+.run-history-table td:nth-child(6) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.kebab-menu-btn {
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    user-select: none;
+}
+
+.run-kebab-cell {
+    width: 22px; text-align: center;
+}
+
+.run-toggle-link {
+    display: inline-block;
+    margin-top: var(--spacing-xs);
+    font-size: 11px;
+    color: var(--primary);
+    cursor: pointer;
+    text-decoration: none;
+    user-select: none;
+}
+
+.run-toggle-link:hover { text-decoration: underline; }
+
+/* -------------------------------------------------------------
+   Agents table (main dashboard list)
+   ------------------------------------------------------------- */
+
+.agents-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-primary);
+  margin-top: var(--spacing-md);
+}
+
+.agents-table th,
+.agents-table td {
+  padding: var(--table-cell-padding);
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.agents-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.agents-table td {
+  color: var(--text-primary);
+}
+
+.agents-table tr:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.owner-cell { text-align: center; vertical-align: middle; }
+
+.owner-wrapper { display: inline-flex; align-items: center; }
+.owner-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+/* Action buttons in dashboard header */
+#create-agent-button,
+.create-agent-button,
+.create-agent-btn {
+  background: var(--primary);
+  color: var(--dark);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  min-height: 40px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#create-agent-button:hover,
+.create-agent-btn:hover {
+  background: var(--secondary);
+}
+
+.create-agent-button.loading {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+/* Danger (reset db) button */
+.reset-db-btn {
+  background: var(--error) !important;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.2s;
+}
+
+.reset-db-btn:hover { background: #c0392b !important; }
+
+/* -------------------------------------------------------------
+   Dashboard layout, header & search
+   ------------------------------------------------------------- */
+
+.dashboard-container {
+  flex: 1;
+  padding: 20px;
+  width: 100%;
+  max-width: 1200px;
+  min-width: 800px;
+  margin: 0 auto;
+  background: var(--dark-lighter);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow-y: auto;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;            /* Allow wrapping on very narrow viewports */
+  gap: var(--spacing-sm);
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Container that groups the Create-Agent & Reset-DB buttons */
+.button-container {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Search bar */
+.search-container {
+  display: flex;
+  align-items: center;
+  background: var(--bg-dark);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  width: 300px;
+  flex-shrink: 0;
+}
+
+.search-icon { margin-right: 8px; color: #aaa; }
+
+#agent-search {
+  background: transparent;
+  border: none;
+  color: #fff;
+  outline: none;
+  width: 100%;
+  font-size: 14px;
+}
+
+#agent-search::placeholder { color: #777; }
+
+.search-clear {
+  cursor: pointer;
+  color: #aaa;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px;
+  margin-left: 4px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.search-clear:hover { color: #fff; }
+
+/* Scope selector */
+/* Legacy select is gone – new fancy toggle below */
+
+/* ------------------------------------------------------------------ */
+.scope-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-right: var(--spacing-md);
+}
+
+.scope-text-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  text-align: center;
+  line-height: 1;
+}
+
+/* Slider toggle (My vs All agents)                                    */
+/* ------------------------------------------------------------------ */
+
+.scope-toggle {
+  position: relative;
+  display: inline-block;
+  width: 80px;
+  height: 32px;
+  user-select: none;
+}
+
+.scope-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.slider::before {
+  position: absolute;
+  content: "";
+  height: 24px;
+  width: 24px;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--primary);
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+
+/* Move knob to the right when checked */
+.scope-toggle input:checked + .slider::before {
+  transform: translate(52px, -50%);
+}
+
+/* Highlight border on focus */
+.scope-toggle input:focus + .slider {
+  box-shadow: 0 0 0 2px rgba(100,255,218,0.4);
+  border-color: var(--primary);
+}
+
+/* Small text labels */
+
+
+/* View tabs above dashboard/canvas */
+.view-tabs {
+  display: flex;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 10px;
+  padding: 0 10px;
+}
+
+.view-tab-button {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 12px 20px;
+  margin-right: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: color 0.3s;
+  border-bottom: 3px solid transparent;
+  position: relative;
+}
+
+.view-tab-button:hover { color: #fff; }
+.view-tab-button.active {
+  color: var(--primary);
+  border-bottom: 3px solid var(--primary);
+}
+
+/* Sticky actions column */
+.agents-table th.actions-header {
+  position: sticky;
+  right: 0;
+  background: var(--bg-dark);
+  box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+  min-width: var(--actions-column-width);
+  z-index: 2;
+}
+
+.actions-cell {
+  white-space: nowrap;
+  text-align: right;
+  position: sticky;
+  right: 0;
+  background: var(--dark-lighter);
+  box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+  min-width: var(--actions-column-width);
+  vertical-align: middle;
+}
+
+.actions-cell-inner { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--spacing-xs); }
+
+/* Generic card + action rows reused across dashboard */
+.card {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--border-color);
+  margin-top: var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  background: var(--bg-dark);
+}
+
+.actions-row { display: flex; gap: 8px; margin-top: var(--spacing-sm); }
+
+/* -------------------------------------------------------------
+   Action buttons inside the Agents table
+   ------------------------------------------------------------- */
+
+/* Keep them visually unobtrusive – transparent background, no forced fill
+   colours.  Icons (emoji/SVG) keep their native palette exactly like the
+   pre-refactor main branch. */
+
+.action-btn {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: inherit;          /* don’t override intrinsic icon colour */
+}
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+
+/* -------------------------------------------------------------
+   Agent Detail & Debug modal content
+   ------------------------------------------------------------- */
+
+.overview-list { list-style: none; padding-left: 0; margin: 0; color: var(--text-primary); }
+.overview-list li { margin-bottom: var(--spacing-sm); }
+
+.raw-json {
+  background: var(--bg-darker);
+  color: var(--text-primary);
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 0.85rem;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.tab-body { margin-top: var(--spacing-md); }
+
+.agent-detail-container { padding: var(--spacing-md); display: flex; flex-direction: column; gap: var(--spacing-md); }
+
+.error-block {
+  background: rgba(231,76,60,0.1);
+  border-left: 3px solid var(--error);
+  color: var(--text-primary);
+  padding: var(--spacing-md);
+  overflow-x: auto;
+  font-family: monospace;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.detail-actions { display: flex; gap: var(--spacing-md); justify-content: flex-start; }
+
+.detail-btn {
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.detail-btn:hover { background: var(--bg-button-hover); transform: translateY(-2px); }
+
+.last-run-indicator { margin-left: 5px; font-size: 0.8em; }
+.last-run-success { color: var(--success); }
+.last-run-failure { color: var(--error); }
+
+/* Schedule / triggers summary text */
+.schedule-summary { font-size: 0.9em; color: #555; margin-top: 6px; }
+
+.triggers-list { margin-top: var(--spacing-md); }
+
+.summary-text { font-size: 0.9em; color: #555; }
+
+/* MCP (server manager) intro sections reuse card/grid util from dashboard */
+.mcp-intro-text, .mcp-custom-intro { margin-bottom: var(--spacing-md); color: var(--text-secondary); }
+
+
+/* Utility */
+.text-success { color: var(--success); }
+
+/* Responsive tweaks */
+@media (max-width: 992px) {
+  .dashboard-container { overflow-x: auto; padding-bottom: var(--spacing-md); min-width: 600px; }
+  .agents-table th, .agents-table td { padding: var(--spacing-sm) var(--spacing-md); white-space: nowrap; }
+  .agents-table tr:hover .actions-cell { background: var(--bg-hover); }
+}
+
+@media (max-width: 768px) {
+  .agents-table { display: block; width: 100%; overflow: hidden; }
+  .agents-table thead { display: none; }
+  .agents-table tr { display: block; background: var(--bg-darker); margin-bottom: var(--spacing-sm); border-radius: 6px; padding: var(--spacing-sm) var(--spacing-md); }
+  .agents-table td { display: flex; justify-content: space-between; padding: var(--spacing-xs) 0; }
+  .agents-table td::before { content: attr(data-label); font-weight: 600; color: var(--text-secondary); }
+  .agents-table td.actions-cell { justify-content: flex-end; }
+}
+
+
+
+/* Empty-state */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-xl);
+    color: var(--text-secondary);
+    min-height: 400px;
+    width: 100%;
+}
+
+.empty-state-illustration { font-size: 64px; margin-bottom: var(--spacing-md); }
+.empty-state-text { margin: 0 0 var(--spacing-md) 0; font-size: 18px; text-align: center; }

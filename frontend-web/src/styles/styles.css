@@ -1,0 +1,55 @@
+/* ------------------------------------------------------------------ */
+/*  Base stylesheet – imports dedicated CSS modules                   */
+/* ------------------------------------------------------------------ */
+
+/* Design tokens & utilities */
+@import url("tokens.css");
+@import url("layout.css");
+
+/* ------------------------------------------------------------------ */
+/*  Global base styles not scoped to a particular module               */
+/* ------------------------------------------------------------------ */
+
+/* Reset & base */
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background-color: var(--dark);
+  font-size: 14px; /* normalised baseline */
+  color: var(--text);
+}
+
+/* Modal select helper – lives here until we refactor modal CSS */
+.modal-select {
+  width: 100%;
+  padding: 12px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background-color: #333;
+  color: white;
+  font-family: inherit;
+  margin-bottom: 15px;
+  box-sizing: border-box;
+  font-size: 15px;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23bdc3c7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6,9 12,15 18,9'></polyline></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 18px;
+  padding-right: 36px;
+}
+
+.modal-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 5px rgba(100, 255, 218, 0.5);
+}
+
+.modal-select option {
+  background: #252535;
+  color: #eee;
+  padding: 8px;
+}

@@ -1,0 +1,229 @@
+/* ====================================================================
+   Execution Results Panel - Workflow Execution Feedback UI
+   ==================================================================== */
+
+.execution-results-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    width: min(30vw, 400px);
+    background: var(--dark-card);
+    border: 1px solid var(--border-subtle);
+    border-left: none;
+    border-radius: 0 0 0 12px;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
+    z-index: 100;
+    transition: width 0.3s ease, transform 0.3s ease;
+    transform: none;
+}
+
+/* .execution-results-panel.collapsed {
+    transform: none;
+} */
+
+/* collapse hide disabled: always show panel content */
+/* .execution-results-panel.collapsed .results-panel-content {
+    display: none;
+} */
+
+/* Panel Header */
+.results-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface-secondary);
+    border-radius: 12px 12px 0 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.results-panel-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: background-color 0.2s ease;
+}
+
+.results-panel-toggle:hover {
+    background: var(--surface-tertiary);
+}
+
+.results-panel-status {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    background: var(--surface-tertiary);
+    color: var(--text-secondary);
+}
+
+.results-panel-status.running {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    animation: pulse 2s infinite;
+}
+
+.results-panel-status.success {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.results-panel-status.failed {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.results-panel-status.starting {
+    background: rgba(168, 85, 247, 0.2);
+    color: #a855f7;
+}
+
+/* Panel Content */
+.results-panel-content {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 0 20px 20px;
+}
+
+.results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.no-results {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+/* Result Items */
+.result-item {
+    background: var(--surface-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px;
+    transition: border-color 0.2s ease;
+}
+
+.result-item:hover {
+    border-color: var(--border-primary);
+}
+
+.result-item-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.result-icon {
+    font-size: 18px;
+    width: 24px;
+    text-align: center;
+}
+
+.result-icon.running {
+    animation: pulse 2s infinite;
+}
+
+.result-node-name {
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+}
+
+.result-output {
+    background: var(--surface-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 12px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    overflow-x: auto;
+}
+
+.result-output.running {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: var(--text-secondary);
+    font-style: italic;
+    text-align: center;
+}
+
+.result-output pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--text);
+}
+
+/* Animations */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .execution-results-panel {
+        width: 95vw;
+        left: 2.5vw;
+        transform: none;
+    }
+    
+    .execution-results-panel.collapsed {
+        transform: translateY(calc(100% - 50px));
+    }
+    
+    .results-panel-header {
+        padding: 10px 16px;
+    }
+    
+    .results-panel-content {
+        padding: 0 16px 16px;
+    }
+    
+    .result-item {
+        padding: 12px;
+    }
+}
+
+/* Enhanced Status Indicators for Workflow Bar */
+.workflow-bar .run-btn.running {
+    background: linear-gradient(45deg, #3b82f6, #1d4ed8);
+    animation: pulse 2s infinite;
+}
+
+.workflow-bar .run-btn.success {
+    background: linear-gradient(45deg, #22c55e, #16a34a);
+}
+
+.workflow-bar .run-btn.failed {
+    background: linear-gradient(45deg, #ef4444, #dc2626);
+}
+
+/* Progress indicator in status bar */
+.execution-progress-text {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-left: 8px;
+}

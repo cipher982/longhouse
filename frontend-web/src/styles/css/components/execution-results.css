@@ -1,0 +1,264 @@
+/* ====================================================================
+   Execution Results Panel - Modern CSS Implementation
+   Uses native <details>/<summary> with container queries & modern CSS
+   ==================================================================== */
+
+/* Panel Container with Container Queries */
+.execution-results-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(30vw, 400px);
+    
+    background: var(--dark-card);
+    border: 1px solid var(--border-subtle);
+    border-left: none;
+    border-radius: 0 0 0 12px;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
+    z-index: 100;
+    
+    /* Modern CSS transitions */
+    transition: width 0.3s ease, view-transition-name 0.3s ease;
+    container-type: inline-size;
+    container-name: results-panel;
+}
+
+/* Enhanced Summary Header */
+.execution-results-panel .disclosure__summary {
+    padding: 12px 20px;
+    background: var(--surface-secondary);
+    border-radius: 12px 12px 0 0;
+    
+    /* Use :has() selector for modern state detection */
+    &:hover {
+        background: color-mix(in srgb, var(--surface-secondary) 90%, var(--color-primary) 10%);
+    }
+}
+
+.results-panel-header-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.results-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* Status Badge with Modern Color Mixing */
+.results-panel-status {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    background: var(--surface-tertiary);
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+}
+
+.results-panel-status.running {
+    background: color-mix(in srgb, #3b82f6 20%, transparent);
+    color: #3b82f6;
+    animation: pulse 2s infinite;
+}
+
+.results-panel-status.success {
+    background: color-mix(in srgb, #22c55e 20%, transparent);
+    color: #22c55e;
+}
+
+.results-panel-status.failed {
+    background: color-mix(in srgb, #ef4444 20%, transparent);
+    color: #ef4444;
+}
+
+.results-panel-status.starting {
+    background: color-mix(in srgb, #a855f7 20%, transparent);
+    color: #a855f7;
+}
+
+/* Content Area with Modern Scrollbar */
+.execution-results-panel .disclosure__content > .results-panel-content {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 0 20px 20px;
+    
+    /* Modern scrollbar styling */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-subtle) transparent;
+    
+    &::-webkit-scrollbar {
+        width: 6px;
+    }
+    
+    &::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+        background: var(--border-subtle);
+        border-radius: 3px;
+        
+        &:hover {
+            background: var(--border-primary);
+        }
+    }
+}
+
+.results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    container-type: inline-size;
+}
+
+.no-results {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+/* Result Items with :has() selector */
+.result-item {
+    background: var(--surface-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 16px;
+    transition: all 0.2s ease;
+    
+    /* Modern hover with :has() */
+    &:has(.result-output) {
+        border-left-width: 3px;
+        border-left-color: var(--color-primary);
+    }
+    
+    &:hover {
+        border-color: var(--border-primary);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+}
+
+.result-item-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.result-icon {
+    font-size: 18px;
+    width: 24px;
+    text-align: center;
+    
+    &.running {
+        animation: pulse 2s infinite;
+    }
+}
+
+.result-node-name {
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+}
+
+.result-output {
+    background: var(--surface-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 12px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    
+    &.running {
+        background: color-mix(in srgb, #3b82f6 10%, var(--surface-secondary));
+        border-color: color-mix(in srgb, #3b82f6 30%, var(--border-subtle));
+        color: var(--text-secondary);
+        font-style: italic;
+        text-align: center;
+    }
+    
+    pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        color: var(--text);
+    }
+}
+
+/* Modern Animations */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Container Queries for Responsive Design (2025) */
+@container results-panel (max-width: 300px) {
+    .results-panel-header-content {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .results-panel-status {
+        align-self: flex-end;
+    }
+}
+
+@container results-list (max-width: 250px) {
+    .result-item {
+        padding: 12px;
+    }
+    
+    .result-item-header {
+        flex-wrap: wrap;
+    }
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .execution-results-panel {
+        width: 95vw;
+        left: 2.5vw;
+        right: 2.5vw;
+    }
+    
+    .execution-results-panel .disclosure__summary {
+        padding: 10px 16px;
+    }
+    
+    .execution-results-panel .disclosure__content > .results-panel-content {
+        padding: 0 16px 16px;
+    }
+}
+
+/* View Transitions API Support (2025) */
+@supports (view-transition-name: panel-transition) {
+    .execution-results-panel {
+        view-transition-name: results-panel-transition;
+    }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+    .execution-results-panel,
+    .result-item,
+    .results-panel-status {
+        transition: none;
+        animation: none;
+    }
+    
+    .result-item:hover {
+        transform: none;
+    }
+}
