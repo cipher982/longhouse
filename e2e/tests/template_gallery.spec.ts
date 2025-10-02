@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures';
+import { test, expect, type Page } from './fixtures';
 
 async function navigateToCanvas(page: Page) {
   await page.goto('/');

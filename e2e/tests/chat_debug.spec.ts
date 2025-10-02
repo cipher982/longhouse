@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures';
+import { test, expect, type Page } from './fixtures';
 
 // Reset DB before each test to keep agent/thread ids predictable
 test.beforeEach(async ({ request }) => {

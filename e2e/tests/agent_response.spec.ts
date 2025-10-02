@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures';
+import { test, expect, type Page } from './fixtures';
 import { WebSocketServer, WebSocket } from 'ws';
 
 // Reset DB before each test to keep thread ids predictable
