@@ -215,6 +215,34 @@ def _exchange_google_auth_code(auth_code: str, *, redirect_uri: Optional[str] = 
 # ---------------------------------------------------------------------------
 
 
+@router.post("/dev-login", response_model=TokenOut)
+def dev_login(db: Session = Depends(get_db)) -> TokenOut:
+    """Development-only login endpoint that bypasses Google OAuth.
+
+    Only works when AUTH_DISABLED=1 is set in environment.
+    Creates/returns a token for dev@local admin user.
+    """
+    if not _settings.auth_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1"
+        )
+
+    # Get or create dev@local user
+    user = crud.get_user_by_email(db, "dev@local")
+    if not user:
+        user = crud.create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN")
+
+    # Issue platform JWT
+    access_token = _issue_access_token(
+        user.id,
+        user.email,
+        display_name=user.display_name or "Dev User",
+        avatar_url=user.avatar_url,
+    )
+
+    return TokenOut(access_token=access_token, expires_in=30 * 60)
+
+
 @router.post("/google", response_model=TokenOut)
 def google_sign_in(body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:  # noqa: D401 – simple name
     """Exchange a Google ID token for a platform access token.

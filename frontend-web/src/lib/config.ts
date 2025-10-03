@@ -27,16 +27,33 @@ export interface AppConfig {
   queryRetryDelay: number;
 }
 
+// Extend window type to include runtime config
+declare global {
+  interface Window {
+    API_BASE_URL?: string;
+    WS_BASE_URL?: string;
+  }
+}
+
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
   const isDevelopment = import.meta.env.MODE === 'development';
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
 
+  // Prefer runtime config (from config.js) over build-time env vars
+  const apiBaseUrl = typeof window !== 'undefined' && window.API_BASE_URL
+    ? window.API_BASE_URL
+    : (import.meta.env.VITE_API_BASE_URL || '/api');
+
+  const wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
+    ? window.WS_BASE_URL
+    : (import.meta.env.VITE_WS_BASE_URL || window?.location?.origin?.replace('http', 'ws') || '');
+
   return {
     // API Configuration
-    apiBaseUrl: import.meta.env.VITE_API_BASE_URL || '/api',
-    wsBaseUrl: import.meta.env.VITE_WS_BASE_URL || window?.location?.origin?.replace('http', 'ws') || '',
+    apiBaseUrl,
+    wsBaseUrl,
 
     // Authentication
     googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || "REDACTED_OAUTH_CLIENT.apps.googleusercontent.com",

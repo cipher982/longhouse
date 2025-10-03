@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
+import config from './config';
 
 // Types from our API
 interface User {
@@ -55,7 +56,7 @@ function removeStoredToken(): void {
 
 // API functions
 async function loginWithGoogle(idToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const response = await fetch('/api/auth/google', {
+  const response = await fetch(`${config.apiBaseUrl}/auth/google`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -77,7 +78,7 @@ async function getCurrentUser(): Promise<User> {
     throw new Error('No auth token');
   }
 
-  const response = await fetch('/api/users/me', {
+  const response = await fetch(`${config.apiBaseUrl}/users/me`, {
     headers: {
       'Authorization': `Bearer ${token}`,
     },
@@ -247,18 +248,51 @@ export function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignI
   );
 }
 
+// Dev login function (bypasses Google OAuth in development)
+async function loginWithDevAccount(): Promise<{ access_token: string; expires_in: number }> {
+  const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(error || 'Dev login failed');
+  }
+
+  return response.json();
+}
+
 // Login overlay component
 interface LoginOverlayProps {
   clientId: string;
 }
 
 export function LoginOverlay({ clientId }: LoginOverlayProps) {
+  const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
+  const { login } = useAuth();
+
   const handleLoginSuccess = () => {
     // The AuthProvider will handle updating the authentication state
   };
 
   const handleLoginError = (error: string) => {
     toast.error(error);
+  };
+
+  const handleDevLogin = async () => {
+    setIsDevLoginLoading(true);
+    try {
+      const data = await loginWithDevAccount();
+      setStoredToken(data.access_token);
+      window.location.reload(); // Reload to trigger auth state update
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Dev login failed');
+    } finally {
+      setIsDevLoginLoading(false);
+    }
   };
 
   return (
@@ -292,6 +326,24 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           onSuccess={handleLoginSuccess}
           onError={handleLoginError}
         />
+        <div style={{ margin: '1rem 0', color: '#666' }}>or</div>
+        <button
+          onClick={handleDevLogin}
+          disabled={isDevLoginLoading}
+          style={{
+            padding: '0.75rem 2rem',
+            background: '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            fontSize: '14px',
+            fontWeight: 600,
+            cursor: isDevLoginLoading ? 'not-allowed' : 'pointer',
+            opacity: isDevLoginLoading ? 0.6 : 1,
+          }}
+        >
+          {isDevLoginLoading ? 'Logging in...' : 'Dev Login (Local Only)'}
+        </button>
       </div>
     </div>
   );
