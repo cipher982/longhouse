@@ -82,6 +82,9 @@ export const test = base.extend<TestFixtures>({
           window.localStorage.setItem('zerg_react_dashboard_url', `${normalized}/dashboard`);
           window.localStorage.setItem('zerg_react_chat_base', `${normalized}/chat`);
 
+          // Add test JWT token for React authentication
+          window.localStorage.setItem('zerg_jwt', 'test-jwt-token-for-e2e-tests');
+
           // Inject test worker ID for API request headers
           (window as any).__TEST_WORKER_ID__ = config.workerId;
         } catch (error) {
@@ -156,4 +159,4 @@ export const test = base.extend<TestFixtures>({
   // context.
 });
 
-export { expect, Page } from '@playwright/test';
+export { expect } from '@playwright/test';
