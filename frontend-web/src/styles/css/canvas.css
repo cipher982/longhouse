@@ -7,17 +7,25 @@
 /* Root container – app container during canvas view */
 /* ------------------------------------------------------------------ */
 
-#app-container {
-  display: flex;
-  flex-direction: column;
-  /* Occupy the page grid's content row and allow children to size */
-  min-height: 0;
-  box-sizing: border-box;
-  overflow: visible; /* Allow dropdowns to escape stacking context */
-}
-
+/* Canvas-specific overrides for app-container */
 #app-container.canvas-view {
   flex-direction: row;
+  overflow: visible; /* Allow canvas dropdowns to escape */
+}
+
+#app-container.canvas-view > #agent-shelf {
+  flex: 0 0 260px;
+  min-width: 260px;
+  max-width: 320px;
+  width: auto;
+  height: 100%;
+}
+
+#app-container.canvas-view > #canvas-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  height: 100%;
 }
 
 #canvas-container {

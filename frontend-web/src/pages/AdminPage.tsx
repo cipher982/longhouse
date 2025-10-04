@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
+import config from "../lib/config";
 
 // Types for ops data - matching actual backend contract
 interface OpsSummary {
@@ -51,7 +52,7 @@ async function fetchOpsSummary(): Promise<OpsSummary> {
     throw new Error("No auth token");
   }
 
-  const response = await fetch("/api/ops/summary", {
+  const response = await fetch(`${config.apiBaseUrl}/ops/summary`, {
     headers: { "Authorization": `Bearer ${token}` },
   });
 
@@ -68,6 +69,35 @@ async function fetchOpsSummary(): Promise<OpsSummary> {
 // fetchTimeSeries removed - not currently used
 
 // fetchTopAgents removed - top agents are included in ops summary
+
+// Database management types and functions
+interface DatabaseResetRequest {
+  confirmation_password?: string;
+  reset_type: "clear_data" | "full_rebuild";
+}
+
+async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
+  const token = localStorage.getItem("zerg_jwt");
+  if (!token) {
+    throw new Error("No auth token");
+  }
+
+  const response = await fetch("/api/admin/reset-database", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Failed to reset database");
+  }
+
+  return response.json();
+}
 
 // Metric card component
 function MetricCard({
@@ -88,6 +118,68 @@ function MetricCard({
       </div>
       <div className="metric-value">{value}</div>
       {subtitle && <div className="metric-subtitle">{subtitle}</div>}
+    </div>
+  );
+}
+
+// Confirmation Modal component
+function ConfirmationModal({
+  isOpen,
+  onClose,
+  onConfirm,
+  title,
+  message,
+  confirmText = "Confirm",
+  isDangerous = false,
+  requirePassword = false,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (password?: string) => void;
+  title: string;
+  message: string;
+  confirmText?: string;
+  isDangerous?: boolean;
+  requirePassword?: boolean;
+}) {
+  const [password, setPassword] = useState("");
+
+  if (!isOpen) return null;
+
+  const handleConfirm = () => {
+    onConfirm(requirePassword ? password : undefined);
+    setPassword("");
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <h3>{title}</h3>
+        <p>{message}</p>
+        {requirePassword && (
+          <div className="form-group" style={{ marginTop: "16px" }}>
+            <input
+              type="password"
+              className="form-input"
+              placeholder="Confirmation password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+        )}
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className={isDangerous ? "btn-danger" : "btn-primary"}
+            onClick={handleConfirm}
+            disabled={requirePassword && !password}
+          >
+            {confirmText}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -137,6 +229,15 @@ function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
 function AdminPage() {
   const { user } = useAuth();
   const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
+  const [modalState, setModalState] = useState<{
+    isOpen: boolean;
+    type: "clear_data" | "full_rebuild" | null;
+    requirePassword: boolean;
+  }>({
+    isOpen: false,
+    type: null,
+    requirePassword: false,
+  });
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
@@ -144,6 +245,18 @@ function AdminPage() {
     queryFn: fetchOpsSummary,
     refetchInterval: 30000, // Refresh every 30 seconds
     enabled: !!user, // Only run query when user is available
+  });
+
+  // Database reset mutation
+  const resetMutation = useMutation({
+    mutationFn: resetDatabase,
+    onSuccess: (data) => {
+      toast.success(data.message || "Database operation completed successfully");
+      setModalState({ isOpen: false, type: null, requirePassword: false });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Database operation failed");
+    },
   });
 
   // Handle permission errors - FIXED: Move ALL hooks before conditional logic
@@ -160,6 +273,32 @@ function AdminPage() {
 
   const formatCurrency = (value: number) => `$${value.toFixed(4)}`;
   const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+
+  // Admin action handlers
+  const handleClearData = () => {
+    setModalState({
+      isOpen: true,
+      type: "clear_data",
+      requirePassword: false, // Development doesn't require password
+    });
+  };
+
+  const handleFullReset = () => {
+    setModalState({
+      isOpen: true,
+      type: "full_rebuild",
+      requirePassword: false, // Development doesn't require password
+    });
+  };
+
+  const handleConfirmReset = (password?: string) => {
+    if (!modalState.type) return;
+
+    resetMutation.mutate({
+      reset_type: modalState.type,
+      confirmation_password: password,
+    });
+  };
 
   return (
     <div className="admin-page">
@@ -299,8 +438,59 @@ function AdminPage() {
               </div>
             </div>
           </div>
+
+          {/* Admin Actions */}
+          <div className="admin-section">
+            <h3>Database Management</h3>
+            <div className="admin-actions">
+              <div className="action-group">
+                <button
+                  className="btn-warning"
+                  onClick={handleClearData}
+                  disabled={resetMutation.isPending}
+                >
+                  Clear User Data
+                </button>
+                <p className="action-description">
+                  Remove all user-generated data (agents, runs, workflows) while preserving user accounts
+                </p>
+              </div>
+              <div className="action-group">
+                <button
+                  className="btn-danger"
+                  onClick={handleFullReset}
+                  disabled={resetMutation.isPending}
+                >
+                  Full Database Reset
+                </button>
+                <p className="action-description">
+                  Drop and recreate all tables (destructive operation)
+                </p>
+              </div>
+            </div>
+          </div>
         </>
       ) : null}
+
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={modalState.isOpen}
+        onClose={() => setModalState({ isOpen: false, type: null, requirePassword: false })}
+        onConfirm={handleConfirmReset}
+        title={
+          modalState.type === "clear_data"
+            ? "Clear User Data"
+            : "Full Database Reset"
+        }
+        message={
+          modalState.type === "clear_data"
+            ? "This will remove all user-generated data (agents, runs, workflows) but preserve user accounts. This action cannot be undone."
+            : "This will drop and recreate all database tables. All data will be lost. This action cannot be undone."
+        }
+        confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}
+        isDangerous={true}
+        requirePassword={modalState.requirePassword}
+      />
     </div>
   );
 }

@@ -234,9 +234,16 @@
 .admin-page {
   padding: 32px;
   background: var(--dark-lighter, #33334a);
-  min-height: calc(100vh - 120px);
-  max-width: 1200px;
+  max-width: 1600px;
   margin: 0 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
 }
 
 .admin-header {
@@ -280,9 +287,27 @@
 /* Metrics Grid */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
+  grid-template-columns: 1fr;
+  gap: 24px;
   margin-bottom: 32px;
+}
+
+@media (min-width: 640px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .metrics-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1400px) {
+  .metrics-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .metric-card {
@@ -341,6 +366,8 @@
 
 /* Top Agents Table */
 .top-agents-table {
+  max-height: 400px;
+  overflow-y: auto;
   overflow-x: auto;
 }
 
@@ -357,12 +384,15 @@
 }
 
 .top-agents-table th {
+  position: sticky;
+  top: 0;
   background: var(--dark-lighter, #33334a);
   color: var(--text-secondary, #e0e0e0);
   font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  z-index: 1;
 }
 
 .top-agents-table td {
@@ -440,11 +470,14 @@
   cursor: pointer;
 }
 
-.empty-state {
+/* Override global empty-state for admin tables */
+.admin-section .empty-state {
   text-align: center;
-  padding: 32px;
+  padding: 24px;
   color: var(--text-secondary, #e0e0e0);
   font-style: italic;
+  min-height: 0;
+  font-size: 14px;
 }
 
 /* System Info */
@@ -492,6 +525,134 @@
 
 .top-agents-table tr:hover {
   background: rgba(255, 255, 255, 0.05);
+}
+
+/* Admin Actions */
+.admin-actions {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.action-group {
+  flex: 1;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-description {
+  color: var(--text-secondary, #e0e0e0);
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.btn-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+}
+
+.btn-warning:disabled {
+  background: #6b7280;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+.btn-danger:disabled {
+  background: #6b7280;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.modal-content {
+  background: var(--dark-card, #2a2a3a);
+  border: 1px solid var(--border-color, #3d3d5c);
+  border-radius: var(--radius-lg, 8px);
+  padding: 32px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.modal-content h3 {
+  color: var(--text, #ffffff);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 16px 0;
+}
+
+.modal-content p {
+  color: var(--text-secondary, #e0e0e0);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 24px 0;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
 }
 
 /* Animation */

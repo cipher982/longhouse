@@ -40,29 +40,51 @@
 }
 
 /* --------------------------------------------------------- */
-/* Application grid layout (header, content, status)          */
+/* Application grid layout (header, tabs, content, status)   */
 /* --------------------------------------------------------- */
 
-/* Make the whole page a three-row grid:
-   1) Header (includes title + tabs)
-   2) Main content (views)
-   3) Status bar */
+html,
 body {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  height: 100vh; /* fallback */
-  height: 100dvh; /* modern mobile viewport */
-  /* Body overflow is hidden; inner content rows manage scrolling */
+  height: 100%;
+}
+
+/* Body simply hosts the React root and suppresses document scrolling */
+body {
+  margin: 0;
   overflow: hidden;
+}
+
+/* The React root acts as the application grid */
+#react-root {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  height: 100%;
+  min-height: 100vh; /* fallback */
+  min-height: 100dvh; /* modern viewport */
+  width: 100%;
 }
 
 /* Place elements explicitly so order in DOM does not matter */
 .header { grid-row: 1; }
-.status-bar { grid-row: 3; }
+.tabs-container { grid-row: 2; }
+.status-bar { grid-row: 4; }
 
-/* Content containers occupy the middle row */
+/* Content containers occupy the main viewport row */
 #app-container {
-  grid-row: 2;
-  min-height: 0; /* allow children to size and scroll */
-  overflow: auto; /* content scrolls in the middle row */
+  grid-row: 3;
+  min-height: 0; /* allow pages to size and scroll */
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: hidden; /* no container scroll - individual pages handle their own */
+  position: relative;
+}
+
+/* Ensure direct children can manage their own scrolling */
+#app-container > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
 }
