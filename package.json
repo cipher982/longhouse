@@ -1,14 +1,21 @@
 {
-  "name": "zerg-dev-tools",
+  "name": "@swarm/monorepo",
   "version": "1.0.0",
-  "description": "Development tools for the Zerg monorepo.",
+  "description": "Unified Swarm Platform: Jarvis (voice/text UI) + Zerg (agent orchestration backend)",
   "private": true,
   "workspaces": [
-    "frontend-web",
-    "prerender"
+    "apps/jarvis/apps/*",
+    "apps/jarvis/packages/*",
+    "apps/zerg/frontend-web",
+    "apps/zerg/prerender",
+    "packages/*"
   ],
   "scripts": {
-    "start": "make start"
+    "start": "make swarm-dev",
+    "jarvis": "make jarvis-dev",
+    "zerg": "make zerg-dev",
+    "test": "make test",
+    "generate-sdk": "make generate-sdk"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",
