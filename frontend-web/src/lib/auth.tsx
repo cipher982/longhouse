@@ -326,24 +326,28 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
           onSuccess={handleLoginSuccess}
           onError={handleLoginError}
         />
-        <div style={{ margin: '1rem 0', color: '#666' }}>or</div>
-        <button
-          onClick={handleDevLogin}
-          disabled={isDevLoginLoading}
-          style={{
-            padding: '0.75rem 2rem',
-            background: '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            fontSize: '14px',
-            fontWeight: 600,
-            cursor: isDevLoginLoading ? 'not-allowed' : 'pointer',
-            opacity: isDevLoginLoading ? 0.6 : 1,
-          }}
-        >
-          {isDevLoginLoading ? 'Logging in...' : 'Dev Login (Local Only)'}
-        </button>
+        {config.isDevelopment && (
+          <>
+            <div style={{ margin: '1rem 0', color: '#666' }}>or</div>
+            <button
+              onClick={handleDevLogin}
+              disabled={isDevLoginLoading}
+              style={{
+                padding: '0.75rem 2rem',
+                background: '#10b981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: isDevLoginLoading ? 'not-allowed' : 'pointer',
+                opacity: isDevLoginLoading ? 0.6 : 1,
+              }}
+            >
+              {isDevLoginLoading ? 'Logging in...' : 'Dev Login (Local Only)'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
