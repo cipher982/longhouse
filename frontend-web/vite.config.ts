@@ -9,9 +9,12 @@ export default defineConfig(({ mode }) => {
   const backendPort = Number(rootEnv.BACKEND_PORT || 8001);
   const frontendPort = Number(rootEnv.FRONTEND_PORT || 3000);
 
+  // Use root path in production, /react/ in development
+  const basePath = mode === "production" ? "/" : "/react/";
+
   return {
     plugins: [react()],
-    base: "/react/",
+    base: basePath,
     server: {
       host: "127.0.0.1",
       port: frontendPort,

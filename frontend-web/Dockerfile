@@ -19,7 +19,7 @@ FROM nginx:alpine
 # Copy custom nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# Copy built React app
+# Copy built React app (production build uses base: "/" so copy to root)
 COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
 # Health check: ensure key files exist
