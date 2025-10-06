@@ -50,6 +50,7 @@ from zerg.routers.connectors import router as connectors_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.graph_layout import router as graph_router
+from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -329,6 +330,7 @@ app.include_router(auth_router, prefix=f"{API_PREFIX}")
 app.include_router(users_router, prefix=f"{API_PREFIX}")
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
+app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
 app.include_router(ops_router, prefix=f"{API_PREFIX}")
