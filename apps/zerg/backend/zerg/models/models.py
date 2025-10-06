@@ -424,6 +424,10 @@ class AgentRun(Base):
     error = Column(Text, nullable=True)
     cancel_reason = Column(Text, nullable=True)
 
+    # Summary ------------------------------------------------------------
+    # Brief summary of the run for Jarvis Task Inbox (first assistant response or truncated output)
+    summary = Column(Text, nullable=True)
+
     # Relationships ------------------------------------------------------
     agent = relationship("Agent", back_populates="runs")
     thread = relationship("Thread", backref="runs")

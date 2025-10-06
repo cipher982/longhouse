@@ -8,6 +8,7 @@ Provides endpoints for Jarvis (voice/text UI) to interact with Zerg backend:
 - Events: SSE stream for real-time updates
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -15,12 +16,16 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.models.enums import AgentStatus, RunStatus
+from zerg.events import EventType
+from zerg.events.event_bus import event_bus
+from zerg.models.enums import AgentStatus, RunStatus, RunTrigger
+from zerg.services.task_runner import execute_agent_task
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,22 @@ class JarvisRunSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
+
+
+class JarvisDispatchRequest(BaseModel):
+    """Jarvis dispatch request to trigger agent execution."""
+
+    agent_id: int = Field(..., description="ID of agent to execute")
+    task_override: Optional[str] = Field(None, description="Optional task instruction override")
+
+
+class JarvisDispatchResponse(BaseModel):
+    """Jarvis dispatch response with run/thread IDs."""
+
+    run_id: int = Field(..., description="AgentRun ID for tracking execution")
+    thread_id: int = Field(..., description="Thread ID containing conversation")
+    status: str = Field(..., description="Initial run status")
+    agent_name: str = Field(..., description="Name of agent being executed")
 
 
 # ---------------------------------------------------------------------------
@@ -243,3 +264,184 @@ def list_jarvis_runs(
         )
 
     return summaries
+
+# ---------------------------------------------------------------------------
+# Dispatch Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/dispatch", response_model=JarvisDispatchResponse)
+async def jarvis_dispatch(
+    request: JarvisDispatchRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> JarvisDispatchResponse:
+    """Dispatch agent task from Jarvis.
+
+    Triggers immediate execution of an agent task and returns run/thread IDs
+    for tracking. Jarvis can then listen to the SSE stream for updates.
+
+    Args:
+        request: Dispatch request with agent_id and optional task override
+        db: Database session
+        current_user: Authenticated user (Jarvis service account)
+
+    Returns:
+        JarvisDispatchResponse with run and thread IDs
+
+    Raises:
+        404: Agent not found
+        409: Agent already running
+        500: Execution error
+    """
+    # Get agent
+    agent = crud.get_agent(db, request.agent_id)
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {request.agent_id} not found",
+        )
+
+    # Optionally override task instructions
+    original_task = agent.task_instructions
+    if request.task_override:
+        agent.task_instructions = request.task_override
+
+    try:
+        # Execute agent task (creates thread and run)
+        thread = await execute_agent_task(db, agent, thread_type="manual")
+
+        # Get the created run
+        run = db.query(crud.models.AgentRun).filter(
+            crud.models.AgentRun.thread_id == thread.id
+        ).order_by(crud.models.AgentRun.created_at.desc()).first()
+
+        if not run:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create agent run",
+            )
+
+        logger.info(f"Jarvis dispatched agent {agent.id} (run {run.id}, thread {thread.id})")
+
+        return JarvisDispatchResponse(
+            run_id=run.id,
+            thread_id=thread.id,
+            status=run.status.value if hasattr(run.status, "value") else str(run.status),
+            agent_name=agent.name,
+        )
+
+    except ValueError as e:
+        # Agent already running or validation error
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Jarvis dispatch failed for agent {agent.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to dispatch agent: {str(e)}",
+        )
+    finally:
+        # Restore original task instructions if overridden
+        if request.task_override:
+            agent.task_instructions = original_task
+            db.add(agent)
+            db.commit()
+
+
+# ---------------------------------------------------------------------------
+# SSE Events Endpoint
+# ---------------------------------------------------------------------------
+
+
+async def _jarvis_event_generator(current_user):
+    """Generate SSE events for Jarvis.
+
+    Subscribes to the event bus and yields agent/run update events.
+    Runs until the client disconnects.
+    """
+    # Create asyncio queue for this connection
+    queue = asyncio.Queue()
+
+    # Subscribe to relevant events
+    def event_handler(event):
+        """Handle event and put into queue."""
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("Jarvis SSE queue full, dropping event")
+
+    # Subscribe to agent and run events
+    event_bus.subscribe(EventType.AGENT_UPDATED, event_handler)
+    event_bus.subscribe(EventType.RUN_CREATED, event_handler)
+    event_bus.subscribe(EventType.RUN_UPDATED, event_handler)
+
+    try:
+        # Send initial connection event
+        import json
+        yield {
+            "event": "connected",
+            "data": json.dumps({"message": "Jarvis SSE stream connected"}),
+        }
+
+        # Stream events
+        while True:
+            try:
+                # Wait for event with timeout to allow periodic heartbeats
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                # Format event for SSE
+                event_type = event.get("type", "unknown")
+                event_data = {
+                    "type": event_type,
+                    "payload": event.get("payload", {}),
+                    "timestamp": event.get("timestamp"),
+                }
+
+                yield {
+                    "event": event_type,
+                    "data": json.dumps(event_data),
+                }
+
+            except asyncio.TimeoutError:
+                # Send heartbeat to keep connection alive
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps({"timestamp": asyncio.get_event_loop().time()}),
+                }
+
+    except asyncio.CancelledError:
+        # Client disconnected
+        logger.info("Jarvis SSE stream disconnected")
+    finally:
+        # Unsubscribe from events
+        event_bus.unsubscribe(EventType.AGENT_UPDATED, event_handler)
+        event_bus.unsubscribe(EventType.RUN_CREATED, event_handler)
+        event_bus.unsubscribe(EventType.RUN_UPDATED, event_handler)
+
+
+@router.get("/events")
+async def jarvis_events(
+    current_user=Depends(get_current_user),
+) -> EventSourceResponse:
+    """Server-Sent Events stream for Jarvis.
+
+    Provides real-time updates for agent and run events. Jarvis listens to this
+    stream to update the Task Inbox UI without polling.
+
+    Event types:
+    - connected: Initial connection confirmation
+    - heartbeat: Keep-alive ping every 30 seconds
+    - agent_updated: Agent status or configuration changed
+    - run_created: New agent run started
+    - run_updated: Agent run status changed (running → success/failed)
+
+    Args:
+        current_user: Authenticated user (Jarvis service account)
+
+    Returns:
+        EventSourceResponse streaming SSE events
+    """
+    return EventSourceResponse(_jarvis_event_generator(current_user))
