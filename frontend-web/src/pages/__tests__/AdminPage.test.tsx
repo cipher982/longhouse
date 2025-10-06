@@ -72,8 +72,6 @@ const mockOpsSummary = {
   ],
 };
 
-// mockTopAgents removed - top agents included in summary
-
 function renderAdminPage() {
   // Mock localStorage.zerg_jwt that AdminPage expects
   Object.defineProperty(window, 'localStorage', {

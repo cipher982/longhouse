@@ -362,6 +362,11 @@ interface AuthGuardProps {
 export function AuthGuard({ children, clientId }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuth();
 
+  // Skip auth guard if authentication is disabled (for demos/tests)
+  if (!config.authEnabled) {
+    return <>{children}</>;
+  }
+
   if (isLoading) {
     return (
       <div style={{

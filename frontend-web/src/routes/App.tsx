@@ -74,11 +74,8 @@ export default function App() {
     },
   ]);
 
-  // Get Google Client ID from environment or use default from .env
-  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "REDACTED_OAUTH_CLIENT.apps.googleusercontent.com";
-
   return (
-    <AuthGuard clientId={googleClientId}>
+    <AuthGuard clientId={config.googleClientId}>
       <Layout>{routes}</Layout>
     </AuthGuard>
   );
