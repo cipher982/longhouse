@@ -9,6 +9,7 @@ Provides endpoints for Jarvis (voice/text UI) to interact with Zerg backend:
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -24,7 +25,7 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.enums import AgentStatus, RunStatus, RunTrigger
+from zerg.models.models import AgentRun
 from zerg.services.task_runner import execute_agent_task
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,25 @@ def jarvis_auth(
             detail="Invalid device secret",
         )
 
+    jarvis_email = "jarvis@swarm.local"
+    jarvis_user = crud.get_user_by_email(db, jarvis_email)
+    if jarvis_user is None:
+        jarvis_user = crud.create_user(
+            db,
+            email=jarvis_email,
+            provider="jarvis",
+            role="ADMIN",
+        )
+        jarvis_user.display_name = "Jarvis Assistant"
+        db.add(jarvis_user)
+        db.commit()
+        db.refresh(jarvis_user)
+    elif jarvis_user.display_name != "Jarvis Assistant":
+        jarvis_user.display_name = "Jarvis Assistant"
+        db.add(jarvis_user)
+        db.commit()
+        db.refresh(jarvis_user)
+
     # Issue JWT token for Jarvis (longer expiry for device auth)
     # Import the token issuing function from auth router
     from zerg.routers.auth import _issue_access_token
@@ -141,8 +161,8 @@ def jarvis_auth(
     # Create token with jarvis scope - expires in 7 days for device auth
     token_expiry_seconds = 60 * 60 * 24 * 7  # 7 days
     token = _issue_access_token(
-        user_id=0,  # Special ID for Jarvis service account
-        email="jarvis@swarm.local",
+        user_id=jarvis_user.id,
+        email=jarvis_user.email,
         display_name="Jarvis",
         expires_delta=timedelta(seconds=token_expiry_seconds),
     )
@@ -152,7 +172,7 @@ def jarvis_auth(
     return JarvisAuthResponse(
         access_token=token,
         token_type="bearer",
-        expires_in=token_expiry,
+        expires_in=token_expiry_seconds,
     )
 
 
@@ -234,12 +254,12 @@ def list_jarvis_runs(
     # TODO: Add crud method for filtering by agent_id and ordering by created_at
     # For now, get all runs and filter/sort in memory
 
-    query = db.query(crud.models.AgentRun)
+    query = db.query(AgentRun)
 
     if agent_id:
-        query = query.filter(crud.models.AgentRun.agent_id == agent_id)
+        query = query.filter(AgentRun.agent_id == agent_id)
 
-    runs = query.order_by(crud.models.AgentRun.created_at.desc()).limit(limit).all()
+    runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
 
     summaries = []
     for run in runs:
@@ -259,7 +279,7 @@ def list_jarvis_runs(
                 summary=summary,
                 created_at=run.created_at,
                 updated_at=run.updated_at,
-                completed_at=getattr(run, "completed_at", None),
+                completed_at=run.finished_at,
             )
         )
 
@@ -312,9 +332,12 @@ async def jarvis_dispatch(
         thread = await execute_agent_task(db, agent, thread_type="manual")
 
         # Get the created run
-        run = db.query(crud.models.AgentRun).filter(
-            crud.models.AgentRun.thread_id == thread.id
-        ).order_by(crud.models.AgentRun.created_at.desc()).first()
+        run = (
+            db.query(AgentRun)
+            .filter(AgentRun.thread_id == thread.id)
+            .order_by(AgentRun.created_at.desc())
+            .first()
+        )
 
         if not run:
             raise HTTPException(
@@ -356,7 +379,7 @@ async def jarvis_dispatch(
 # ---------------------------------------------------------------------------
 
 
-async def _jarvis_event_generator(current_user):
+async def _jarvis_event_generator(_current_user):
     """Generate SSE events for Jarvis.
 
     Subscribes to the event bus and yields agent/run update events.
@@ -366,12 +389,9 @@ async def _jarvis_event_generator(current_user):
     queue = asyncio.Queue()
 
     # Subscribe to relevant events
-    def event_handler(event):
+    async def event_handler(event):
         """Handle event and put into queue."""
-        try:
-            queue.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.warning("Jarvis SSE queue full, dropping event")
+        await queue.put(event)
 
     # Subscribe to agent and run events
     event_bus.subscribe(EventType.AGENT_UPDATED, event_handler)
@@ -380,7 +400,6 @@ async def _jarvis_event_generator(current_user):
 
     try:
         # Send initial connection event
-        import json
         yield {
             "event": "connected",
             "data": json.dumps({"message": "Jarvis SSE stream connected"}),
@@ -393,11 +412,12 @@ async def _jarvis_event_generator(current_user):
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                 # Format event for SSE
-                event_type = event.get("type", "unknown")
+                event_type = event.get("event_type") or event.get("type") or "event"
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type"}}
                 event_data = {
                     "type": event_type,
-                    "payload": event.get("payload", {}),
-                    "timestamp": event.get("timestamp"),
+                    "payload": payload,
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
                 }
 
                 yield {
@@ -407,9 +427,10 @@ async def _jarvis_event_generator(current_user):
 
             except asyncio.TimeoutError:
                 # Send heartbeat to keep connection alive
+                heartbeat_ts = datetime.utcnow().isoformat() + "Z"
                 yield {
                     "event": "heartbeat",
-                    "data": json.dumps({"timestamp": asyncio.get_event_loop().time()}),
+                    "data": json.dumps({"timestamp": heartbeat_ts}),
                 }
 
     except asyncio.CancelledError:
