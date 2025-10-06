@@ -1,0 +1,67 @@
+# Jarvis Voice Agent — simple Makefile
+# Targets: help, install, start, zeta, personal, native, test, status, stop, clean
+
+.PHONY: help install start zeta personal native test test-e2e status stop clean
+
+help: ## Show available commands
+	@echo "Jarvis Commands" && echo "" && \
+	grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+	awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+install: ## Install all dependencies (monorepo + workspaces)
+	@echo "📦 Installing dependencies..."
+	YARN_IGNORE_PATH=1 yarn install
+
+start: ## Start server (8787) and web app (8080)
+	@echo "🚀 Starting Jarvis... (Ctrl+C to stop)"; \
+	trap 'echo "\n🛑 Stopping..."; $(MAKE) stop; exit 0' INT; \
+	cd apps/server && npm run dev & \
+	cd apps/web && npm run dev & \
+	echo "⏳ Waiting for services..."; \
+	until curl -sf http://localhost:8787/session >/dev/null; do sleep 0.4; done; \
+	until curl -sf http://localhost:8080 >/dev/null || curl -sf http://localhost:8081 >/dev/null; do sleep 0.4; done; \
+	echo "✅ Ready: http://localhost:8080"; \
+	open http://localhost:8080 2>/dev/null || open http://localhost:8081 2>/dev/null || true; \
+	wait
+
+zeta: ## Start with work context (VITE_VOICE_CONTEXT=zeta)
+	@echo "🏢 Starting Zeta context... (Ctrl+C to stop)"; \
+	trap 'echo "\n🛑 Stopping..."; $(MAKE) stop; exit 0' INT; \
+	cd apps/server && npm run dev & \
+	cd apps/web && VITE_VOICE_CONTEXT=zeta npm run dev & \
+	echo "⏳ Waiting for services..."; \
+	until curl -sf http://localhost:8787/session >/dev/null; do sleep 0.4; done; \
+	until curl -sf http://localhost:8080 >/dev/null || curl -sf http://localhost:8081 >/dev/null; do sleep 0.4; done; \
+	echo "✅ Ready: http://localhost:8080"; \
+	open http://localhost:8080 2>/dev/null || open http://localhost:8081 2>/dev/null || true; \
+	wait
+
+personal: ## Alias for start (personal context)
+	@$(MAKE) start
+
+native: ## Launch Electron shell (servers must be running)
+	@cd apps/native && npm start
+
+test: ## Run Playwright tests
+	@npm test
+
+test-e2e: ## Run E2E tests (terminal output only)
+	@echo "🧪 Running E2E tests (servers auto-start via Playwright)..."
+	@npm test
+
+status: ## Check if services are up
+	@echo "API (8787):"; curl -sf http://localhost:8787/session >/dev/null && echo "  ✅" || echo "  ❌"
+	@echo "PWA (8080):"; curl -sf http://localhost:8080 >/dev/null && echo "  ✅" || echo "  ❌"
+
+stop: ## Stop running dev processes (best-effort)
+	@echo "🛑 Stopping Jarvis services..."
+	@pkill -f "/Users/davidrose/git/jarvis/apps/server" 2>/dev/null || true
+	@pkill -f "/Users/davidrose/git/jarvis.*vite" 2>/dev/null || true
+	@pkill -f "jarvis.*electron" 2>/dev/null || true
+	@pkill -f "uvx.*traccar.*jarvis" 2>/dev/null || true
+	@sleep 1
+	@echo "✅ Stopped"
+
+clean: ## Remove node_modules and test artifacts
+	@rm -rf node_modules apps/server/node_modules apps/web/node_modules apps/native/node_modules test-results playwright-report
+	@echo "🧹 Cleaned"
