@@ -41,14 +41,25 @@ function loadConfig(): AppConfig {
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
 
-  // Prefer runtime config (from config.js) over build-time env vars
+  // FAIL FAST: No fallbacks, no silent defaults
+  // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
   const apiBaseUrl = typeof window !== 'undefined' && window.API_BASE_URL
     ? window.API_BASE_URL
-    : (import.meta.env.VITE_API_BASE_URL || '/api');
+    : (import.meta.env.VITE_API_BASE_URL || (isDevelopment ? '/api' : ''));
 
   const wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
     ? window.WS_BASE_URL
-    : (import.meta.env.VITE_WS_BASE_URL || window?.location?.origin?.replace('http', 'ws') || '');
+    : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? window.location.origin.replace('http', 'ws') : ''));
+
+  // Validate required config in production
+  if (isProduction) {
+    if (!apiBaseUrl) {
+      throw new Error('FATAL: API_BASE_URL not configured! Add window.API_BASE_URL in config.js');
+    }
+    if (!wsBaseUrl) {
+      throw new Error('FATAL: WS_BASE_URL not configured! Add window.WS_BASE_URL in config.js');
+    }
+  }
 
   return {
     // API Configuration

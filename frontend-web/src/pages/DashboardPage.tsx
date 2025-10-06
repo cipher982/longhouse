@@ -10,6 +10,7 @@ import {
   type AgentSummary,
 } from "../services/api";
 import { useWebSocket } from "../lib/useWebSocket";
+import { useAuth } from "../lib/auth";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -52,6 +53,7 @@ const STORAGE_KEY_ASC = "dashboard_sort_asc";
 export default function DashboardPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { isAuthenticated } = useAuth();
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedAgentId, setExpandedAgentId] = useState<number | null>(null);
@@ -118,7 +120,8 @@ export default function DashboardPage() {
   }, [expandedAgentId, loadingRunIds, runsByAgent]);
 
   // Use unified WebSocket hook for real-time updates
-  useWebSocket(true, {
+  // Only connect when authenticated to avoid auth failure spam
+  useWebSocket(isAuthenticated, {
     invalidateQueries: [["agents", { scope }]],
     onMessage: () => {
       // Additional refetch for immediate updates
