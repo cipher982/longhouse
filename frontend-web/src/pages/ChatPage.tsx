@@ -26,8 +26,6 @@ function useRequiredNumber(param?: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-// resolveWsBase function removed - not currently used
-
 // Helper functions
 function formatTimestamp(timestamp?: string | null): string {
   if (!timestamp) return "";

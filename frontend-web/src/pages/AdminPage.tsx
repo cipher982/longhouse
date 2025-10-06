@@ -43,8 +43,6 @@ interface OpsTopAgent {
   p95_ms: number;
 }
 
-// TimeSeriesResponse interface removed - not currently used
-
 // API functions (top agents are included in summary)
 async function fetchOpsSummary(): Promise<OpsSummary> {
   const token = localStorage.getItem("zerg_jwt");
@@ -65,10 +63,6 @@ async function fetchOpsSummary(): Promise<OpsSummary> {
 
   return response.json();
 }
-
-// fetchTimeSeries removed - not currently used
-
-// fetchTopAgents removed - top agents are included in ops summary
 
 // Database management types and functions
 interface DatabaseResetRequest {
@@ -104,7 +98,7 @@ async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
     throw new Error("No auth token");
   }
 
-  const response = await fetch("/api/admin/reset-database", {
+  const response = await fetch(`${config.apiBaseUrl}/admin/reset-database`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${token}`,

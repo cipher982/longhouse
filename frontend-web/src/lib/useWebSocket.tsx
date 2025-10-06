@@ -206,7 +206,10 @@ export function useWebSocket(
         wsRef.current.addEventListener('close', handleDisconnect);
         wsRef.current.addEventListener('error', handleError);
       } else {
-        // Fallback to legacy event handlers for mock environments
+        // LEGACY FALLBACK: Required for test mocks that don't implement addEventListener
+        // See: frontend-web/src/pages/__tests__/DashboardPage.test.tsx:67
+        // Our test suite stubs WebSocket with only onmessage/onopen/etc properties
+        // DO NOT REMOVE without updating test infrastructure
         wsRef.current.onmessage = handleMessage as EventListener;
         wsRef.current.onopen = handleConnect as EventListener;
         wsRef.current.onclose = handleDisconnect as EventListener;
