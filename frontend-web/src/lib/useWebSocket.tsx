@@ -53,12 +53,12 @@ function resolveWsBase(): string {
 
   const wsConfig = getWebSocketConfig();
 
-  // Use configured base URL first, then fallback to window config, then location
-  return (
-    wsConfig.baseUrl ||
-    (window as typeof window & { WS_BASE_URL?: string }).WS_BASE_URL ||
-    window.location.origin.replace("http", "ws")
-  );
+  // NO FALLBACKS: Config must be correct or we fail
+  if (!wsConfig.baseUrl) {
+    throw new Error('FATAL: WebSocket baseUrl not configured! Check config.js');
+  }
+
+  return wsConfig.baseUrl;
 }
 
 export function useWebSocket(
