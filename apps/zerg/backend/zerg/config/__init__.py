@@ -89,6 +89,9 @@ class Settings:  # noqa: D401 – simple data container
     # Database reset security
     db_reset_password: str | None
 
+    # Jarvis integration ------------------------------------------------
+    jarvis_device_secret: str | None
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_disabled(self) -> bool:  # noqa: D401
@@ -182,6 +185,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_enable_alerts=_truthy(os.getenv("DISCORD_ENABLE_ALERTS")),
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
+        jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
     )
 
 
