@@ -76,6 +76,28 @@ interface DatabaseResetRequest {
   reset_type: "clear_data" | "full_rebuild";
 }
 
+interface SuperAdminStatusResponse {
+  is_super_admin: boolean;
+  requires_password: boolean;
+}
+
+async function fetchSuperAdminStatus(): Promise<SuperAdminStatusResponse> {
+  const token = localStorage.getItem("zerg_jwt");
+  if (!token) {
+    throw new Error("No auth token");
+  }
+
+  const response = await fetch(`${config.apiBaseUrl}/admin/super-admin-status`, {
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch super admin status");
+  }
+
+  return response.json();
+}
+
 async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
   const token = localStorage.getItem("zerg_jwt");
   if (!token) {
@@ -247,6 +269,13 @@ function AdminPage() {
     enabled: !!user, // Only run query when user is available
   });
 
+  // Super admin status query
+  const { data: adminStatus } = useQuery({
+    queryKey: ["super-admin-status"],
+    queryFn: fetchSuperAdminStatus,
+    enabled: !!user,
+  });
+
   // Database reset mutation
   const resetMutation = useMutation({
     mutationFn: resetDatabase,
@@ -279,7 +308,7 @@ function AdminPage() {
     setModalState({
       isOpen: true,
       type: "clear_data",
-      requirePassword: false, // Development doesn't require password
+      requirePassword: adminStatus?.requires_password ?? false,
     });
   };
 
@@ -287,7 +316,7 @@ function AdminPage() {
     setModalState({
       isOpen: true,
       type: "full_rebuild",
-      requirePassword: false, // Development doesn't require password
+      requirePassword: adminStatus?.requires_password ?? false,
     });
   };
 
