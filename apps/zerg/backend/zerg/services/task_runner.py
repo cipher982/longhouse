@@ -230,7 +230,8 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                         (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
                     ) / 1000.0
 
-            crud.mark_finished(
+            # Mark run as finished (summary auto-extracted if not provided)
+            finished_run = crud.mark_finished(
                 db,
                 run_row.id,
                 finished_at=end_ts,
@@ -238,6 +239,10 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                 total_tokens=total_tokens,
                 total_cost_usd=total_cost_usd,
             )
+
+            # Refresh to get the auto-extracted summary
+            if finished_run:
+                db.refresh(finished_run)
 
             await event_bus.publish(
                 EventType.RUN_UPDATED,
@@ -248,6 +253,7 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                     "status": "success",
                     "finished_at": end_ts.isoformat(),
                     "duration_ms": duration_ms,
+                    "summary": finished_run.summary if finished_run else None,
                 },
             )
 

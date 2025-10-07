@@ -757,6 +757,14 @@ def mark_finished(
     # If no summary provided, extract from thread's first assistant message
     if summary is None and row.thread_id:
         summary = _extract_run_summary(db, row.thread_id)
+        if summary:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Auto-extracted summary for run {run_id}: {summary[:100]}...")
+        else:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"No summary extracted for run {run_id} (thread {row.thread_id})")
 
     # Set to success status
     row.status = RunStatus.SUCCESS

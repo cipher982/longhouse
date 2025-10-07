@@ -103,7 +103,8 @@ async def execute_thread_run_with_history(
                 (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
             ) / 1000.0
 
-    crud.mark_finished(
+    # Mark run as finished (summary auto-extracted)
+    finished_run = crud.mark_finished(
         db,
         run_row.id,
         finished_at=end_ts,
@@ -111,6 +112,11 @@ async def execute_thread_run_with_history(
         total_tokens=total_tokens,
         total_cost_usd=total_cost_usd,
     )
+
+    # Refresh to get the auto-extracted summary
+    if finished_run:
+        db.refresh(finished_run)
+
     await event_bus.publish(
         EventType.RUN_UPDATED,
         {
@@ -120,6 +126,7 @@ async def execute_thread_run_with_history(
             "status": "success",
             "finished_at": end_ts.isoformat(),
             "duration_ms": duration_ms,
+            "summary": finished_run.summary if finished_run else None,
         },
     )
 
