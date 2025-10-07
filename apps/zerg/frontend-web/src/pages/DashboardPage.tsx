@@ -131,12 +131,11 @@ export default function DashboardPage() {
 
   const createAgentMutation = useMutation({
     mutationFn: async () => {
-      const name = typeof window !== "undefined" ? window.prompt("Agent name", "E2E Agent") : "E2E Agent";
-      const trimmedName = (name ?? "E2E Agent").trim() || "E2E Agent";
+      const agentName = `New Agent ${Math.round(Math.random() * 100)}`;
       return createAgent({
-        name: trimmedName,
-        system_instructions: "You are a helpful assistant.",
-        task_instructions: "Respond concisely to user requests.",
+        name: agentName,
+        system_instructions: "You are a helpful AI assistant.",
+        task_instructions: "Complete the given task.",
         model: "gpt-4o",
       });
     },
