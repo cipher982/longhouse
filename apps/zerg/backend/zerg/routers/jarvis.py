@@ -11,10 +11,10 @@ Provides endpoints for Jarvis (voice/text UI) to interact with Zerg backend:
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -22,7 +22,6 @@ from sse_starlette.sse import EventSourceResponse
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
-from zerg.dependencies.auth import get_current_user
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import AgentRun
@@ -31,6 +30,7 @@ from zerg.services.task_runner import execute_agent_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jarvis", tags=["jarvis"])
+JARVIS_SESSION_COOKIE = "jarvis_session"
 
 
 # ---------------------------------------------------------------------------
@@ -45,11 +45,10 @@ class JarvisAuthRequest(BaseModel):
 
 
 class JarvisAuthResponse(BaseModel):
-    """Jarvis authentication response with JWT token."""
+    """Jarvis authentication response metadata."""
 
-    access_token: str = Field(..., description="JWT access token")
-    token_type: str = Field(default="bearer", description="Token type")
-    expires_in: int = Field(..., description="Token expiry in seconds")
+    session_expires_in: int = Field(..., description="Session expiry window in seconds")
+    session_cookie_name: str = Field(..., description="Name of session cookie storing Jarvis session")
 
 
 class JarvisAgentSummary(BaseModel):
@@ -100,19 +99,20 @@ class JarvisDispatchResponse(BaseModel):
 @router.post("/auth", response_model=JarvisAuthResponse)
 def jarvis_auth(
     request: JarvisAuthRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> JarvisAuthResponse:
-    """Authenticate Jarvis device and return JWT token.
+    """Authenticate Jarvis device and establish an authenticated session.
 
     Validates the device secret against environment configuration and issues
-    a short-lived JWT token that Jarvis can use for subsequent API calls.
+    a short-lived session cookie that Jarvis can use for subsequent API calls.
 
     Args:
         request: Contains device_secret for authentication
         db: Database session
 
     Returns:
-        JarvisAuthResponse with JWT token
+        JarvisAuthResponse with session metadata
 
     Raises:
         401: Invalid device secret
@@ -169,10 +169,59 @@ def jarvis_auth(
 
     logger.info("Issued JWT token for Jarvis device")
 
+    cookie_secure = False
+    environment_value = (settings.environment or "").strip().lower()
+    if environment_value and environment_value not in {"development", "dev", "local"} and not settings.testing:
+        cookie_secure = True
+
+    cookie_expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_expiry_seconds)
+    response.set_cookie(
+        key=JARVIS_SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        secure=cookie_secure,
+        samesite="lax",
+        max_age=token_expiry_seconds,
+        expires=cookie_expires_at,
+        path="/api/jarvis",
+    )
+
     return JarvisAuthResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=token_expiry_seconds,
+        session_expires_in=token_expiry_seconds,
+        session_cookie_name=JARVIS_SESSION_COOKIE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Authentication Dependency
+# ---------------------------------------------------------------------------
+
+
+def get_current_jarvis_user(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Resolve the Jarvis session from HttpOnly session cookie.
+
+    This is the unified authentication path for all Jarvis endpoints.
+    Clients must call /api/jarvis/auth to receive the session cookie.
+    """
+    from zerg.dependencies.auth import AUTH_DISABLED, _get_strategy
+
+    # Cookie-based authentication - the unified production path
+    cookie_token = request.cookies.get(JARVIS_SESSION_COOKIE)
+    if cookie_token:
+        user = _get_strategy().validate_ws_token(cookie_token, db)
+        if user is not None:
+            return user
+
+    # Dev-only bypass (global auth system fallback)
+    if AUTH_DISABLED:
+        return _get_strategy().get_current_user(request, db)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated - session cookie required",
     )
 
 
@@ -184,7 +233,7 @@ def jarvis_auth(
 @router.get("/agents", response_model=List[JarvisAgentSummary])
 def list_jarvis_agents(
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_jarvis_user),
 ) -> List[JarvisAgentSummary]:
     """List available agents for Jarvis UI.
 
@@ -234,7 +283,7 @@ def list_jarvis_runs(
     limit: int = 50,
     agent_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_jarvis_user),
 ) -> List[JarvisRunSummary]:
     """List recent agent runs for Jarvis Task Inbox.
 
@@ -294,7 +343,7 @@ def list_jarvis_runs(
 async def jarvis_dispatch(
     request: JarvisDispatchRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_current_jarvis_user),
 ) -> JarvisDispatchResponse:
     """Dispatch agent task from Jarvis.
 
@@ -443,50 +492,18 @@ async def _jarvis_event_generator(_current_user):
         event_bus.unsubscribe(EventType.RUN_UPDATED, event_handler)
 
 
-def get_current_user_with_query_token(
-    token: Optional[str] = None,
-    request: Request = None,
-    db: Session = Depends(get_db),
-):
-    """Get current user from Authorization header OR query param token.
-
-    EventSource doesn't support custom headers, so we allow token as query parameter.
-    """
-    from zerg.dependencies.auth import AUTH_DISABLED, _get_strategy
-
-    # If token in query param, temporarily inject into request headers
-    if token and request:
-        # Create a modified request with Authorization header
-        request._headers = dict(request.headers)
-        request._headers['authorization'] = f'Bearer {token}'
-        request.headers.__dict__['_list'] = [
-            (b'authorization', f'Bearer {token}'.encode())
-        ] + [item for item in request.headers._list if item[0] != b'authorization']
-
-    # Use existing auth strategy
-    if "Authorization" not in request.headers and not AUTH_DISABLED and not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return _get_strategy().get_current_user(request, db)
-
-
 @router.get("/events")
 async def jarvis_events(
-    token: Optional[str] = None,
-    current_user=Depends(get_current_user_with_query_token),
+    current_user=Depends(get_current_jarvis_user),
 ) -> EventSourceResponse:
     """Server-Sent Events stream for Jarvis.
 
     Provides real-time updates for agent and run events. Jarvis listens to this
     stream to update the Task Inbox UI without polling.
 
-    Since EventSource doesn't support custom headers, authentication can be provided via:
-    1. Authorization header (if using a polyfill)
-    2. Query parameter: ?token=xyz (fallback for standard EventSource)
+    Authentication:
+    - HttpOnly session cookie set by `/api/jarvis/auth`
+    - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
     Event types:
     - connected: Initial connection confirmation
@@ -496,7 +513,6 @@ async def jarvis_events(
     - run_updated: Agent run status changed (running → success/failed)
 
     Args:
-        token: Optional JWT token as query parameter (for EventSource compatibility)
         current_user: Authenticated user (Jarvis service account)
 
     Returns:

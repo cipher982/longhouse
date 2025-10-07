@@ -60,7 +60,7 @@ The Swarm Platform integrates **Jarvis** (voice/text UI) with **Zerg** (agent or
 
 #### POST /api/jarvis/auth
 
-Authenticate Jarvis device and receive JWT token.
+Authenticate Jarvis device and establish a session.
 
 **Request**:
 ```json
@@ -72,17 +72,16 @@ Authenticate Jarvis device and receive JWT token.
 **Response**:
 ```json
 {
-  "access_token": "eyJ...",
-  "token_type": "bearer",
-  "expires_in": 604800
+  "session_cookie_name": "jarvis_session",
+  "session_expires_in": 604800
 }
 ```
 
 **Flow**:
 1. Validates device secret against `JARVIS_DEVICE_SECRET` env var
 2. Creates or fetches `jarvis@swarm.local` ADMIN user
-3. Issues JWT token (7-day expiry)
-4. Jarvis stores token in localStorage
+3. Issues JWT token (7-day expiry) and sets HttpOnly cookie (`jarvis_session`)
+4. Jarvis stores expiry metadata locally for re-auth reminders
 
 **Errors**:
 - `401 Unauthorized`: Invalid device secret
@@ -94,10 +93,9 @@ Authenticate Jarvis device and receive JWT token.
 
 List all available agents with their schedules.
 
-**Headers**:
-```
-Authorization: Bearer {jwt}
-```
+**Authentication**:
+- HttpOnly session cookie set during `/api/jarvis/auth`
+- Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Response**:
 ```json
@@ -121,10 +119,9 @@ Authorization: Bearer {jwt}
 
 Get recent agent execution history.
 
-**Headers**:
-```
-Authorization: Bearer {jwt}
-```
+**Authentication**:
+- HttpOnly session cookie set by `/api/jarvis/auth`
+- Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Query Parameters**:
 - `limit` (optional, default 50): Maximum number of runs to return
@@ -154,9 +151,12 @@ Authorization: Bearer {jwt}
 
 Trigger immediate agent execution from Jarvis.
 
+**Authentication**:
+- HttpOnly session cookie set by `/api/jarvis/auth`
+- Development override: when `AUTH_DISABLED=1`, standard dev auth applies
+
 **Headers**:
 ```
-Authorization: Bearer {jwt}
 Content-Type: application/json
 ```
 
@@ -191,10 +191,9 @@ Content-Type: application/json
 
 Server-Sent Events stream for real-time updates.
 
-**Headers**:
-```
-Authorization: Bearer {jwt}
-```
+**Authentication**:
+- HttpOnly session cookie set by `/api/jarvis/auth`
+- Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Event Types**:
 
@@ -340,9 +339,8 @@ User: "Run my morning digest"
 ### JarvisAuthResponse
 ```typescript
 {
-  access_token: string;    // JWT token
-  token_type: "bearer";
-  expires_in: number;      // Seconds (604800 = 7 days)
+  session_cookie_name: string;   // "jarvis_session"
+  session_expires_in: number;    // Seconds (604800 = 7 days)
 }
 ```
 
@@ -406,10 +404,10 @@ Day 7: Token expires → Re-authenticate automatically
 ```
 
 ### Authorization
-- All `/api/jarvis/*` endpoints require JWT token
-- Token is validated via `get_current_user` dependency
-- Jarvis user has ADMIN role → full access to all agents/runs
-- Multi-user Jarvis support: Each device can have separate secret
+- All `/api/jarvis/*` endpoints require the HttpOnly `jarvis_session` cookie issued by `/api/jarvis/auth`
+- Cookie is validated via `get_current_jarvis_user`
+- Dev mode (`AUTH_DISABLED=1`) still honors the global dev auth fallback
+- Multi-device support: each device authenticates to obtain its own session cookie
 
 ## Environment Configuration
 
@@ -477,24 +475,26 @@ OPENAI_API_KEY="sk-..."
 cd /Users/davidrose/git/zerg
 make zerg-dev
 
-# In another terminal, test endpoints
-TOKEN=$(curl -s -X POST http://localhost:47300/api/jarvis/auth \
+# In another terminal, test endpoints (store cookie jar)
+COOKIE_JAR=cookies.txt
+curl -s -X POST http://localhost:47300/api/jarvis/auth \
   -H "Content-Type: application/json" \
-  -d '{"device_secret":"your-secret"}' | jq -r .access_token)
+  -d '{"device_secret":"your-secret"}' \
+  -c "$COOKIE_JAR" -b "$COOKIE_JAR"
 
 # List agents
 curl http://localhost:47300/api/jarvis/agents \
-  -H "Authorization: Bearer $TOKEN"
+  -b "$COOKIE_JAR"
 
 # Dispatch agent
 curl -X POST http://localhost:47300/api/jarvis/dispatch \
-  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"agent_id":1}'
+  -d '{"agent_id":1}' \
+  -b "$COOKIE_JAR"
 
 # Listen to SSE stream
 curl -N http://localhost:47300/api/jarvis/events \
-  -H "Authorization: Bearer $TOKEN"
+  -b "$COOKIE_JAR"
 ```
 
 ### Seeding Baseline Agents

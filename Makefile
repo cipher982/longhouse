@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help start stop jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
+.PHONY: help start stop postgres-up postgres-down jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -24,10 +24,12 @@ help:
 	@echo "=================================="
 	@echo ""
 	@echo "Development:"
+	@echo "  make postgres-up   Start PostgreSQL (via docker compose)"
+	@echo "  make postgres-down Stop PostgreSQL"
 	@echo "  make jarvis-dev    Start Jarvis PWA + node server (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
 	@echo "  make zerg-dev      Start Zerg backend + frontend (ports $(ZERG_BACKEND_PORT), $(ZERG_FRONTEND_PORT))"
 	@echo "  make swarm-dev     Start BOTH Jarvis and Zerg concurrently"
-	@echo "  make stop          Stop all development servers"
+	@echo "  make stop          Stop all development servers (keeps Postgres running)"
 	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
 	@echo "  make generate-tools Generate tool manifest only"
 	@echo "  make seed-jarvis-agents  Seed baseline Zerg agents for Jarvis integration"
@@ -134,3 +136,21 @@ validate-contracts:
 validate-deploy:
 	@echo "🔍 Validating deployment configuration..."
 	@echo "⚠️  Deployment validation script needs to be updated for monorepo"
+# ---------------------------------------------------------------------------
+# PostgreSQL Management
+# ---------------------------------------------------------------------------
+postgres-up:
+	@echo "🐘 Starting PostgreSQL..."
+	docker compose up -d
+	@echo "✅ PostgreSQL running"
+
+postgres-down:
+	@echo "🐘 Stopping PostgreSQL..."
+	docker compose down
+	@echo "✅ PostgreSQL stopped"
+
+postgres-reset:
+	@echo "🐘 Resetting PostgreSQL (destroys data)..."
+	docker compose down -v
+	docker compose up -d
+	@echo "⚠️  Database reset - run migrations and seed agents"
