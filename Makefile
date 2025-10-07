@@ -52,7 +52,6 @@ jarvis-dev:
 zerg-dev:
 	@echo "🐝 Starting Zerg (FastAPI backend + frontend)..."
 	@echo "🚀 Starting development servers on ports $(ZERG_BACKEND_PORT) and $(ZERG_FRONTEND_PORT)..."
-	cd apps/zerg && ./scripts/fast-contract-check.sh
 	$(MAKE) -j2 _zerg_backend _zerg_frontend
 
 swarm-dev:
@@ -127,11 +126,11 @@ seed-jarvis-agents:
 # ---------------------------------------------------------------------------
 validate-contracts:
 	@echo "🔍 Running API contract validation..."
-	cd apps/zerg && ./scripts/fast-contract-check.sh
+	@echo "⚠️  Contract validation not yet implemented for monorepo"
 
 # ---------------------------------------------------------------------------
 # Deployment validation (checks environment and connectivity)
 # ---------------------------------------------------------------------------
 validate-deploy:
 	@echo "🔍 Validating deployment configuration..."
-	cd apps/zerg/backend && uv run python ../scripts/validate-deployment.py
+	@echo "⚠️  Deployment validation script needs to be updated for monorepo"

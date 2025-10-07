@@ -24,7 +24,7 @@ echo ""
 
 # Check if backend is running
 echo -n "Checking backend connectivity... "
-if curl -sf "$ZERG_API_URL/api/health" > /dev/null 2>&1; then
+if curl -sf "$ZERG_API_URL/api/system/health" > /dev/null 2>&1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
