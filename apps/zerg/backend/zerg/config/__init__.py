@@ -17,11 +17,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# ``_REPO_ROOT`` points to the top-level repository directory (one level
-# **above** the "backend" package).  We use ``parents[3]`` because this file is
-# located at ``backend/zerg/config/__init__.py``.
+# ``_REPO_ROOT`` points to the top-level repository directory.
+# After monorepo migration, this file is at ``apps/zerg/backend/zerg/config/__init__.py``,
+# so we need parents[5] to reach the repo root where .env is located.
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _truthy(value: str | None) -> bool:  # noqa: D401 – small helper
