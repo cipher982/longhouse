@@ -772,3 +772,136 @@ body.audio-state-3 .voice-button:not(.listening) {
     opacity: 0.7;
   }
 }
+
+/* Text Input Container */
+.text-input-container {
+  display: flex;
+  gap: 12px;
+  padding: 16px 24px;
+  background: var(--glass-bg);
+  border-top: 1px solid var(--glass-border);
+}
+
+.text-input {
+  flex: 1;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+.text-input::placeholder {
+  color: var(--text-muted);
+}
+
+.send-button {
+  padding: 12px 16px;
+  background: var(--primary-gradient);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
+}
+
+.send-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Task Inbox Sidebar */
+.task-inbox-sidebar {
+  width: 380px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border-left: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Responsive Grid Layout */
+@media (min-width: 1440px) {
+  .app-container {
+    grid-template-columns: 320px 1fr 380px;
+  }
+}
+
+@media (max-width: 1439px) {
+  .app-container {
+    grid-template-columns: 320px 1fr;
+  }
+  
+  .task-inbox-sidebar {
+    position: fixed;
+    right: -380px;
+    top: 0;
+    height: 100vh;
+    z-index: 1000;
+    transition: right 0.3s;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+  
+  .task-inbox-sidebar.visible {
+    right: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  
+  .sidebar {
+    position: fixed;
+    left: -320px;
+    top: 0;
+    height: 100vh;
+    z-index: 200;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+  
+  .sidebar.visible {
+    left: 0;
+  }
+  
+  .task-inbox-sidebar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 40vh;
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--glass-border);
+    transform: translateY(100%);
+    transition: transform 0.3s;
+  }
+  
+  .task-inbox-sidebar.visible {
+    transform: translateY(0);
+  }
+  
+  .text-input-container {
+    padding: 12px 16px;
+  }
+}

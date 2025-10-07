@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles/task-inbox.css">
     <title>Jarvis</title>
   </head>
   <body>
@@ -95,7 +96,28 @@
           </div>
 
         </div>
+
+        <!-- Text Input Mode -->
+        <div class="text-input-container">
+          <input
+            type="text"
+            id="textInput"
+            class="text-input"
+            placeholder="Type a command or question..."
+            aria-label="Text input"
+          />
+          <button id="sendTextBtn" class="send-button" aria-label="Send message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </div>
       </div>
+
+      <!-- Task Inbox Sidebar -->
+      <aside id="task-inbox-container" class="task-inbox-sidebar">
+        <!-- Task Inbox component renders here -->
+      </aside>
 
       <audio id="remoteAudio" autoplay playsinline></audio>
     </div>

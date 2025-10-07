@@ -2,9 +2,10 @@
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
-import { SessionManager, logger } from '@jarvis/core';
+import { SessionManager, logger, getJarvisClient, type JarvisAgentSummary } from '@jarvis/core';
 import { ConversationUI } from './lib/conversation-ui';
 import { ConversationRenderer } from './lib/conversation-renderer';
+import { createTaskInbox, type TaskInbox } from './lib/task-inbox';
 import type { ConversationTurn, ConversationManagerOptions, SyncTransport } from '@jarvis/data-local';
 import { contextLoader } from './contexts/context-loader';
 import type { VoiceAgentConfig } from './contexts/types';
@@ -98,6 +99,11 @@ let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
 // Legacy DOM element placeholders removed in favor of renderer-based state
 // (avoid multiple writers / race conditions)
+
+// Jarvis-Zerg integration
+let taskInbox: TaskInbox | null = null;
+let jarvisClient = getJarvisClient(import.meta.env.VITE_ZERG_API_URL || 'http://localhost:47300');
+let cachedAgents: JarvisAgentSummary[] = [];
 // Track if transcript is showing status text (e.g., "Connecting…")
 let statusActive = false;
 // Accumulate partial transcription text when VAD is used (no PTT)
@@ -1040,10 +1046,12 @@ function handleConversationItemDone(event: any): void {
   logger.debug('Conversation item completed', event.item);
 }
 
-function handleUserTranscript(transcript: any): void {
+async function handleUserTranscript(transcript: any): Promise<void> {
   logger.debug('User transcript received', transcript);
   // If a renderer-based placeholder exists, finalize it; otherwise add new
   const finalText = String(transcript || pendingUserText).trim();
+
+  // First, update the UI with the transcript
   if (pendingUserMessageId && conversationRenderer) {
     conversationRenderer.updateMessage(pendingUserMessageId, {
       content: finalText || '—',
@@ -1055,6 +1063,25 @@ function handleUserTranscript(transcript: any): void {
     pendingUserText = '';
   } else {
     addUserTurnToUI(finalText);
+  }
+
+  // Check if this is an agent dispatch command
+  const agent = findAgentByIntent(finalText);
+  if (agent && cachedAgents.length > 0) {
+    console.log(`🎯 Voice command matched agent: ${agent.name}`);
+
+    try {
+      const result = await jarvisClient.dispatch({ agent_id: agent.id });
+      console.log('✅ Agent dispatched from voice command:', result);
+
+      // Add confirmation to UI
+      addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for results.`);
+      uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
+    } catch (error: any) {
+      console.error('Voice dispatch failed:', error);
+      addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+      uiEnhancements.showToast('Agent dispatch failed', 'error');
+    }
   }
 }
 
@@ -1479,6 +1506,151 @@ window.debugConversations = async () => {
     console.log(`💬 Current conversation (${currentConversationId}) history:`, history);
   }
 };
+
+// Initialize Jarvis-Zerg integration
+async function initializeJarvisIntegration() {
+  try {
+    const zergApiURL = import.meta.env.VITE_ZERG_API_URL || 'http://localhost:47300';
+    const deviceSecret = import.meta.env.VITE_JARVIS_DEVICE_SECRET;
+
+    if (!deviceSecret) {
+      console.warn('⚠️ VITE_JARVIS_DEVICE_SECRET not configured - Zerg integration disabled');
+      return;
+    }
+
+    console.log('🔌 Initializing Jarvis-Zerg integration...');
+
+    // Authenticate with Zerg
+    if (!jarvisClient.isAuthenticated()) {
+      await jarvisClient.authenticate(deviceSecret);
+      console.log('✅ Authenticated with Zerg backend');
+    }
+
+    // Load available agents for voice/text commands
+    cachedAgents = await jarvisClient.listAgents();
+    console.log(`✅ Loaded ${cachedAgents.length} agents from Zerg`);
+
+    // Initialize Task Inbox
+    const taskInboxContainer = document.getElementById('task-inbox-container');
+    if (taskInboxContainer) {
+      taskInbox = await createTaskInbox(taskInboxContainer, {
+        apiURL: zergApiURL,
+        deviceSecret: deviceSecret,
+        onError: (error) => {
+          console.error('Task Inbox error:', error);
+          uiEnhancements.showToast('Task Inbox error - check console', 'error');
+        },
+        onRunUpdate: (run) => {
+          // Speak result when agent completes successfully
+          if (run.status === 'success' && run.summary) {
+            console.log(`✅ Agent "${run.agent_name}" completed:`, run.summary);
+            // Optional: Add TTS here when ready
+            // const utterance = new SpeechSynthesisUtterance(run.summary);
+            // speechSynthesis.speak(utterance);
+          }
+        },
+      });
+      console.log('✅ Task Inbox initialized');
+
+      // Show Task Inbox on wide screens
+      if (window.innerWidth >= 1440) {
+        taskInboxContainer.classList.add('visible');
+      }
+    }
+
+    // Set up text input handler
+    const textInput = document.getElementById('textInput') as HTMLInputElement;
+    const sendTextBtn = document.getElementById('sendTextBtn');
+
+    const handleTextCommand = async () => {
+      const text = textInput?.value.trim();
+      if (!text) return;
+
+      console.log('💬 Text command:', text);
+
+      // Try to map to agent dispatch
+      const agent = findAgentByIntent(text);
+
+      if (agent) {
+        console.log(`🎯 Dispatching agent: ${agent.name}`);
+        textInput.value = '';
+
+        try {
+          const result = await jarvisClient.dispatch({ agent_id: agent.id });
+          console.log('✅ Agent dispatched:', result);
+          uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
+
+          // Add message to UI
+          addUserTurnToUI(text);
+          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
+        } catch (error: any) {
+          console.error('Dispatch failed:', error);
+          uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
+          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+        }
+      } else {
+        // Handle as regular conversation (if connected)
+        if (isConnected && session) {
+          textInput.value = '';
+          addUserTurnToUI(text);
+          session.send({ type: 'input_text', text });
+        } else {
+          uiEnhancements.showToast('Not connected - click Connect first', 'error');
+        }
+      }
+    };
+
+    sendTextBtn?.addEventListener('click', handleTextCommand);
+    textInput?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        handleTextCommand();
+      }
+    });
+
+    console.log('✅ Text input mode enabled');
+
+  } catch (error) {
+    console.error('❌ Jarvis-Zerg integration failed:', error);
+    // Non-fatal - voice features still work
+  }
+}
+
+// Map user text/voice to agent intent
+function findAgentByIntent(text: string): JarvisAgentSummary | null {
+  const lower = text.toLowerCase();
+
+  // Agent keywords mapping
+  if (lower.includes('morning') || lower.includes('digest')) {
+    return cachedAgents.find(a => a.name === 'Morning Digest') || null;
+  }
+  if (lower.includes('health') || lower.includes('recovery') || lower.includes('whoop')) {
+    return cachedAgents.find(a => a.name === 'Health Watch') || null;
+  }
+  if (lower.includes('status') || lower.includes('quick check')) {
+    return cachedAgents.find(a => a.name === 'Quick Status Check') || null;
+  }
+  if (lower.includes('planning') || lower.includes('week ahead')) {
+    return cachedAgents.find(a => a.name === 'Weekly Planning Assistant') || null;
+  }
+
+  // Check if text starts with "run" or "execute"
+  if (lower.startsWith('run ') || lower.startsWith('execute ')) {
+    // Extract agent name after "run"
+    const agentNamePart = lower.replace(/^(run|execute)\s+/, '').trim();
+    return cachedAgents.find(a =>
+      a.name.toLowerCase().includes(agentNamePart)
+    ) || null;
+  }
+
+  return null;
+}
+
+// Initialize integration after DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+  initializeJarvisIntegration().catch(err => {
+    console.error('Integration initialization failed:', err);
+  });
+});
 
 console.log('Jarvis PWA with Agents SDK ready', {
   toggleConnectionBtn: !!toggleConnectionBtn,
