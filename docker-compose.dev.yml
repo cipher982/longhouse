@@ -29,8 +29,8 @@ services:
   # Backend API Service (Development mode)
   backend:
     build:
-      context: backend
-      dockerfile: ../docker/backend.dockerfile
+      context: apps/zerg/backend
+      dockerfile: ../../../docker/backend.dockerfile
       target: development
       args:
         BUILD_ENV: development
@@ -53,6 +53,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-secret-for-integration-testing}
       ALLOWED_CORS_ORIGINS: "*"
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-1}
@@ -61,10 +62,10 @@ services:
       DEBUG: true
       LOG_LEVEL: DEBUG
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-47300}:8000"
     volumes:
       # Hot reload: mount source code
-      - ./backend:/app:cached
+      - ./apps/zerg/backend:/app:cached
       - backend_dev_static:/app/static
       # Development logs
       - ./logs/backend:/app/logs
@@ -77,35 +78,24 @@ services:
     networks:
       - zerg-dev-network
 
-  # Frontend Service (Development mode)
+  # Frontend Service (Development mode - React UI)
   frontend:
     build:
-      context: frontend
-      dockerfile: ../docker/frontend.dockerfile
-      target: development
-      args:
-        BUILD_ENV: development
-        API_BASE_URL: http://localhost:8000
-      # Local build cache
-      cache_from:
-        - type=local,src=/tmp/docker-cache/frontend
-      cache_to:
-        - type=local,dest=/tmp/docker-cache/frontend,mode=max
+      context: apps/zerg/frontend-web
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       - backend
     environment:
-      API_BASE_URL: http://localhost:8000
-      RUST_LOG: debug
+      VITE_API_URL: http://localhost:47300
     ports:
-      - "${FRONTEND_PORT:-8080}:8080"
+      - "${FRONTEND_PORT:-47200}:80"
     volumes:
-      # Hot reload: mount source code for Rust rebuilds
-      - ./frontend/src:/app/src:cached
-      - ./frontend/Cargo.toml:/app/Cargo.toml:cached
-      - ./frontend/www:/app/www:cached
+      # Hot reload: mount source code
+      - ./apps/zerg/frontend-web/src:/app/src:cached
+      - ./apps/zerg/frontend-web/public:/app/public:cached
       # Development logs
-      - ./logs/frontend:/app/logs
+      - ./logs/frontend:/var/log/nginx
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 15s

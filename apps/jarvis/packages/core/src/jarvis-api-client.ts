@@ -2,7 +2,7 @@
  * Jarvis API Client for Zerg Backend Integration
  *
  * Provides typed client for Jarvis-specific endpoints:
- * - Authentication (device secret → JWT)
+ * - Authentication (device secret → session cookie)
  * - Agent listing
  * - Run history
  * - Task dispatch
@@ -14,9 +14,8 @@ export interface JarvisAuthRequest {
 }
 
 export interface JarvisAuthResponse {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
+  session_expires_in: number;
+  session_cookie_name: string;
 }
 
 export interface JarvisAgentSummary {
@@ -57,28 +56,30 @@ export interface JarvisEventData {
   timestamp: string;
 }
 
+const JARVIS_SESSION_STORAGE_KEY = 'jarvis_session_meta';
+
 export class JarvisAPIClient {
   private _baseURL: string;
-  private token: string | null = null;
+  private sessionExpiresAt: number | null = null;
   private eventSource: EventSource | null = null;
 
   constructor(baseURL: string = 'http://localhost:47300') {
     this._baseURL = baseURL;
 
-    // Load token from localStorage if available
-    const stored = localStorage.getItem('jarvis_token');
+    // Load session metadata from localStorage if available
+    const stored = localStorage.getItem(JARVIS_SESSION_STORAGE_KEY);
     if (stored) {
       try {
         const data = JSON.parse(stored);
         // Check if token is still valid (not expired)
         const now = Date.now() / 1000;
-        if (data.expires_at > now) {
-          this.token = data.access_token;
+        if (typeof data.expires_at === 'number' && data.expires_at > now) {
+          this.sessionExpiresAt = data.expires_at;
         } else {
-          localStorage.removeItem('jarvis_token');
+          localStorage.removeItem(JARVIS_SESSION_STORAGE_KEY);
         }
       } catch (e) {
-        localStorage.removeItem('jarvis_token');
+        localStorage.removeItem(JARVIS_SESSION_STORAGE_KEY);
       }
     }
   }
@@ -99,6 +100,7 @@ export class JarvisAPIClient {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include',
       body: JSON.stringify({ device_secret: deviceSecret }),
     });
 
@@ -108,13 +110,16 @@ export class JarvisAPIClient {
 
     const data: JarvisAuthResponse = await response.json();
 
-    // Store token with expiry
-    this.token = data.access_token;
-    const expiresAt = Date.now() / 1000 + data.expires_in;
-    localStorage.setItem('jarvis_token', JSON.stringify({
-      access_token: data.access_token,
-      expires_at: expiresAt,
-    }));
+    // Store session expiry metadata (token itself remains HttpOnly)
+    const expiresAt = Date.now() / 1000 + data.session_expires_in;
+    this.sessionExpiresAt = expiresAt;
+    try {
+      localStorage.setItem(JARVIS_SESSION_STORAGE_KEY, JSON.stringify({
+        expires_at: expiresAt,
+      }));
+    } catch {
+      // Ignore storage errors (e.g. private mode)
+    }
 
     return data;
   }
@@ -123,30 +128,50 @@ export class JarvisAPIClient {
    * Check if client is authenticated
    */
   isAuthenticated(): boolean {
-    return this.token !== null;
+    if (this.sessionExpiresAt === null) {
+      return false;
+    }
+
+    const now = Date.now() / 1000;
+    if (this.sessionExpiresAt <= now) {
+      this.resetSession();
+      return false;
+    }
+
+    return true;
   }
 
-  /**
-   * Get authorization header
-   */
-  private getAuthHeader(): Record<string, string> {
-    if (!this.token) {
+  private ensureAuthenticated(): void {
+    if (!this.isAuthenticated()) {
       throw new Error('Not authenticated - call authenticate() first');
     }
-    return {
-      'Authorization': `Bearer ${this.token}`,
-    };
+  }
+
+  private resetSession(): void {
+    this.sessionExpiresAt = null;
+    try {
+      localStorage.removeItem(JARVIS_SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors (e.g. private mode)
+    }
+  }
+
+  private async authenticatedFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
+    this.ensureAuthenticated();
+    const options: RequestInit = { ...init, credentials: 'include' };
+    const response = await fetch(input, options);
+    if (response.status === 401) {
+      this.resetSession();
+      throw new Error('Authentication expired');
+    }
+    return response;
   }
 
   /**
    * List available agents
    */
   async listAgents(): Promise<JarvisAgentSummary[]> {
-    const response = await fetch(`${this._baseURL}/api/jarvis/agents`, {
-      headers: {
-        ...this.getAuthHeader(),
-      },
-    });
+    const response = await this.authenticatedFetch(`${this._baseURL}/api/jarvis/agents`);
 
     if (!response.ok) {
       throw new Error(`Failed to list agents: ${response.statusText}`);
@@ -165,11 +190,7 @@ export class JarvisAPIClient {
 
     const url = `${this._baseURL}/api/jarvis/runs${params.toString() ? '?' + params.toString() : ''}`;
 
-    const response = await fetch(url, {
-      headers: {
-        ...this.getAuthHeader(),
-      },
-    });
+    const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
       throw new Error(`Failed to list runs: ${response.statusText}`);
@@ -182,14 +203,16 @@ export class JarvisAPIClient {
    * Dispatch agent task
    */
   async dispatch(request: JarvisDispatchRequest): Promise<JarvisDispatchResponse> {
-    const response = await fetch(`${this._baseURL}/api/jarvis/dispatch`, {
-      method: 'POST',
-      headers: {
-        ...this.getAuthHeader(),
-        'Content-Type': 'application/json',
+    const response = await this.authenticatedFetch(
+      `${this._baseURL}/api/jarvis/dispatch`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
       },
-      body: JSON.stringify(request),
-    });
+    );
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
@@ -207,19 +230,16 @@ export class JarvisAPIClient {
     onHeartbeat?: (timestamp: string) => void;
     onAgentUpdated?: (event: JarvisEventData) => void;
     onRunCreated?: (event: JarvisEventData) => void;
-    onRunUpdated?: (event: JarvisEventData) => void;
-    onError?: (error: Event) => void;
-  }): void {
-    if (!this.token) {
-      throw new Error('Not authenticated - call authenticate() first');
-    }
+  onRunUpdated?: (event: JarvisEventData) => void;
+  onError?: (error: Event) => void;
+}): void {
+    this.ensureAuthenticated();
 
     // Close existing connection if any
     this.disconnectEventStream();
 
-    // Include token as query parameter since EventSource doesn't support custom headers
-    const url = `${this._baseURL}/api/jarvis/events?token=${encodeURIComponent(this.token)}`;
-    this.eventSource = new EventSource(url);
+    const url = `${this._baseURL}/api/jarvis/events`;
+    this.eventSource = new EventSource(url, { withCredentials: true });
 
     this.eventSource.addEventListener('connected', () => {
       handlers.onConnected?.();
@@ -281,8 +301,7 @@ export class JarvisAPIClient {
    * Logout and clear stored token
    */
   logout(): void {
-    this.token = null;
-    localStorage.removeItem('jarvis_token');
+    this.resetSession();
     this.disconnectEventStream();
   }
 }

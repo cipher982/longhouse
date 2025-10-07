@@ -22,6 +22,9 @@ echo "  Zerg API: $ZERG_API_URL"
 echo "  Device Secret: ${DEVICE_SECRET:0:10}..."
 echo ""
 
+COOKIE_JAR=$(mktemp)
+trap 'rm -f "$COOKIE_JAR"' EXIT
+
 # Check if backend is running
 echo -n "Checking backend connectivity... "
 if curl -sf "$ZERG_API_URL/api/system/health" > /dev/null 2>&1; then
@@ -42,13 +45,16 @@ echo -n "POST /api/jarvis/auth ... "
 
 AUTH_RESPONSE=$(curl -sf -X POST "$ZERG_API_URL/api/jarvis/auth" \
   -H "Content-Type: application/json" \
-  -d "{\"device_secret\":\"$DEVICE_SECRET\"}" 2>&1)
+  -d "{\"device_secret\":\"$DEVICE_SECRET\"}" \
+  -c "$COOKIE_JAR" \
+  -b "$COOKIE_JAR" 2>&1)
 
 if [ $? -eq 0 ]; then
-    TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.access_token' 2>/dev/null)
-    if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
+    SESSION_COOKIE_NAME=$(echo "$AUTH_RESPONSE" | jq -r '.session_cookie_name' 2>/dev/null)
+    SESSION_EXPIRES_IN=$(echo "$AUTH_RESPONSE" | jq -r '.session_expires_in' 2>/dev/null)
+    if [ -n "$SESSION_COOKIE_NAME" ] && [ "$SESSION_COOKIE_NAME" != "null" ]; then
         echo -e "${GREEN}✓${NC}"
-        echo "  Token received: ${TOKEN:0:20}..."
+        echo "  Session cookie: $SESSION_COOKIE_NAME (expires in ${SESSION_EXPIRES_IN}s)"
     else
         echo -e "${RED}✗${NC}"
         echo "  Response: $AUTH_RESPONSE"
@@ -69,7 +75,7 @@ echo "-------------------"
 echo -n "GET /api/jarvis/agents ... "
 
 AGENTS_RESPONSE=$(curl -sf "$ZERG_API_URL/api/jarvis/agents" \
-  -H "Authorization: Bearer $TOKEN" 2>&1)
+  -b "$COOKIE_JAR" 2>&1)
 
 if [ $? -eq 0 ]; then
     AGENT_COUNT=$(echo "$AGENTS_RESPONSE" | jq '. | length' 2>/dev/null)
@@ -93,7 +99,7 @@ echo "-----------------"
 echo -n "GET /api/jarvis/runs ... "
 
 RUNS_RESPONSE=$(curl -sf "$ZERG_API_URL/api/jarvis/runs?limit=10" \
-  -H "Authorization: Bearer $TOKEN" 2>&1)
+  -b "$COOKIE_JAR" 2>&1)
 
 if [ $? -eq 0 ]; then
     RUN_COUNT=$(echo "$RUNS_RESPONSE" | jq '. | length' 2>/dev/null)
@@ -122,7 +128,7 @@ if [ "$AGENT_COUNT" -gt 0 ]; then
         echo "  Skipped - agent already running"
     else
         DISPATCH_RESPONSE=$(curl -sf -X POST "$ZERG_API_URL/api/jarvis/dispatch" \
-          -H "Authorization: Bearer $TOKEN" \
+          -b "$COOKIE_JAR" \
           -H "Content-Type: application/json" \
           -d "{\"agent_id\":$FIRST_AGENT_ID,\"task_override\":\"Quick test - just say hello and finish immediately.\"}" 2>&1)
 
@@ -148,7 +154,7 @@ echo -n "GET /api/jarvis/events (connection test) ... "
 
 # Test SSE connection with 5 second timeout
 SSE_TEST=$(timeout 5 curl -sf -N "$ZERG_API_URL/api/jarvis/events" \
-  -H "Authorization: Bearer $TOKEN" 2>&1 | head -3)
+  -b "$COOKIE_JAR" 2>&1 | head -3)
 
 if [ $? -eq 0 ] || [ $? -eq 124 ]; then
     # Exit code 124 = timeout (expected), 0 = got data

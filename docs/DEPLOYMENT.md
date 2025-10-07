@@ -382,8 +382,15 @@ curl https://api.swarmlet.com/api/health/db
 ### SSE Stream
 
 ```bash
+# Authenticate (stores HttpOnly session cookie)
+curl -s -X POST https://api.swarmlet.com/api/jarvis/auth \
+  -H "Content-Type: application/json" \
+  -d '{"device_secret":"<device-secret>"}' \
+  -c cookies.txt -b cookies.txt
+
+# Stream events using the stored session
 curl -N https://api.swarmlet.com/api/jarvis/events \
-  -H "Authorization: Bearer <token>"
+  -b cookies.txt
 
 # Should receive connected event immediately
 ```
