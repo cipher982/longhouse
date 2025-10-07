@@ -82,7 +82,14 @@ mock_langsmith.Client.return_value = mock_langsmith_client
 sys.modules["langsmith"] = mock_langsmith
 sys.modules["langsmith.client"] = MagicMock()
 
-dotenv.load_dotenv()
+# Load .env from monorepo root (5 levels up from conftest.py)
+_REPO_ROOT = Path(__file__).resolve().parents[4]  # tests -> backend -> zerg -> apps -> repo_root
+_env_path = _REPO_ROOT / ".env"
+if _env_path.exists():
+    dotenv.load_dotenv(_env_path)
+else:
+    # Tests can run without .env if all required env vars are already set
+    dotenv.load_dotenv()
 
 
 # Ensure docker-py can reach Docker Desktop on macOS where the socket lives
@@ -349,11 +356,19 @@ def cleanup_global_resources(request):
         async def _stop_scheduler():
             await scheduler_service.stop()
 
-        # Use asyncio.run ONLY if no other loop is running (which should be true at session end)
-        # If this causes issues, might need pytest-asyncio's loop access.
+        # Try to use existing event loop, otherwise create a new one
+        # This handles both pytest-asyncio and non-async test scenarios
         if scheduler_service._initialized:
-            asyncio.run(_stop_scheduler())
-            print("Stopped scheduler service.")
+            try:
+                # Try to get running loop first (for async test contexts)
+                loop = asyncio.get_running_loop()
+                # If we're in a running loop, schedule the stop as a task
+                loop.create_task(_stop_scheduler())
+                print("Scheduled scheduler service stop.")
+            except RuntimeError:
+                # No running loop, safe to use asyncio.run()
+                asyncio.run(_stop_scheduler())
+                print("Stopped scheduler service.")
         else:
             print("Scheduler service was not initialized, skipping stop.")
     except Exception as e:
@@ -383,6 +398,12 @@ def db_session():
         if db.query(User).filter(User.id == 1).count() == 0:
             dev = User(id=1, email="dev@local")
             db.add(dev)
+            db.commit()
+
+            # Reset the sequence so next auto-generated ID starts at 2
+            # This prevents conflicts when tests create users without specifying IDs
+            from sqlalchemy import text
+            db.execute(text("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users))"))
             db.commit()
     except Exception:
         # If seeding fails, continue; individual tests may create their own users
@@ -682,11 +703,19 @@ def _shutdown_email_trigger_service():
 
     # Cancel poll loop if still running (ignore event-loop already closed)
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.run_until_complete(email_trigger_service.stop())
-    except RuntimeError:
-        # event-loop already closed by pytest – no action needed
+        async def _stop_email_service():
+            await email_trigger_service.stop()
+
+        try:
+            # Try to get running loop first (for async test contexts)
+            loop = asyncio.get_running_loop()
+            # If we're in a running loop, schedule the stop as a task
+            loop.create_task(_stop_email_service())
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            asyncio.run(_stop_email_service())
+    except Exception:
+        # Service already stopped or event-loop closed – no action needed
         pass
 
 

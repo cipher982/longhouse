@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.dependencies import auth as auth_dep
 from zerg.routers import auth as auth_router
@@ -65,7 +66,15 @@ def test_admin_route_requires_super_admin(monkeypatch, client: TestClient, db_se
     """A regular *ADMIN* (not in ADMIN_EMAILS) must receive 403."""
 
     monkeypatch.setattr(auth_dep, "AUTH_DISABLED", False)
-    # Don't set ADMIN_EMAILS so alice is not a super admin
+
+    # Create a patched settings object with testing=False and no admin emails
+    settings = get_settings()
+    settings.testing = False
+    settings.admin_emails = ""
+
+    # Mock get_settings to return our patched version
+    import zerg.dependencies.auth as auth_module
+    monkeypatch.setattr(auth_module, "get_settings", lambda: settings)
 
     token = _google_login(client, monkeypatch, "alice@example.com")
 
