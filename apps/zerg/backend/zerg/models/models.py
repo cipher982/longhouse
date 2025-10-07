@@ -428,6 +428,10 @@ class AgentRun(Base):
     # Brief summary of the run for Jarvis Task Inbox (first assistant response or truncated output)
     summary = Column(Text, nullable=True)
 
+    # Timestamps ---------------------------------------------------------
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
     # Relationships ------------------------------------------------------
     agent = relationship("Agent", back_populates="runs")
     thread = relationship("Thread", backref="runs")

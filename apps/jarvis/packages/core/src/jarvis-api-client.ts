@@ -58,12 +58,12 @@ export interface JarvisEventData {
 }
 
 export class JarvisAPIClient {
-  private baseURL: string;
+  private _baseURL: string;
   private token: string | null = null;
   private eventSource: EventSource | null = null;
 
   constructor(baseURL: string = 'http://localhost:47300') {
-    this.baseURL = baseURL;
+    this._baseURL = baseURL;
 
     // Load token from localStorage if available
     const stored = localStorage.getItem('jarvis_token');
@@ -84,10 +84,17 @@ export class JarvisAPIClient {
   }
 
   /**
+   * Get base URL
+   */
+  get baseURL(): string {
+    return this._baseURL;
+  }
+
+  /**
    * Authenticate with device secret and receive JWT token
    */
   async authenticate(deviceSecret: string): Promise<JarvisAuthResponse> {
-    const response = await fetch(`${this.baseURL}/api/jarvis/auth`, {
+    const response = await fetch(`${this._baseURL}/api/jarvis/auth`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -135,7 +142,7 @@ export class JarvisAPIClient {
    * List available agents
    */
   async listAgents(): Promise<JarvisAgentSummary[]> {
-    const response = await fetch(`${this.baseURL}/api/jarvis/agents`, {
+    const response = await fetch(`${this._baseURL}/api/jarvis/agents`, {
       headers: {
         ...this.getAuthHeader(),
       },
@@ -156,7 +163,7 @@ export class JarvisAPIClient {
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.agent_id) params.append('agent_id', options.agent_id.toString());
 
-    const url = `${this.baseURL}/api/jarvis/runs${params.toString() ? '?' + params.toString() : ''}`;
+    const url = `${this._baseURL}/api/jarvis/runs${params.toString() ? '?' + params.toString() : ''}`;
 
     const response = await fetch(url, {
       headers: {
@@ -175,7 +182,7 @@ export class JarvisAPIClient {
    * Dispatch agent task
    */
   async dispatch(request: JarvisDispatchRequest): Promise<JarvisDispatchResponse> {
-    const response = await fetch(`${this.baseURL}/api/jarvis/dispatch`, {
+    const response = await fetch(`${this._baseURL}/api/jarvis/dispatch`, {
       method: 'POST',
       headers: {
         ...this.getAuthHeader(),
@@ -210,12 +217,9 @@ export class JarvisAPIClient {
     // Close existing connection if any
     this.disconnectEventStream();
 
-    const url = `${this.baseURL}/api/jarvis/events`;
-    this.eventSource = new EventSource(url, {
-      // Note: EventSource doesn't support custom headers, so we need to include token in URL
-      // or use a different approach. For now, we'll rely on cookie-based auth
-      // In production, consider using WebSocket with custom headers
-    });
+    // Include token as query parameter since EventSource doesn't support custom headers
+    const url = `${this._baseURL}/api/jarvis/events?token=${encodeURIComponent(this.token)}`;
+    this.eventSource = new EventSource(url);
 
     this.eventSource.addEventListener('connected', () => {
       handlers.onConnected?.();
@@ -290,7 +294,7 @@ let clientInstance: JarvisAPIClient | null = null;
  * Get or create Jarvis API client instance
  */
 export function getJarvisClient(baseURL?: string): JarvisAPIClient {
-  if (!clientInstance || (baseURL && clientInstance['baseURL'] !== baseURL)) {
+  if (!clientInstance || (baseURL && clientInstance.baseURL !== baseURL)) {
     clientInstance = new JarvisAPIClient(baseURL);
   }
   return clientInstance;

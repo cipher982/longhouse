@@ -21,8 +21,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add summary column to agent_runs table for Jarvis Task Inbox."""
-    # Check if the column already exists (for safety)
+    """Add summary, created_at, and updated_at columns to agent_runs table for Jarvis Task Inbox."""
+    # Check if the columns already exist (for safety)
     connection = op.get_bind()
     inspector = sa.inspect(connection)
 
@@ -34,7 +34,7 @@ def upgrade() -> None:
     # Get table columns
     columns = [col["name"] for col in inspector.get_columns("agent_runs")]
 
-    # Only add column if it doesn't exist
+    # Add summary column
     if "summary" not in columns:
         print("Adding summary column to agent_runs table")
         op.add_column(
@@ -45,10 +45,32 @@ def upgrade() -> None:
     else:
         print("Summary column already exists - skipping")
 
+    # Add created_at column
+    if "created_at" not in columns:
+        print("Adding created_at column to agent_runs table")
+        op.add_column(
+            "agent_runs",
+            sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        )
+        print("created_at column added successfully")
+    else:
+        print("created_at column already exists - skipping")
+
+    # Add updated_at column
+    if "updated_at" not in columns:
+        print("Adding updated_at column to agent_runs table")
+        op.add_column(
+            "agent_runs",
+            sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        )
+        print("updated_at column added successfully")
+    else:
+        print("updated_at column already exists - skipping")
+
 
 def downgrade() -> None:
-    """Remove summary column from agent_runs table."""
-    # Check if the column exists before trying to drop it
+    """Remove summary, created_at, and updated_at columns from agent_runs table."""
+    # Check if the columns exist before trying to drop them
     connection = op.get_bind()
     inspector = sa.inspect(connection)
 
@@ -62,5 +84,13 @@ def downgrade() -> None:
         print("Removing summary column from agent_runs table")
         op.drop_column("agent_runs", "summary")
         print("Summary column removed successfully")
-    else:
-        print("Summary column doesn't exist - skipping downgrade")
+
+    if "updated_at" in columns:
+        print("Removing updated_at column from agent_runs table")
+        op.drop_column("agent_runs", "updated_at")
+        print("updated_at column removed successfully")
+
+    if "created_at" in columns:
+        print("Removing created_at column from agent_runs table")
+        op.drop_column("agent_runs", "created_at")
+        print("created_at column removed successfully")

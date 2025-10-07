@@ -443,14 +443,50 @@ async def _jarvis_event_generator(_current_user):
         event_bus.unsubscribe(EventType.RUN_UPDATED, event_handler)
 
 
+def get_current_user_with_query_token(
+    token: Optional[str] = None,
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    """Get current user from Authorization header OR query param token.
+
+    EventSource doesn't support custom headers, so we allow token as query parameter.
+    """
+    from zerg.dependencies.auth import AUTH_DISABLED, _get_strategy
+
+    # If token in query param, temporarily inject into request headers
+    if token and request:
+        # Create a modified request with Authorization header
+        request._headers = dict(request.headers)
+        request._headers['authorization'] = f'Bearer {token}'
+        request.headers.__dict__['_list'] = [
+            (b'authorization', f'Bearer {token}'.encode())
+        ] + [item for item in request.headers._list if item[0] != b'authorization']
+
+    # Use existing auth strategy
+    if "Authorization" not in request.headers and not AUTH_DISABLED and not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return _get_strategy().get_current_user(request, db)
+
+
 @router.get("/events")
 async def jarvis_events(
-    current_user=Depends(get_current_user),
+    token: Optional[str] = None,
+    current_user=Depends(get_current_user_with_query_token),
 ) -> EventSourceResponse:
     """Server-Sent Events stream for Jarvis.
 
     Provides real-time updates for agent and run events. Jarvis listens to this
     stream to update the Task Inbox UI without polling.
+
+    Since EventSource doesn't support custom headers, authentication can be provided via:
+    1. Authorization header (if using a polyfill)
+    2. Query parameter: ?token=xyz (fallback for standard EventSource)
 
     Event types:
     - connected: Initial connection confirmation
@@ -460,6 +496,7 @@ async def jarvis_events(
     - run_updated: Agent run status changed (running → success/failed)
 
     Args:
+        token: Optional JWT token as query parameter (for EventSource compatibility)
         current_user: Authenticated user (Jarvis service account)
 
     Returns:
