@@ -19,6 +19,7 @@ from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.models.enums import AgentStatus
+from zerg.models.models import Agent
 
 # Agent definitions
 JARVIS_AGENTS = [
@@ -41,9 +42,8 @@ Be brief, positive, and focus on actionable insights. Limit response to 3-4 para
 
 Present this as a friendly morning briefing.""",
         "schedule": "0 7 * * *",  # 7 AM daily
-        "model_id": "gpt-4o-mini",
-        "temperature": 0.7,
-        "max_tokens": 500,
+        "model": "gpt-4o-mini",
+        "config": {"temperature": 0.7, "max_tokens": 500},
     },
     {
         "name": "Health Watch",
@@ -64,9 +64,8 @@ Provide data-driven insights with specific recommendations.""",
 
 Be specific with numbers and trends.""",
         "schedule": "0 20 * * *",  # 8 PM daily
-        "model_id": "gpt-4o-mini",
-        "temperature": 0.5,
-        "max_tokens": 400,
+        "model": "gpt-4o-mini",
+        "config": {"temperature": 0.5, "max_tokens": 400},
     },
     {
         "name": "Weekly Planning Assistant",
@@ -87,9 +86,8 @@ Be strategic and help optimize time management.""",
 
 Provide a structured weekly overview.""",
         "schedule": "0 18 * * 0",  # 6 PM every Sunday
-        "model_id": "gpt-4o-mini",
-        "temperature": 0.6,
-        "max_tokens": 600,
+        "model": "gpt-4o-mini",
+        "config": {"temperature": 0.6, "max_tokens": 600},
     },
     {
         "name": "Quick Status Check",
@@ -109,9 +107,8 @@ Respond in 2-3 sentences max. Be direct and efficient.""",
 
 Keep it to 2-3 sentences total.""",
         "schedule": None,  # On-demand only
-        "model_id": "gpt-4o-mini",
-        "temperature": 0.3,
-        "max_tokens": 150,
+        "model": "gpt-4o-mini",
+        "config": {"temperature": 0.3, "max_tokens": 150},
     },
 ]
 
@@ -148,9 +145,9 @@ def seed_agents():
 
     for agent_def in JARVIS_AGENTS:
         # Check if agent already exists
-        existing = db.query(crud.models.Agent).filter(
-            crud.models.Agent.name == agent_def["name"],
-            crud.models.Agent.owner_id == jarvis_user.id,
+        existing = db.query(Agent).filter(
+            Agent.name == agent_def["name"],
+            Agent.owner_id == jarvis_user.id,
         ).first()
 
         if existing:
@@ -159,24 +156,22 @@ def seed_agents():
             existing.system_instructions = agent_def["system_instructions"]
             existing.task_instructions = agent_def["task_instructions"]
             existing.schedule = agent_def["schedule"]
-            existing.model_id = agent_def["model_id"]
-            existing.temperature = agent_def["temperature"]
-            existing.max_tokens = agent_def["max_tokens"]
+            existing.model = agent_def["model"]
+            existing.config = agent_def.get("config", {})
             existing.status = AgentStatus.IDLE
             db.add(existing)
             updated_count += 1
         else:
             print(f"  ✨ Creating agent: {agent_def['name']}")
             # Create new agent
-            agent = crud.models.Agent(
+            agent = Agent(
                 owner_id=jarvis_user.id,
                 name=agent_def["name"],
                 system_instructions=agent_def["system_instructions"],
                 task_instructions=agent_def["task_instructions"],
                 schedule=agent_def["schedule"],
-                model_id=agent_def["model_id"],
-                temperature=agent_def["temperature"],
-                max_tokens=agent_def["max_tokens"],
+                model=agent_def["model"],
+                config=agent_def.get("config", {}),
                 status=AgentStatus.IDLE,
             )
             db.add(agent)
