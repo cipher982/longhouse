@@ -744,6 +744,7 @@ def mark_finished(
     duration_ms: Optional[int] = None,
     total_tokens: Optional[int] = None,
     total_cost_usd: Optional[float] = None,
+    summary: Optional[str] = None,
 ) -> Optional[AgentRun]:
     row = db.query(AgentRun).filter(AgentRun.id == run_id).first()
     if row is None:
@@ -753,16 +754,70 @@ def mark_finished(
     if row.started_at and duration_ms is None:
         duration_ms = int((finished_at - row.started_at).total_seconds() * 1000)
 
+    # If no summary provided, extract from thread's first assistant message
+    if summary is None and row.thread_id:
+        summary = _extract_run_summary(db, row.thread_id)
+
     # Set to success status
     row.status = RunStatus.SUCCESS
     row.finished_at = finished_at
     row.duration_ms = duration_ms
     row.total_tokens = total_tokens
     row.total_cost_usd = total_cost_usd
+    row.summary = summary
 
     db.commit()
     db.refresh(row)
     return row
+
+
+def _extract_run_summary(db: Session, thread_id: int, max_length: int = 500) -> str:
+    """Extract summary from thread's first assistant message.
+
+    Args:
+        db: Database session
+        thread_id: Thread ID to extract from
+        max_length: Maximum summary length (default 500 chars)
+
+    Returns:
+        Summary text (truncated if needed) or empty string if no assistant messages
+    """
+    # Get first assistant message from thread
+    first_assistant_msg = (
+        db.query(ThreadMessage)
+        .filter(ThreadMessage.thread_id == thread_id)
+        .filter(ThreadMessage.role == "assistant")
+        .order_by(ThreadMessage.id.asc())
+        .first()
+    )
+
+    if not first_assistant_msg or not first_assistant_msg.content:
+        return ""
+
+    # Extract text content
+    content = first_assistant_msg.content
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        # Handle array of content blocks (might be JSON)
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                text_parts.append(block)
+        text = " ".join(text_parts)
+    elif isinstance(content, dict):
+        # Handle single content block
+        text = content.get("text", str(content))
+    else:
+        text = str(content)
+
+    # Truncate if needed
+    if len(text) > max_length:
+        text = text[:max_length].strip() + "..."
+
+    return text.strip()
 
 
 def mark_failed(
