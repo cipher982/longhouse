@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help start stop jarvis-dev zerg-dev swarm-dev test generate-sdk seed-jarvis-agents validate-contracts validate-deploy
+.PHONY: help start stop jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -28,7 +28,8 @@ help:
 	@echo "  make zerg-dev      Start Zerg backend + frontend (ports $(ZERG_BACKEND_PORT), $(ZERG_FRONTEND_PORT))"
 	@echo "  make swarm-dev     Start BOTH Jarvis and Zerg concurrently"
 	@echo "  make stop          Stop all development servers"
-	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients for /packages/contracts"
+	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
+	@echo "  make generate-tools Generate tool manifest only"
 	@echo "  make seed-jarvis-agents  Seed baseline Zerg agents for Jarvis integration"
 	@echo ""
 	@echo "Testing:"
@@ -100,12 +101,18 @@ test-zerg:
 # SDK Generation
 # ---------------------------------------------------------------------------
 generate-sdk:
-	@echo "🔄 Generating OpenAPI/AsyncAPI clients..."
+	@echo "🔄 Generating OpenAPI/AsyncAPI clients and tool manifest..."
 	@echo "📡 Generating from Zerg backend..."
 	cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
 	@echo "📦 Generating TypeScript clients..."
 	cd packages/contracts && npm run generate
+	@echo "🔧 Generating tool manifest..."
+	python3 scripts/generate-tool-manifest.py
 	@echo "✅ SDK generation complete"
+
+generate-tools:
+	@echo "🔧 Generating tool manifest only..."
+	python3 scripts/generate-tool-manifest.py
 
 # ---------------------------------------------------------------------------
 # Jarvis Integration
