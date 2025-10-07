@@ -429,8 +429,10 @@ class AgentRun(Base):
     summary = Column(Text, nullable=True)
 
     # Timestamps ---------------------------------------------------------
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    # Note: nullable=True for SQLite compatibility with existing tables
+    # New rows will have defaults, existing rows backfilled by migration
+    created_at = Column(DateTime, server_default=func.now(), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
 
     # Relationships ------------------------------------------------------
     agent = relationship("Agent", back_populates="runs")

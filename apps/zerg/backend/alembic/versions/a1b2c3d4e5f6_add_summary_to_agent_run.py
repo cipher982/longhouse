@@ -45,25 +45,33 @@ def upgrade() -> None:
     else:
         print("Summary column already exists - skipping")
 
-    # Add created_at column
+    # Add created_at column (nullable, no default - SQLite limitation)
     if "created_at" not in columns:
         print("Adding created_at column to agent_runs table")
         op.add_column(
             "agent_runs",
-            sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=True),
         )
-        print("created_at column added successfully")
+        # Backfill with started_at or current time for existing rows
+        connection.execute(
+            sa.text("UPDATE agent_runs SET created_at = COALESCE(started_at, datetime('now')) WHERE created_at IS NULL")
+        )
+        print("created_at column added and backfilled successfully")
     else:
         print("created_at column already exists - skipping")
 
-    # Add updated_at column
+    # Add updated_at column (nullable, no default - SQLite limitation)
     if "updated_at" not in columns:
         print("Adding updated_at column to agent_runs table")
         op.add_column(
             "agent_runs",
-            sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=True),
         )
-        print("updated_at column added successfully")
+        # Backfill with finished_at or started_at or current time
+        connection.execute(
+            sa.text("UPDATE agent_runs SET updated_at = COALESCE(finished_at, started_at, datetime('now')) WHERE updated_at IS NULL")
+        )
+        print("updated_at column added and backfilled successfully")
     else:
         print("updated_at column already exists - skipping")
 
