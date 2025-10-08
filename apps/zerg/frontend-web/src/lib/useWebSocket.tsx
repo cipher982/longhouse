@@ -89,6 +89,31 @@ export function useWebSocket(
   const reconnectTimeoutRef = useRef<number | null>(null);
   const messageQueueRef = useRef<WebSocketMessage[]>([]);
   const connectRef = useRef<(() => void) | null>(null);
+  const onMessageRef = useRef<typeof onMessage>();
+  const onConnectRef = useRef<typeof onConnect>();
+  const onDisconnectRef = useRef<typeof onDisconnect>();
+  const onErrorRef = useRef<typeof onError>();
+  const invalidateQueriesRef = useRef<(string | number | object)[][]>(invalidateQueries);
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
+
+  useEffect(() => {
+    onConnectRef.current = onConnect;
+  }, [onConnect]);
+
+  useEffect(() => {
+    onDisconnectRef.current = onDisconnect;
+  }, [onDisconnect]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    invalidateQueriesRef.current = invalidateQueries;
+  }, [invalidateQueries]);
 
   const buildWebSocketUrl = useCallback(() => {
     const base = resolveWsBase();
@@ -122,13 +147,13 @@ export function useWebSocket(
     }
 
     // Call custom message handler if provided
-    onMessage?.(message);
+    onMessageRef.current?.(message);
 
     // Invalidate specified queries
-    invalidateQueries.forEach(queryKey => {
+    invalidateQueriesRef.current.forEach(queryKey => {
       queryClient.invalidateQueries({ queryKey });
     });
-  }, [onMessage, invalidateQueries, queryClient]);
+  }, [queryClient]);
 
   const handleConnect = useCallback(() => {
     setConnectionStatus(ConnectionStatus.CONNECTED);
@@ -142,12 +167,12 @@ export function useWebSocket(
       messageQueueRef.current = [];
     }
 
-    onConnect?.();
-  }, [onConnect]);
+    onConnectRef.current?.();
+  }, []);
 
   const handleDisconnect = useCallback(() => {
     setConnectionStatus(ConnectionStatus.DISCONNECTED);
-    onDisconnect?.();
+    onDisconnectRef.current?.();
 
     // Attempt reconnection if enabled and we haven't exceeded max attempts
     if (enabled && reconnectAttemptsRef.current < maxReconnectAttempts) {
@@ -157,17 +182,17 @@ export function useWebSocket(
         connectRef.current?.();
       }, reconnectInterval);
     }
-  }, [enabled, maxReconnectAttempts, reconnectInterval, onDisconnect]);
+  }, [enabled, maxReconnectAttempts, reconnectInterval]);
 
   const handleError = useCallback((error: Event) => {
     setConnectionStatus(ConnectionStatus.ERROR);
-    onError?.(error);
+    onErrorRef.current?.(error);
 
     // Show user-friendly error message
     if (reconnectAttemptsRef.current === 0) {
       toast.error("Connection lost. Attempting to reconnect...");
     }
-  }, [onError]);
+  }, []);
 
   const connect = useCallback(() => {
     // Clean up existing connection
