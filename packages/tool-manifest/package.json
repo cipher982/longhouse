@@ -1,0 +1,10 @@
+{
+  "name": "@swarm/tool-manifest",
+  "version": "0.1.0",
+  "description": "Shared MCP tool definitions for Jarvis and Zerg",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "generate": "python3 ../../scripts/generate-tool-manifest.py"
+  }
+}

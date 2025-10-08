@@ -1,0 +1,12 @@
+{
+  "name": "@swarm/contracts",
+  "version": "0.1.0",
+  "description": "Generated OpenAPI and AsyncAPI clients for Swarm Platform",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "generate": "npm run generate:openapi && npm run generate:asyncapi",
+    "generate:openapi": "echo 'OpenAPI generation placeholder'",
+    "generate:asyncapi": "echo 'AsyncAPI generation placeholder'"
+  }
+}

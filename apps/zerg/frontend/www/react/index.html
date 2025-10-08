@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.swarmlet.com wss://api.swarmlet.com https://accounts.google.com http://localhost:47300 ws://localhost:47300; script-src 'self' https://accounts.google.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https:; frame-src https://accounts.google.com;" />
+    <title>AI Agent Platform - React</title>
+    <script src="/config.js"></script>
+    <script type="module" crossorigin src="/assets/index-joekNwW3.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Cy2GraO9.css">
+  </head>
+  <body>
+    <div id="react-root"></div>
+
+    <!-- Global overlay portal (dropdowns, tooltips, modals that need to escape stacking contexts) -->
+    <div id="overlay-root"></div>
+
+    <!-- Particle background layer -->
+    <div class="particle-bg" aria-hidden="true"></div>
+
+    <!-- Feather icons – lightweight SVG set -->
+    <script src="https://unpkg.com/feather-icons"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        if (window.feather && typeof window.feather.replace === "function") {
+          window.feather.replace({ "stroke-width": 1.5 });
+        }
+      });
+    </script>
+  </body>
+</html>
