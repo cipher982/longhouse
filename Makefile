@@ -23,13 +23,15 @@ help:
 	@echo "\n🌐 Swarm Platform (Jarvis + Zerg)"
 	@echo "=================================="
 	@echo ""
+	@echo "Quick Start:"
+	@echo "  make start         Start EVERYTHING (Postgres + Backend + Frontend)"
+	@echo "  make stop          Stop EVERYTHING"
+	@echo "  make logs          View logs"
+	@echo ""
 	@echo "Development:"
-	@echo "  make postgres-up   Start PostgreSQL (via docker compose)"
-	@echo "  make postgres-down Stop PostgreSQL"
-	@echo "  make jarvis-dev    Start Jarvis PWA + node server (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
-	@echo "  make zerg-dev      Start Zerg backend + frontend (ports $(ZERG_BACKEND_PORT), $(ZERG_FRONTEND_PORT))"
-	@echo "  make swarm-dev     Start BOTH Jarvis and Zerg concurrently"
-	@echo "  make stop          Stop all development servers (keeps Postgres running)"
+	@echo "  make zerg-up       Docker compose (Postgres + Zerg backend/frontend)"
+	@echo "  make zerg-down     Stop docker compose"
+	@echo "  make jarvis-dev    Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
 	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
 	@echo "  make generate-tools Generate tool manifest only"
 	@echo "  make seed-jarvis-agents  Seed baseline Zerg agents for Jarvis integration"
@@ -137,20 +139,34 @@ validate-deploy:
 	@echo "🔍 Validating deployment configuration..."
 	@echo "⚠️  Deployment validation script needs to be updated for monorepo"
 # ---------------------------------------------------------------------------
-# PostgreSQL Management
+# Quick Start - Everything together
 # ---------------------------------------------------------------------------
-postgres-up:
-	@echo "🐘 Starting PostgreSQL..."
-	docker compose up -d
-	@echo "✅ PostgreSQL running"
+start: zerg-up
+	@echo "✅ Platform started!"
+	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
+	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
 
-postgres-down:
-	@echo "🐘 Stopping PostgreSQL..."
-	docker compose down
-	@echo "✅ PostgreSQL stopped"
+stop: zerg-down
+	@echo "✅ Platform stopped"
 
-postgres-reset:
-	@echo "🐘 Resetting PostgreSQL (destroys data)..."
-	docker compose down -v
-	docker compose up -d
-	@echo "⚠️  Database reset - run migrations and seed agents"
+logs:
+	docker compose -f docker-compose.dev.yml logs -f
+
+# ---------------------------------------------------------------------------
+# Docker Compose Management
+# ---------------------------------------------------------------------------
+zerg-up:
+	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
+	docker compose -f docker-compose.dev.yml up -d
+	@sleep 3
+	@docker compose -f docker-compose.dev.yml ps
+
+zerg-down:
+	@echo "🛑 Stopping Zerg platform..."
+	docker compose -f docker-compose.dev.yml down
+
+zerg-reset:
+	@echo "⚠️  Resetting database (destroys all data)..."
+	docker compose -f docker-compose.dev.yml down -v
+	docker compose -f docker-compose.dev.yml up -d
+	@echo "Run migrations and seed agents"
