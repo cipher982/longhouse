@@ -125,19 +125,3 @@ networks:
 volumes:
   backend_dev_static:
     driver: local
-
-# Development-specific logging (more verbose)
-x-dev-logging: &dev-logging
-  driver: "json-file"
-  options:
-    max-size: "50m"
-    max-file: "5"
-
-# Apply logging to all services
-services:
-  postgres:
-    logging: *dev-logging
-  backend:
-    logging: *dev-logging
-  frontend:
-    logging: *dev-logging
