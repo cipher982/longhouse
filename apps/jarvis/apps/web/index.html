@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#8b5cf6" />
+    <link rel="icon" href="icon-192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles/task-inbox.css">
+    <title>Jarvis</title>
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Mobile Menu Toggle (hidden on desktop) -->
+      <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Open conversation sidebar" aria-expanded="false" style="display:none;">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12h18M3 6h18M3 18h18"/>
+        </svg>
+      </button>
+
+      <!-- Sidebar -->
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <h2>Conversations</h2>
+        </div>
+        <div class="sidebar-content">
+          <button id="newConversationBtn" class="sidebar-button primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            New Conversation
+          </button>
+          <button id="clearConvosBtn" class="sidebar-button danger">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14zM10 11v6M14 11v6"/>
+            </svg>
+            Clear All
+          </button>
+          <div id="conversationList">
+            <div class="conversation-item empty">
+              <div class="conversation-name">No conversations yet</div>
+              <div class="conversation-meta">Start your first conversation</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Content -->
+      <div class="main-content">
+        <div class="main-header">
+          <h1 id="appTitle">Jarvis AI</h1>
+          <div class="header-actions">
+            <button id="syncNowBtn" class="header-button" title="Sync conversations">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.64A9 9 0 0 1 3.51 15"/>
+              </svg>
+              <span>Sync</span>
+            </button>
+            <div id="context-selector-container"></div>
+          </div>
+        </div>
+
+        <div class="chat-container">
+          <div id="transcript">
+            <div class="status-message">Click Connect to start</div>
+          </div>
+        </div>
+
+        <!-- Voice Controls (now in their own layout row, not absolute) -->
+        <div class="voice-controls">
+          <!-- Main Voice Button -->
+          <div class="voice-button-container" id="voiceButtonContainer">
+            <button id="pttBtn" class="voice-button" type="button" aria-label="Push to talk" aria-pressed="false" disabled>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+                <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Control Buttons -->
+          <div class="control-buttons">
+            <button id="toggleConnectionBtn" class="control-button primary">
+              <span class="connect-text">Connect</span>
+              <span class="disconnect-text" style="display: none;">Disconnect</span>
+            </button>
+          </div>
+
+          <!-- Listening Indicator -->
+          <div class="listening-indicator" aria-live="polite">
+            <span class="dot"></span>
+            Listening…
+          </div>
+
+        </div>
+
+        <!-- Text Input Mode -->
+        <div class="text-input-container">
+          <input
+            type="text"
+            id="textInput"
+            class="text-input"
+            placeholder="Type a command or question..."
+            aria-label="Text input"
+          />
+          <button id="sendTextBtn" class="send-button" aria-label="Send message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Task Inbox Sidebar -->
+      <aside id="task-inbox-container" class="task-inbox-sidebar">
+        <!-- Task Inbox component renders here -->
+      </aside>
+
+      <audio id="remoteAudio" autoplay playsinline></audio>
+    </div>
+    <script type="module" src="main.ts"></script>
+  </body>
+</html>

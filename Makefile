@@ -1,132 +1,159 @@
-# Zerg Agent Platform
+# Swarm Platform (Jarvis + Zerg Monorepo)
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env (ports are now configured there)
 # ---------------------------------------------------------------------------
-include .env
-export $(shell sed 's/=.*//' .env)
+-include .env
+export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 
 # Fallback defaults if .env is missing values
-B_PORT ?= $(BACKEND_PORT)
-F_PORT ?= $(FRONTEND_PORT)
-B_PORT ?= 8001
-F_PORT ?= 8002
+ZERG_BACKEND_PORT ?= $(BACKEND_PORT)
+ZERG_FRONTEND_PORT ?= $(FRONTEND_PORT)
+ZERG_BACKEND_PORT ?= 47300
+ZERG_FRONTEND_PORT ?= 47200
+JARVIS_SERVER_PORT ?= 8787
+JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help start stop test test-backend test-frontend test-e2e test-e2e-basic test-e2e-full test-auto test-ci test-visual generate validate-contracts validate-deploy
+.PHONY: help start stop postgres-up postgres-down jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
 # ---------------------------------------------------------------------------
 help:
-	@echo "\nZerg Agent Platform"
-	@echo "==================="
+	@echo "\n🌐 Swarm Platform (Jarvis + Zerg)"
+	@echo "=================================="
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make zerg-up       Start EVERYTHING (Postgres + Backend + Frontend via docker-compose)"
+	@echo "  make zerg-down     Stop EVERYTHING"
+	@echo "  make zerg-logs     View all logs"
+	@echo "  make zerg-reset    Reset database (destroys all data)"
 	@echo ""
 	@echo "Development:"
-	@echo "  make start         Start backend (port $(B_PORT)) and frontend (port $(F_PORT)) servers"
-	@echo "  make stop          Stop all development servers"
-	@echo "  make generate      Regenerate code from AsyncAPI schemas"
-	@echo "  make validate-contracts  Run contract validation checks (catches API mismatches)"
+	@echo "  make jarvis-dev    Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
+	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
+	@echo "  make generate-tools Generate tool manifest only"
+	@echo "  make seed-jarvis-agents  Seed baseline Zerg agents for Jarvis integration"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test          Run ALL tests (backend + frontend + e2e)"
-	@echo "  make test-backend  Run backend unit tests only (~10 sec)"
-	@echo "  make test-frontend Run frontend WASM tests only (~30 sec)"
-	@echo "  make test-e2e      Run e2e integration tests only (~2 min)"
-	@echo "  make e2e-basic     🧪 E2E basic test suite (~3 min - core functionality)"
-	@echo "  make e2e-full      🧪 E2E full test suite (~15 min - comprehensive)"
-	@echo "  make test-auto     🤖 Automated UI parity testing (zero human interaction)"
-	@echo "  make test-ci       🚀 CI-ready test suite (unit tests + builds + contracts)"
-	@echo "  make test-visual   🎨 AI-powered visual UI parity analysis"
+	@echo "  make test          Run ALL tests (Jarvis + Zerg + integration)"
+	@echo "  make test-jarvis   Run Jarvis tests only"
+	@echo "  make test-zerg     Run Zerg tests (backend + frontend + e2e)"
+	@echo "  make validate-contracts  Run contract validation checks"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  make validate-deploy    Validate environment for deployment (required vars, DB connectivity)"
+	@echo "  make validate-deploy    Validate environment for deployment"
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# Development workflow
+# Development workflow – Individual apps
 # ---------------------------------------------------------------------------
-start:
-	@echo "🚀 Starting development servers on ports $(B_PORT) and $(F_PORT)..."
-	./scripts/fast-contract-check.sh
-	$(MAKE) -j2 _backend _frontend
+jarvis-dev:
+	@echo "🤖 Starting Jarvis (PWA + Node server)..."
+	cd apps/jarvis && $(MAKE) start
 
-_backend:
-	cd backend && uv run python -m uvicorn zerg.main:app --reload --port $(B_PORT)
+zerg-dev:
+	@echo "🐝 Starting Zerg (FastAPI backend + frontend)..."
+	@echo "🚀 Starting development servers on ports $(ZERG_BACKEND_PORT) and $(ZERG_FRONTEND_PORT)..."
+	$(MAKE) -j2 _zerg_backend _zerg_frontend
 
-_frontend:
-	cd frontend && ./build-debug.sh
+swarm-dev:
+	@echo "🌐 Starting FULL SWARM (Jarvis + Zerg)..."
+	@echo "   Jarvis: http://localhost:$(JARVIS_WEB_PORT)"
+	@echo "   Zerg Backend: http://localhost:$(ZERG_BACKEND_PORT)"
+	@echo "   Zerg Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
+	$(MAKE) -j2 jarvis-dev zerg-dev
 
-stop:
-	- lsof -ti:$(B_PORT) | xargs kill 2>/dev/null || true
-	- lsof -ti:$(F_PORT) | xargs kill 2>/dev/null || true
+_zerg_backend:
+	cd apps/zerg/backend && uv run python -m uvicorn zerg.main:app --reload --port $(ZERG_BACKEND_PORT)
+
+_zerg_frontend:
+	cd apps/zerg/frontend && ./build-debug.sh
+
+# Stop targets removed - use docker compose commands instead
+# See zerg-up/zerg-down below
 
 # ---------------------------------------------------------------------------
 # Testing targets
 # ---------------------------------------------------------------------------
 
 test:
-	@echo "🧪 Running ALL tests..."
-	cd backend && ./run_backend_tests.sh
-	cd frontend && ./run_frontend_tests.sh
-	cd e2e && ./run_e2e_tests.sh --mode=basic
+	@echo "🧪 Running ALL tests (Jarvis + Zerg)..."
+	$(MAKE) test-jarvis
+	$(MAKE) test-zerg
 	@echo "✅ All tests complete"
 
-test-backend:
-	@echo "🧪 Running backend unit tests..."
-	cd backend && ./run_backend_tests.sh
+test-jarvis:
+	@echo "🧪 Running Jarvis tests..."
+	cd apps/jarvis && npm test
 
-test-frontend:
-	@echo "🧪 Running frontend WASM tests..."
-	cd frontend && ./run_frontend_tests.sh
-
-test-e2e:
-	@echo "🧪 Running E2E integration tests..."
-	cd e2e && ./run_e2e_tests.sh --mode=basic
-
-e2e-basic:
-	@echo "🧪 Running E2E basic test suite (core functionality)..."
-	cd e2e && ./run_e2e_tests.sh --mode=basic
-
-e2e-full:
-	@echo "🧪 Running E2E full test suite (comprehensive)..."
-	cd e2e && ./run_e2e_tests.sh --mode=full
-
-test-auto:
-	@echo "🤖 Running automated UI parity tests (zero human interaction)..."
-	./run-automated-tests.sh
-
-test-ci:
-	@echo "🚀 Running CI-ready test suite (unit tests + builds + contracts)..."
-	./run-ci-tests.sh
-
-test-visual:
-	@echo "🎨 Running AI-powered visual UI parity analysis..."
-	./run-visual-analysis.sh
+test-zerg:
+	@echo "🧪 Running Zerg tests..."
+	cd apps/zerg/backend && ./run_backend_tests.sh
+	cd apps/zerg/frontend && ./run_frontend_tests.sh
+	cd apps/zerg/e2e && ./run_e2e_tests.sh --mode=basic
 
 # ---------------------------------------------------------------------------
-# Code generation (run when schemas change)
+# SDK Generation
 # ---------------------------------------------------------------------------
-generate:
-	@echo "🔄 Regenerating code from schemas..."
-	@echo "📡 WebSocket types..."
-	python3 scripts/generate-ws-types-modern.py ws-protocol-asyncapi.yml
-	@echo "🛠  Tool types..."
-	python3 scripts/generate_tool_types.py asyncapi/tools.yml
-	@echo "🔍 Validating..."
-	python3 scripts/validate_tool_contracts.py
-	./scripts/validate-asyncapi.sh
-	@echo "✅ Code generation complete"
+generate-sdk:
+	@echo "🔄 Generating OpenAPI/AsyncAPI clients and tool manifest..."
+	@echo "📡 Generating from Zerg backend..."
+	cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
+	@echo "📦 Generating TypeScript clients..."
+	cd packages/contracts && npm run generate
+	@echo "🔧 Generating tool manifest..."
+	python3 scripts/generate-tool-manifest.py
+	@echo "✅ SDK generation complete"
+
+generate-tools:
+	@echo "🔧 Generating tool manifest only..."
+	python3 scripts/generate-tool-manifest.py
+
+# ---------------------------------------------------------------------------
+# Jarvis Integration
+# ---------------------------------------------------------------------------
+seed-jarvis-agents:
+	@echo "🌱 Seeding baseline Zerg agents for Jarvis..."
+	cd apps/zerg/backend && uv run python scripts/seed_jarvis_agents.py
+	@echo "✅ Agents seeded"
 
 # ---------------------------------------------------------------------------
 # Contract validation (catches API mismatches at build time)
 # ---------------------------------------------------------------------------
 validate-contracts:
 	@echo "🔍 Running API contract validation..."
-	./scripts/fast-contract-check.sh
+	@echo "⚠️  Contract validation not yet implemented for monorepo"
 
 # ---------------------------------------------------------------------------
 # Deployment validation (checks environment and connectivity)
 # ---------------------------------------------------------------------------
 validate-deploy:
 	@echo "🔍 Validating deployment configuration..."
-	cd backend && uv run python ../scripts/validate-deployment.py
+	@echo "⚠️  Deployment validation script needs to be updated for monorepo"
+# ---------------------------------------------------------------------------
+# Docker Compose - Everything together
+# ---------------------------------------------------------------------------
+zerg-up:
+	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
+	docker compose -f docker-compose.dev.yml up -d
+	@sleep 3
+	@docker compose -f docker-compose.dev.yml ps
+	@echo ""
+	@echo "✅ Platform started!"
+	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
+	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
+
+zerg-down:
+	@echo "🛑 Stopping Zerg platform..."
+	docker compose -f docker-compose.dev.yml down
+	@echo "✅ All stopped"
+
+zerg-logs:
+	docker compose -f docker-compose.dev.yml logs -f
+
+zerg-reset:
+	@echo "⚠️  Resetting database (destroys all data)..."
+	docker compose -f docker-compose.dev.yml down -v
+	docker compose -f docker-compose.dev.yml up -d
+	@echo "Run migrations and seed agents"

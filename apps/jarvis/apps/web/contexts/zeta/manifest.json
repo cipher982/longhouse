@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "name": "zeta", 
+  "description": "Work AI assistant context with company knowledge and business tools",
+  "configFile": "config.ts",
+  "themeFile": "theme.css",
+  "requiredEnvVars": [
+    "COMPANY_API_KEY",
+    "RAG_DATABASE_URL"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "extends": "../../configs/tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@jarvis/core": ["../../packages/core/src/index.ts"],
+      "@jarvis/core/*": ["../../packages/core/src/*"],
+      "@jarvis/data-local": ["../../packages/data/local/src/index.ts"],
+      "@jarvis/data-local/*": ["../../packages/data/local/src/*"]
+    }
+  },
+  "include": [
+    "*.ts",
+    "lib/**/*",
+    "contexts/**/*",
+    "tests/**/*",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
+}

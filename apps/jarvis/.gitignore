@@ -1,0 +1,93 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# API keys and secrets
+*secret*
+*key*
+*token*
+*.pem
+*.p12
+*.pfx
+
+# Node.js
+node_modules/
+apps/*/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Testing
+test-results/
+playwright-report/
+coverage/
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+apps/server/server/data/*.json
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+
+# Cache directories
+.cache/
+.tmp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+
+# Archive/junk directory contents (keep structure but ignore contents)
+archive/
+misc/
+junk/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Work context configuration (keep company data private)
+apps/web/contexts/zeta/config.ts
+apps/web/contexts/zeta/theme.css
+apps/web/contexts/zeta/tools/
+apps/web/contexts/zeta/assets/
+*.work.*
+.env.zeta
+.env.work
+
+# Company-specific files
+company-logo.*
+company-favicon.*
+*-company.*
