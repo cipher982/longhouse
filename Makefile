@@ -24,13 +24,12 @@ help:
 	@echo "=================================="
 	@echo ""
 	@echo "Quick Start:"
-	@echo "  make start         Start EVERYTHING (Postgres + Backend + Frontend)"
-	@echo "  make stop          Stop EVERYTHING"
-	@echo "  make logs          View logs"
+	@echo "  make zerg-up       Start EVERYTHING (Postgres + Backend + Frontend via docker-compose)"
+	@echo "  make zerg-down     Stop EVERYTHING"
+	@echo "  make zerg-logs     View all logs"
+	@echo "  make zerg-reset    Reset database (destroys all data)"
 	@echo ""
 	@echo "Development:"
-	@echo "  make zerg-up       Docker compose (Postgres + Zerg backend/frontend)"
-	@echo "  make zerg-down     Stop docker compose"
 	@echo "  make jarvis-dev    Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
 	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
 	@echo "  make generate-tools Generate tool manifest only"
@@ -71,14 +70,8 @@ _zerg_backend:
 _zerg_frontend:
 	cd apps/zerg/frontend && ./build-debug.sh
 
-stop:
-	@echo "🛑 Stopping all Swarm services..."
-	- lsof -ti:$(ZERG_BACKEND_PORT) | xargs kill 2>/dev/null || true
-	- lsof -ti:$(ZERG_FRONTEND_PORT) | xargs kill 2>/dev/null || true
-	- lsof -ti:$(JARVIS_SERVER_PORT) | xargs kill 2>/dev/null || true
-	- lsof -ti:$(JARVIS_WEB_PORT) | xargs kill 2>/dev/null || true
-	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
-	@echo "✅ Stopped"
+# Stop targets removed - use docker compose commands instead
+# See zerg-up/zerg-down below
 
 # ---------------------------------------------------------------------------
 # Testing targets
@@ -139,31 +132,25 @@ validate-deploy:
 	@echo "🔍 Validating deployment configuration..."
 	@echo "⚠️  Deployment validation script needs to be updated for monorepo"
 # ---------------------------------------------------------------------------
-# Quick Start - Everything together
-# ---------------------------------------------------------------------------
-start: zerg-up
-	@echo "✅ Platform started!"
-	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
-	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
-
-stop: zerg-down
-	@echo "✅ Platform stopped"
-
-logs:
-	docker compose -f docker-compose.dev.yml logs -f
-
-# ---------------------------------------------------------------------------
-# Docker Compose Management
+# Docker Compose - Everything together
 # ---------------------------------------------------------------------------
 zerg-up:
 	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
 	docker compose -f docker-compose.dev.yml up -d
 	@sleep 3
 	@docker compose -f docker-compose.dev.yml ps
+	@echo ""
+	@echo "✅ Platform started!"
+	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
+	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
 
 zerg-down:
 	@echo "🛑 Stopping Zerg platform..."
 	docker compose -f docker-compose.dev.yml down
+	@echo "✅ All stopped"
+
+zerg-logs:
+	docker compose -f docker-compose.dev.yml logs -f
 
 zerg-reset:
 	@echo "⚠️  Resetting database (destroys all data)..."
