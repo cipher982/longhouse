@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../lib/useWebSocket";
 import {
@@ -35,8 +35,13 @@ import {
   type ExecutionStatus,
 } from "../services/api";
 
-// Type for node config data - simplified to match backend schema
-type NodeConfig = Record<string, unknown>;
+// Type for node config data - properly typed to match backend schema
+interface NodeConfig {
+  text?: string;
+  agent_id?: number;
+  tool_type?: string;
+  [key: string]: unknown; // Allow additional properties
+}
 
 // Custom node component for agents
 function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
@@ -104,7 +109,11 @@ function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput
     id: node.id,
     type: node.type as "agent" | "tool" | "trigger" | "conditional",
     position: { x: node.position.x, y: node.position.y },
-    config: {} as Record<string, never>,
+    config: {
+      text: node.data.label,
+      agent_id: node.data.agentId,
+      tool_type: node.data.toolType,
+    } as Record<string, unknown>,
   }));
 
   const workflowEdges: WorkflowEdge[] = edges.map((edge) => ({
@@ -119,16 +128,65 @@ function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput
   };
 }
 
+// Normalize workflow data to eliminate float drift and ordering differences
+function normalizeWorkflow(nodes: Node[], edges: Edge[]): WorkflowDataInput {
+  const sortedNodes = [...nodes]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((node) => ({
+      id: node.id,
+      type: node.type as "agent" | "tool" | "trigger" | "conditional",
+      position: {
+        x: Math.round(node.position.x * 2) / 2, // 0.5px quantization
+        y: Math.round(node.position.y * 2) / 2,
+      },
+      config: {
+        text: node.data.label,
+        agent_id: node.data.agentId,
+        tool_type: node.data.toolType,
+      } as Record<string, unknown>,
+    }));
+
+  const sortedEdges = [...edges]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((edge) => ({
+      from_node_id: edge.source,
+      to_node_id: edge.target,
+      config: {}, // Edges typically don't have config data
+    }));
+
+  return { nodes: sortedNodes, edges: sortedEdges };
+}
+
+// Hash workflow data for change detection
+async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
+  const json = JSON.stringify(data);
+
+  // Fallback for environments without crypto.subtle (tests, HTTP contexts)
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    return json; // Use JSON string as hash fallback
+  }
+
+  const buffer = new TextEncoder().encode(json);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export default function CanvasPage() {
   const queryClient = useQueryClient();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const lastSavedHashRef = useRef<string>("");
+  const pendingHashesRef = useRef<Set<string>>(new Set());
+  const currentExecutionRef = useRef<ExecutionStatus | null>(null);
+  const toastIdRef = useRef<string | null>(null);
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
   const [executionLogs, setExecutionLogs] = useState<string>("");
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
 
   // Fetch agents for the shelf
@@ -151,27 +209,67 @@ export default function CanvasPage() {
       const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData(workflow.canvas);
       setNodes(flowNodes);
       setEdges(flowEdges);
+
+      // Initialize hash from loaded workflow
+      const normalized = normalizeWorkflow(flowNodes, flowEdges);
+      hashWorkflow(normalized).then((hash) => {
+        lastSavedHashRef.current = hash;
+      });
     }
   }, [workflow, setNodes, setEdges]);
 
-  // Save workflow mutation
+  // Sync ref with latest execution for stable WebSocket handler
+  useEffect(() => {
+    currentExecutionRef.current = currentExecution;
+  }, [currentExecution]);
+
+  // Save workflow mutation with hash-based deduplication
   const saveWorkflowMutation = useMutation({
-    mutationFn: updateWorkflowCanvas,
-    onSuccess: () => {
-      toast.success("Workflow saved successfully");
-      queryClient.invalidateQueries({ queryKey: ["workflow", "current"] });
+    onMutate: async (data: WorkflowDataInput) => {
+      const hash = await hashWorkflow(data);
+      return { hash };
     },
-    onError: (error: Error) => {
+    mutationFn: async (data: WorkflowDataInput) => {
+      const hash = await hashWorkflow(data);
+
+      // Skip if identical to last saved OR already in flight
+      if (hash === lastSavedHashRef.current || pendingHashesRef.current.has(hash)) {
+        return null;
+      }
+
+      pendingHashesRef.current.add(hash);
+      const result = await updateWorkflowCanvas(data);
+      return result;
+    },
+    onSuccess: (result, _variables, context) => {
+      if (!result || !context) return; // Skipped save
+
+      lastSavedHashRef.current = context.hash;
+      pendingHashesRef.current.delete(context.hash);
+
+      // Reuse single toast ID to avoid stacking
+      if (toastIdRef.current) {
+        toast.success("Workflow saved", { id: toastIdRef.current });
+      } else {
+        toastIdRef.current = toast.success("Workflow saved");
+      }
+
+      queryClient.setQueryData(["workflow", "current"], result);
+    },
+    onError: (error: Error, _variables, context) => {
+      if (context?.hash) {
+        pendingHashesRef.current.delete(context.hash);
+      }
       console.error("Failed to save workflow:", error);
       toast.error(`Failed to save workflow: ${error.message || "Unknown error"}`);
     },
   });
 
-  // Auto-save workflow when nodes or edges change
+  // Auto-save workflow when nodes or edges change (skip during drag)
   const debouncedSave = useCallback(
     debounce((nodes: Node[], edges: Edge[]) => {
       if (nodes.length > 0 || edges.length > 0) {
-        const workflowData = convertToBackendFormat(nodes, edges);
+        const workflowData = normalizeWorkflow(nodes, edges);
         saveWorkflowMutation.mutate(workflowData);
       }
     }, 1000),
@@ -180,8 +278,10 @@ export default function CanvasPage() {
   );
 
   React.useEffect(() => {
-    debouncedSave(nodes, edges);
-  }, [nodes, edges, debouncedSave]);
+    if (!isDragging) {
+      debouncedSave(nodes, edges);
+    }
+  }, [nodes, edges, isDragging, debouncedSave]);
 
   // Workflow execution mutations
   const executeWorkflowMutation = useMutation({
@@ -218,35 +318,37 @@ export default function CanvasPage() {
   });
 
   // WebSocket for real-time execution updates
+  const handleExecutionMessage = useCallback(async () => {
+    const execution = currentExecutionRef.current;
+    if (!execution?.execution_id) {
+      return;
+    }
+
+    try {
+      const updatedStatus = await getExecutionStatus(execution.execution_id);
+
+      setCurrentExecution((prevExecution) => ({
+        ...updatedStatus,
+        execution_id: prevExecution?.execution_id || execution.execution_id,
+      }));
+
+      if (updatedStatus.phase === "finished" || updatedStatus.phase === "cancelled") {
+        try {
+          const logs = await getExecutionLogs(execution.execution_id);
+          setExecutionLogs(logs.logs);
+        } catch (error) {
+          console.error("Failed to fetch execution logs:", error);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch execution status:", error);
+    }
+  }, [getExecutionLogs, getExecutionStatus]);
+
   useWebSocket(currentExecution?.execution_id != null, {
     includeAuth: true,
     invalidateQueries: [],
-    onMessage: async () => {
-      // Fetch updated execution status when we receive WebSocket messages
-      if (currentExecution?.execution_id) {
-        try {
-          const updatedStatus = await getExecutionStatus(currentExecution.execution_id);
-
-          // CRITICAL FIX: Preserve execution_id by merging with existing state
-          setCurrentExecution(prevExecution => ({
-            ...updatedStatus,
-            execution_id: prevExecution?.execution_id || currentExecution.execution_id
-          }));
-
-          // If execution is finished, fetch logs
-          if (updatedStatus.phase === 'finished' || updatedStatus.phase === 'cancelled') {
-            try {
-              const logs = await getExecutionLogs(currentExecution.execution_id);
-              setExecutionLogs(logs.logs);
-            } catch (error) {
-              console.error("Failed to fetch execution logs:", error);
-            }
-          }
-        } catch (error) {
-          console.error("Failed to fetch execution status:", error);
-        }
-      }
-    },
+    onMessage: handleExecutionMessage,
   });
 
   // Handle connection creation
@@ -256,6 +358,20 @@ export default function CanvasPage() {
     },
     [setEdges]
   );
+
+  // Drag lifecycle handlers
+  const onNodeDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const onNodeDragStop = useCallback(() => {
+    setIsDragging(false);
+    // Trigger immediate save after drag completes
+    if (nodes.length > 0 || edges.length > 0) {
+      const workflowData = normalizeWorkflow(nodes, edges);
+      saveWorkflowMutation.mutate(workflowData);
+    }
+  }, [nodes, edges, saveWorkflowMutation]);
 
   // E2E Test Compatibility: Add legacy CSS classes to React Flow nodes
   useEffect(() => {
@@ -476,6 +592,8 @@ export default function CanvasPage() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
+                onNodeDragStart={onNodeDragStart}
+                onNodeDragStop={onNodeDragStop}
                 onDrop={onDrop}
                 onDragOver={onDragOver}
                 nodeTypes={nodeTypes}
