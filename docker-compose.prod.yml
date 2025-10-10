@@ -33,8 +33,8 @@ services:
   # Backend API Service
   backend:
     build:
-      context: backend
-      dockerfile: ../docker/backend.dockerfile
+      context: apps/zerg/backend
+      dockerfile: ../../../docker/backend.dockerfile
       target: production
       args:
         BUILD_ENV: production
@@ -83,7 +83,7 @@ services:
   # Frontend Service - React UI (switched from Rust/WASM)
   frontend:
     build:
-      context: frontend-web
+      context: apps/zerg/frontend-web
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
