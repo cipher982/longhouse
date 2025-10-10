@@ -105,7 +105,7 @@ function convertToReactFlowData(workflowData: WorkflowData): { nodes: Node[]; ed
 
 // Convert React Flow data to backend WorkflowData format
 function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput {
-  const workflowNodes: WorkflowNode[] = nodes.map((node) => ({
+  const workflowNodes = nodes.map((node) => ({
     id: node.id,
     type: node.type as "agent" | "tool" | "trigger" | "conditional",
     position: { x: node.position.x, y: node.position.y },
@@ -113,8 +113,8 @@ function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput
       text: node.data.label,
       agent_id: node.data.agentId,
       tool_type: node.data.toolType,
-    } as Record<string, unknown>,
-  }));
+    },
+  })) as unknown as WorkflowNode[];
 
   const workflowEdges: WorkflowEdge[] = edges.map((edge) => ({
     from_node_id: edge.source,
@@ -143,8 +143,8 @@ function normalizeWorkflow(nodes: Node[], edges: Edge[]): WorkflowDataInput {
         text: node.data.label,
         agent_id: node.data.agentId,
         tool_type: node.data.toolType,
-      } as Record<string, unknown>,
-    }));
+      },
+    })) as unknown as WorkflowNode[];
 
   const sortedEdges = [...edges]
     .sort((a, b) => a.id.localeCompare(b.id))
