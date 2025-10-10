@@ -3,13 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.swarmlet.com wss://api.swarmlet.com https://accounts.google.com http://localhost:47300 ws://localhost:47300; script-src 'self' https://accounts.google.com https://unpkg.com https://analytics.drose.io; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https:; frame-src https://accounts.google.com;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.swarmlet.com wss://api.swarmlet.com https://accounts.google.com https://analytics.drose.io http://localhost:47300 ws://localhost:47300; script-src 'self' https://accounts.google.com https://analytics.drose.io; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https:; frame-src https://accounts.google.com;" />
     <title>Swarmlet AI Agent Platform</title>
     <meta
       name="description"
       content="Swarmlet helps teams design, deploy, and monitor AI agents with real-time collaboration and production-ready tooling."
     />
     <meta name="theme-color" content="#0a0a0f" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/maskable-icon-192.png" />
@@ -44,14 +45,5 @@
     <div class="particle-bg" aria-hidden="true"></div>
 
     <script type="module" src="/src/main.tsx"></script>
-    <!-- Feather icons – lightweight SVG set -->
-    <script src="https://unpkg.com/feather-icons"></script>
-    <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        if (window.feather && typeof window.feather.replace === "function") {
-          window.feather.replace({ "stroke-width": 1.5 });
-        }
-      });
-    </script>
   </body>
 </html>
