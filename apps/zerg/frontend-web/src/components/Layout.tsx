@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import "../styles/layout.css";
+import { MenuIcon } from "./icons";
 
 const STATUS_ITEMS = [
   { label: "Runs", value: "0" },
@@ -57,7 +58,7 @@ function WelcomeHeader() {
           console.log("Shelf toggle clicked - not implemented yet");
         }}
       >
-        <i data-feather="menu"></i>
+        <MenuIcon />
       </button>
       <h1 id="header-title">AI Agent Platform</h1>
       <div className="user-menu-container">

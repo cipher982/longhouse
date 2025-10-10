@@ -11,6 +11,7 @@ import {
 } from "../services/api";
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
+import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -27,16 +28,6 @@ type LegacyAgentRow = {
   lastRunDisplay: string;
   nextRunDisplay: string;
 };
-
-type Feather = {
-  replace: (options?: Record<string, unknown>) => void;
-};
-
-declare global {
-  interface Window {
-    feather?: Feather;
-  }
-}
 
 const STATUS_ORDER: Record<string, number> = {
   running: 0,
@@ -151,13 +142,6 @@ export default function DashboardPage() {
       nextRunDisplay: formatDateTimeShort(agent.next_run_at ?? null),
     }));
   }, [agents, runsByAgent, sortConfig]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.feather || typeof window.feather.replace !== "function") {
-      return;
-    }
-    window.feather.replace({ "stroke-width": 1.5 });
-  }, [sortedRows, expandedAgentId, expandedRunHistory]);
 
   if (isLoading) {
     return (
@@ -297,7 +281,7 @@ export default function DashboardPage() {
                           aria-label={isRunning ? "Agent is already running" : "Run Agent"}
                           onClick={(event) => handleRunAgent(event, agent.id, agent.status)}
                         >
-                          <i data-feather="play" />
+                          <PlayIcon />
                         </button>
                         <button
                           type="button"
@@ -307,7 +291,7 @@ export default function DashboardPage() {
                           aria-label="Edit Agent"
                           onClick={(event) => handleEditAgent(event, agent.id)}
                         >
-                          <i data-feather="edit-3" />
+                          <EditIcon />
                         </button>
                         <button
                           type="button"
@@ -317,7 +301,7 @@ export default function DashboardPage() {
                           aria-label="Chat with Agent"
                           onClick={(event) => handleChatAgent(event, agent.id)}
                         >
-                          <i data-feather="message-circle" />
+                          <MessageCircleIcon />
                         </button>
                         <button
                           type="button"
@@ -327,7 +311,7 @@ export default function DashboardPage() {
                           aria-label="Debug / Info"
                           onClick={(event) => handleDebugAgent(event, agent.id)}
                         >
-                          <i data-feather="settings" />
+                          <SettingsIcon />
                         </button>
                         <button
                           type="button"
@@ -337,7 +321,7 @@ export default function DashboardPage() {
                           aria-label="Delete Agent"
                           onClick={(event) => handleDeleteAgent(event, agent.id, agent.name)}
                         >
-                          <i data-feather="trash-2" />
+                          <TrashIcon />
                         </button>
                       </div>
                     </td>
