@@ -10,6 +10,8 @@ const baseProps: Partial<IconProps> = {
   fill: "none",
   strokeLinecap: "round",
   strokeLinejoin: "round",
+  viewBox: "0 0 24 24",
+  preserveAspectRatio: "xMidYMid meet",
 };
 
 export function MenuIcon(props: IconProps) {
