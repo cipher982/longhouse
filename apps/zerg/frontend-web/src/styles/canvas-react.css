@@ -185,6 +185,21 @@
   margin-right: 8px;
 }
 
+.canvas-drag-preview {
+  z-index: 200;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.35));
+}
+
+.drag-preview-node {
+  pointer-events: none;
+  opacity: 0.95;
+  transition: none;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
 /* React Flow Controls styling */
 .react-flow__controls {
   background: var(--dark-card, #2a2a3a);
