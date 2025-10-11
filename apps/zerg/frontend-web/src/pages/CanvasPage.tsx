@@ -8,9 +8,11 @@ import {
   Controls,
   MiniMap,
   addEdge,
+  ViewportPortal,
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useStore,
   type Node as FlowNode,
   type Edge,
   type Connection,
@@ -115,6 +117,8 @@ const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
 };
 
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
 // Convert backend WorkflowData to React Flow format
 function convertToReactFlowData(workflowData: WorkflowData): { nodes: FlowNode[]; edges: Edge[] } {
   const nodes: FlowNode[] = workflowData.nodes.map((node: WorkflowNode) => ({
@@ -184,12 +188,14 @@ async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
 function CanvasPageContent() {
   const queryClient = useQueryClient();
   const reactFlowInstance = useReactFlow();
+  const zoom = useStore((state) => state.transform[2]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastSavedHashRef = useRef<string>("");
   const pendingHashesRef = useRef<Set<string>>(new Set());
   const currentExecutionRef = useRef<ExecutionStatus | null>(null);
   const canvasInitializedRef = useRef<boolean>(false);
+  const initialFitDoneRef = useRef<boolean>(false);
   const toastIdRef = useRef<string | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -199,6 +205,19 @@ function CanvasPageContent() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+  const [dragPreviewData, setDragPreviewData] = useState<DragPreviewData | null>(null);
+  const [dragPreviewPosition, setDragPreviewPosition] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const transparentDragImage = React.useMemo(() => {
+    const img = new Image();
+    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    return img;
+  }, []);
+  const resetDragPreview = useCallback(() => {
+    setDragPreviewData(null);
+    setDragPreviewPosition(null);
+  }, []);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [collapsedSections, setCollapsedSections] = useState<Record<ShelfSection, boolean>>(() => {
@@ -415,33 +434,168 @@ function CanvasPageContent() {
   type DraggableAgent = { id: number; name: string };
   type DraggableTool = { type: string; name: string };
 
+  type DragPreviewKind = "agent" | "tool";
+
+  interface DragPreviewData {
+    kind: DragPreviewKind;
+    label: string;
+    icon: string;
+    baseSize: { width: number; height: number };
+    pointerRatio: { x: number; y: number };
+    agentId?: number;
+    toolType?: string;
+  }
+
+  const resolveToolIcon = useCallback((toolType: string) => {
+    return TOOL_ITEMS.find((tool) => tool.type === toolType)?.icon ?? "🔧";
+  }, []);
+
   const beginAgentDrag = useCallback(
     (event: React.DragEvent, agent: DraggableAgent) => {
       event.dataTransfer.setData("agent-id", String(agent.id));
       event.dataTransfer.setData("agent-name", agent.name);
+      event.dataTransfer.effectAllowed = "move";
+      if (event.dataTransfer.setDragImage) {
+        event.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+      }
       if (event.currentTarget instanceof HTMLElement) {
         event.currentTarget.setAttribute("aria-grabbed", "true");
+        const rect = event.currentTarget.getBoundingClientRect();
+        const clientX = event.clientX ?? 0;
+        const clientY = event.clientY ?? 0;
+        const pointerOffsetX = clientX - rect.left;
+        const pointerOffsetY = clientY - rect.top;
+        const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
+        const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
+        setDragPreviewData({
+          kind: "agent",
+          label: agent.name,
+          icon: "🤖",
+          baseSize: { width: rect.width || 160, height: rect.height || 48 },
+          pointerRatio: { x: pointerRatioX, y: pointerRatioY },
+          agentId: agent.id,
+        });
+        if (clientX !== 0 || clientY !== 0) {
+          const baseWidth = rect.width || 160;
+          const baseHeight = rect.height || 48;
+          const offsetX = baseWidth * zoom * pointerRatioX;
+          const offsetY = baseHeight * zoom * pointerRatioY;
+          const initialPosition = reactFlowInstance.screenToFlowPosition({
+            x: clientX - offsetX,
+            y: clientY - offsetY,
+          });
+          setDragPreviewPosition(initialPosition);
+        } else {
+          setDragPreviewPosition(null);
+        }
+      } else {
+        setDragPreviewData({
+          kind: "agent",
+          label: agent.name,
+          icon: "🤖",
+          baseSize: { width: 160, height: 48 },
+          pointerRatio: { x: 0, y: 0 },
+          agentId: agent.id,
+        });
+        setDragPreviewPosition(null);
       }
       setIsDragActive(true);
     },
-    [setIsDragActive]
+    [reactFlowInstance, setIsDragActive, transparentDragImage, zoom]
   );
 
   const beginToolDrag = useCallback(
     (event: React.DragEvent, tool: DraggableTool) => {
       event.dataTransfer.setData("tool-type", tool.type);
       event.dataTransfer.setData("tool-name", tool.name);
+      event.dataTransfer.effectAllowed = "move";
+      if (event.dataTransfer.setDragImage) {
+        event.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+      }
       if (event.currentTarget instanceof HTMLElement) {
         event.currentTarget.setAttribute("aria-grabbed", "true");
+        const rect = event.currentTarget.getBoundingClientRect();
+        const clientX = event.clientX ?? 0;
+        const clientY = event.clientY ?? 0;
+        const pointerOffsetX = clientX - rect.left;
+        const pointerOffsetY = clientY - rect.top;
+        const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
+        const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
+        setDragPreviewData({
+          kind: "tool",
+          label: tool.name,
+          icon: resolveToolIcon(tool.type),
+          baseSize: { width: rect.width || 160, height: rect.height || 48 },
+          pointerRatio: { x: pointerRatioX, y: pointerRatioY },
+          toolType: tool.type,
+        });
+        if (clientX !== 0 || clientY !== 0) {
+          const baseWidth = rect.width || 160;
+          const baseHeight = rect.height || 48;
+          const offsetX = baseWidth * zoom * pointerRatioX;
+          const offsetY = baseHeight * zoom * pointerRatioY;
+          const initialPosition = reactFlowInstance.screenToFlowPosition({
+            x: clientX - offsetX,
+            y: clientY - offsetY,
+          });
+          setDragPreviewPosition(initialPosition);
+        } else {
+          setDragPreviewPosition(null);
+        }
+      } else {
+        setDragPreviewData({
+          kind: "tool",
+          label: tool.name,
+          icon: resolveToolIcon(tool.type),
+          baseSize: { width: 160, height: 48 },
+          pointerRatio: { x: 0, y: 0 },
+          toolType: tool.type,
+        });
+        setDragPreviewPosition(null);
       }
       setIsDragActive(true);
     },
-    [setIsDragActive]
+    [reactFlowInstance, resolveToolIcon, setIsDragActive, transparentDragImage, zoom]
   );
 
-  const resolveToolIcon = useCallback((toolType: string) => {
-    return TOOL_ITEMS.find((tool) => tool.type === toolType)?.icon ?? "🔧";
-  }, []);
+  useEffect(() => {
+    if (!dragPreviewData) {
+      return;
+    }
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!dragPreviewData) {
+        return;
+      }
+      event.preventDefault();
+      if (event.clientX === 0 && event.clientY === 0) {
+        return;
+      }
+      const baseWidth = dragPreviewData.baseSize.width || 1;
+      const baseHeight = dragPreviewData.baseSize.height || 1;
+      const offsetX = baseWidth * zoom * dragPreviewData.pointerRatio.x;
+      const offsetY = baseHeight * zoom * dragPreviewData.pointerRatio.y;
+      const flowPosition = reactFlowInstance.screenToFlowPosition({
+        x: event.clientX - offsetX,
+        y: event.clientY - offsetY,
+      });
+      setDragPreviewPosition(flowPosition);
+    };
+
+    const handleDragEnd = () => {
+      resetDragPreview();
+    };
+
+    document.addEventListener("dragover", handleDragOver);
+    document.addEventListener("dragend", handleDragEnd);
+    document.addEventListener("drop", handleDragEnd);
+
+    return () => {
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("dragend", handleDragEnd);
+      document.removeEventListener("drop", handleDragEnd);
+    };
+  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom]);
 
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
@@ -499,6 +653,29 @@ function CanvasPageContent() {
       });
     }
   }, [workflow, setNodes, setEdges]);
+
+  useEffect(() => {
+    if (!canvasInitializedRef.current || initialFitDoneRef.current) {
+      return;
+    }
+
+    if (nodes.length === 0) {
+      initialFitDoneRef.current = true;
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      try {
+        reactFlowInstance.fitView({ maxZoom: 1, duration: 200 });
+      } catch (error) {
+        console.warn("Failed to fit initial view:", error);
+      }
+    });
+
+    initialFitDoneRef.current = true;
+
+    return () => cancelAnimationFrame(frame);
+  }, [nodes, reactFlowInstance]);
 
   // Sync ref with latest execution for stable WebSocket handler
   useEffect(() => {
@@ -688,9 +865,21 @@ function CanvasPageContent() {
 
       // Use ReactFlow's screenToFlowPosition to properly convert screen coordinates
       // to flow coordinates, accounting for zoom/pan transforms
+      const pointerAdjustment = dragPreviewData
+        ? {
+            x:
+              (dragPreviewData.baseSize.width || 0) *
+              zoom *
+              dragPreviewData.pointerRatio.x,
+            y:
+              (dragPreviewData.baseSize.height || 0) *
+              zoom *
+              dragPreviewData.pointerRatio.y,
+          }
+        : { x: 0, y: 0 };
       const position = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
+        x: event.clientX - pointerAdjustment.x,
+        y: event.clientY - pointerAdjustment.y,
       });
 
       const agentId = event.dataTransfer.getData('agent-id');
@@ -741,8 +930,9 @@ function CanvasPageContent() {
           toolName,
         });
       }
+      resetDragPreview();
     },
-    [reactFlowInstance, recordRecentItem, resolveToolIcon, setNodes]
+    [dragPreviewData, reactFlowInstance, recordRecentItem, resolveToolIcon, resetDragPreview, setNodes, zoom]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -760,10 +950,12 @@ function CanvasPageContent() {
 
     const handleDragEnd = () => {
       setIsDragActive(false);
+      resetDragPreview();
       resetGrabState();
     };
     const handleDrop = () => {
       setIsDragActive(false);
+      resetDragPreview();
       resetGrabState();
     };
 
@@ -1064,7 +1256,6 @@ function CanvasPageContent() {
                 onDrop={onDrop}
                 onDragOver={onDragOver}
                 nodeTypes={nodeTypes}
-                fitView
                 snapToGrid={snapToGridEnabled}
                 snapGrid={[SNAP_GRID_SIZE, SNAP_GRID_SIZE]}
                 selectionOnDrag
@@ -1073,6 +1264,32 @@ function CanvasPageContent() {
                 onPaneClick={handlePaneClick}
                 onNodeContextMenu={handleNodeContextMenu}
               >
+                {dragPreviewData && dragPreviewPosition && (
+                  <ViewportPortal>
+                    <div
+                      className="canvas-drag-preview"
+                      style={{
+                        position: "absolute",
+                        transform: `translate(${dragPreviewPosition.x}px, ${dragPreviewPosition.y}px)`,
+                        pointerEvents: "none",
+                        width: `${dragPreviewData.baseSize.width || 160}px`,
+                        height: `${dragPreviewData.baseSize.height || 48}px`,
+                      }}
+                    >
+                      {dragPreviewData.kind === "agent" ? (
+                        <div className="agent-node drag-preview-node">
+                          <div className="agent-icon">{dragPreviewData.icon}</div>
+                          <div className="agent-name">{dragPreviewData.label}</div>
+                        </div>
+                      ) : (
+                        <div className="tool-node drag-preview-node">
+                          <div className="tool-icon">{dragPreviewData.icon}</div>
+                          <div className="tool-name">{dragPreviewData.label}</div>
+                        </div>
+                      )}
+                    </div>
+                  </ViewportPortal>
+                )}
                 {guidesVisible && <Background gap={SNAP_GRID_SIZE} />}
                 <Controls />
                 <MiniMap />

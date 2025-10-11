@@ -136,7 +136,7 @@ validate-deploy:
 # ---------------------------------------------------------------------------
 zerg-up:
 	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
-	docker compose -f docker-compose.dev.yml up -d
+	docker compose -f docker-compose.dev.yml up -d --build
 	@sleep 3
 	@docker compose -f docker-compose.dev.yml ps
 	@echo ""
