@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import ProfilePage from "../ProfilePage";
 
 // Mock the auth hook
@@ -51,11 +51,27 @@ describe("ProfilePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Mock successful update response
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ...mockUser, display_name: "Updated Name" }),
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url === "/api/users/me") {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ ...mockUser, display_name: "Updated Name" }),
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        json: () => Promise.resolve(mockUser),
+      } as Response;
     });
+
+    window.localStorage.setItem("zerg_jwt", "mock-token");
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
   });
 
   it("renders user profile form with current data", async () => {
@@ -99,9 +115,13 @@ describe("ProfilePage", () => {
   it("shows account information", () => {
     renderProfilePage();
 
-    expect(screen.getByText("Account Information")).toBeInTheDocument();
-    expect(screen.getByText("1")).toBeInTheDocument(); // User ID
-    expect(screen.getByText("1/1/2024")).toBeInTheDocument(); // Member since
+    const accountSection = screen.getAllByText("Account Information")[0].closest(".form-section");
+    expect(accountSection).not.toBeNull();
+    const info = within(accountSection as Element);
+    expect(info.getByText("User ID:")).toBeInTheDocument();
+    expect(info.getByText(String(mockUser.id))).toBeInTheDocument();
+    const expectedMemberSince = new Date(mockUser.created_at).toLocaleDateString();
+    expect(info.getByText(expectedMemberSince)).toBeInTheDocument();
   });
 
   it("handles avatar file upload", async () => {
@@ -112,7 +132,7 @@ describe("ProfilePage", () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ ...mockUser, avatar_url: "new-avatar.jpg" }),
-    });
+    } as Response);
 
     const file = new File(["avatar"], "avatar.png", { type: "image/png" });
     const fileInput = screen.getByLabelText("Choose Avatar");
@@ -140,7 +160,7 @@ describe("ProfilePage", () => {
     await user.clear(displayNameInput);
     await user.type(displayNameInput, "Changed Name");
 
-    const resetButton = screen.getByText("Reset Changes");
+    const resetButton = screen.getAllByRole("button", { name: /Reset Changes/i })[0];
     await user.click(resetButton);
 
     expect(displayNameInput).toHaveValue("Test User");

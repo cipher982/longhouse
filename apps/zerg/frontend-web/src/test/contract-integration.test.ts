@@ -11,6 +11,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import { setTimeout } from 'timers/promises';
 
+const RUN_CONTRACT_TESTS = process.env.RUN_CONTRACT_TESTS === 'true';
+const describeContract = RUN_CONTRACT_TESTS ? describe : describe.skip;
+
 const API_BASE_URL = 'http://localhost:47301'; // Use different port to avoid conflicts
 let backendProcess: ChildProcess;
 
@@ -32,7 +35,7 @@ async function apiCall(endpoint: string, options: RequestInit = {}) {
   };
 }
 
-describe('Backend API Contract Integration', () => {
+describeContract('Backend API Contract Integration', () => {
   beforeAll(async () => {
     // Start backend server for testing
     console.log('🚀 Starting test backend server...');

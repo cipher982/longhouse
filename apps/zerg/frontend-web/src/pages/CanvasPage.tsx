@@ -9,7 +9,7 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
-  type Node,
+  type Node as FlowNode,
   type Edge,
   type Connection,
   type OnConnect,
@@ -42,6 +42,38 @@ interface NodeConfig {
   tool_type?: string;
   [key: string]: unknown; // Allow additional properties
 }
+
+type ToolPaletteItem = {
+  type: string;
+  name: string;
+  icon: string;
+};
+
+type ShelfSection = "recent" | "agents" | "tools";
+
+interface RecentShelfItem {
+  key: string;
+  kind: "agent" | "tool";
+  label: string;
+  icon: string;
+  agentId?: number;
+  toolType?: string;
+  toolName?: string;
+}
+
+const TOOL_ITEMS: ToolPaletteItem[] = [
+  { type: "http-request", name: "HTTP Request", icon: "🌐" },
+  { type: "url-fetch", name: "URL Fetch", icon: "📡" },
+] ;
+
+const RECENT_ITEMS_STORAGE_KEY = "canvas_recent_items";
+const SECTION_STATE_STORAGE_KEY = "canvas_section_state";
+const DEFAULT_SECTION_STATE: Record<ShelfSection, boolean> = {
+  recent: false,
+  agents: false,
+  tools: false,
+};
+const SNAP_GRID_SIZE = 24;
 
 // Custom node component for agents
 function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
@@ -82,8 +114,8 @@ const nodeTypes: NodeTypes = {
 };
 
 // Convert backend WorkflowData to React Flow format
-function convertToReactFlowData(workflowData: WorkflowData): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = workflowData.nodes.map((node: WorkflowNode) => ({
+function convertToReactFlowData(workflowData: WorkflowData): { nodes: FlowNode[]; edges: Edge[] } {
+  const nodes: FlowNode[] = workflowData.nodes.map((node: WorkflowNode) => ({
     id: node.id,
     type: node.type,
     position: { x: node.position.x, y: node.position.y },
@@ -103,33 +135,8 @@ function convertToReactFlowData(workflowData: WorkflowData): { nodes: Node[]; ed
   return { nodes, edges };
 }
 
-// Convert React Flow data to backend WorkflowData format
-function convertToBackendFormat(nodes: Node[], edges: Edge[]): WorkflowDataInput {
-  const workflowNodes = nodes.map((node) => ({
-    id: node.id,
-    type: node.type as "agent" | "tool" | "trigger" | "conditional",
-    position: { x: node.position.x, y: node.position.y },
-    config: {
-      text: node.data.label,
-      agent_id: node.data.agentId,
-      tool_type: node.data.toolType,
-    },
-  })) as unknown as WorkflowNode[];
-
-  const workflowEdges: WorkflowEdge[] = edges.map((edge) => ({
-    from_node_id: edge.source,
-    to_node_id: edge.target,
-    config: {},
-  }));
-
-  return {
-    nodes: workflowNodes,
-    edges: workflowEdges,
-  };
-}
-
 // Normalize workflow data to eliminate float drift and ordering differences
-function normalizeWorkflow(nodes: Node[], edges: Edge[]): WorkflowDataInput {
+function normalizeWorkflow(nodes: FlowNode[], edges: Edge[]): WorkflowDataInput {
   const sortedNodes = [...nodes]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((node) => ({
@@ -174,13 +181,13 @@ async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
 
 export default function CanvasPage() {
   const queryClient = useQueryClient();
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const lastSavedHashRef = useRef<string>("");
   const pendingHashesRef = useRef<Set<string>>(new Set());
   const currentExecutionRef = useRef<ExecutionStatus | null>(null);
   const toastIdRef = useRef<string | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
@@ -189,12 +196,281 @@ export default function CanvasPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [collapsedSections, setCollapsedSections] = useState<Record<ShelfSection, boolean>>(() => {
+    if (typeof window === "undefined") {
+      return { ...DEFAULT_SECTION_STATE };
+    }
+    try {
+      const stored = window.localStorage.getItem(SECTION_STATE_STORAGE_KEY);
+      if (!stored) {
+        return { ...DEFAULT_SECTION_STATE };
+      }
+      const parsed = JSON.parse(stored) as Partial<Record<ShelfSection, boolean>>;
+      return { ...DEFAULT_SECTION_STATE, ...parsed };
+    } catch (error) {
+      console.warn("Failed to parse shelf section state:", error);
+      return { ...DEFAULT_SECTION_STATE };
+    }
+  });
+  const [recentItems, setRecentItems] = useState<RecentShelfItem[]>(() => {
+    if (typeof window === "undefined") {
+      return [];
+    }
+    try {
+      const stored = window.localStorage.getItem(RECENT_ITEMS_STORAGE_KEY);
+      if (!stored) {
+        return [];
+      }
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed
+        .filter(
+          (item): item is RecentShelfItem =>
+            typeof item?.key === "string" &&
+            (item.kind === "agent" || item.kind === "tool") &&
+            typeof item.label === "string" &&
+            typeof item.icon === "string"
+        )
+        .slice(0, 6);
+    } catch (error) {
+      console.warn("Failed to parse recent shelf items:", error);
+      return [];
+    }
+  });
+  const [snapToGridEnabled, setSnapToGridEnabled] = useState(true);
+  const [guidesVisible, setGuidesVisible] = useState(true);
+  const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+  const [showShortcutHelp, setShowShortcutHelp] = useState(false);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(RECENT_ITEMS_STORAGE_KEY, JSON.stringify(recentItems));
+    } catch (error) {
+      console.warn("Failed to persist recent shelf items:", error);
+    }
+  }, [recentItems]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(SECTION_STATE_STORAGE_KEY, JSON.stringify(collapsedSections));
+    } catch (error) {
+      console.warn("Failed to persist shelf section state:", error);
+    }
+  }, [collapsedSections]);
+
+  const toggleSection = useCallback((section: ShelfSection) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [section]: !prev[section],
+    }));
+  }, []);
+
+  const recordRecentItem = useCallback((item: RecentShelfItem) => {
+    setRecentItems((prev) => {
+      const combined = [item, ...prev];
+      const seen = new Set<string>();
+      const unique: RecentShelfItem[] = [];
+      for (const entry of combined) {
+        if (seen.has(entry.key)) continue;
+        seen.add(entry.key);
+        unique.push(entry);
+        if (unique.length >= 6) break;
+      }
+      return unique;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isFormField =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable;
+
+      if (isFormField) {
+        return;
+      }
+
+      if (event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === "s") {
+          event.preventDefault();
+          setSnapToGridEnabled((prev) => !prev);
+          return;
+        }
+        if (key === "g") {
+          event.preventDefault();
+          setGuidesVisible((prev) => !prev);
+          return;
+        }
+        if (event.code === "Slash") {
+          event.preventDefault();
+          setShowShortcutHelp((prev) => !prev);
+          return;
+        }
+      }
+
+      if (event.key === "Escape" && showShortcutHelp) {
+        event.preventDefault();
+        setShowShortcutHelp(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showShortcutHelp]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const handlePointer = (event: MouseEvent) => {
+      if (contextMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setContextMenu(null);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointer);
+    window.addEventListener("contextmenu", handlePointer);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("mousedown", handlePointer);
+      window.removeEventListener("contextmenu", handlePointer);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (contextMenu && contextMenuRef.current) {
+      contextMenuRef.current.focus();
+    }
+  }, [contextMenu]);
+
+  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: FlowNode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      nodeId: node.id,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }, []);
+
+  const handleDuplicateNode = useCallback(() => {
+    if (!contextMenu) return;
+    const { nodeId } = contextMenu;
+    setNodes((currentNodes) => {
+      const sourceNode = currentNodes.find((node) => node.id === nodeId);
+      if (!sourceNode) {
+        return currentNodes;
+      }
+      const duplicatedNode: FlowNode = {
+        ...sourceNode,
+        id: `${sourceNode.id}-copy-${Date.now()}`,
+        position: {
+          x: sourceNode.position.x + SNAP_GRID_SIZE,
+          y: sourceNode.position.y + SNAP_GRID_SIZE,
+        },
+        selected: false,
+      };
+      return [...currentNodes, duplicatedNode];
+    });
+    setContextMenu(null);
+  }, [contextMenu, setNodes]);
+
+  const handleDeleteNode = useCallback(() => {
+    if (!contextMenu) return;
+    const { nodeId } = contextMenu;
+    setNodes((currentNodes) => currentNodes.filter((node) => node.id !== nodeId));
+    setEdges((currentEdges) =>
+      currentEdges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
+    );
+    setContextMenu(null);
+  }, [contextMenu, setEdges, setNodes]);
+
+  const handlePaneClick = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  type DraggableAgent = { id: number; name: string };
+  type DraggableTool = { type: string; name: string };
+
+  const beginAgentDrag = useCallback(
+    (event: React.DragEvent, agent: DraggableAgent) => {
+      event.dataTransfer.setData("agent-id", String(agent.id));
+      event.dataTransfer.setData("agent-name", agent.name);
+      if (event.currentTarget instanceof HTMLElement) {
+        event.currentTarget.setAttribute("aria-grabbed", "true");
+      }
+      setIsDragActive(true);
+    },
+    [setIsDragActive]
+  );
+
+  const beginToolDrag = useCallback(
+    (event: React.DragEvent, tool: DraggableTool) => {
+      event.dataTransfer.setData("tool-type", tool.type);
+      event.dataTransfer.setData("tool-name", tool.name);
+      if (event.currentTarget instanceof HTMLElement) {
+        event.currentTarget.setAttribute("aria-grabbed", "true");
+      }
+      setIsDragActive(true);
+    },
+    [setIsDragActive]
+  );
+
+  const resolveToolIcon = useCallback((toolType: string) => {
+    return TOOL_ITEMS.find((tool) => tool.type === toolType)?.icon ?? "🔧";
+  }, []);
+
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
     queryKey: ["agents", { scope: "my" }],
     queryFn: () => fetchAgents({ scope: "my" }),
     refetchInterval: 2000, // Poll every 2 seconds
   });
+
+  const filteredAgents = React.useMemo(() => {
+    const normalized = searchTerm.trim().toLowerCase();
+    if (!normalized) {
+      return agents;
+    }
+    return agents.filter((agent) => agent.name.toLowerCase().includes(normalized));
+  }, [agents, searchTerm]);
+
+  const filteredTools = React.useMemo(() => {
+    const normalized = searchTerm.trim().toLowerCase();
+    if (!normalized) {
+      return TOOL_ITEMS;
+    }
+    return TOOL_ITEMS.filter((tool) => tool.name.toLowerCase().includes(normalized));
+  }, [searchTerm]);
+
+  const filteredRecent = React.useMemo(() => {
+    const normalized = searchTerm.trim().toLowerCase();
+    if (!normalized) {
+      return recentItems;
+    }
+    return recentItems.filter((item) => item.label.toLowerCase().includes(normalized));
+  }, [recentItems, searchTerm]);
+
+  const hasRecentItems = recentItems.length > 0;
 
   // Fetch current workflow
   const { data: workflow } = useQuery<Workflow>({
@@ -266,16 +542,14 @@ export default function CanvasPage() {
   });
 
   // Auto-save workflow when nodes or edges change (skip during drag)
-  const debouncedSave = useCallback(
-    debounce((nodes: Node[], edges: Edge[]) => {
+  const debouncedSave = React.useMemo(() => {
+    return debounce((nodes: FlowNode[], edges: Edge[]) => {
       if (nodes.length > 0 || edges.length > 0) {
         const workflowData = normalizeWorkflow(nodes, edges);
         saveWorkflowMutation.mutate(workflowData);
       }
-    }, 1000),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [saveWorkflowMutation]
-  );
+    }, 1000);
+  }, [saveWorkflowMutation]);
 
   React.useEffect(() => {
     if (!isDragging) {
@@ -317,6 +591,8 @@ export default function CanvasPage() {
     },
   });
 
+  const isSaving = saveWorkflowMutation.isPending;
+
   // WebSocket for real-time execution updates
   const handleExecutionMessage = useCallback(async () => {
     const execution = currentExecutionRef.current;
@@ -343,7 +619,7 @@ export default function CanvasPage() {
     } catch (error) {
       console.error("Failed to fetch execution status:", error);
     }
-  }, [getExecutionLogs, getExecutionStatus]);
+  }, []);
 
   useWebSocket(currentExecution?.execution_id != null, {
     includeAuth: true,
@@ -436,18 +712,30 @@ export default function CanvasPage() {
       const toolName = event.dataTransfer.getData('tool-name');
 
       if (agentId && agentName) {
-        const newNode: Node = {
+        const parsedAgentId = parseInt(agentId, 10);
+        if (Number.isNaN(parsedAgentId)) {
+          return;
+        }
+        const newNode: FlowNode = {
           id: `agent-${Date.now()}`,
           type: 'agent',
           position,
           data: {
             label: agentName,
-            agentId: parseInt(agentId, 10),
+            agentId: parsedAgentId,
           },
         };
-        setNodes((nds: Node[]) => [...nds, newNode]);
+        setNodes((nds: FlowNode[]) => [...nds, newNode]);
+        recordRecentItem({
+          key: `agent:${parsedAgentId}`,
+          kind: "agent",
+          label: agentName,
+          icon: "🤖",
+          agentId: parsedAgentId,
+        });
       } else if (toolType && toolName) {
-        const newNode: Node = {
+        const toolIcon = resolveToolIcon(toolType);
+        const newNode: FlowNode = {
           id: `tool-${Date.now()}`,
           type: 'tool',
           position,
@@ -456,10 +744,18 @@ export default function CanvasPage() {
             toolType,
           },
         };
-        setNodes((nds: Node[]) => [...nds, newNode]);
+        setNodes((nds: FlowNode[]) => [...nds, newNode]);
+        recordRecentItem({
+          key: `tool:${toolType}`,
+          kind: "tool",
+          label: toolName,
+          icon: toolIcon,
+          toolType,
+          toolName,
+        });
       }
     },
-    [setNodes]
+    [recordRecentItem, resolveToolIcon, setNodes]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -469,8 +765,20 @@ export default function CanvasPage() {
 
   // Global drag end handler to reset drag state
   useEffect(() => {
-    const handleDragEnd = () => setIsDragActive(false);
-    const handleDrop = () => setIsDragActive(false);
+    const resetGrabState = () => {
+      document.querySelectorAll('[aria-grabbed="true"]').forEach((element) => {
+        (element as HTMLElement).setAttribute('aria-grabbed', 'false');
+      });
+    };
+
+    const handleDragEnd = () => {
+      setIsDragActive(false);
+      resetGrabState();
+    };
+    const handleDrop = () => {
+      setIsDragActive(false);
+      resetGrabState();
+    };
 
     document.addEventListener('dragend', handleDragEnd);
     document.addEventListener('drop', handleDrop);
@@ -488,30 +796,169 @@ export default function CanvasPage() {
         data-testid="agent-shelf"
         className="agent-shelf"
       >
-          <h3>Available Agents</h3>
-          <div className="agent-shelf-content">
-            {agents.length === 0 ? (
-              <p>No agents available</p>
-            ) : (
-              agents.map((agent) => (
-                <div
-                  key={agent.id}
-                  className="agent-shelf-item agent-pill"
-                  data-testid={`shelf-agent-${agent.id}`}
-                  draggable={true}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('agent-id', String(agent.id));
-                    e.dataTransfer.setData('agent-name', agent.name);
-                    setIsDragActive(true);
-                  }}
-                >
-                  <div className="agent-icon">🤖</div>
-                  <div className="agent-name">{agent.name}</div>
+        <section className="agent-shelf-section shelf-search">
+          <label htmlFor="canvas-shelf-search" className="shelf-search-label">
+            Search
+          </label>
+          <input
+            id="canvas-shelf-search"
+            type="search"
+            className="shelf-search-input"
+            placeholder="Filter agents or tools"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </section>
+
+        {hasRecentItems && (
+          <section className="agent-shelf-section">
+            <button
+              type="button"
+              className="shelf-section-toggle"
+              onClick={() => toggleSection("recent")}
+              aria-expanded={!collapsedSections.recent}
+              aria-controls="shelf-recent-list"
+            >
+              <span className="caret">{collapsedSections.recent ? "▸" : "▾"}</span>
+              <span>Recently Used</span>
+              <span className="count">{filteredRecent.length}</span>
+            </button>
+            {!collapsedSections.recent &&
+              (filteredRecent.length > 0 ? (
+                <div id="shelf-recent-list" className="shelf-list recent-list">
+                  {filteredRecent.map((item) => (
+                    <div
+                      key={item.key}
+                      className={item.kind === "agent" ? "agent-shelf-item agent-pill" : "tool-palette-item"}
+                      draggable={true}
+                      role="button"
+                      tabIndex={0}
+                      aria-grabbed="false"
+                      aria-label={
+                        item.kind === "agent"
+                          ? `Drag agent ${item.label} onto the canvas`
+                          : `Drag tool ${item.label} onto the canvas`
+                      }
+                      onDragStart={(event) => {
+                        if (item.kind === "agent" && item.agentId != null) {
+                          beginAgentDrag(event, { id: item.agentId, name: item.label });
+                        } else if (item.kind === "tool" && item.toolType) {
+                          beginToolDrag(event, { type: item.toolType, name: item.toolName ?? item.label });
+                        }
+                      }}
+                      onDragEnd={(event) => {
+                        if (event.currentTarget instanceof HTMLElement) {
+                          event.currentTarget.setAttribute('aria-grabbed', 'false');
+                        }
+                      }}
+                    >
+                      <div className={item.kind === "agent" ? "agent-icon" : "tool-icon"}>
+                        {item.icon}
+                      </div>
+                      <div className={item.kind === "agent" ? "agent-name" : "tool-name"}>
+                        {item.label}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))
-            )}
-          </div>
-        </div>
+              ) : (
+                <p className="shelf-empty">No recently used items match your search.</p>
+              ))}
+          </section>
+        )}
+
+        <section className="agent-shelf-section">
+          <button
+            type="button"
+            className="shelf-section-toggle"
+            onClick={() => toggleSection("agents")}
+            aria-expanded={!collapsedSections.agents}
+            aria-controls="shelf-agent-list"
+          >
+            <span className="caret">{collapsedSections.agents ? "▸" : "▾"}</span>
+            <span>Agents</span>
+            <span className="count">{filteredAgents.length}</span>
+          </button>
+          {!collapsedSections.agents &&
+            (filteredAgents.length > 0 ? (
+              <div id="shelf-agent-list" className="agent-shelf-content">
+                {filteredAgents.map((agent) => (
+                  <div
+                    key={agent.id}
+                    className="agent-shelf-item agent-pill"
+                    data-testid={`shelf-agent-${agent.id}`}
+                    draggable={true}
+                    role="button"
+                    tabIndex={0}
+                    aria-grabbed="false"
+                    aria-label={`Drag agent ${agent.name} onto the canvas`}
+                    onDragStart={(event) => beginAgentDrag(event, { id: agent.id, name: agent.name })}
+                    onDragEnd={(event) => {
+                      if (event.currentTarget instanceof HTMLElement) {
+                        event.currentTarget.setAttribute('aria-grabbed', 'false');
+                      }
+                    }}
+                  >
+                    <div className="agent-icon">🤖</div>
+                    <div className="agent-name">{agent.name}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="shelf-empty">
+                {searchTerm ? `No agents found for "${searchTerm}".` : "No agents available."}
+              </p>
+            ))}
+        </section>
+
+        <section
+          id="tool-palette"
+          data-testid="tool-palette"
+          className="agent-shelf-section"
+        >
+          <button
+            type="button"
+            className="shelf-section-toggle"
+            onClick={() => toggleSection("tools")}
+            aria-expanded={!collapsedSections.tools}
+            aria-controls="shelf-tool-list"
+          >
+            <span className="caret">{collapsedSections.tools ? "▸" : "▾"}</span>
+            <span>Tools</span>
+            <span className="count">{filteredTools.length}</span>
+          </button>
+          {!collapsedSections.tools &&
+            (filteredTools.length > 0 ? (
+              <div id="shelf-tool-list" className="tool-palette-content">
+                {filteredTools.map((tool) => (
+                  <div
+                    key={tool.type}
+                    className="tool-palette-item"
+                    data-testid={`tool-${tool.type}`}
+                    draggable={true}
+                    role="button"
+                    tabIndex={0}
+                    aria-grabbed="false"
+                    aria-label={`Drag tool ${tool.name} onto the canvas`}
+                    onDragStart={(event) => beginToolDrag(event, tool)}
+                    onDragEnd={(event) => {
+                      if (event.currentTarget instanceof HTMLElement) {
+                        event.currentTarget.setAttribute('aria-grabbed', 'false');
+                      }
+                    }}
+                  >
+                    <div className="tool-icon">{tool.icon}</div>
+                    <div className="tool-name">{tool.name}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="shelf-empty">
+                {searchTerm ? `No tools found for "${searchTerm}".` : "No tools available."}
+              </p>
+            ))}
+        </section>
+      </div>
 
       <div
         id="canvas-container"
@@ -547,10 +994,35 @@ export default function CanvasPage() {
                   className="logs-button"
                   onClick={() => setShowLogs(!showLogs)}
                   title="Toggle Execution Logs"
+                  aria-expanded={showLogs}
+                  aria-controls="execution-logs-drawer"
                 >
                   📋 Logs {showLogs ? '▼' : '▶️'}
                 </button>
               )}
+
+              <div className="canvas-mode-toggles" role="group" aria-label="Canvas display toggles">
+                <button
+                  type="button"
+                  className="canvas-toggle-btn"
+                  onClick={() => setSnapToGridEnabled((prev) => !prev)}
+                  aria-pressed={snapToGridEnabled}
+                  aria-label={snapToGridEnabled ? 'Disable snap to grid (Shift+S)' : 'Enable snap to grid (Shift+S)'}
+                  title={`Snap to grid ${snapToGridEnabled ? 'enabled' : 'disabled'} (Shift+S)`}
+                >
+                  ⬛
+                </button>
+                <button
+                  type="button"
+                  className="canvas-toggle-btn"
+                  onClick={() => setGuidesVisible((prev) => !prev)}
+                  aria-pressed={guidesVisible}
+                  aria-label={guidesVisible ? 'Hide guides (Shift+G)' : 'Show guides (Shift+G)'}
+                  title={`Guides ${guidesVisible ? 'visible' : 'hidden'} (Shift+G)`}
+                >
+                  #️⃣
+                </button>
+              </div>
             </div>
 
             {/* Execution Status */}
@@ -567,8 +1039,16 @@ export default function CanvasPage() {
             )}
           </div>
 
-          <div className="canvas-workspace" data-testid="canvas-workspace">
-            <div style={{ width: '100%', height: '100%', minHeight: '600px', position: 'relative' }}>
+          <div
+            className={`canvas-workspace${showLogs && currentExecution ? ' logs-open' : ''}`}
+            data-testid="canvas-workspace"
+          >
+            <div className="canvas-stage">
+              {isSaving && (
+                <div className="canvas-save-banner" role="status" aria-live="polite">
+                  {saveWorkflowMutation.isPending ? 'Saving changes...' : 'Syncing workflow...'}
+                </div>
+              )}
               {/* Canvas overlay for E2E test compatibility - only active during drag operations */}
               {isDragActive && (
                 <canvas
@@ -598,90 +1078,100 @@ export default function CanvasPage() {
                 onDragOver={onDragOver}
                 nodeTypes={nodeTypes}
                 fitView
+                snapToGrid={snapToGridEnabled}
+                snapGrid={[SNAP_GRID_SIZE, SNAP_GRID_SIZE]}
+                selectionOnDrag
+                panOnScroll
+                multiSelectionKeyCode="Shift"
+                onPaneClick={handlePaneClick}
+                onNodeContextMenu={handleNodeContextMenu}
               >
-                <Background />
+                {guidesVisible && <Background gap={SNAP_GRID_SIZE} />}
                 <Controls />
                 <MiniMap />
               </ReactFlow>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        id="tool-palette"
-        data-testid="tool-palette"
-        className="tool-palette"
-      >
-        <h3>Tools</h3>
-        <div className="tool-palette-content">
-          <div
-            className="tool-palette-item"
-            data-testid="tool-http-request"
-            draggable={true}
-            onDragStart={(e) => {
-              e.dataTransfer.setData('tool-type', 'http-request');
-              e.dataTransfer.setData('tool-name', 'HTTP Request');
-              setIsDragActive(true);
-            }}
-          >
-            <div className="tool-icon">🌐</div>
-            <div className="tool-name">HTTP Request</div>
-          </div>
-          <div
-            className="tool-palette-item"
-            data-testid="tool-url-fetch"
-            draggable={true}
-            onDragStart={(e) => {
-              e.dataTransfer.setData('tool-type', 'url-fetch');
-              e.dataTransfer.setData('tool-name', 'URL Fetch');
-              setIsDragActive(true);
-            }}
-          >
-            <div className="tool-icon">📡</div>
-            <div className="tool-name">URL Fetch</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Execution Logs Panel */}
-      {showLogs && currentExecution && (
-        <div className="execution-logs-panel">
-          <div className="logs-header">
-            <h4>Execution Logs</h4>
-            <button
-              className="close-logs"
-              onClick={() => setShowLogs(false)}
-              title="Close Logs"
-            >
-              ✕
-            </button>
-          </div>
-          <div className="logs-content">
-            <div className="execution-info">
-              <div>Execution ID: {currentExecution.execution_id}</div>
-              <div>Status: {currentExecution.phase}</div>
-              {currentExecution.result !== undefined && currentExecution.result !== null && (
-                <div>
-                  Result: <pre>{String(JSON.stringify(currentExecution.result, null, 2) || 'null')}</pre>
+            {showLogs && currentExecution && (
+              <aside
+                id="execution-logs-drawer"
+                className="execution-logs-drawer"
+                role="complementary"
+                aria-label="Execution logs"
+              >
+                <div className="logs-header">
+                  <h4>Execution Logs</h4>
+                  <button
+                    className="close-logs"
+                    onClick={() => setShowLogs(false)}
+                    title="Close Logs"
+                  >
+                    ✕
+                  </button>
                 </div>
-              )}
+                <div className="logs-content">
+                  <div className="execution-info">
+                    <div>Execution ID: {currentExecution.execution_id}</div>
+                    <div>Status: {currentExecution.phase}</div>
+                    {currentExecution.result !== undefined && currentExecution.result !== null && (
+                      <div>
+                        Result: <pre>{String(JSON.stringify(currentExecution.result, null, 2) || 'null')}</pre>
+                      </div>
+                    )}
+                  </div>
+                  <div className="logs-output">
+                    <h5>Logs:</h5>
+                    <pre className="logs-text">
+                      {executionLogs || "No logs available yet..."}
+                    </pre>
+                  </div>
+                </div>
+              </aside>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showShortcutHelp && (
+        <div className="shortcut-help-overlay" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title">
+          <div className="shortcut-help-panel">
+            <div className="shortcut-help-header">
+              <h3 id="shortcut-help-title">Canvas Shortcuts</h3>
+              <button
+                type="button"
+                className="close-logs"
+                onClick={() => setShowShortcutHelp(false)}
+                title="Close shortcuts"
+              >
+                ✕
+              </button>
             </div>
-            <div className="logs-output">
-              <h5>Logs:</h5>
-              <pre className="logs-text">
-                {executionLogs || "No logs available yet..."}
-              </pre>
-            </div>
+            <ul className="shortcut-help-list">
+              <li><kbd>Shift</kbd> + <kbd>S</kbd> Toggle snap to grid</li>
+              <li><kbd>Shift</kbd> + <kbd>G</kbd> Toggle guides</li>
+              <li><kbd>Shift</kbd> + <kbd>/</kbd> Show this panel</li>
+            </ul>
+            <p className="shortcut-help-hint">Press Esc to close.</p>
           </div>
         </div>
       )}
 
-      {(isLoading || saveWorkflowMutation.isPending) && (
-        <div className="saving-indicator">
-          Saving workflow...
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="canvas-context-menu"
+          role="menu"
+          tabIndex={-1}
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button type="button" role="menuitem" onClick={handleDuplicateNode}>
+            Duplicate node
+          </button>
+          <button type="button" role="menuitem" onClick={handleDeleteNode}>
+            Delete node
+          </button>
         </div>
       )}
+
     </>
   );
 }
