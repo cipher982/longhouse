@@ -53,27 +53,15 @@ type ToolPaletteItem = {
   icon: string;
 };
 
-type ShelfSection = "recent" | "agents" | "tools";
-
-interface RecentShelfItem {
-  key: string;
-  kind: "agent" | "tool";
-  label: string;
-  icon: string;
-  agentId?: number;
-  toolType?: string;
-  toolName?: string;
-}
+type ShelfSection = "agents" | "tools";
 
 const TOOL_ITEMS: ToolPaletteItem[] = [
   { type: "http-request", name: "HTTP Request", icon: "🌐" },
   { type: "url-fetch", name: "URL Fetch", icon: "📡" },
 ] ;
 
-const RECENT_ITEMS_STORAGE_KEY = "canvas_recent_items";
 const SECTION_STATE_STORAGE_KEY = "canvas_section_state";
 const DEFAULT_SECTION_STATE: Record<ShelfSection, boolean> = {
-  recent: false,
   agents: false,
   tools: false,
 };
@@ -236,46 +224,10 @@ function CanvasPageContent() {
       return { ...DEFAULT_SECTION_STATE };
     }
   });
-  const [recentItems, setRecentItems] = useState<RecentShelfItem[]>(() => {
-    if (typeof window === "undefined") {
-      return [];
-    }
-    try {
-      const stored = window.localStorage.getItem(RECENT_ITEMS_STORAGE_KEY);
-      if (!stored) {
-        return [];
-      }
-      const parsed = JSON.parse(stored);
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      return parsed
-        .filter(
-          (item): item is RecentShelfItem =>
-            typeof item?.key === "string" &&
-            (item.kind === "agent" || item.kind === "tool") &&
-            typeof item.label === "string" &&
-            typeof item.icon === "string"
-        )
-        .slice(0, 6);
-    } catch (error) {
-      console.warn("Failed to parse recent shelf items:", error);
-      return [];
-    }
-  });
   const [snapToGridEnabled, setSnapToGridEnabled] = useState(true);
   const [guidesVisible, setGuidesVisible] = useState(true);
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(RECENT_ITEMS_STORAGE_KEY, JSON.stringify(recentItems));
-    } catch (error) {
-      console.warn("Failed to persist recent shelf items:", error);
-    }
-  }, [recentItems]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -291,21 +243,6 @@ function CanvasPageContent() {
       ...prev,
       [section]: !prev[section],
     }));
-  }, []);
-
-  const recordRecentItem = useCallback((item: RecentShelfItem) => {
-    setRecentItems((prev) => {
-      const combined = [item, ...prev];
-      const seen = new Set<string>();
-      const unique: RecentShelfItem[] = [];
-      for (const entry of combined) {
-        if (seen.has(entry.key)) continue;
-        seen.add(entry.key);
-        unique.push(entry);
-        if (unique.length >= 6) break;
-      }
-      return unique;
-    });
   }, []);
 
   useEffect(() => {
@@ -620,16 +557,6 @@ function CanvasPageContent() {
     return TOOL_ITEMS.filter((tool) => tool.name.toLowerCase().includes(normalized));
   }, [searchTerm]);
 
-  const filteredRecent = React.useMemo(() => {
-    const normalized = searchTerm.trim().toLowerCase();
-    if (!normalized) {
-      return recentItems;
-    }
-    return recentItems.filter((item) => item.label.toLowerCase().includes(normalized));
-  }, [recentItems, searchTerm]);
-
-  const hasRecentItems = recentItems.length > 0;
-
   // Fetch current workflow
   const { data: workflow } = useQuery<Workflow>({
     queryKey: ["workflow", "current"],
@@ -902,13 +829,6 @@ function CanvasPageContent() {
           },
         };
         setNodes((nds: FlowNode[]) => [...nds, newNode]);
-        recordRecentItem({
-          key: `agent:${parsedAgentId}`,
-          kind: "agent",
-          label: agentName,
-          icon: "🤖",
-          agentId: parsedAgentId,
-        });
       } else if (toolType && toolName) {
         const toolIcon = resolveToolIcon(toolType);
         const newNode: FlowNode = {
@@ -921,18 +841,10 @@ function CanvasPageContent() {
           },
         };
         setNodes((nds: FlowNode[]) => [...nds, newNode]);
-        recordRecentItem({
-          key: `tool:${toolType}`,
-          kind: "tool",
-          label: toolName,
-          icon: toolIcon,
-          toolType,
-          toolName,
-        });
       }
       resetDragPreview();
     },
-    [dragPreviewData, reactFlowInstance, recordRecentItem, resolveToolIcon, resetDragPreview, setNodes, zoom]
+    [dragPreviewData, reactFlowInstance, resolveToolIcon, resetDragPreview, setNodes, zoom]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -988,63 +900,6 @@ function CanvasPageContent() {
             onChange={(event) => setSearchTerm(event.target.value)}
           />
         </section>
-
-        {hasRecentItems && (
-          <section className="agent-shelf-section">
-            <button
-              type="button"
-              className="shelf-section-toggle"
-              onClick={() => toggleSection("recent")}
-              aria-expanded={!collapsedSections.recent}
-              aria-controls="shelf-recent-list"
-            >
-              <span className="caret">{collapsedSections.recent ? "▸" : "▾"}</span>
-              <span>Recently Used</span>
-              <span className="count">{filteredRecent.length}</span>
-            </button>
-            {!collapsedSections.recent &&
-              (filteredRecent.length > 0 ? (
-                <div id="shelf-recent-list" className="shelf-list recent-list">
-                  {filteredRecent.map((item) => (
-                    <div
-                      key={item.key}
-                      className={item.kind === "agent" ? "agent-shelf-item agent-pill" : "tool-palette-item"}
-                      draggable={true}
-                      role="button"
-                      tabIndex={0}
-                      aria-grabbed="false"
-                      aria-label={
-                        item.kind === "agent"
-                          ? `Drag agent ${item.label} onto the canvas`
-                          : `Drag tool ${item.label} onto the canvas`
-                      }
-                      onDragStart={(event) => {
-                        if (item.kind === "agent" && item.agentId != null) {
-                          beginAgentDrag(event, { id: item.agentId, name: item.label });
-                        } else if (item.kind === "tool" && item.toolType) {
-                          beginToolDrag(event, { type: item.toolType, name: item.toolName ?? item.label });
-                        }
-                      }}
-                      onDragEnd={(event) => {
-                        if (event.currentTarget instanceof HTMLElement) {
-                          event.currentTarget.setAttribute('aria-grabbed', 'false');
-                        }
-                      }}
-                    >
-                      <div className={item.kind === "agent" ? "agent-icon" : "tool-icon"}>
-                        {item.icon}
-                      </div>
-                      <div className={item.kind === "agent" ? "agent-name" : "tool-name"}>
-                        {item.label}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="shelf-empty">No recently used items match your search.</p>
-              ))}
-          </section>
-        )}
 
         <section className="agent-shelf-section">
           <button
