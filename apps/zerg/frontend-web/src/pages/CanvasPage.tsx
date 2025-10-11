@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../lib/useWebSocket";
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node as FlowNode,
   type Edge,
   type Connection,
@@ -179,13 +181,15 @@ async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export default function CanvasPage() {
+function CanvasPageContent() {
   const queryClient = useQueryClient();
+  const reactFlowInstance = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const lastSavedHashRef = useRef<string>("");
   const pendingHashesRef = useRef<Set<string>>(new Set());
   const currentExecutionRef = useRef<ExecutionStatus | null>(null);
+  const canvasInitializedRef = useRef<boolean>(false);
   const toastIdRef = useRef<string | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -479,12 +483,14 @@ export default function CanvasPage() {
     staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
-  // Initialize nodes and edges from workflow data
+  // Initialize nodes and edges from workflow data ONLY on first load
+  // This prevents flickering when server state updates after user drags nodes
   React.useEffect(() => {
-    if (workflow?.canvas) {
+    if (workflow?.canvas && !canvasInitializedRef.current) {
       const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData(workflow.canvas);
       setNodes(flowNodes);
       setEdges(flowEdges);
+      canvasInitializedRef.current = true;
 
       // Initialize hash from loaded workflow
       const normalized = normalizeWorkflow(flowNodes, flowEdges);
@@ -680,31 +686,12 @@ export default function CanvasPage() {
       event.preventDefault();
       setIsDragActive(false); // End drag state
 
-      // Handle canvas overlay drops by calculating position relative to React Flow
-      let position;
-      const isCanvasTarget = (event.target as Element)?.tagName === 'CANVAS';
-
-      if (isCanvasTarget) {
-        // E2E test dropping to canvas overlay - calculate React Flow relative position
-        const reactFlowElement = document.querySelector('.react-flow');
-        if (reactFlowElement) {
-          const reactFlowBounds = reactFlowElement.getBoundingClientRect();
-          position = {
-            x: event.clientX - reactFlowBounds.left,
-            y: event.clientY - reactFlowBounds.top,
-          };
-        } else {
-          return; // Can't find React Flow element
-        }
-      } else {
-        // Normal React Flow drop
-        const reactFlowBounds = (event.target as Element)?.closest('.react-flow')?.getBoundingClientRect();
-        if (!reactFlowBounds) return;
-        position = {
-          x: event.clientX - reactFlowBounds.left,
-          y: event.clientY - reactFlowBounds.top,
-        };
-      }
+      // Use ReactFlow's screenToFlowPosition to properly convert screen coordinates
+      // to flow coordinates, accounting for zoom/pan transforms
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
 
       const agentId = event.dataTransfer.getData('agent-id');
       const agentName = event.dataTransfer.getData('agent-name');
@@ -755,7 +742,7 @@ export default function CanvasPage() {
         });
       }
     },
-    [recordRecentItem, resolveToolIcon, setNodes]
+    [reactFlowInstance, recordRecentItem, resolveToolIcon, setNodes]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -1173,6 +1160,15 @@ export default function CanvasPage() {
       )}
 
     </>
+  );
+}
+
+// Wrapper component that provides ReactFlow context
+export default function CanvasPage() {
+  return (
+    <ReactFlowProvider>
+      <CanvasPageContent />
+    </ReactFlowProvider>
   );
 }
 
