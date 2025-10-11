@@ -1,4 +1,27 @@
+import type { ReactNode } from "react";
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
+
+vi.mock("../lib/auth", () => {
+  const noop = async () => {};
+  return {
+    useAuth: () => ({
+      user: {
+        id: 1,
+        email: "test@local",
+        display_name: "Test User",
+        is_active: true,
+        created_at: new Date(0).toISOString(),
+      },
+      isAuthenticated: true,
+      isLoading: false,
+      login: noop,
+      logout: noop,
+      getToken: () => "test-token",
+    }),
+    AuthProvider: ({ children }: { children: ReactNode }) => children,
+  };
+});
 
 class MockWebSocket {
   static CONNECTING = 0;

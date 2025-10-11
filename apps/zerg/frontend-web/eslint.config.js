@@ -16,10 +16,16 @@ export default [
     ...js.configs.recommended,
     languageOptions: {
       ...js.configs.recommended.languageOptions,
-      globals: {
-        ...globals.browser,
-        ...globals.node,
-      },
+      globals: (() => {
+        const trimKeys = (source) =>
+          Object.fromEntries(
+            Object.entries(source).map(([key, value]) => [key.trim(), value])
+          );
+        return {
+          ...trimKeys(globals.browser),
+          ...trimKeys(globals.node),
+        };
+      })(),
       ecmaVersion: "latest",
       sourceType: "module",
     },
@@ -50,6 +56,13 @@ export default [
       ],
       "no-undef": "off",
       "react-refresh/only-export-components": isProduction ? "error" : "warn",
+      "@typescript-eslint/no-explicit-any": "warn",
+    },
+  },
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "src/test/**/*.ts"],
+    rules: {
+      "no-prototype-builtins": "off",
     },
   },
   prettier,

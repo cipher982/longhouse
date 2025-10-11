@@ -43,13 +43,22 @@ function loadConfig(): AppConfig {
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
-  const apiBaseUrl = typeof window !== 'undefined' && window.API_BASE_URL
+  let apiBaseUrl = typeof window !== 'undefined' && window.API_BASE_URL
     ? window.API_BASE_URL
     : (import.meta.env.VITE_API_BASE_URL || (isDevelopment ? '/api' : ''));
 
-  const wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
+  let wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
     ? window.WS_BASE_URL
     : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? window.location.origin.replace('http', 'ws') : ''));
+
+  if (isTesting) {
+    if (!apiBaseUrl) {
+      apiBaseUrl = 'http://127.0.0.1:47300';
+    }
+    if (!wsBaseUrl) {
+      wsBaseUrl = 'ws://127.0.0.1:47300';
+    }
+  }
 
   // Validate required config in production
   if (isProduction) {

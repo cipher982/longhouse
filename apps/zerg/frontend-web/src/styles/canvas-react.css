@@ -31,6 +31,40 @@
   padding: 0;
 }
 
+.canvas-workspace.logs-open {
+  gap: 0;
+}
+
+.canvas-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  min-height: 600px;
+}
+
+.execution-logs-drawer {
+  flex: 0 0 clamp(320px, 30vw, 400px);
+  height: 100%;
+  background: var(--dark-card, #2a2a3a);
+  border-left: 1px solid var(--border-color, #3d3d5c);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -12px 0 24px rgba(13, 19, 33, 0.4);
+  animation: drawerSlideIn 180ms ease;
+  z-index: 150;
+}
+
+@keyframes drawerSlideIn {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 /* Agent Shelf Items - match Rust styling */
 .agent-shelf-item {
   cursor: grab;
@@ -65,39 +99,6 @@
 }
 
 .agent-shelf-item .agent-name {
-  flex: 1;
-}
-
-/* Tool Palette Items - match Rust styling */
-.tool-palette-item {
-  cursor: grab;
-  margin-bottom: 8px;
-  padding: 10px 12px;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  font-size: 14px;
-  color: #1e293b;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  user-select: none;
-}
-
-.tool-palette-item:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.tool-palette-item .tool-icon {
-  font-size: 16px;
-  margin-right: 8px;
-}
-
-.tool-palette-item .tool-name {
   flex: 1;
 }
 
@@ -210,39 +211,54 @@
   border-radius: var(--radius-sm, 4px);
 }
 
-/* Saving indicator */
-.saving-indicator {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  background: var(--dark-card, #2a2a3a);
-  color: var(--text, #ffffff);
-  padding: 8px 16px;
-  border-radius: var(--radius-sm, 4px);
-  border: 1px solid var(--border-color, #3d3d5c);
-  font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
-  animation: fadeIn 0.2s ease;
+/* Canvas save banner */
+.canvas-save-banner {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(30, 64, 175, 0.9);
+  color: #e0f2fe;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.01em;
+  animation: bannerPop 180ms ease;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+.canvas-save-banner::before {
+  content: "•";
+  font-size: 20px;
+  line-height: 1;
+  color: #bae6fd;
+}
+
+@keyframes bannerPop {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 /* Canvas container adjustments for React Flow */
 .canvas-container {
   display: flex;
   flex-direction: row;
-  height: 100vh;
+  height: 100%;
   background: var(--dark-lighter, #33334a);
 }
 
-/* Agent shelf and tool palette layout */
-#agent-shelf,
-#tool-palette {
+/* Agent shelf layout */
+#agent-shelf {
   z-index: 10; /* Ensure they appear above React Flow */
 }
 
@@ -273,32 +289,6 @@
   background: var(--success, #4ecdc4);
 }
 
-/* Tool palette styling to match agent shelf */
-#tool-palette {
-  width: 260px;
-  flex-shrink: 0;
-  background: linear-gradient(to bottom, #2a2a3a, #252535);
-  border-left: 1px solid #3d3d5c;
-  padding: 16px;
-  box-sizing: border-box;
-  display: block;
-  overflow-y: auto;
-  height: 100%;
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
-}
-
-#tool-palette h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #F0F0F0;
-  margin: 0 0 16px 0;
-}
-
-.tool-palette-content {
-  display: flex;
-  flex-direction: column;
-}
-
 /* Execution Controls */
 .execution-controls {
   display: flex;
@@ -314,6 +304,39 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.canvas-mode-toggles {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 16px;
+}
+
+.canvas-toggle-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(30, 41, 59, 0.6);
+  color: rgba(226, 232, 240, 0.85);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 14px;
+}
+
+.canvas-toggle-btn:hover {
+  border-color: rgba(99, 179, 237, 0.7);
+  color: #f8fafc;
+}
+
+.canvas-toggle-btn[aria-pressed="true"] {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.8);
+  color: #e0f2fe;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
 }
 
 .run-button {
@@ -431,21 +454,7 @@
   font-family: 'Monaco', 'Menlo', monospace;
 }
 
-/* Execution Logs Panel */
-.execution-logs-panel {
-  position: fixed;
-  bottom: 0;
-  left: 260px; /* Account for agent shelf */
-  right: 260px; /* Account for tool palette */
-  height: 300px;
-  background: var(--dark-card, #2a2a3a);
-  border-top: 1px solid var(--border-color, #3d3d5c);
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 -4px 8px rgba(0, 0, 0, 0.2);
-}
-
+/* Execution Logs Drawer */
 .logs-header {
   display: flex;
   justify-content: space-between;
@@ -495,6 +504,10 @@
   font-family: 'Monaco', 'Menlo', monospace;
 }
 
+.execution-info > div {
+  min-width: 0;
+}
+
 .execution-info pre {
   background: rgba(0, 0, 0, 0.2);
   padding: 8px;
@@ -525,4 +538,118 @@
   max-height: 200px;
   overflow-y: auto;
   margin: 0;
+}
+
+@media (max-width: 1200px) {
+  .execution-logs-drawer {
+    position: absolute;
+    inset: 64px 16px 16px 16px;
+    flex: none;
+    width: auto;
+    max-width: none;
+    border-left: 1px solid var(--border-color, #3d3d5c);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .logs-header {
+    border-radius: 12px 12px 0 0;
+  }
+}
+
+.canvas-context-menu {
+  position: fixed;
+  z-index: 220;
+  background: var(--dark-card, #2a2a3a);
+  border: 1px solid rgba(61, 61, 92, 0.9);
+  border-radius: 8px;
+  min-width: 180px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.45);
+  padding: 4px 0;
+  backdrop-filter: blur(8px);
+}
+
+.canvas-context-menu button {
+  width: 100%;
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 10px 16px;
+  color: rgba(226, 232, 240, 0.85);
+  font-size: 13px;
+  cursor: pointer;
+  display: block;
+}
+
+.canvas-context-menu button:hover {
+  background: rgba(59, 130, 246, 0.15);
+  color: #f8fafc;
+}
+
+.shortcut-help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 15, 25, 0.65);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 240;
+  padding: 24px;
+}
+
+.shortcut-help-panel {
+  background: var(--dark-card, #2a2a3a);
+  border: 1px solid rgba(61, 61, 92, 0.9);
+  border-radius: 12px;
+  padding: 20px 24px;
+  width: min(420px, 100%);
+  box-shadow: 0 20px 40px rgba(8, 11, 19, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shortcut-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shortcut-help-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.shortcut-help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: rgba(226, 232, 240, 0.85);
+  font-size: 14px;
+}
+
+.shortcut-help-list kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  font-size: 12px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  color: #e2e8f0;
+  margin-right: 6px;
+}
+
+.shortcut-help-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.8);
+  text-align: right;
 }
