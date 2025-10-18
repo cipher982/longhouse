@@ -339,7 +339,18 @@
   display: none; /* only used on mobile */
 }
 
-body.shelf-open .shelf-scrim { opacity: 1; pointer-events: auto; }
+/* Activate scrim when shelf is open (via React state) */
+.shelf-scrim--visible {
+  opacity: 1;
+  pointer-events: auto;
+  display: block;
+}
+
+/* Legacy: keep body.shelf-open support for backward compatibility */
+body.shelf-open .shelf-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* Disable animations for users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
