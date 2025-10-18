@@ -146,7 +146,7 @@
   padding: 20px;
   width: 100%;
   max-width: 1200px;
-  min-width: 800px;
+  /* min-width removed - allow fluid width on all screens */
   margin: 0 auto;
   background: var(--dark-lighter);
   border-radius: var(--radius-md);
@@ -182,7 +182,7 @@
   background: var(--bg-dark);
   border-radius: var(--radius-sm);
   padding: 8px 16px;
-  width: 300px;
+  width: min(100%, 300px);  /* Adaptive: 100% or 300px */
   flex-shrink: 0;
 }
 
@@ -441,12 +441,24 @@
 
 /* Responsive tweaks */
 @media (max-width: 992px) {
-  .dashboard-container { overflow-x: auto; padding-bottom: var(--spacing-md); min-width: 600px; }
+  .dashboard-container { overflow-x: auto; padding-bottom: var(--spacing-md); }
   .agents-table th, .agents-table td { padding: var(--spacing-sm) var(--spacing-md); white-space: nowrap; }
   .agents-table tr:hover .actions-cell { background: var(--bg-hover); }
 }
 
 @media (max-width: 768px) {
+  .dashboard-container { padding: 12px; }
+
+  /* Stack header elements vertically on mobile */
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-container { width: 100%; }
+
+  .button-container { width: 100%; }
+
   .agents-table { display: block; width: 100%; overflow: hidden; }
   .agents-table thead { display: none; }
   .agents-table tr { display: block; background: var(--bg-darker); margin-bottom: var(--spacing-sm); border-radius: 6px; padding: var(--spacing-sm) var(--spacing-md); }

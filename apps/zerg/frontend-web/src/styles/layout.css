@@ -48,10 +48,10 @@ body {
   height: 100%;
 }
 
-/* Body simply hosts the React root and suppresses document scrolling */
+/* Body simply hosts the React root */
 body {
   margin: 0;
-  overflow: hidden;
+  overflow-y: auto;  /* Allow vertical scrolling naturally */
 }
 
 /* The React root acts as the application grid */
@@ -78,7 +78,8 @@ body {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  overflow: hidden; /* no container scroll - individual pages handle their own */
+  overflow-y: auto;    /* Allow vertical scrolling */
+  overflow-x: hidden;  /* Prevent horizontal scroll */
   position: relative;
 }
 

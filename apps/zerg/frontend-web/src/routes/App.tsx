@@ -7,6 +7,7 @@ import CanvasPage from "../pages/CanvasPage";
 import ProfilePage from "../pages/ProfilePage";
 import AdminPage from "../pages/AdminPage";
 import { AuthGuard } from "../lib/auth";
+import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
@@ -76,7 +77,9 @@ export default function App() {
 
   return (
     <AuthGuard clientId={config.googleClientId}>
-      <Layout>{routes}</Layout>
+      <ShelfProvider>
+        <Layout>{routes}</Layout>
+      </ShelfProvider>
     </AuthGuard>
   );
 }
