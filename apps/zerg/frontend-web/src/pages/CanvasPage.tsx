@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import clsx from "clsx";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useShelf } from "../lib/useShelfState";
 import { useWebSocket } from "../lib/useWebSocket";
 import {
   ReactFlow,
@@ -175,6 +177,7 @@ async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
 
 function CanvasPageContent() {
   const queryClient = useQueryClient();
+  const { isShelfOpen, closeShelf } = useShelf();
   const reactFlowInstance = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
@@ -885,7 +888,7 @@ function CanvasPageContent() {
       <div
         id="agent-shelf"
         data-testid="agent-shelf"
-        className="agent-shelf"
+        className={clsx("agent-shelf", { open: isShelfOpen })}
       >
         <section className="agent-shelf-section shelf-search">
           <label htmlFor="canvas-shelf-search" className="shelf-search-label">
@@ -1231,6 +1234,11 @@ function CanvasPageContent() {
         </div>
       )}
 
+      {/* Scrim overlay when shelf is open on mobile */}
+      <div
+        className={clsx("shelf-scrim", { "shelf-scrim--visible": isShelfOpen })}
+        onClick={closeShelf}
+      />
     </>
   );
 }

@@ -18,6 +18,7 @@ import {
   startWorkflowExecution,
   type Workflow,
 } from "../services/api";
+import { useShelf } from "../lib/useShelfState";
 import { useWebSocket } from "../lib/useWebSocket";
 
 function useRequiredNumber(param?: string): number | null {
@@ -81,6 +82,7 @@ export default function ChatPage() {
   const params = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { isShelfOpen, closeShelf } = useShelf();
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const agentId = useRequiredNumber(params.agentId);
@@ -579,7 +581,7 @@ export default function ChatPage() {
       </header>
 
       <div className="chat-body">
-        <aside className="thread-sidebar">
+        <aside className={clsx("thread-sidebar", { active: isShelfOpen })}>
           <div className="sidebar-header">
             <h3>Threads</h3>
             <button
@@ -724,6 +726,12 @@ export default function ChatPage() {
           </div>
         </section>
       </div>
+
+      {/* Scrim overlay when thread sidebar is open on mobile */}
+      <div
+        className={clsx("thread-scrim", { "thread-scrim--visible": isShelfOpen })}
+        onClick={closeShelf}
+      />
 
       {/* Enhanced Chat Input Area */}
       <div className="chat-input-wrapper">

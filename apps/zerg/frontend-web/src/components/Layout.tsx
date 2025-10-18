@@ -2,6 +2,7 @@ import clsx from "clsx";
 import type { PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import "../styles/layout.css";
 import { MenuIcon } from "./icons";
@@ -15,6 +16,7 @@ const STATUS_ITEMS = [
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
+  const { isShelfOpen, toggleShelf } = useShelf();
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {
@@ -52,11 +54,8 @@ function WelcomeHeader() {
         id="shelf-toggle-btn"
         aria-label="Open agent panel"
         aria-controls="agent-shelf"
-        aria-expanded="false"
-        onClick={() => {
-          // TODO: Implement shelf toggle functionality
-          console.log("Shelf toggle clicked - not implemented yet");
-        }}
+        aria-expanded={isShelfOpen}
+        onClick={toggleShelf}
       >
         <MenuIcon />
       </button>

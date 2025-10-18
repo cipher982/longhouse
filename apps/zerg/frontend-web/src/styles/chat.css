@@ -68,7 +68,7 @@
     background-color: var(--bg-darker);
     border-bottom: 1px solid var(--border-color);
     height: 70px;
-    margin-top: 70px;
+    /* margin-top removed: grid layout provides header spacing */
 }
 
 .back-button {
@@ -517,4 +517,26 @@
     .messages-container {
         padding: 15px;
     }
+}
+
+/* Thread sidebar scrim overlay (mobile) */
+.thread-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+  z-index: 5;  /* Below thread-sidebar (z-index not set, but above content) */
+  display: none;
+}
+
+.thread-scrim--visible {
+  opacity: 1;
+  pointer-events: auto;
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .thread-scrim { display: block; }
 }
