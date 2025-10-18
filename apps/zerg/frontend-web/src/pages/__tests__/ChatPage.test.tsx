@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatPage from "../ChatPage";
+import { ShelfProvider } from "../../lib/useShelfState";
 import type { Thread, ThreadMessage } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
@@ -42,11 +43,13 @@ function renderChatPage(initialEntry = "/chat/1/42") {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/chat/:agentId/:threadId" element={<ChatPage />} />
-        </Routes>
-      </MemoryRouter>
+      <ShelfProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/chat/:agentId/:threadId" element={<ChatPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ShelfProvider>
     </QueryClientProvider>
   );
 }
