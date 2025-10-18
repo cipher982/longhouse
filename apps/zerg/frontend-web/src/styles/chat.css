@@ -527,7 +527,7 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity 200ms ease;
-  z-index: 5;  /* Below thread-sidebar (z-index not set, but above content) */
+  z-index: 100;  /* Above chat input (z-index: 5) and all content */
   display: none;
 }
 
