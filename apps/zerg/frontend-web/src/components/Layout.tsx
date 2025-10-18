@@ -17,6 +17,12 @@ const STATUS_ITEMS = [
 function WelcomeHeader() {
   const { user, logout } = useAuth();
   const { isShelfOpen, toggleShelf } = useShelf();
+  const location = useLocation();
+
+  // Only show shelf toggle on routes that have drawer UI
+  const shouldShowShelfToggle =
+    location.pathname.startsWith("/canvas") ||
+    location.pathname.startsWith("/chat");
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {
@@ -50,15 +56,17 @@ function WelcomeHeader() {
 
   return (
     <header className="header" data-testid="welcome-header">
-      <button
-        id="shelf-toggle-btn"
-        aria-label="Open agent panel"
-        aria-controls="agent-shelf"
-        aria-expanded={isShelfOpen}
-        onClick={toggleShelf}
-      >
-        <MenuIcon />
-      </button>
+      {shouldShowShelfToggle && (
+        <button
+          id="shelf-toggle-btn"
+          aria-label="Open agent panel"
+          aria-controls="agent-shelf"
+          aria-expanded={isShelfOpen}
+          onClick={toggleShelf}
+        >
+          <MenuIcon />
+        </button>
+      )}
       <h1 id="header-title">AI Agent Platform</h1>
       <div className="user-menu-container">
         <div
