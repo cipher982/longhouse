@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket } from "../lib/useWebSocket";
+import { usePointerDrag, type DragData } from "../hooks/usePointerDrag";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -189,6 +190,9 @@ function CanvasPageContent() {
   const initialFitDoneRef = useRef<boolean>(false);
   const toastIdRef = useRef<string | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Pointer/touch drag handler (cross-platform support)
+  const { startDrag, updateDragPosition, endDrag, getDragData, isDragging: isPointerDragging } = usePointerDrag();
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
@@ -538,12 +542,56 @@ function CanvasPageContent() {
     document.addEventListener("dragend", handleDragEnd);
     document.addEventListener("drop", handleDragEnd);
 
+    // Pointer event handlers for touch/mouse drag (cross-platform)
+    const handlePointerMove = (e: PointerEvent) => {
+      updateDragPosition(e);
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      const dragData = getDragData();
+      if (dragData) {
+        // Convert screen coords to canvas coords
+        const pos = reactFlowInstance.screenToFlowPosition({
+          x: e.clientX,
+          y: e.clientY,
+        });
+
+        // Create node based on drag data type
+        if (dragData.type === 'agent') {
+          const agentId = parseInt(dragData.id || '0', 10);
+          if (!agentId) return;
+
+          const newNode: FlowNode = {
+            id: `agent-${Date.now()}`,
+            data: { agent_id: agentId },
+            position: pos,
+            type: 'agent',
+          };
+          setNodes((nds) => [...nds, newNode]);
+        } else if (dragData.type === 'tool') {
+          const newNode: FlowNode = {
+            id: `tool-${Date.now()}`,
+            data: { tool_type: dragData.tool_type },
+            position: pos,
+            type: 'tool',
+          };
+          setNodes((nds) => [...nds, newNode]);
+        }
+      }
+      endDrag(e);
+    };
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", handlePointerUp);
+
     return () => {
       document.removeEventListener("dragover", handleDragOver);
       document.removeEventListener("dragend", handleDragEnd);
       document.removeEventListener("drop", handleDragEnd);
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom]);
+  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom, getDragData, updateDragPosition, endDrag, setNodes]);
 
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
@@ -943,6 +991,16 @@ function CanvasPageContent() {
                         event.currentTarget.setAttribute('aria-grabbed', 'false');
                       }
                     }}
+                    onPointerDown={(event) => {
+                      if (event.isPrimary) {
+                        startDrag(event as unknown as React.PointerEvent, {
+                          type: 'agent',
+                          id: agent.id.toString(),
+                          name: agent.name
+                        });
+                        event.currentTarget.setAttribute('aria-grabbed', 'true');
+                      }
+                    }}
                   >
                     <div className="agent-icon">🤖</div>
                     <div className="agent-name">{agent.name}</div>
@@ -989,6 +1047,16 @@ function CanvasPageContent() {
                     onDragEnd={(event) => {
                       if (event.currentTarget instanceof HTMLElement) {
                         event.currentTarget.setAttribute('aria-grabbed', 'false');
+                      }
+                    }}
+                    onPointerDown={(event) => {
+                      if (event.isPrimary) {
+                        startDrag(event as unknown as React.PointerEvent, {
+                          type: 'tool',
+                          name: tool.name,
+                          tool_type: tool.type
+                        });
+                        event.currentTarget.setAttribute('aria-grabbed', 'true');
                       }
                     }}
                   >
