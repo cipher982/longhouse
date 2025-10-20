@@ -1238,14 +1238,6 @@ function CanvasPageContent() {
       <div
         className={clsx("shelf-scrim", { "shelf-scrim--visible": isShelfOpen })}
       />
-      {/* Tap-catcher layer for mobile (sits above scrim, allows closing shelf) */}
-      {isShelfOpen && (
-        <div
-          className="shelf-scrim-tap-catcher"
-          onClick={closeShelf}
-          aria-label="Close shelf"
-        />
-      )}
     </>
   );
 }

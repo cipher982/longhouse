@@ -34,6 +34,10 @@ const SHELF_STORAGE_KEY = 'zerg:shelf-state';
 export function ShelfProvider({ children }: { children: ReactNode }) {
   // Initialize from localStorage, default to false
   const [isShelfOpen, setIsShelfOpen] = useState(() => {
+    // Guard against SSR/Node environments where localStorage doesn't exist
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return false;
+    }
     try {
       const stored = localStorage.getItem(SHELF_STORAGE_KEY);
       return stored ? JSON.parse(stored) : false;
@@ -44,11 +48,33 @@ export function ShelfProvider({ children }: { children: ReactNode }) {
 
   // Persist state to localStorage whenever it changes
   useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(SHELF_STORAGE_KEY, JSON.stringify(isShelfOpen));
     } catch (error) {
       console.warn('Failed to persist shelf state:', error);
     }
+  }, [isShelfOpen]);
+
+  // Close shelf when clicking outside on mobile (click-outside pattern)
+  useEffect(() => {
+    if (!isShelfOpen) return;
+
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      const shelfElement = document.getElementById('agent-shelf');
+      const target = event.target as Node;
+
+      // Close shelf if click is outside the shelf element
+      if (shelfElement && !shelfElement.contains(target)) {
+        setIsShelfOpen(false);
+      }
+    };
+
+    // Use capture phase to intercept clicks early
+    document.addEventListener('click', handleClickOutside, true);
+    return () => {
+      document.removeEventListener('click', handleClickOutside, true);
+    };
   }, [isShelfOpen]);
 
   const toggleShelf = () => setIsShelfOpen((prev: boolean) => !prev);

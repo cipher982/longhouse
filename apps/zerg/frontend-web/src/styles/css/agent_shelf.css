@@ -346,22 +346,6 @@
   display: block;
 }
 
-/* Tap-catcher layer for closing shelf on mobile (appears only on mobile, above canvas) */
-.shelf-scrim-tap-catcher {
-  display: none;
-}
-
-@media (max-width: 767px) {
-  .shelf-scrim-tap-catcher {
-    display: block;
-    position: fixed;
-    inset: 0;
-    pointer-events: auto; /* ONLY this layer catches clicks */
-    cursor: pointer;
-    z-index: 1499; /* below shelf (1500), above scrim (1400), above canvas */
-  }
-}
-
 /* Legacy: keep body.shelf-open support for backward compatibility */
 body.shelf-open .shelf-scrim {
   opacity: 1;
