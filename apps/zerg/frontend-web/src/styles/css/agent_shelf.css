@@ -333,7 +333,7 @@
   inset: 0;
   background: rgba(0,0,0,0.35);
   opacity: 0;
-  pointer-events: none;
+  pointer-events: none; /* CRITICAL: stays none to allow canvas drops */
   transition: opacity 200ms ease;
   z-index: 1400; /* below shelf (1500), above content */
   display: none; /* only used on mobile */
@@ -342,14 +342,30 @@
 /* Activate scrim when shelf is open (via React state) */
 .shelf-scrim--visible {
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none; /* IMPORTANT: keeps none to not block drag/drop on canvas */
   display: block;
+}
+
+/* Tap-catcher layer for closing shelf on mobile (appears only on mobile, above canvas) */
+.shelf-scrim-tap-catcher {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .shelf-scrim-tap-catcher {
+    display: block;
+    position: fixed;
+    inset: 0;
+    pointer-events: auto; /* ONLY this layer catches clicks */
+    cursor: pointer;
+    z-index: 1499; /* below shelf (1500), above scrim (1400), above canvas */
+  }
 }
 
 /* Legacy: keep body.shelf-open support for backward compatibility */
 body.shelf-open .shelf-scrim {
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none; /* stays none now */
 }
 
 /* Disable animations for users who prefer reduced motion */

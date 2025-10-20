@@ -1234,11 +1234,18 @@ function CanvasPageContent() {
         </div>
       )}
 
-      {/* Scrim overlay when shelf is open on mobile */}
+      {/* Scrim overlay (decorative, pointer-events: none to allow drag/drop) */}
       <div
         className={clsx("shelf-scrim", { "shelf-scrim--visible": isShelfOpen })}
-        onClick={closeShelf}
       />
+      {/* Tap-catcher layer for mobile (sits above scrim, allows closing shelf) */}
+      {isShelfOpen && (
+        <div
+          className="shelf-scrim-tap-catcher"
+          onClick={closeShelf}
+          aria-label="Close shelf"
+        />
+      )}
     </>
   );
 }
