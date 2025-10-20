@@ -133,6 +133,7 @@
     align-items: center;
     font-weight: 500;
     user-select: none;
+    touch-action: none; /* CRITICAL: Prevent browser default pan/zoom when dragging on mobile */
 }
 
 .tool-palette-item:hover {
@@ -248,6 +249,7 @@
     display: flex; /* Added for alignment */
     align-items: center; /* Added for vertical centering */
     font-weight: 500; /* Increased font weight for better visibility */
+    touch-action: none; /* CRITICAL: Prevent browser default pan/zoom when dragging on mobile */
 }
 
 .agent-pill::before {

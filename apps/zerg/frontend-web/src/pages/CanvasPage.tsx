@@ -392,6 +392,10 @@ function CanvasPageContent() {
 
   const beginAgentDrag = useCallback(
     (event: React.DragEvent, agent: DraggableAgent) => {
+      // Prevent event from bubbling to canvas (stops unwanted pan/zoom on mobile)
+      event.stopPropagation();
+      event.preventDefault();
+
       event.dataTransfer.setData("agent-id", String(agent.id));
       event.dataTransfer.setData("agent-name", agent.name);
       event.dataTransfer.effectAllowed = "move";
@@ -446,6 +450,10 @@ function CanvasPageContent() {
 
   const beginToolDrag = useCallback(
     (event: React.DragEvent, tool: DraggableTool) => {
+      // Prevent event from bubbling to canvas (stops unwanted pan/zoom on mobile)
+      event.stopPropagation();
+      event.preventDefault();
+
       event.dataTransfer.setData("tool-type", tool.type);
       event.dataTransfer.setData("tool-name", tool.name);
       event.dataTransfer.effectAllowed = "move";
