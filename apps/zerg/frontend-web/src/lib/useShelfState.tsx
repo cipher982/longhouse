@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 
 /**
  * Shared mobile drawer state for Canvas agent shelf and Chat thread sidebar.
@@ -29,10 +29,29 @@ interface ShelfContextType {
 
 export const ShelfContext = createContext<ShelfContextType | null>(null);
 
-export function ShelfProvider({ children }: { children: ReactNode }) {
-  const [isShelfOpen, setIsShelfOpen] = useState(false);
+const SHELF_STORAGE_KEY = 'zerg:shelf-state';
 
-  const toggleShelf = () => setIsShelfOpen(prev => !prev);
+export function ShelfProvider({ children }: { children: ReactNode }) {
+  // Initialize from localStorage, default to false
+  const [isShelfOpen, setIsShelfOpen] = useState(() => {
+    try {
+      const stored = localStorage.getItem(SHELF_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : false;
+    } catch {
+      return false; // Fallback on storage error
+    }
+  });
+
+  // Persist state to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem(SHELF_STORAGE_KEY, JSON.stringify(isShelfOpen));
+    } catch (error) {
+      console.warn('Failed to persist shelf state:', error);
+    }
+  }, [isShelfOpen]);
+
+  const toggleShelf = () => setIsShelfOpen((prev: boolean) => !prev);
   const closeShelf = () => setIsShelfOpen(false);
 
   return (
