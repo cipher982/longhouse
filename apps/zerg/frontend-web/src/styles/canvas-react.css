@@ -65,42 +65,9 @@
   }
 }
 
-/* Agent Shelf Items - match Rust styling */
-.agent-shelf-item {
-  cursor: grab;
-  margin-bottom: 10px;
-  padding: 12px 14px;
-  background: linear-gradient(135deg, #2e2e3e 0%, #2a2a3a 100%);
-  border: 1px solid #3d3d5c;
-  border-radius: var(--radius-lg, 8px);
-  font-size: 14px;
-  color: #e0e0e0;
-  transition: all 0.2s ease;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  user-select: none;
-}
-
-.agent-shelf-item:hover {
-  background: linear-gradient(135deg, #3a3a4a 0%, #363646 100%);
-  border-color: #4d4d6c;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-}
-
-.agent-shelf-item .agent-icon {
-  font-size: 16px;
-  margin-right: 8px;
-  opacity: 0.7;
-}
-
-.agent-shelf-item .agent-name {
-  flex: 1;
-}
+/* Agent Shelf Items - consolidated into agent_shelf.css to avoid duplication
+   See: src/styles/css/agent_shelf.css (agent-pill styles)
+   Removed: 34 lines of duplicate styling */
 
 /* Custom Node Styles to match Rust implementation */
 .agent-node {
@@ -273,9 +240,8 @@
 }
 
 /* Agent shelf layout */
-#agent-shelf {
-  z-index: 10; /* Ensure they appear above React Flow */
-}
+/* #agent-shelf styling consolidated into agent_shelf.css (canonical source)
+   See: src/styles/css/agent_shelf.css for all shelf-related styles */
 
 /* Override React Flow edge styles */
 .react-flow__edge-path {
