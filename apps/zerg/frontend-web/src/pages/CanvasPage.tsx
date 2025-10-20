@@ -510,6 +510,7 @@ function CanvasPageContent() {
     [reactFlowInstance, resolveToolIcon, setIsDragActive, transparentDragImage, zoom]
   );
 
+  // Effect 1: HTML5 drag preview (desktop drag, depends on dragPreviewData)
   useEffect(() => {
     if (!dragPreviewData) {
       return;
@@ -542,7 +543,16 @@ function CanvasPageContent() {
     document.addEventListener("dragend", handleDragEnd);
     document.addEventListener("drop", handleDragEnd);
 
-    // Pointer event handlers for touch/mouse drag (cross-platform)
+    return () => {
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("dragend", handleDragEnd);
+      document.removeEventListener("drop", handleDragEnd);
+    };
+  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom]);
+
+  // Effect 2: Pointer event handlers for touch/mouse drag (independent of HTML5 preview)
+  // CRITICAL: This must mount regardless of dragPreviewData state
+  useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
       updateDragPosition(e);
     };
@@ -585,13 +595,10 @@ function CanvasPageContent() {
     document.addEventListener("pointerup", handlePointerUp);
 
     return () => {
-      document.removeEventListener("dragover", handleDragOver);
-      document.removeEventListener("dragend", handleDragEnd);
-      document.removeEventListener("drop", handleDragEnd);
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom, getDragData, updateDragPosition, endDrag, setNodes]);
+  }, [reactFlowInstance, getDragData, updateDragPosition, endDrag, setNodes]);
 
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
