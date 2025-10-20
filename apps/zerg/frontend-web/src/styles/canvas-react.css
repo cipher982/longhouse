@@ -717,3 +717,69 @@
     font-size: 13px;
   }
 }
+
+/* ========== ACCESSIBILITY: PREFERS-REDUCED-MOTION ========== */
+/* Respect user preference for reduced motion (WCAG 2.1 criterion 2.3.3) */
+
+@media (prefers-reduced-motion: reduce) {
+  /* Disable all animations and transitions */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  /* Specific canvas elements */
+  .execution-logs-drawer {
+    animation: none !important;
+  }
+
+  .canvas-save-banner {
+    animation: none !important;
+  }
+
+  .execution-status--running {
+    animation: none !important;
+  }
+
+  .execution-controls,
+  .canvas-toggle-btn,
+  .react-flow__controls-button,
+  .run-button,
+  .cancel-button,
+  .logs-button,
+  .agent-pill,
+  .tool-palette-item,
+  .react-flow__edge,
+  .react-flow__node {
+    transition: none !important;
+  }
+
+  /* Preserve hover/focus visual states without animation */
+  .agent-pill:hover {
+    transform: none !important;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  }
+
+  .tool-palette-item:hover {
+    transform: none !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .run-button:hover:not(:disabled) {
+    transform: none !important;
+    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+  }
+
+  .cancel-button:hover:not(:disabled) {
+    transform: none !important;
+    box-shadow: 0 4px 8px rgba(239, 68, 68, 0.3);
+  }
+
+  /* Remove transforms that create motion */
+  .agent-shelf-item:hover {
+    transform: none !important;
+  }
+}
