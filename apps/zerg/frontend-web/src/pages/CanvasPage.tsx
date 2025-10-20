@@ -573,22 +573,29 @@ function CanvasPageContent() {
 
           const newNode: FlowNode = {
             id: `agent-${Date.now()}`,
-            data: { agent_id: agentId },
-            position: pos,
             type: 'agent',
+            position: pos,
+            data: {
+              label: dragData.name,      // Include label for node display
+              agentId: agentId,
+            },
           };
           setNodes((nds) => [...nds, newNode]);
         } else if (dragData.type === 'tool') {
           const newNode: FlowNode = {
             id: `tool-${Date.now()}`,
-            data: { tool_type: dragData.tool_type },
-            position: pos,
             type: 'tool',
+            position: pos,
+            data: {
+              label: dragData.name,      // Include label for node display
+              toolType: dragData.tool_type,
+            },
           };
           setNodes((nds) => [...nds, newNode]);
         }
       }
       endDrag(e);
+      resetDragPreview(); // Clear visual preview
     };
 
     document.addEventListener("pointermove", handlePointerMove);
@@ -598,7 +605,7 @@ function CanvasPageContent() {
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [reactFlowInstance, getDragData, updateDragPosition, endDrag, setNodes]);
+  }, [reactFlowInstance, getDragData, updateDragPosition, endDrag, setNodes, resetDragPreview]);
 
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
@@ -1000,16 +1007,34 @@ function CanvasPageContent() {
                     }}
                     onPointerDown={(event) => {
                       if (event.isPrimary) {
+                        // Start pointer drag tracking
                         startDrag(event as unknown as React.PointerEvent, {
                           type: 'agent',
                           id: agent.id.toString(),
                           name: agent.name
                         });
+
+                        // Set drag preview data for visual feedback
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const pointerOffsetX = event.clientX - rect.left;
+                        const pointerOffsetY = event.clientY - rect.top;
+                        setDragPreviewData({
+                          kind: 'agent',
+                          label: agent.name,
+                          icon: '🤖',
+                          baseSize: { width: rect.width || 160, height: rect.height || 48 },
+                          pointerRatio: {
+                            x: rect.width ? pointerOffsetX / rect.width : 0,
+                            y: rect.height ? pointerOffsetY / rect.height : 0
+                          },
+                          agentId: agent.id,
+                        });
+
                         event.currentTarget.setAttribute('aria-grabbed', 'true');
                       }
                     }}
                   >
-                    <div className="agent-icon">🤖</div>
+                    {/* Icon added via CSS ::before pseudo-element */}
                     <div className="agent-name">{agent.name}</div>
                   </div>
                 ))}
@@ -1058,11 +1083,29 @@ function CanvasPageContent() {
                     }}
                     onPointerDown={(event) => {
                       if (event.isPrimary) {
+                        // Start pointer drag tracking
                         startDrag(event as unknown as React.PointerEvent, {
                           type: 'tool',
                           name: tool.name,
                           tool_type: tool.type
                         });
+
+                        // Set drag preview data for visual feedback
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const pointerOffsetX = event.clientX - rect.left;
+                        const pointerOffsetY = event.clientY - rect.top;
+                        setDragPreviewData({
+                          kind: 'tool',
+                          label: tool.name,
+                          icon: tool.icon,
+                          baseSize: { width: rect.width || 160, height: rect.height || 48 },
+                          pointerRatio: {
+                            x: rect.width ? pointerOffsetX / rect.width : 0,
+                            y: rect.height ? pointerOffsetY / rect.height : 0
+                          },
+                          toolType: tool.type,
+                        });
+
                         event.currentTarget.setAttribute('aria-grabbed', 'true');
                       }
                     }}
