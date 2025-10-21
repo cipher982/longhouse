@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket } from "../lib/useWebSocket";
-import { usePointerDrag, type DragData } from "../hooks/usePointerDrag";
+import { usePointerDrag } from "../hooks/usePointerDrag";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -178,7 +178,7 @@ async function hashWorkflow(data: WorkflowDataInput): Promise<string> {
 
 function CanvasPageContent() {
   const queryClient = useQueryClient();
-  const { isShelfOpen, closeShelf } = useShelf();
+  const { isShelfOpen } = useShelf();
   const reactFlowInstance = useReactFlow();
   const zoom = useStore((state) => state.transform[2]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
@@ -192,7 +192,7 @@ function CanvasPageContent() {
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Pointer/touch drag handler (cross-platform support)
-  const { startDrag, updateDragPosition, endDrag, getDragData, isDragging: isPointerDragging } = usePointerDrag();
+  const { startDrag, updateDragPosition, endDrag, getDragData } = usePointerDrag();
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
@@ -213,6 +213,103 @@ function CanvasPageContent() {
     setDragPreviewData(null);
     setDragPreviewPosition(null);
   }, []);
+
+  const updatePreviewPositionFromClientPoint = useCallback(
+    (clientPoint: { x: number; y: number }, overridePreview?: DragPreviewData | null) => {
+      const preview = overridePreview ?? dragPreviewData;
+      if (!preview) {
+        return;
+      }
+
+      if (!Number.isFinite(clientPoint.x) || !Number.isFinite(clientPoint.y)) {
+        return;
+      }
+
+      const baseWidth = preview.baseSize.width || 1;
+      const baseHeight = preview.baseSize.height || 1;
+      const offsetX = baseWidth * zoom * preview.pointerRatio.x;
+      const offsetY = baseHeight * zoom * preview.pointerRatio.y;
+      const flowPosition = reactFlowInstance.screenToFlowPosition({
+        x: clientPoint.x - offsetX,
+        y: clientPoint.y - offsetY,
+      });
+      setDragPreviewPosition(flowPosition);
+    },
+    [dragPreviewData, reactFlowInstance, zoom]
+  );
+
+  type DropPayload =
+    | { type: "agent"; agentId: number; label: string }
+    | { type: "tool"; toolType: string; label: string };
+
+  const toDropPayload = useCallback(
+    (raw: { type: "agent" | "tool"; id?: string; name: string; tool_type?: string }): DropPayload | null => {
+      if (!raw?.type || !raw.name) {
+        return null;
+      }
+
+      if (raw.type === "agent") {
+        const agentId = parseInt(raw.id ?? "", 10);
+        if (!agentId) {
+          return null;
+        }
+        return { type: "agent", agentId, label: raw.name };
+      }
+
+      if (raw.type === "tool") {
+        if (typeof raw.tool_type !== "string" || raw.tool_type.length === 0) {
+          return null;
+        }
+        return { type: "tool", toolType: raw.tool_type, label: raw.name };
+      }
+
+      return null;
+    },
+    []
+  );
+
+  const finalizeDrop = useCallback(
+    (clientPoint: { x: number; y: number }, payload: DropPayload) => {
+      const preview = dragPreviewData;
+      const pointerAdjustment = preview
+        ? {
+            x: (preview.baseSize.width || 0) * zoom * preview.pointerRatio.x,
+            y: (preview.baseSize.height || 0) * zoom * preview.pointerRatio.y,
+          }
+        : { x: 0, y: 0 };
+
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: clientPoint.x - pointerAdjustment.x,
+        y: clientPoint.y - pointerAdjustment.y,
+      });
+
+      const newNode: FlowNode =
+        payload.type === "agent"
+          ? {
+              id: `agent-${Date.now()}`,
+              type: "agent",
+              position,
+              data: {
+                label: payload.label,
+                agentId: payload.agentId,
+              },
+            }
+          : {
+              id: `tool-${Date.now()}`,
+              type: "tool",
+              position,
+              data: {
+                label: payload.label,
+                toolType: payload.toolType,
+              },
+            };
+
+      setNodes((nodes) => [...nodes, newNode]);
+      setIsDragActive(false);
+      resetDragPreview();
+    },
+    [dragPreviewData, reactFlowInstance, resetDragPreview, setNodes, zoom]
+  );
 
   const [searchTerm, setSearchTerm] = useState("");
   const [collapsedSections, setCollapsedSections] = useState<Record<ShelfSection, boolean>>(() => {
@@ -398,7 +495,7 @@ function CanvasPageContent() {
     (event: React.DragEvent, agent: DraggableAgent) => {
       // Prevent event from bubbling to canvas (stops unwanted pan/zoom on mobile)
       event.stopPropagation();
-      event.preventDefault();
+      // NOTE: Do NOT call preventDefault() - it cancels HTML5 drag on desktop
 
       event.dataTransfer.setData("agent-id", String(agent.id));
       event.dataTransfer.setData("agent-name", agent.name);
@@ -415,48 +512,38 @@ function CanvasPageContent() {
         const pointerOffsetY = clientY - rect.top;
         const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
         const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
-        setDragPreviewData({
+        const preview: DragPreviewData = {
           kind: "agent",
           label: agent.name,
           icon: "🤖",
           baseSize: { width: rect.width || 160, height: rect.height || 48 },
           pointerRatio: { x: pointerRatioX, y: pointerRatioY },
           agentId: agent.id,
-        });
-        if (clientX !== 0 || clientY !== 0) {
-          const baseWidth = rect.width || 160;
-          const baseHeight = rect.height || 48;
-          const offsetX = baseWidth * zoom * pointerRatioX;
-          const offsetY = baseHeight * zoom * pointerRatioY;
-          const initialPosition = reactFlowInstance.screenToFlowPosition({
-            x: clientX - offsetX,
-            y: clientY - offsetY,
-          });
-          setDragPreviewPosition(initialPosition);
-        } else {
-          setDragPreviewPosition(null);
-        }
+        };
+        setDragPreviewData(preview);
+        updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
       } else {
-        setDragPreviewData({
+        const preview: DragPreviewData = {
           kind: "agent",
           label: agent.name,
           icon: "🤖",
           baseSize: { width: 160, height: 48 },
           pointerRatio: { x: 0, y: 0 },
           agentId: agent.id,
-        });
-        setDragPreviewPosition(null);
+        };
+        setDragPreviewData(preview);
+        updatePreviewPositionFromClientPoint({ x: event.clientX ?? 0, y: event.clientY ?? 0 }, preview);
       }
       setIsDragActive(true);
     },
-    [reactFlowInstance, setIsDragActive, transparentDragImage, zoom]
+    [setIsDragActive, transparentDragImage, updatePreviewPositionFromClientPoint]
   );
 
   const beginToolDrag = useCallback(
     (event: React.DragEvent, tool: DraggableTool) => {
       // Prevent event from bubbling to canvas (stops unwanted pan/zoom on mobile)
       event.stopPropagation();
-      event.preventDefault();
+      // NOTE: Do NOT call preventDefault() - it cancels HTML5 drag on desktop
 
       event.dataTransfer.setData("tool-type", tool.type);
       event.dataTransfer.setData("tool-name", tool.name);
@@ -473,41 +560,31 @@ function CanvasPageContent() {
         const pointerOffsetY = clientY - rect.top;
         const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
         const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
-        setDragPreviewData({
+        const preview: DragPreviewData = {
           kind: "tool",
           label: tool.name,
           icon: resolveToolIcon(tool.type),
           baseSize: { width: rect.width || 160, height: rect.height || 48 },
           pointerRatio: { x: pointerRatioX, y: pointerRatioY },
           toolType: tool.type,
-        });
-        if (clientX !== 0 || clientY !== 0) {
-          const baseWidth = rect.width || 160;
-          const baseHeight = rect.height || 48;
-          const offsetX = baseWidth * zoom * pointerRatioX;
-          const offsetY = baseHeight * zoom * pointerRatioY;
-          const initialPosition = reactFlowInstance.screenToFlowPosition({
-            x: clientX - offsetX,
-            y: clientY - offsetY,
-          });
-          setDragPreviewPosition(initialPosition);
-        } else {
-          setDragPreviewPosition(null);
-        }
+        };
+        setDragPreviewData(preview);
+        updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
       } else {
-        setDragPreviewData({
+        const preview: DragPreviewData = {
           kind: "tool",
           label: tool.name,
           icon: resolveToolIcon(tool.type),
           baseSize: { width: 160, height: 48 },
           pointerRatio: { x: 0, y: 0 },
           toolType: tool.type,
-        });
-        setDragPreviewPosition(null);
+        };
+        setDragPreviewData(preview);
+        updatePreviewPositionFromClientPoint({ x: event.clientX ?? 0, y: event.clientY ?? 0 }, preview);
       }
       setIsDragActive(true);
     },
-    [reactFlowInstance, resolveToolIcon, setIsDragActive, transparentDragImage, zoom]
+    [resolveToolIcon, setIsDragActive, transparentDragImage, updatePreviewPositionFromClientPoint]
   );
 
   // Effect 1: HTML5 drag preview (desktop drag, depends on dragPreviewData)
@@ -517,22 +594,8 @@ function CanvasPageContent() {
     }
 
     const handleDragOver = (event: DragEvent) => {
-      if (!dragPreviewData) {
-        return;
-      }
       event.preventDefault();
-      if (event.clientX === 0 && event.clientY === 0) {
-        return;
-      }
-      const baseWidth = dragPreviewData.baseSize.width || 1;
-      const baseHeight = dragPreviewData.baseSize.height || 1;
-      const offsetX = baseWidth * zoom * dragPreviewData.pointerRatio.x;
-      const offsetY = baseHeight * zoom * dragPreviewData.pointerRatio.y;
-      const flowPosition = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX - offsetX,
-        y: event.clientY - offsetY,
-      });
-      setDragPreviewPosition(flowPosition);
+      updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY });
     };
 
     const handleDragEnd = () => {
@@ -548,64 +611,71 @@ function CanvasPageContent() {
       document.removeEventListener("dragend", handleDragEnd);
       document.removeEventListener("drop", handleDragEnd);
     };
-  }, [dragPreviewData, reactFlowInstance, resetDragPreview, zoom]);
+  }, [dragPreviewData, resetDragPreview, updatePreviewPositionFromClientPoint]);
 
-  // Effect 2: Pointer event handlers for touch/mouse drag (independent of HTML5 preview)
+  // Effect 2: Pointer event handlers for touch/pen drag (independent of HTML5 preview)
   // CRITICAL: This must mount regardless of dragPreviewData state
   useEffect(() => {
     const handlePointerMove = (e: PointerEvent) => {
       updateDragPosition(e);
+      updatePreviewPositionFromClientPoint({ x: e.clientX, y: e.clientY });
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       const dragData = getDragData();
-      if (dragData) {
-        // Convert screen coords to canvas coords
-        const pos = reactFlowInstance.screenToFlowPosition({
-          x: e.clientX,
-          y: e.clientY,
-        });
 
-        // Create node based on drag data type
-        if (dragData.type === 'agent') {
-          const agentId = parseInt(dragData.id || '0', 10);
-          if (!agentId) return;
-
-          const newNode: FlowNode = {
-            id: `agent-${Date.now()}`,
-            type: 'agent',
-            position: pos,
-            data: {
-              label: dragData.name,      // Include label for node display
-              agentId: agentId,
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        } else if (dragData.type === 'tool') {
-          const newNode: FlowNode = {
-            id: `tool-${Date.now()}`,
-            type: 'tool',
-            position: pos,
-            data: {
-              label: dragData.name,      // Include label for node display
-              toolType: dragData.tool_type,
-            },
-          };
-          setNodes((nds) => [...nds, newNode]);
-        }
+      if (!dragData) {
+        endDrag(e);
+        resetDragPreview();
+        setIsDragActive(false);
+        return;
       }
+
+      const payload = toDropPayload(dragData);
+      if (!payload) {
+        endDrag(e);
+        resetDragPreview();
+        setIsDragActive(false);
+        return;
+      }
+
+      updatePreviewPositionFromClientPoint({ x: e.clientX, y: e.clientY });
+      finalizeDrop({ x: e.clientX, y: e.clientY }, payload);
       endDrag(e);
-      resetDragPreview(); // Clear visual preview
+    };
+
+    const handlePointerCancel = (e: PointerEvent) => {
+      // Only handle if there's an active pointer drag
+      const dragData = getDragData();
+      if (!dragData) {
+        return;
+      }
+
+      // Handle interrupted drags (e.g., user switches apps, browser gesture)
+      endDrag(e);
+      resetDragPreview();
+      setIsDragActive(false);
     };
 
     document.addEventListener("pointermove", handlePointerMove);
     document.addEventListener("pointerup", handlePointerUp);
+    document.addEventListener("pointercancel", handlePointerCancel);
 
     return () => {
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
+      document.removeEventListener("pointercancel", handlePointerCancel);
     };
-  }, [reactFlowInstance, getDragData, updateDragPosition, endDrag, setNodes, resetDragPreview]);
+  }, [
+    finalizeDrop,
+    getDragData,
+    resetDragPreview,
+    setIsDragActive,
+    updateDragPosition,
+    toDropPayload,
+    endDrag,
+    updatePreviewPositionFromClientPoint,
+  ]);
 
   // Fetch agents for the shelf
   const { data: agents = [] } = useQuery<AgentSummary[]>({
@@ -861,63 +931,30 @@ function CanvasPageContent() {
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
-      setIsDragActive(false); // End drag state
 
-      // Use ReactFlow's screenToFlowPosition to properly convert screen coordinates
-      // to flow coordinates, accounting for zoom/pan transforms
-      const pointerAdjustment = dragPreviewData
-        ? {
-            x:
-              (dragPreviewData.baseSize.width || 0) *
-              zoom *
-              dragPreviewData.pointerRatio.x,
-            y:
-              (dragPreviewData.baseSize.height || 0) *
-              zoom *
-              dragPreviewData.pointerRatio.y,
-          }
-        : { x: 0, y: 0 };
-      const position = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX - pointerAdjustment.x,
-        y: event.clientY - pointerAdjustment.y,
-      });
+      const agentId = event.dataTransfer.getData("agent-id");
+      const agentName = event.dataTransfer.getData("agent-name");
+      const toolType = event.dataTransfer.getData("tool-type");
+      const toolName = event.dataTransfer.getData("tool-name");
 
-      const agentId = event.dataTransfer.getData('agent-id');
-      const agentName = event.dataTransfer.getData('agent-name');
-      const toolType = event.dataTransfer.getData('tool-type');
-      const toolName = event.dataTransfer.getData('tool-name');
+      let payload: DropPayload | null = null;
 
       if (agentId && agentName) {
-        const parsedAgentId = parseInt(agentId, 10);
-        if (Number.isNaN(parsedAgentId)) {
-          return;
-        }
-        const newNode: FlowNode = {
-          id: `agent-${Date.now()}`,
-          type: 'agent',
-          position,
-          data: {
-            label: agentName,
-            agentId: parsedAgentId,
-          },
-        };
-        setNodes((nds: FlowNode[]) => [...nds, newNode]);
+        payload = toDropPayload({ type: "agent", id: agentId, name: agentName });
       } else if (toolType && toolName) {
-        const toolIcon = resolveToolIcon(toolType);
-        const newNode: FlowNode = {
-          id: `tool-${Date.now()}`,
-          type: 'tool',
-          position,
-          data: {
-            label: toolName,
-            toolType,
-          },
-        };
-        setNodes((nds: FlowNode[]) => [...nds, newNode]);
+        payload = toDropPayload({ type: "tool", name: toolName, tool_type: toolType });
       }
-      resetDragPreview();
+
+      if (!payload) {
+        setIsDragActive(false);
+        resetDragPreview();
+        return;
+      }
+
+      updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, dragPreviewData);
+      finalizeDrop({ x: event.clientX, y: event.clientY }, payload);
     },
-    [dragPreviewData, reactFlowInstance, resolveToolIcon, resetDragPreview, setNodes, zoom]
+    [dragPreviewData, finalizeDrop, resetDragPreview, setIsDragActive, toDropPayload, updatePreviewPositionFromClientPoint]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -951,7 +988,7 @@ function CanvasPageContent() {
       document.removeEventListener('dragend', handleDragEnd);
       document.removeEventListener('drop', handleDrop);
     };
-  }, []);
+  }, [resetDragPreview]);
 
   return (
     <>
@@ -1006,7 +1043,8 @@ function CanvasPageContent() {
                       }
                     }}
                     onPointerDown={(event) => {
-                      if (event.isPrimary) {
+                      // Only use Pointer API for touch/pen; let HTML5 drag handle mouse
+                      if (event.isPrimary && event.pointerType !== 'mouse') {
                         // Start pointer drag tracking
                         startDrag(event as unknown as React.PointerEvent, {
                           type: 'agent',
@@ -1018,7 +1056,7 @@ function CanvasPageContent() {
                         const rect = event.currentTarget.getBoundingClientRect();
                         const pointerOffsetX = event.clientX - rect.left;
                         const pointerOffsetY = event.clientY - rect.top;
-                        setDragPreviewData({
+                        const preview: DragPreviewData = {
                           kind: 'agent',
                           label: agent.name,
                           icon: '🤖',
@@ -1028,7 +1066,10 @@ function CanvasPageContent() {
                             y: rect.height ? pointerOffsetY / rect.height : 0
                           },
                           agentId: agent.id,
-                        });
+                        };
+                        setDragPreviewData(preview);
+                        updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
+                        setIsDragActive(true);
 
                         event.currentTarget.setAttribute('aria-grabbed', 'true');
                       }
@@ -1082,7 +1123,8 @@ function CanvasPageContent() {
                       }
                     }}
                     onPointerDown={(event) => {
-                      if (event.isPrimary) {
+                      // Only use Pointer API for touch/pen; let HTML5 drag handle mouse
+                      if (event.isPrimary && event.pointerType !== 'mouse') {
                         // Start pointer drag tracking
                         startDrag(event as unknown as React.PointerEvent, {
                           type: 'tool',
@@ -1094,7 +1136,7 @@ function CanvasPageContent() {
                         const rect = event.currentTarget.getBoundingClientRect();
                         const pointerOffsetX = event.clientX - rect.left;
                         const pointerOffsetY = event.clientY - rect.top;
-                        setDragPreviewData({
+                        const preview: DragPreviewData = {
                           kind: 'tool',
                           label: tool.name,
                           icon: tool.icon,
@@ -1104,7 +1146,10 @@ function CanvasPageContent() {
                             y: rect.height ? pointerOffsetY / rect.height : 0
                           },
                           toolType: tool.type,
-                        });
+                        };
+                        setDragPreviewData(preview);
+                        updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
+                        setIsDragActive(true);
 
                         event.currentTarget.setAttribute('aria-grabbed', 'true');
                       }
