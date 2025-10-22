@@ -12,8 +12,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-zerg_dev}
       POSTGRES_USER: ${POSTGRES_USER:-zerg}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       # Ephemeral database - data is lost when containers stop
       # Development: expose logs  
