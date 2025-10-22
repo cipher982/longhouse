@@ -15,6 +15,7 @@ without touching agent/workflow code paths until we flip the integration flag.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass
@@ -84,12 +85,13 @@ class ContainerRunner:
 
         # Prepare mounts: optional RW bind to /workspace, read-only root
         volumes: Dict[str, dict] = {}
+        tmpdir = None  # Track temp directory for cleanup
         if read_write_mount:
             host_path = str(read_write_mount.resolve())
             volumes[host_path] = {"bind": "/workspace", "mode": "rw"}
             container_workdir = "/workspace"
         else:
-            # Provide an isolated tmpfs workspace when no host bind is provided
+            # Provide an isolated workspace when no host bind is provided
             tmpdir = tempfile.mkdtemp(prefix="zerg-run-")
             volumes[tmpdir] = {"bind": "/workspace", "mode": "rw"}
             container_workdir = "/workspace"
@@ -150,5 +152,11 @@ class ContainerRunner:
             if container is not None:
                 try:
                     container.remove(force=True)
+                except Exception:
+                    pass
+            # Clean up temporary workspace directory if it was created
+            if tmpdir is not None:
+                try:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
                 except Exception:
                     pass

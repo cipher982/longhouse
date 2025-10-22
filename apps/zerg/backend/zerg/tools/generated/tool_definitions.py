@@ -14,6 +14,7 @@ class ToolName(str, Enum):
     GET_CURRENT_TIME = "get_current_time"
     DATETIME_DIFF = "datetime_diff"
     GENERATE_UUID = "generate_uuid"
+    CONTAINER_EXEC = "container_exec"
 
 
 class ServerName(str, Enum):
@@ -23,6 +24,7 @@ class ServerName(str, Enum):
     MATH = "math"
     DATETIME = "datetime"
     UUID = "uuid"
+    CONTAINER = "container"
 
 
 # Tool to server mapping for validation
@@ -32,6 +34,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
+    ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
 }
 
 
