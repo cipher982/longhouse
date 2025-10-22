@@ -197,10 +197,8 @@ pub fn update(state: &mut AppState, msg: &Message, commands: &mut Vec<Command>) 
             })));
             true
         }
-        Message::UpdateAllowedTools {
-            agent_id,
-            allowed_tools,
-        } => {
+        Message::UpdateAllowedTools { agent_id, allowed_tools } => {
+            // Update local state first
             if let Some(config) = state.agent_mcp_configs.get_mut(agent_id) {
                 config.allowed_tools = allowed_tools.clone();
             } else {
@@ -212,6 +210,7 @@ pub fn update(state: &mut AppState, msg: &Message, commands: &mut Vec<Command>) 
                     },
                 );
             }
+
             debug_log!(
                 "UpdateAllowedTools for agent {}: {:?}",
                 agent_id,
@@ -220,6 +219,24 @@ pub fn update(state: &mut AppState, msg: &Message, commands: &mut Vec<Command>) 
                     .get(agent_id)
                     .map(|c| &c.allowed_tools)
             );
+
+            // Persist to backend via AgentUpdate.allowed_tools
+            let tools_vec: Vec<String> = allowed_tools.iter().cloned().collect();
+            let payload = serde_json::json!({
+                "allowed_tools": tools_vec,
+            })
+            .to_string();
+
+            commands.push(Command::UpdateAgent {
+                agent_id: *agent_id,
+                payload,
+                on_success: Box::new(Message::RefreshAgentsFromAPI),
+                on_error: Box::new(Message::McpError {
+                    agent_id: *agent_id,
+                    error: "Failed to save allowed tools".to_string(),
+                }),
+            });
+
             true
         }
         Message::McpServerAdded {

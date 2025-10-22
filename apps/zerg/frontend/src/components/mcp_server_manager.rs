@@ -180,6 +180,7 @@ impl MCPServerManager {
             "Date/Time (get_current_time)",
             "Math (math_eval)",
             "HTTP Requests (http_request)",
+            "Container Exec (container_exec)",
         ];
 
         for tool in &builtin_tools {
