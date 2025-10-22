@@ -238,12 +238,26 @@ class MCPToolAdapter:
                         self._tool_schemas[tool_name] = tool_spec["inputSchema"]
 
                     # Create a wrapper function for this tool
-                    _ = self._create_tool_wrapper(tool_name, tool_spec)
+                    wrapper_fn = self._create_tool_wrapper(tool_name, tool_spec)
 
-                    # MCP tool registration would go here in the new registry system.
-                    # For now, MCP tools should be added to a dynamic tool list and
-                    # included in the registry build process.
-                    # logger.info(f"Registered MCP tool: {self.tool_prefix}{tool_name}")
+                    # Register with mutable runtime registry so callers can rebuild
+                    # the immutable production registry to include these tools.
+                    try:
+                        from langchain_core.tools import StructuredTool
+                        from zerg.tools.registry import ToolRegistry
+
+                        tool = StructuredTool.from_function(
+                            wrapper_fn,
+                            name=f"{self.tool_prefix}{tool_name}",
+                            description=tool_spec.get("description", f"MCP tool {tool_name}"),
+                        )
+                        ToolRegistry().register(tool)
+                        logger.info(
+                            "Registered MCP tool: %s", f"{self.tool_prefix}{tool_name}"
+                        )
+                    except Exception as reg_err:  # noqa: BLE001
+                        logger.error("Failed to register MCP tool %s: %s", tool_name, reg_err)
+                        # Continue with others
 
             except MCPConnectionError as e:
                 logger.error(f"Failed to register MCP tools: {e}")
@@ -403,6 +417,15 @@ class MCPManager:
         # tools exposed by the MCP server.
         await adapter.register_tools()
         self._adapters[key] = adapter
+        # After successful registration, refresh immutable registry view
+        try:
+            from zerg.tools import refresh_registry
+            from zerg.tools.unified_access import reset_tool_resolver
+
+            refresh_registry()
+            reset_tool_resolver()
+        except Exception:  # pragma: no cover – best-effort refresh
+            pass
 
     async def add_server_async(self, cfg_dict: Dict[str, Any]):
         """Add a server configuration (async version)."""

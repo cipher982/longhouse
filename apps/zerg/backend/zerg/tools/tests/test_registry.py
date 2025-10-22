@@ -60,5 +60,5 @@ def test_builtin_tools_aggregation():
     names = [tool.name for tool in BUILTIN_TOOLS]
     assert len(names) == len(set(names)), "Duplicate tool names in BUILTIN_TOOLS"
     # Spot check for expected tools
-    expected = {"get_current_time", "datetime_diff", "http_request", "math_eval", "generate_uuid"}
+    expected = {"get_current_time", "datetime_diff", "http_request", "math_eval", "generate_uuid", "container_exec"}
     assert expected.issubset(set(names))

@@ -99,6 +99,16 @@ class Settings:  # noqa: D401 – simple data container
     # Jarvis integration ------------------------------------------------
     jarvis_device_secret: str | None
 
+    # Container runner settings ----------------------------------------
+    container_default_image: str | None
+    container_network_enabled: bool
+    container_user_id: str | None
+    container_memory_limit: str | None
+    container_cpus: str | None
+    container_timeout_secs: int
+    container_seccomp_profile: str | None
+    container_tools_enabled: bool
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_disabled(self) -> bool:  # noqa: D401
@@ -193,6 +203,15 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
+        # Container runner defaults
+        container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
+        container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),
+        container_user_id=os.getenv("CONTAINER_USER_ID", "65532"),
+        container_memory_limit=os.getenv("CONTAINER_MEMORY_LIMIT", "512m"),
+        container_cpus=os.getenv("CONTAINER_CPUS", "0.5"),
+        container_timeout_secs=int(os.getenv("CONTAINER_TIMEOUT_SECS", "30")),
+        container_seccomp_profile=os.getenv("CONTAINER_SECCOMP_PROFILE"),
+        container_tools_enabled=_truthy(os.getenv("CONTAINER_TOOLS_ENABLED")),
     )
 
 
