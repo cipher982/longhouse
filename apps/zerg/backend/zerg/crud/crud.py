@@ -157,6 +157,7 @@ def update_agent(
     status: Optional[str] = None,
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    allowed_tools: Optional[list] = None,
     next_run_at: Optional[datetime] = None,
     last_run_at: Optional[datetime] = None,
     last_error: Optional[str] = None,
@@ -182,6 +183,8 @@ def update_agent(
         db_agent.schedule = schedule
     if config is not None:
         db_agent.config = config
+    if allowed_tools is not None:
+        db_agent.allowed_tools = allowed_tools
     if next_run_at is not None:
         db_agent.next_run_at = next_run_at
     if last_run_at is not None:
