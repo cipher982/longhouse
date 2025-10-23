@@ -20,6 +20,8 @@ import {
 } from "../services/api";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket } from "../lib/useWebSocket";
+import { SettingsIcon } from "../components/icons";
+import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 
 function useRequiredNumber(param?: string): number | null {
   if (!param) return null;
@@ -90,6 +92,7 @@ export default function ChatPage() {
   const [selectedThreadId, setSelectedThreadId] = useState<number | null>(threadIdParam);
   const [editingThreadId, setEditingThreadId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [isSettingsDrawerOpen, setIsSettingsDrawerOpen] = useState(false);
 
   // Advanced features state
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
@@ -535,7 +538,8 @@ export default function ChatPage() {
   };
 
   return (
-    <div id="chat-view-container" className="chat-view-container">
+    <>
+      <div id="chat-view-container" className="chat-view-container">
       <header className="chat-header">
         <button
           type="button"
@@ -578,6 +582,19 @@ export default function ChatPage() {
             </span>
           </div>
         </div>
+        {agentId != null && (
+          <div className="chat-actions">
+            <button
+              type="button"
+              className="chat-settings-btn"
+              onClick={() => setIsSettingsDrawerOpen(true)}
+              title="Agent tooling settings"
+            >
+              <SettingsIcon />
+              <span>Tooling</span>
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="chat-body">
@@ -834,6 +851,14 @@ export default function ChatPage() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+      {agentId != null && (
+        <AgentSettingsDrawer
+          agentId={agentId}
+          isOpen={isSettingsDrawerOpen}
+          onClose={() => setIsSettingsDrawerOpen(false)}
+        />
+      )}
+    </>
   );
 }
