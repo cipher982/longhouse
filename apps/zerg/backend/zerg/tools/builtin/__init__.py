@@ -11,7 +11,7 @@ from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
 from zerg.tools.registry import ToolRegistry
 
-BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + UUID_TOOLS + CONTAINER_TOOLS
+BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + CONTAINER_TOOLS
 
 __all__ = [
     "BUILTIN_TOOLS",

@@ -7,6 +7,7 @@ import { AuthProvider } from "./lib/auth";
 import "./styles/legacy.css";
 import "./styles/chat.css";
 import "./styles/profile-admin.css";
+import "./styles/css/agent-settings.css";
 import App from "./routes/App";
 
 const container = document.getElementById("react-root");
