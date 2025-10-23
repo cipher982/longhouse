@@ -53,9 +53,9 @@ jarvis-dev:
 	cd apps/jarvis && $(MAKE) start
 
 zerg-dev:
-	@echo "🐝 Starting Zerg (FastAPI backend + frontend)..."
+	@echo "🐝 Starting Zerg (FastAPI backend + React frontend)..."
 	@echo "🚀 Starting development servers on ports $(ZERG_BACKEND_PORT) and $(ZERG_FRONTEND_PORT)..."
-	$(MAKE) -j2 _zerg_backend _zerg_frontend
+	$(MAKE) -j2 _zerg_backend _zerg_frontend_react
 
 swarm-dev:
 	@echo "🌐 Starting FULL SWARM (Jarvis + Zerg)..."
@@ -67,8 +67,8 @@ swarm-dev:
 _zerg_backend:
 	cd apps/zerg/backend && uv run python -m uvicorn zerg.main:app --reload --port $(ZERG_BACKEND_PORT)
 
-_zerg_frontend:
-	cd apps/zerg/frontend && ./build-debug.sh
+_zerg_frontend_react:
+	cd apps/zerg/frontend-web && npm run dev
 
 # Stop targets removed - use docker compose commands instead
 # See zerg-up/zerg-down below
@@ -90,8 +90,8 @@ test-jarvis:
 test-zerg:
 	@echo "🧪 Running Zerg tests..."
 	cd apps/zerg/backend && ./run_backend_tests.sh
-	cd apps/zerg/frontend && ./run_frontend_tests.sh
-	cd apps/zerg/e2e && ./run_e2e_tests.sh --mode=basic
+	cd apps/zerg/frontend-web && npm test
+	cd apps/zerg/e2e && npx playwright test
 
 # ---------------------------------------------------------------------------
 # SDK Generation
