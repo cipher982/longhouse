@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type {
@@ -169,5 +169,57 @@ export function useToolOptions(agentId: number | null) {
     );
     return [...builtin, ...mcpEntries];
   }, [data]);
+}
+
+/**
+ * Hook for debounced auto-save mutations.
+ * Collapses rapid consecutive calls within a debounce window (500ms).
+ * Returns the mutation handler and a boolean indicating if save is in-flight.
+ */
+export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceMs = 500) {
+  const queryClient = useQueryClient();
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingValueRef = useRef<string[] | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (allowedTools: string[] | null) => {
+      if (agentId == null) {
+        return Promise.reject(new Error("Missing agent id"));
+      }
+      return updateAgent(agentId, { allowed_tools: allowedTools ?? [] });
+    },
+    onSuccess: () => {
+      // Silent success - only show toast on manual save or error for auto-save
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+    },
+    onError: (error: Error) => {
+      toast.error(`Failed to update tools: ${error.message}`);
+    },
+  });
+
+  const debouncedMutate = (allowedTools: string[] | null) => {
+    // Store the latest value
+    pendingValueRef.current = allowedTools;
+
+    // Clear existing timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    // Set new timer
+    debounceTimerRef.current = setTimeout(() => {
+      if (pendingValueRef.current !== null) {
+        mutation.mutate(pendingValueRef.current);
+      }
+      debounceTimerRef.current = null;
+    }, debounceMs);
+  };
+
+  return {
+    mutate: debouncedMutate,
+    isPending: mutation.isPending,
+    isError: mutation.isError,
+    error: mutation.error,
+  };
 }
 
