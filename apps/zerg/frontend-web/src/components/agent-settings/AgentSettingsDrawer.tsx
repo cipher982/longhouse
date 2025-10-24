@@ -9,7 +9,7 @@ import {
   useRemoveMcpServer,
   useTestMcpServer,
   useToolOptions,
-  useUpdateAllowedTools,
+  useDebouncedUpdateAllowedTools,
 } from "../../hooks/useAgentTooling";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
 
@@ -31,7 +31,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? agentId : null);
   const { data: availableTools } = useAvailableTools(isOpen ? agentId : null);
   const toolOptions = useToolOptions(isOpen ? agentId : null) as AllowedToolOption[];
-  const updateAllowedTools = useUpdateAllowedTools(isOpen ? agentId : null);
+  const debouncedUpdateAllowedTools = useDebouncedUpdateAllowedTools(isOpen ? agentId : null);
   const addMcpServer = useAddMcpServer(isOpen ? agentId : null);
   const removeMcpServer = useRemoveMcpServer(isOpen ? agentId : null);
   const testMcpServer = useTestMcpServer(isOpen ? agentId : null);
@@ -47,6 +47,9 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const [formAllowedTools, setFormAllowedTools] = useState("");
   const [isTesting, setIsTesting] = useState(false);
 
+  // Check if there are unsaved changes in-flight for allowed tools
+  const hasUnflushedChanges = debouncedUpdateAllowedTools.isPending;
+
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -61,6 +64,14 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Warn if there are unsaved changes
+        if (hasUnflushedChanges) {
+          const confirmed = window.confirm("You have unsaved changes. Are you sure you want to close?");
+          if (!confirmed) {
+            event.preventDefault();
+            return;
+          }
+        }
         onClose();
       }
     };
@@ -68,7 +79,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, hasUnflushedChanges]);
 
   const builtinTools = useMemo(() => (availableTools ? availableTools.builtin : []), [availableTools]);
   const mcpTools = useMemo(() => availableTools?.mcp ?? {}, [availableTools]);
@@ -81,6 +92,8 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
       } else {
         next.add(tool);
       }
+      // Auto-save via debounced mutation
+      debouncedUpdateAllowedTools.mutate(Array.from(next));
       return next;
     });
   };
@@ -90,12 +103,13 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     if (!trimmed) {
       return;
     }
-    setSelectedTools((prev) => new Set(prev).add(trimmed));
+    setSelectedTools((prev) => {
+      const next = new Set(prev).add(trimmed);
+      // Auto-save via debounced mutation
+      debouncedUpdateAllowedTools.mutate(Array.from(next));
+      return next;
+    });
     setCustomTool("");
-  };
-
-  const handleSaveAllowedTools = () => {
-    updateAllowedTools.mutate(Array.from(selectedTools));
   };
 
   const resetForm = () => {
@@ -243,10 +257,19 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
         </section>
 
         <section className="agent-settings-section">
-          <h3>Allowed Tools</h3>
-          <p className="section-description">
-            Select which tools this agent can invoke. Leave empty to allow all tools. You can also add wildcard entries.
-          </p>
+          <div className="section-header">
+            <div>
+              <h3>Allowed Tools</h3>
+              <p className="section-description">
+                Select which tools this agent can invoke. Leave empty to allow all tools. You can also add wildcard entries.
+              </p>
+            </div>
+            {debouncedUpdateAllowedTools.isPending && (
+              <span className="saving-indicator" title="Saving changes…">
+                ●
+              </span>
+            )}
+          </div>
           <div className="tools-list">
             {toolOptions.map(renderToolOption)}
           </div>
@@ -259,23 +282,6 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
             />
             <button type="button" onClick={handleAddCustomTool}>
               Add
-            </button>
-          </div>
-          <div className="tool-actions">
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleSaveAllowedTools}
-              disabled={updateAllowedTools.isPending}
-            >
-              {updateAllowedTools.isPending ? "Saving…" : "Save allowlist"}
-            </button>
-            <button
-              type="button"
-              className="btn-tertiary"
-              onClick={() => setSelectedTools(new Set())}
-            >
-              Allow all tools
             </button>
           </div>
         </section>
@@ -444,11 +450,20 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
         </section>
 
         <footer className="agent-settings-footer">
-          <button type="button" className="btn-secondary" onClick={() => setShowAddForm((value) => !value)}>
-            {showAddForm ? "Hide add server form" : "Add MCP server"}
-          </button>
-          <button type="button" className="btn-primary" onClick={onClose}>
-            Done
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => {
+              if (hasUnflushedChanges) {
+                const confirmed = window.confirm("You have unsaved changes. Are you sure you want to close?");
+                if (!confirmed) {
+                  return;
+                }
+              }
+              onClose();
+            }}
+          >
+            Close
           </button>
         </footer>
       </aside>
