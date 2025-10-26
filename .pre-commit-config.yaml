@@ -110,6 +110,7 @@ repos:
         language: system
         entry: scripts/validate-asyncapi.sh
         pass_filenames: false
+        files: ^asyncapi/
 
 # ---------------------------------------------------------------------------
 # Tool contract validation – ensures tool schema matches backend registry
