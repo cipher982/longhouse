@@ -505,6 +505,27 @@ export default function ChatPage() {
     executeWorkflowMutation.mutate({ workflowId: selectedWorkflow });
   };
 
+  // Auto-create and select a default thread on component mount if none exists
+  useEffect(() => {
+    const initializeThread = async () => {
+      if (agentId == null || selectedThreadId != null || threads.length > 0) {
+        return;
+      }
+      try {
+        // Auto-create a default thread for the agent
+        const thread = await createThread(agentId, "Thread 1");
+        await queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
+        setSelectedThreadId(thread.id);
+      } catch (error) {
+        // Silently fail - user can create thread manually if needed
+      }
+    };
+
+    if (agentId != null && selectedThreadId == null && threads.length === 0) {
+      initializeThread();
+    }
+  }, [agentId, selectedThreadId, threads.length, queryClient]);
+
   // Scroll to bottom when messages change
   useEffect(() => {
     if (messagesContainerRef.current) {
@@ -526,15 +547,17 @@ export default function ChatPage() {
 
   const handleCreateThread = async () => {
     if (agentId == null) return;
-    const title = window.prompt("Thread title", "Untitled Thread") ?? "Untitled Thread";
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle) {
-      return;
+    // Auto-generate thread name based on the count of existing threads
+    const threadCount = threads.length + 1;
+    const title = `Thread ${threadCount}`;
+    try {
+      const thread = await createThread(agentId, title);
+      queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
+      setSelectedThreadId(thread.id);
+      navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
+    } catch (error) {
+      toast.error("Failed to create thread", { duration: 6000 });
     }
-    const thread = await createThread(agentId, trimmedTitle);
-    queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
-    setSelectedThreadId(thread.id);
-    navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
   };
 
   return (
