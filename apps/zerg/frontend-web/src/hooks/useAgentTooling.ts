@@ -172,10 +172,11 @@ export function useToolOptions(agentId: number | null) {
 }
 
 /**
- * Hook for debounced auto-save mutations with rollback on failure.
- * Collapses rapid consecutive calls within a debounce window (500ms).
- * Tracks last synced value for rollback on error.
- * Blocks overlapping mutations to prevent race conditions.
+ * Hook for debounced auto-save mutations with queueing and rollback.
+ * - Queues all user changes (never drops input)
+ * - Fires queued changes after current mutation completes
+ * - Collapses rapid consecutive calls within debounce window (500ms)
+ * - Tracks last synced value for rollback on error
  */
 export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceMs = 500) {
   const queryClient = useQueryClient();
@@ -194,23 +195,32 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
       // Track last successful sync as source of truth
       lastSyncedRef.current = response.allowed_tools ?? null;
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+
+      // Fire queued change if one exists
+      if (pendingValueRef.current !== null) {
+        const queued = pendingValueRef.current;
+        pendingValueRef.current = null;
+        // Schedule on next tick to avoid nested mutation calls
+        setTimeout(() => mutation.mutate(queued), 0);
+      }
     },
     onError: (error: Error) => {
       toast.error(`Failed to update tools: ${error.message}. Changes reverted.`);
       // Force refresh from server to restore correct state
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
+      // Clear pending value on error to avoid retrying bad data
+      pendingValueRef.current = null;
     },
   });
 
   const debouncedMutate = (allowedTools: string[] | null) => {
-    // Block overlapping mutations to prevent race conditions
-    if (mutation.isPending) {
-      toast("Save in progress, please wait...", { icon: "⏳" });
-      return;
-    }
-
-    // Store the latest value
+    // Always queue the latest value (never drop user input)
     pendingValueRef.current = allowedTools;
+
+    // If mutation in-flight, queued value will fire in onSuccess
+    if (mutation.isPending) {
+      return; // Silently queue, don't show toast for every change
+    }
 
     // Clear existing timer
     if (debounceTimerRef.current) {
@@ -221,9 +231,20 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
     debounceTimerRef.current = setTimeout(() => {
       if (pendingValueRef.current !== null) {
         mutation.mutate(pendingValueRef.current);
+        pendingValueRef.current = null;
       }
       debounceTimerRef.current = null;
     }, debounceMs);
+  };
+
+  const flushPending = () => {
+    // Immediately fire pending debounce
+    if (debounceTimerRef.current && pendingValueRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+      mutation.mutate(pendingValueRef.current);
+      pendingValueRef.current = null;
+    }
   };
 
   const cancelPendingDebounce = () => {
@@ -236,6 +257,7 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
 
   return {
     mutate: debouncedMutate,
+    flush: flushPending,
     cancelPending: cancelPendingDebounce,
     isPending: mutation.isPending,
     isError: mutation.isError,
