@@ -307,6 +307,7 @@ export function getToastLocator(page: Page, options?: {
 }) {
   const { type = 'any', text } = options || {};
 
+  // Build base selector without text constraint
   let baseSelector = '.toast';
   if (type === 'success') {
     baseSelector = '.toast-success, .toast'; // Fallback to .toast if type class doesn't exist
@@ -315,11 +316,16 @@ export function getToastLocator(page: Page, options?: {
     baseSelector = '.toast';
   }
 
+  // Get base locator
+  const baseLocator = page.locator(baseSelector);
+
+  // Apply text filter using .filter() to ensure it applies to ALL matched elements
+  // This avoids the comma-separated selector bug where text only applies to last branch
   if (text) {
-    return page.locator(`${baseSelector}:has-text("${text}")`);
+    return baseLocator.filter({ hasText: text });
   }
 
-  return page.locator(baseSelector);
+  return baseLocator;
 }
 
 /**
