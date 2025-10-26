@@ -141,7 +141,8 @@ validate-deploy:
 # Docker Compose - Everything together
 # ---------------------------------------------------------------------------
 zerg-up:
-	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
+	@echo "🚀 Starting Zerg platform (Dev environment with hot-reload)..."
+	@echo "   Using: docker-compose.dev.yml (development with volume mounts)"
 	docker compose -f docker-compose.dev.yml up -d --build
 	@sleep 3
 	@docker compose -f docker-compose.dev.yml ps
