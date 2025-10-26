@@ -142,10 +142,11 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
     await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
   });
 
-  test('should block overlapping mutations with mutex (race condition fix)', async ({ page }) => {
+  test('should queue changes during in-flight mutation (race condition fix)', async ({ page }) => {
     await openSettingsDrawer(page, testAgentId);
 
     const checkbox = await getFirstToolCheckbox(page);
+    const initialChecked = await checkbox.isChecked();
 
     // Toggle and immediately try another toggle
     await checkbox.click();
@@ -158,19 +159,28 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
     const isPending = await saveIndicator.isVisible();
 
     if (isPending) {
-      // Try to toggle again during in-flight mutation
+      // Toggle again during in-flight mutation (should queue silently)
       await checkbox.click();
 
-      // Should show "Save in progress" toast
-      const toast = page.locator('.toaster').getByText(/save in progress/i);
-      await expect(toast).toBeVisible({ timeout: 2000 });
+      // UI should reflect the queued change
+      await expect(checkbox).toBeChecked({ checked: initialChecked });
 
-      // Checkbox should still be in intermediate state
-      // (clicked but mutation blocked)
+      // Wait for first mutation to complete
+      await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
+
+      // Queued change should fire next
+      await expect(saveIndicator).toBeVisible({ timeout: 1000 });
+      await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
     }
 
-    // Wait for first mutation to complete
-    await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
+    // Close and reopen to verify final state persisted
+    const closeButton = page.locator('.agent-settings-footer button:has-text("Close")');
+    await closeButton.click();
+    await openSettingsDrawer(page, testAgentId);
+
+    const checkboxAfterReopen = await getFirstToolCheckbox(page);
+    // Final state should be back to initial (toggled twice)
+    await expect(checkboxAfterReopen).toBeChecked({ checked: initialChecked });
   });
 
   test('should rollback optimistic update on API error', async ({ page }) => {
@@ -315,7 +325,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
       );
     });
 
-    test('should cancel pending debounce timer on close', async ({ page }) => {
+    test('should warn about unsaved debounced changes on close', async ({ page }) => {
       await openSettingsDrawer(page, testAgentId);
 
       const checkbox = await getFirstToolCheckbox(page);
@@ -324,17 +334,54 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
       await checkbox.click();
       await page.waitForTimeout(200); // Only 200ms, debounce is 500ms
 
-      // Close immediately (should cancel pending debounce)
+      // Set up dialog handler to choose "No" (discard changes)
+      page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('unsaved changes');
+        await dialog.dismiss(); // Choose "No" (discard)
+      });
+
+      // Close (should prompt user)
       const closeButton = page.locator('.agent-settings-footer button:has-text("Close")');
       await closeButton.click();
 
-      // Drawer should close without warning (no in-flight mutation)
+      // Drawer should close (user chose to discard)
       await expect(page.locator('.agent-settings-drawer.open')).not.toBeVisible();
 
-      // Reopen and verify checkbox did NOT save (debounce was cancelled)
+      // Reopen and verify checkbox did NOT save (user discarded)
       await openSettingsDrawer(page, testAgentId);
       const checkboxAfterReopen = await getFirstToolCheckbox(page);
       await expect(checkboxAfterReopen).toBeChecked({ checked: false });
+    });
+
+    test('should flush pending debounce when user chooses to save on close', async ({ page }) => {
+      await openSettingsDrawer(page, testAgentId);
+
+      const checkbox = await getFirstToolCheckbox(page);
+
+      // Toggle to start debounce timer
+      await checkbox.click();
+      await page.waitForTimeout(200); // Only 200ms, debounce is 500ms
+
+      // Set up dialog handler to choose "Yes" (save)
+      page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('unsaved changes');
+        await dialog.accept(); // Choose "Yes" (save)
+      });
+
+      // Close (should prompt and flush)
+      const closeButton = page.locator('.agent-settings-footer button:has-text("Close")');
+      await closeButton.click();
+
+      // Drawer should close, mutation happens in background
+      await expect(page.locator('.agent-settings-drawer.open')).not.toBeVisible();
+
+      // Wait a moment for background save
+      await page.waitForTimeout(1000);
+
+      // Reopen and verify checkbox DID save (user chose to save)
+      await openSettingsDrawer(page, testAgentId);
+      const checkboxAfterReopen = await getFirstToolCheckbox(page);
+      await expect(checkboxAfterReopen).toBeChecked({ checked: true });
     });
   });
 
