@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset
+.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-rebuild zerg-down zerg-logs zerg-reset
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -24,7 +24,8 @@ help:
 	@echo "=================================="
 	@echo ""
 	@echo "Quick Start:"
-	@echo "  make zerg-up       Start EVERYTHING (Postgres + Backend + Frontend via docker-compose)"
+	@echo "  make zerg-up       Start EVERYTHING (fast, uses existing images)"
+	@echo "  make zerg-rebuild  Rebuild images (full rebuild, slower)"
 	@echo "  make zerg-down     Stop EVERYTHING"
 	@echo "  make zerg-logs     View all logs"
 	@echo "  make zerg-reset    Reset database (destroys all data)"
@@ -98,13 +99,18 @@ seed-jarvis-agents:
 zerg-up:
 	@echo "🚀 Starting Zerg platform (Dev environment with hot-reload)..."
 	@echo "   Using: docker-compose.dev.yml (development with volume mounts)"
-	docker compose -f docker-compose.dev.yml up -d --build
+	docker compose -f docker-compose.dev.yml up -d
 	@sleep 3
 	@docker compose -f docker-compose.dev.yml ps
 	@echo ""
 	@echo "✅ Platform started!"
 	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
 	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
+
+zerg-rebuild:
+	@echo "🔨 Rebuilding images (full rebuild)..."
+	docker compose -f docker-compose.dev.yml up -d --build
+	@echo "✅ Rebuild complete"
 
 zerg-down:
 	@echo "🛑 Stopping Zerg platform..."
