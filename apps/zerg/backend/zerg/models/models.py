@@ -157,7 +157,7 @@ class Agent(Base):
     # Empty/NULL means all tools are allowed. Otherwise, it's a JSON array
     # of tool names that the agent is allowed to use. Supports wildcards
     # like "http_*" to allow all HTTP tools.
-    allowed_tools = Column(MutableDict.as_mutable(JSON), nullable=True)
+    allowed_tools = Column(MutableList.as_mutable(JSON), nullable=True)
 
     # -------------------------------------------------------------------
     # Ownership – every agent belongs to *one* user (creator / owner).

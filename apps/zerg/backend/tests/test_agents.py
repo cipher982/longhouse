@@ -102,6 +102,30 @@ def test_update_agent(client: TestClient, sample_agent: Agent):
     assert fetched_agent["name"] == update_data["name"]
 
 
+def test_update_agent_allowed_tools(client: TestClient, sample_agent: Agent):
+    """Test updating agent allowed_tools field with various list formats"""
+    # Test with list of tools
+    update_data = {"allowed_tools": ["tool1", "tool2", "tool3"]}
+    response = client.put(f"/api/agents/{sample_agent.id}", json=update_data)
+    assert response.status_code == 200
+    updated_agent = response.json()
+    assert updated_agent["allowed_tools"] == ["tool1", "tool2", "tool3"]
+
+    # Test with empty list (restrict to no tools)
+    update_data = {"allowed_tools": []}
+    response = client.put(f"/api/agents/{sample_agent.id}", json=update_data)
+    assert response.status_code == 200
+    updated_agent = response.json()
+    assert updated_agent["allowed_tools"] == []
+
+    # Test with wildcards
+    update_data = {"allowed_tools": ["http_*", "mcp:github/*"]}
+    response = client.put(f"/api/agents/{sample_agent.id}", json=update_data)
+    assert response.status_code == 200
+    updated_agent = response.json()
+    assert updated_agent["allowed_tools"] == ["http_*", "mcp:github/*"]
+
+
 def test_update_agent_not_found(client: TestClient):
     """Test the PUT /api/agents/{agent_id} endpoint with a non-existent ID"""
     update_data = {"name": "This agent doesn't exist"}
