@@ -1,7 +1,18 @@
 #!/bin/bash
 # Check for meaningful WebSocket contract drift (exclude timestamp-only changes)
 
-FILES="backend/zerg/generated/ws_messages.py frontend/src/generated/ws_messages.rs frontend/src/generated/ws_handlers.rs"
+# List of files to check (only those that exist)
+FILES=""
+for file in "apps/zerg/backend/zerg/generated/ws_messages.py" "apps/zerg/frontend-web/src/generated/ws_messages.ts"; do
+  if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+    FILES="$FILES $file"
+  fi
+done
+
+# If no files to check, exit successfully
+if [ -z "$FILES" ]; then
+  exit 0
+fi
 
 # Get diff output and filter out timestamp lines
 DIFF_OUTPUT=$(git diff --ignore-space-at-eol $FILES)

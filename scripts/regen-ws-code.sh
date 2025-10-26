@@ -95,7 +95,7 @@ rm -f "$VALID_OUT"
 
 echo "🛠  Generating Rust (backend) types…"
 # Output to a temporary dir then move (safer than deleting first).
-BACKEND_OUT="backend/zerg/ws_schema"
+BACKEND_OUT="apps/zerg/backend/zerg/ws_schema"
 rm -rf "$BACKEND_OUT.tmp" && mkdir -p "$BACKEND_OUT.tmp"
 # The Rust template is not yet published to npm. Attempt generation but fall
 # back gracefully if the template or the network is unavailable so that local
@@ -132,7 +132,7 @@ else
 fi
 
 echo "🛠  Generating TypeScript (frontend) types…"
-FRONTEND_OUT="frontend/generated"
+FRONTEND_OUT="apps/zerg/frontend-web/src/generated"
 rm -rf "$FRONTEND_OUT.tmp" && mkdir -p "$FRONTEND_OUT.tmp"
 
 set +e
