@@ -11,10 +11,8 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
 # Cache dependencies separately from app code for better cache hits
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-dev
+COPY uv.lock pyproject.toml ./
+RUN uv sync --frozen --no-install-project --no-dev
 
 # Builder stage - application with dependencies
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
@@ -31,8 +29,7 @@ COPY --from=dependencies /app/.venv /app/.venv
 COPY . .
 
 # Install the project itself using cached dependencies
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 # Production stage - minimal distroless-style runtime
 FROM python:3.12-slim-bookworm AS production
@@ -96,8 +93,7 @@ RUN cp -r /app/.venv /opt/venv && \
     find /opt/venv/bin -type f -exec sed -i 's|#!/app/.venv/bin/python|#!/opt/venv/bin/python|g' {} \;
 
 # Install dev dependencies using uv (available in builder stage)
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen
+RUN uv sync --frozen
 
 # Create non-root user (same as production)
 RUN useradd --create-home --shell /bin/bash --uid 1000 zerg || true

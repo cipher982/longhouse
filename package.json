@@ -16,7 +16,9 @@
     "jarvis": "make jarvis-dev",
     "zerg": "make zerg-dev",
     "test": "make test",
-    "generate-sdk": "make generate-sdk"
+    "generate-sdk": "make generate-sdk",
+    "validate:css": "node scripts/validate-css-classes.js",
+    "validate:all": "npm run validate:css && ./scripts/fast-contract-check.sh"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",
