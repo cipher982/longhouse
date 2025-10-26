@@ -26,3 +26,6 @@ COPY --from=builder /app/dist/ /usr/share/nginx/html/
 RUN test -f /usr/share/nginx/html/index.html
 
 EXPOSE 80
+
+# Run nginx in foreground to handle signals properly
+CMD ["nginx", "-g", "daemon off;"]
