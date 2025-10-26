@@ -6,6 +6,7 @@
   "workspaces": [
     "apps/jarvis/apps/*",
     "apps/jarvis/packages/*",
+    "apps/jarvis/packages/data/*",
     "apps/zerg/frontend-web",
     "apps/zerg/prerender",
     "packages/*"

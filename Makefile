@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help start stop postgres-up postgres-down jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
+.PHONY: help start stop postgres-up postgres-down jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg regen-ws-code ws-code-diff-check
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -157,3 +157,16 @@ zerg-reset:
 	docker compose -f docker-compose.dev.yml down -v
 	docker compose -f docker-compose.dev.yml up -d
 	@echo "Run migrations and seed agents"
+
+# ---------------------------------------------------------------------------
+# WebSocket Code Generation
+# ---------------------------------------------------------------------------
+regen-ws-code:
+	@echo "🔄 Regenerating WebSocket code from AsyncAPI spec..."
+	./scripts/regen-ws-code.sh
+	@echo "✅ WebSocket code regenerated"
+
+ws-code-diff-check:
+	@echo "🔍 Checking for WebSocket code drift..."
+	./scripts/check_ws_drift.sh
+	@echo "✅ No WebSocket code drift detected"
