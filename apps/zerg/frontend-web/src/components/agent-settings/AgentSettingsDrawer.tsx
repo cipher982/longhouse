@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import clsx from "clsx";
 import {
   useAddMcpServer,
@@ -47,9 +47,23 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const [formAllowedTools, setFormAllowedTools] = useState("");
   const [isTesting, setIsTesting] = useState(false);
 
-  // Check if there are unsaved changes in-flight for allowed tools
-  const hasUnflushedChanges = debouncedUpdateAllowedTools.isPending;
+  // Unified close handler that guards all close paths
+  const handleClose = useCallback(() => {
+    // Cancel pending debounce timer
+    debouncedUpdateAllowedTools.cancelPending();
 
+    // Check if mutation is in-flight
+    if (debouncedUpdateAllowedTools.isPending) {
+      const confirmed = window.confirm("Save in progress. Close anyway?");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    onClose();
+  }, [debouncedUpdateAllowedTools, onClose]);
+
+  // Rehydrate selectedTools from server state when drawer opens
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -58,28 +72,29 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     setSelectedTools(new Set(tools));
   }, [agent?.allowed_tools, isOpen]);
 
+  // Rollback optimistic updates on error
+  useEffect(() => {
+    if (debouncedUpdateAllowedTools.isError && agent?.allowed_tools) {
+      // Restore last known good state from server
+      setSelectedTools(new Set(agent.allowed_tools));
+    }
+  }, [debouncedUpdateAllowedTools.isError, agent?.allowed_tools]);
+
+  // ESC key handler
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        // Warn if there are unsaved changes
-        if (hasUnflushedChanges) {
-          const confirmed = window.confirm("You have unsaved changes. Are you sure you want to close?");
-          if (!confirmed) {
-            event.preventDefault();
-            return;
-          }
-        }
-        onClose();
+        handleClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, onClose, hasUnflushedChanges]);
+  }, [isOpen, handleClose]);
 
   const builtinTools = useMemo(() => (availableTools ? availableTools.builtin : []), [availableTools]);
   const mcpTools = useMemo(() => availableTools?.mcp ?? {}, [availableTools]);
@@ -197,7 +212,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
       className={clsx("agent-settings-backdrop", { open: isOpen })}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
-          onClose();
+          handleClose();
         }
       }}
       role="presentation"
@@ -208,7 +223,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
             <h2>Agent Tooling</h2>
             <p>{agent?.name}</p>
           </div>
-          <button type="button" className="close-btn" onClick={onClose} aria-label="Close settings">
+          <button type="button" className="close-btn" onClick={handleClose} aria-label="Close settings">
             ×
           </button>
         </header>
@@ -450,19 +465,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
         </section>
 
         <footer className="agent-settings-footer">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              if (hasUnflushedChanges) {
-                const confirmed = window.confirm("You have unsaved changes. Are you sure you want to close?");
-                if (!confirmed) {
-                  return;
-                }
-              }
-              onClose();
-            }}
-          >
+          <button type="button" className="btn-primary" onClick={handleClose}>
             Close
           </button>
         </footer>
