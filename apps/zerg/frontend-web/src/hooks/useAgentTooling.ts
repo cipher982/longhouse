@@ -172,14 +172,16 @@ export function useToolOptions(agentId: number | null) {
 }
 
 /**
- * Hook for debounced auto-save mutations.
+ * Hook for debounced auto-save mutations with rollback on failure.
  * Collapses rapid consecutive calls within a debounce window (500ms).
- * Returns the mutation handler and a boolean indicating if save is in-flight.
+ * Tracks last synced value for rollback on error.
+ * Blocks overlapping mutations to prevent race conditions.
  */
 export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceMs = 500) {
   const queryClient = useQueryClient();
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pendingValueRef = useRef<string[] | null>(null);
+  const lastSyncedRef = useRef<string[] | null>(null);
 
   const mutation = useMutation({
     mutationFn: (allowedTools: string[] | null) => {
@@ -188,16 +190,25 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
       }
       return updateAgent(agentId, { allowed_tools: allowedTools ?? [] });
     },
-    onSuccess: () => {
-      // Silent success - only show toast on manual save or error for auto-save
+    onSuccess: (response) => {
+      // Track last successful sync as source of truth
+      lastSyncedRef.current = response.allowed_tools ?? null;
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
     },
     onError: (error: Error) => {
-      toast.error(`Failed to update tools: ${error.message}`);
+      toast.error(`Failed to update tools: ${error.message}. Changes reverted.`);
+      // Force refresh from server to restore correct state
+      queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
     },
   });
 
   const debouncedMutate = (allowedTools: string[] | null) => {
+    // Block overlapping mutations to prevent race conditions
+    if (mutation.isPending) {
+      toast("Save in progress, please wait...", { icon: "⏳" });
+      return;
+    }
+
     // Store the latest value
     pendingValueRef.current = allowedTools;
 
@@ -215,10 +226,21 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
     }, debounceMs);
   };
 
+  const cancelPendingDebounce = () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+      pendingValueRef.current = null;
+    }
+  };
+
   return {
     mutate: debouncedMutate,
+    cancelPending: cancelPendingDebounce,
     isPending: mutation.isPending,
     isError: mutation.isError,
+    hasPendingDebounce: debounceTimerRef.current !== null,
+    lastSyncedValue: lastSyncedRef.current,
     error: mutation.error,
   };
 }
