@@ -279,3 +279,62 @@ export function skipIfNotImplemented(page: Page, selector: string, reason: strin
     return false;
   };
 }
+
+/**
+ * Toast notification helpers for react-hot-toast
+ *
+ * React-hot-toast renders with:
+ * - .toast - base class for all toasts
+ * - .toast-success - success toasts
+ * - .toast-error - error toasts (may not exist, check .toast instead)
+ * - role="status" or role="alert" depending on type
+ *
+ * @example
+ * // Wait for any toast containing text
+ * await waitForToast(page, 'Settings saved');
+ *
+ * // Wait for success toast
+ * const toast = getToastLocator(page, { type: 'success', text: 'Agent created' });
+ * await expect(toast).toBeVisible();
+ */
+
+/**
+ * Get a locator for a toast notification
+ */
+export function getToastLocator(page: Page, options?: {
+  type?: 'success' | 'error' | 'any';
+  text?: string;
+}) {
+  const { type = 'any', text } = options || {};
+
+  let baseSelector = '.toast';
+  if (type === 'success') {
+    baseSelector = '.toast-success, .toast'; // Fallback to .toast if type class doesn't exist
+  } else if (type === 'error') {
+    // react-hot-toast may not have .toast-error, just use .toast with text match
+    baseSelector = '.toast';
+  }
+
+  if (text) {
+    return page.locator(`${baseSelector}:has-text("${text}")`);
+  }
+
+  return page.locator(baseSelector);
+}
+
+/**
+ * Wait for a toast notification to appear
+ */
+export async function waitForToast(
+  page: Page,
+  text: string,
+  options?: {
+    timeout?: number;
+    type?: 'success' | 'error' | 'any';
+  }
+) {
+  const { timeout = 3000, type = 'any' } = options || {};
+  const toast = getToastLocator(page, { type, text });
+  await expect(toast).toBeVisible({ timeout });
+  return toast;
+}

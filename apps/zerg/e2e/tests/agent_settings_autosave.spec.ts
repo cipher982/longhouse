@@ -11,6 +11,7 @@ import { test, expect, type Page } from './fixtures';
 import { createAgentViaAPI, deleteAgentViaAPI } from './helpers/agent-helpers';
 import { resetDatabaseViaRequest } from './helpers/database-helpers';
 import { safeClick, waitForStableElement } from './helpers/test-utils';
+import { waitForToast } from './helpers/test-helpers';
 
 test.describe('Agent Settings Drawer - Auto-Save', () => {
   let testAgentId: number;
@@ -155,23 +156,22 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
     await page.waitForTimeout(600);
 
     // Verify save indicator is showing (mutation in-flight)
+    // This assertion MUST pass - if it doesn't, the test is invalid
     const saveIndicator = page.locator('.saving-indicator');
-    const isPending = await saveIndicator.isVisible();
+    await expect(saveIndicator).toBeVisible({ timeout: 1000 });
 
-    if (isPending) {
-      // Toggle again during in-flight mutation (should queue silently)
-      await checkbox.click();
+    // Toggle again during in-flight mutation (should queue silently)
+    await checkbox.click();
 
-      // UI should reflect the queued change
-      await expect(checkbox).toBeChecked({ checked: initialChecked });
+    // UI should reflect the queued change
+    await expect(checkbox).toBeChecked({ checked: initialChecked });
 
-      // Wait for first mutation to complete
-      await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
+    // Wait for first mutation to complete
+    await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
 
-      // Queued change should fire next
-      await expect(saveIndicator).toBeVisible({ timeout: 1000 });
-      await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
-    }
+    // Queued change should fire next
+    await expect(saveIndicator).toBeVisible({ timeout: 1000 });
+    await expect(saveIndicator).not.toBeVisible({ timeout: 3000 });
 
     // Close and reopen to verify final state persisted
     const closeButton = page.locator('.agent-settings-footer button:has-text("Close")');
@@ -212,8 +212,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
     await page.waitForTimeout(1000);
 
     // Should show error toast
-    const errorToast = page.locator('.toaster').getByText(/failed to update tools/i);
-    await expect(errorToast).toBeVisible({ timeout: 2000 });
+    await waitForToast(page, 'Failed to update tools', { timeout: 2000, type: 'error' });
 
     // Checkbox should ROLLBACK to initial state
     await expect(checkbox).toBeChecked({ checked: initialChecked }, { timeout: 2000 });
