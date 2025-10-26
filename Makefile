@@ -53,9 +53,15 @@ jarvis-dev:
 	cd apps/jarvis && $(MAKE) start
 
 zerg-dev:
-	@echo "🐝 Starting Zerg (FastAPI backend + React frontend)..."
-	@echo "🚀 Starting development servers on ports $(ZERG_BACKEND_PORT) and $(ZERG_FRONTEND_PORT)..."
-	$(MAKE) -j2 _zerg_backend _zerg_frontend_react
+	@echo "🐝 Dev mode: Use 'make zerg-up' for full Docker dev environment"
+	@echo "🚀 For local dev servers, start Postgres first:"
+	@echo "   docker compose -f docker-compose.dev.yml up postgres -d"
+	@echo "   Then run:"
+	@echo "   cd apps/zerg/backend && uv run python -m uvicorn zerg.main:app --reload"
+	@echo "   cd apps/zerg/frontend-web && npm run dev"
+	@echo ""
+	@echo "Or simply use: make zerg-up (includes Postgres, all services)"
+	@exit 0
 
 swarm-dev:
 	@echo "🌐 Starting FULL SWARM (Jarvis + Zerg)..."
