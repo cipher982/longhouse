@@ -49,8 +49,21 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
 
   // Unified close handler that guards all close paths
   const handleClose = useCallback(() => {
-    // Cancel pending debounce timer
-    debouncedUpdateAllowedTools.cancelPending();
+    // Check if debounce timer is active (user has unsaved changes)
+    if (debouncedUpdateAllowedTools.hasPendingDebounce) {
+      const confirmed = window.confirm(
+        "You have unsaved changes. Save before closing?"
+      );
+      if (confirmed) {
+        // Flush pending changes immediately
+        debouncedUpdateAllowedTools.flush();
+        // Note: drawer will close, mutation happens in background
+        // User will see save indicator if they reopen quickly
+      } else {
+        // User chose to discard changes
+        debouncedUpdateAllowedTools.cancelPending();
+      }
+    }
 
     // Check if mutation is in-flight
     if (debouncedUpdateAllowedTools.isPending) {
