@@ -32,11 +32,6 @@ services:
       target: development
       args:
         BUILD_ENV: development
-      # Local build cache
-      cache_from:
-        - type=local,src=/tmp/docker-cache/backend
-      cache_to:
-        - type=local,dest=/tmp/docker-cache/backend,mode=max
     restart: unless-stopped
     depends_on:
       postgres:
