@@ -83,6 +83,8 @@ services:
       VITE_API_URL: http://localhost:47300
     ports:
       - "${FRONTEND_PORT:-47200}:80"
+    stop_signal: SIGQUIT
+    stop_grace_period: 5s
     volumes:
       # Hot reload: mount source code
       - ./apps/zerg/frontend-web/src:/app/src:cached

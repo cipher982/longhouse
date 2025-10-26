@@ -27,5 +27,6 @@ RUN test -f /usr/share/nginx/html/index.html
 
 EXPOSE 80
 
-# Run nginx in foreground with graceful shutdown handling
-CMD ["sh", "-c", "nginx -g 'daemon off;' & PID=$!; trap 'echo \"Shutting down...\"; nginx -s quit; wait $PID' SIGTERM; wait $PID"]
+# Run nginx in foreground - nginx master process will handle SIGTERM gracefully
+# The key is running it directly (not through shell) so signals work properly
+CMD ["nginx", "-g", "daemon off;"]
