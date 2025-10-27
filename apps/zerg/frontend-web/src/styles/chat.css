@@ -479,22 +479,23 @@
 }
 
 .tool-btn {
-    background-color: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: var(--text-primary);
-    padding: 6px 12px;
+    background-color: var(--color-surface-overlay);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-primary);
+    padding: var(--component-toolbar-padding-y) var(--component-toolbar-padding-x);
     border-radius: var(--radius-md);
     cursor: pointer;
-    font-size: 13px;
-    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+    font-size: var(--component-toolbar-font-size);
+    transition: background-color var(--motion-duration-fast) var(--motion-easing-standard),
+        border-color var(--motion-duration-fast) var(--motion-easing-standard);
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--component-toolbar-gap);
 }
 
 .tool-btn:hover:not(:disabled) {
-    background-color: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.2);
+    background-color: color-mix(in srgb, var(--color-surface-overlay) 70%, #ffffff 30%);
+    border-color: color-mix(in srgb, var(--color-border-subtle) 70%, #ffffff 30%);
 }
 
 .tool-btn:disabled {
