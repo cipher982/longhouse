@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:tokens": "node ./scripts/build-design-tokens.mjs",
     "dev": "vite",
+    "predev": "npm run build:tokens",
+    "prebuild": "npm run build:tokens",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",

@@ -18,6 +18,7 @@ const apiMocks = vi.hoisted(() => ({
   updateThread: vi.fn(),
   fetchWorkflows: vi.fn(),
   startWorkflowExecution: vi.fn(),
+  fetchContainerPolicy: vi.fn(),
 }));
 
 vi.mock("../../services/api", () => apiMocks);
@@ -32,6 +33,7 @@ const {
   updateThread: mockUpdateThread,
   fetchWorkflows: mockFetchWorkflows,
   startWorkflowExecution: mockStartWorkflowExecution,
+  fetchContainerPolicy: mockFetchContainerPolicy,
 } = apiMocks;
 
 function renderChatPage(initialEntry = "/chat/1/42") {
@@ -126,6 +128,16 @@ describe("ChatPage", () => {
       execution_id: 123,
       phase: "running",
       result: null,
+    });
+    mockFetchContainerPolicy.mockResolvedValue({
+      enabled: true,
+      default_image: "ubuntu:latest",
+      network_enabled: true,
+      user_id: 1,
+      memory_limit: "1Gi",
+      cpus: "1",
+      timeout_secs: 300,
+      seccomp_profile: null,
     });
   });
 
