@@ -22,7 +22,7 @@ import {
 
 export function useContainerPolicy() {
   return useQuery<ContainerPolicy>({
-    queryKey: ["tooling", "container-policy"],
+    queryKey: ["config", "container-policy"],
     queryFn: fetchContainerPolicy,
   });
 }

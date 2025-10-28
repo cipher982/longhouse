@@ -10,7 +10,7 @@ import {
   useTestMcpServer,
   useToolOptions,
   useDebouncedUpdateAllowedTools,
-} from "../../hooks/useAgentTooling";
+} from "../../hooks/useAgentConfig";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
 
 type AgentSettingsDrawerProps = {
@@ -233,7 +233,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
       <aside className={clsx("agent-settings-drawer", { open: isOpen })}>
         <header className="agent-settings-header">
           <div>
-            <h2>Agent Tooling</h2>
+            <h2>Agent Config</h2>
             <p>{agent?.name}</p>
           </div>
           <button type="button" className="close-btn" onClick={handleClose} aria-label="Close settings">

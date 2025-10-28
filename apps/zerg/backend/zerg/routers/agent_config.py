@@ -1,4 +1,4 @@
-"""Tooling configuration endpoints."""
+"""Agent configuration endpoints."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -7,8 +7,8 @@ from zerg.config import get_settings
 from zerg.dependencies.auth import get_current_user
 
 router = APIRouter(
-    prefix="/tooling",
-    tags=["tooling"],
+    prefix="/config",
+    tags=["config"],
     dependencies=[Depends(get_current_user)],
 )
 
