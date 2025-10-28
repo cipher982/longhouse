@@ -611,10 +611,10 @@ export default function ChatPage() {
               type="button"
               className="chat-settings-btn"
               onClick={() => setIsSettingsDrawerOpen(true)}
-              title="Agent tooling settings"
+              title="Agent configuration settings"
             >
               <SettingsIcon />
-              <span>Tooling</span>
+              <span>Config</span>
             </button>
           </div>
         )}

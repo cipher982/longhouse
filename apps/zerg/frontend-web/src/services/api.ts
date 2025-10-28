@@ -321,7 +321,7 @@ export async function runAgent(agentId: number): Promise<void> {
 }
 
 export async function fetchContainerPolicy(): Promise<ContainerPolicy> {
-  return request<ContainerPolicy>(`/tooling/container-policy`);
+  return request<ContainerPolicy>(`/config/container-policy`);
 }
 
 export async function fetchAvailableTools(agentId: number): Promise<AvailableToolsResponse> {
