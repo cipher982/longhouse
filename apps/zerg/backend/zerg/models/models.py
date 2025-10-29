@@ -368,6 +368,7 @@ class ThreadMessage(Base):
     tool_call_id = Column(String, nullable=True)  # For tool responses
     name = Column(String, nullable=True)  # For tool messages
     timestamp = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())  # For chronological message ordering
     processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by agent
     message_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)  # Store additional metadata
     parent_id = Column(Integer, ForeignKey("thread_messages.id"), nullable=True)
