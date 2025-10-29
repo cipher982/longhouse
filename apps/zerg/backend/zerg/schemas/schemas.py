@@ -124,6 +124,7 @@ class ThreadMessageResponse(ThreadMessageBase):
     id: int
     thread_id: int
     timestamp: datetime
+    created_at: datetime  # For chronological message ordering on frontend
     processed: bool = False
     parent_id: Optional[int] = None
     # Fields for message type and tool display
