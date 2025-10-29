@@ -45,6 +45,50 @@ function truncateText(text: string, maxLength: number): string {
   return text.substring(0, maxLength) + "...";
 }
 
+// Type for messages with optional client-side metadata
+type ThreadMessageWithClientMeta = ThreadMessage & { client_created_at?: number };
+
+// Comparator function for chronological message ordering
+// Sorts by timestamp first (older → newer), then by ID, then by client_created_at
+function compareMessagesChronologically(
+  a: ThreadMessageWithClientMeta,
+  b: ThreadMessageWithClientMeta
+): number {
+  // Extract comparable timestamps from created_at, timestamp, or fallback to client_created_at
+  const getMessageTime = (msg: ThreadMessageWithClientMeta): number => {
+    const timestampStr = msg.created_at || msg.timestamp;
+    if (timestampStr) {
+      const parsed = new Date(timestampStr).getTime();
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return msg.client_created_at || 0;
+  };
+
+  const aTime = getMessageTime(a);
+  const bTime = getMessageTime(b);
+
+  // Primary sort: by timestamp
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+
+  // Secondary sort: by ID (prefer messages with real IDs over optimistic ones)
+  const aHasId = a.id != null && a.id > 0;
+  const bHasId = b.id != null && b.id > 0;
+
+  if (aHasId && !bHasId) return -1;
+  if (!aHasId && bHasId) return 1;
+
+  if (aHasId && bHasId) {
+    return a.id - b.id;
+  }
+
+  // Tertiary sort: by client_created_at for optimistic messages
+  return (a.client_created_at || 0) - (b.client_created_at || 0);
+}
+
 // ToolMessage component for rendering collapsible tool call details
 interface ToolMessageProps {
   message: ThreadMessage;
@@ -175,7 +219,8 @@ export default function ChatPage() {
 
       const optimisticId = -Date.now();
       const now = new Date().toISOString();
-      const optimisticMessage: ThreadMessage = {
+      const clientNow = Date.now();
+      const optimisticMessage: ThreadMessageWithClientMeta = {
         id: optimisticId,
         thread_id: threadId,
         role: "user",
@@ -183,6 +228,7 @@ export default function ChatPage() {
         timestamp: now,
         created_at: now,
         processed: true,
+        client_created_at: clientNow,
       };
 
       queryClient.setQueryData<ThreadMessage[]>(["thread-messages", threadId], (oldMessages) => {
@@ -350,8 +396,8 @@ export default function ChatPage() {
 
   const messages = useMemo(() => {
     const list = messagesQuery.data ?? [];
-    // Sort messages by ID for stable chronological order
-    return [...list].sort((a, b) => a.id - b.id);
+    // Sort messages chronologically by timestamp, with tie-breaking by ID and client_created_at
+    return [...list].sort(compareMessagesChronologically);
   }, [messagesQuery.data]);
 
   const agent = agentQuery.data;
