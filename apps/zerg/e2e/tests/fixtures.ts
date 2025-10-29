@@ -90,18 +90,6 @@ export const test = base.extend<TestFixtures>({
           console.warn('Playwright init: unable to seed React flags', error);
         }
       }, { baseUrl: reactBaseUrl, workerId });
-    } else {
-      await context.addInitScript(() => {
-        try {
-          window.localStorage.removeItem('zerg_use_react_dashboard');
-          window.localStorage.removeItem('zerg_react_dashboard_url');
-          window.localStorage.removeItem('zerg_use_react_chat');
-          window.localStorage.removeItem('zerg_react_chat_base');
-        } catch (error) {
-          console.warn('Playwright init: unable to clear React flags', error);
-        }
-      });
-    }
 
     // -------------------------------------------------------------------
     // Monkey-patch *browser.newContext* so ad-hoc contexts created **inside**

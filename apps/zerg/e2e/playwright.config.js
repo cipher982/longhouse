@@ -38,6 +38,9 @@ const frontendServer = {
   reuseExistingServer: !process.env.CI,
   timeout: 180_000,
   cwd: path.resolve(__dirname, '../frontend-web'),
+  env: {
+    VITE_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}`,
+  },
 };
 
 const config = {

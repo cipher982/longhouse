@@ -193,6 +193,7 @@ def read_thread_messages(
                 tool_call_id=m.tool_call_id,
                 name=m.name,
                 timestamp=m.timestamp,
+                created_at=m.created_at,
                 processed=m.processed,
                 parent_id=m.parent_id,
                 message_type=message_type,
