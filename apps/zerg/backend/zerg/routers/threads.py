@@ -151,7 +151,15 @@ def read_thread_messages(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Get all messages for a thread"""
+    """
+    Get all messages for a thread.
+    
+    IMPORTANT: Messages are returned strictly ordered by database ID (insertion order).
+    This provides deterministic ordering regardless of timestamp precision or creation time.
+    The client MUST NOT sort these messages client-side; the server ordering is authoritative.
+    
+    See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
+    """
     # First check if thread exists
     db_thread = crud.get_thread(db, thread_id=thread_id)
     if not db_thread:
@@ -192,8 +200,7 @@ def read_thread_messages(
                 tool_calls=m.tool_calls,
                 tool_call_id=m.tool_call_id,
                 name=m.name,
-                timestamp=m.timestamp,
-                created_at=m.created_at,
+                sent_at=m.sent_at,
                 processed=m.processed,
                 parent_id=m.parent_id,
                 message_type=message_type,
@@ -227,7 +234,13 @@ def create_thread_message(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Create the message (note: by default, processed=False for user messages)
-    new_message = crud.create_thread_message(db=db, thread_id=thread_id, role=message.role, content=message.content)
+    new_message = crud.create_thread_message(
+        db=db,
+        thread_id=thread_id,
+        role=message.role,
+        content=message.content,
+        sent_at=message.sent_at,
+    )
     logger.info(f"Created message with ID {new_message.id} in thread {thread_id}, processed={new_message.processed}")
 
     return new_message

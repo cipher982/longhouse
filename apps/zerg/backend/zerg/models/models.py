@@ -12,6 +12,7 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
+from sqlalchemy import text
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import relationship
@@ -367,8 +368,7 @@ class ThreadMessage(Base):
     tool_calls = Column(MutableList.as_mutable(JSON), nullable=True)
     tool_call_id = Column(String, nullable=True)  # For tool responses
     name = Column(String, nullable=True)  # For tool messages
-    timestamp = Column(DateTime, server_default=func.now())
-    created_at = Column(DateTime, server_default=func.now())  # For chronological message ordering
+    sent_at = Column(DateTime(timezone=True), server_default=func.now())  # When user sent the message (UTC)
     processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by agent
     message_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)  # Store additional metadata
     parent_id = Column(Integer, ForeignKey("thread_messages.id"), nullable=True)

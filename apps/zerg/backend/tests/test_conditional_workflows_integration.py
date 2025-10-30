@@ -153,8 +153,8 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
 
             # Verify REAL ThreadMessage serialization (the bug that was missed)
             message = messages[0]
-            assert "created_at" in message  # This was the failing field access
-            assert message["created_at"] is not None
+            assert "sent_at" in message  # This was the failing field access
+            assert message["sent_at"] is not None
             assert message["role"] == "assistant"
             # Content should contain our mocked response
             assert "greater than 50" in message["content"] or len(message["content"]) > 0
@@ -177,7 +177,7 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
 
             # Find the assistant message
             assistant_msg = next(msg for msg in thread_messages if msg.role == "assistant")
-            assert assistant_msg.timestamp is not None  # REAL timestamp field
+            assert assistant_msg.sent_at is not None  # REAL sent_at field
             assert len(assistant_msg.content) > 0  # Should have some content
 
             print("✅ REAL integration test passed - tested entire stack except LLM API")
