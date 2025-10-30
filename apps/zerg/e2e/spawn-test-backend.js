@@ -63,6 +63,7 @@ const backend = spawn('uv', ['run', 'python', '-m', 'uvicorn', 'zerg.main:app', 
         DEV_ADMIN: process.env.DEV_ADMIN || '1',
         ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
         DATABASE_URL: '',  // Unset DATABASE_URL to force SQLite for E2E tests
+        LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
     },
     cwd: join(__dirname, '..', 'backend'),
     stdio: 'inherit'
