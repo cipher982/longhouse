@@ -100,11 +100,12 @@ export default function ChatPage() {
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
 
+  // Sync selectedThreadId from URL parameter - one-way only (URL → state)
+  // This ensures state stays consistent with URL, but doesn't override when
+  // we're intentionally changing threads via state updates
   useEffect(() => {
-    if (threadIdParam !== selectedThreadId) {
-      setSelectedThreadId(threadIdParam ?? null);
-    }
-  }, [threadIdParam, selectedThreadId]);
+    setSelectedThreadId(threadIdParam ?? null);
+  }, [threadIdParam]);
 
   const agentQuery = useQuery<Agent>({
     queryKey: ["agent", agentId],
