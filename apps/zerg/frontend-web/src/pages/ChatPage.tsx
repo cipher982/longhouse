@@ -553,6 +553,16 @@ export default function ChatPage() {
     }
   }, [messages]);
 
+  // Update document title with agent name for better context
+  useEffect(() => {
+    if (agent) {
+      document.title = `${agent.name} - Swarmlet`;
+    }
+    return () => {
+      document.title = "Swarmlet AI Agent Platform";
+    };
+  }, [agent]);
+
   if (agentId == null) {
     return <div>Missing agent context.</div>;
   }

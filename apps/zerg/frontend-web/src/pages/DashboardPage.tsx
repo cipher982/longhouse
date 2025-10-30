@@ -301,7 +301,7 @@ export default function DashboardPage() {
                           data-testid={`chat-agent-${agent.id}`}
                           title="Chat with Agent"
                           aria-label="Chat with Agent"
-                          onClick={(event) => handleChatAgent(event, agent.id)}
+                          onClick={(event) => handleChatAgent(event, agent.id, agent.name)}
                         >
                           <MessageCircleIcon />
                         </button>
@@ -513,9 +513,9 @@ export default function DashboardPage() {
     dispatchDashboardEvent("edit", agentId);
   }
 
-  function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
+  function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, agentName: string) {
     event.stopPropagation();
-    navigate(`/chat/${agentId}`);
+    navigate(`/chat/${agentId}?name=${encodeURIComponent(agentName)}`);
   }
 
   function handleDebugAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
