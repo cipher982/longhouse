@@ -33,6 +33,9 @@ interface UseWebSocketOptions {
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
+  
+  // Streaming message handler
+  onStreamingMessage?: (envelope: WebSocketMessage) => void;
 
   // Connection lifecycle
   autoConnect?: boolean;
@@ -76,6 +79,7 @@ export function useWebSocket(
     onConnect,
     onDisconnect,
     onError,
+    onStreamingMessage,
     autoConnect = true,
   } = options;
 
@@ -93,6 +97,7 @@ export function useWebSocket(
   const onConnectRef = useRef<typeof onConnect>();
   const onDisconnectRef = useRef<typeof onDisconnect>();
   const onErrorRef = useRef<typeof onError>();
+  const onStreamingMessageRef = useRef<typeof onStreamingMessage>();
   const invalidateQueriesRef = useRef<(string | number | object)[][]>(invalidateQueries);
 
   useEffect(() => {
@@ -110,6 +115,10 @@ export function useWebSocket(
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
+
+  useEffect(() => {
+    onStreamingMessageRef.current = onStreamingMessage;
+  }, [onStreamingMessage]);
 
   useEffect(() => {
     invalidateQueriesRef.current = invalidateQueries;
@@ -146,13 +155,22 @@ export function useWebSocket(
       message = { type: 'message', data: event.data };
     }
 
+    // Check if this is a streaming message
+    const streamingTypes = ['stream_start', 'stream_chunk', 'stream_end', 'assistant_id'];
+    if (streamingTypes.includes(message.type)) {
+      // Call streaming message handler if provided
+      onStreamingMessageRef.current?.(message);
+    }
+
     // Call custom message handler if provided
     onMessageRef.current?.(message);
 
-    // Invalidate specified queries
-    invalidateQueriesRef.current.forEach(queryKey => {
-      queryClient.invalidateQueries({ queryKey });
-    });
+    // Invalidate specified queries (but not for streaming chunks to avoid flicker)
+    if (!streamingTypes.includes(message.type)) {
+      invalidateQueriesRef.current.forEach(queryKey => {
+        queryClient.invalidateQueries({ queryKey });
+      });
+    }
   }, [queryClient]);
 
   const handleConnect = useCallback(() => {
