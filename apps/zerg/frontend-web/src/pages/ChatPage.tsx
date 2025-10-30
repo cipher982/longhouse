@@ -337,14 +337,6 @@ export default function ChatPage() {
     invalidateQueries: wsQueries,
   });
 
-  useEffect(() => {
-    if (agentId != null && effectiveThreadId != null) {
-      navigate(`/chat/${agentId}/${effectiveThreadId}`, { replace: true });
-    } else if (agentId != null) {
-      navigate(`/chat/${agentId}`, { replace: true });
-    }
-  }, [agentId, effectiveThreadId, navigate]);
-
   const chatThreads = useMemo(() => {
     const list = chatThreadsQuery.data ?? [];
     // Sort threads by updated_at (newest first), falling back to created_at
@@ -446,6 +438,7 @@ export default function ChatPage() {
       const thread = await createThread(agentId, "Primary Thread");
       await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       setSelectedThreadId(thread.id);
+      navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
       return thread.id;
     } catch (error) {
       toast.error("Failed to create thread", {
@@ -534,6 +527,7 @@ export default function ChatPage() {
         const thread = await createThread(agentId, "Thread 1");
         await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
         setSelectedThreadId(thread.id);
+        navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
       } catch (error) {
         // Silently fail - user can create thread manually if needed
       } finally {
