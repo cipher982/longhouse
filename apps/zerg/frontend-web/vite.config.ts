@@ -8,8 +8,9 @@ export default defineConfig(({ mode }) => {
 
   const frontendPort = Number(rootEnv.FRONTEND_PORT || 3000);
 
-  // Use root path in production, /react/ in development
-  const basePath = mode === "production" ? "/" : "/react/";
+  // Use root path for both dev and production
+  // The /react/ path was legacy and unnecessary - only frontend runs on this port
+  const basePath = "/";
 
   // Proxy target: use VITE_PROXY_TARGET for local dev outside Docker,
   // otherwise leverage Docker Compose DNS (backend:8000)
