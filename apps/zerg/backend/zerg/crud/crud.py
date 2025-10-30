@@ -480,12 +480,14 @@ def create_agent_message(db: Session, agent_id: int, role: str, content: str):
 
 
 # Thread CRUD operations
-def get_threads(db: Session, agent_id: Optional[int] = None, skip: int = 0, limit: int = 100):
-    """Get all threads, filtered by agent_id if provided"""
+def get_threads(db: Session, agent_id: Optional[int] = None, thread_type: Optional[str] = None, skip: int = 0, limit: int = 100):
+    """Get threads, optionally filtered by agent_id and/or thread_type"""
     query = db.query(Thread).options(selectinload(Thread.messages))
     if agent_id is not None:
         query = query.filter(Thread.agent_id == agent_id)
-    return query.offset(skip).limit(limit).all()
+    if thread_type is not None:
+        query = query.filter(Thread.thread_type == thread_type)
+    return query.order_by(Thread.created_at.desc()).offset(skip).limit(limit).all()
 
 
 def get_active_thread(db: Session, agent_id: int):

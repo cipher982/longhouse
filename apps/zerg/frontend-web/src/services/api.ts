@@ -253,8 +253,12 @@ export async function fetchAgent(agentId: number): Promise<AgentResponse> {
   return request<AgentResponse>(`/agents/${agentId}`);
 }
 
-export async function fetchThreads(agentId: number): Promise<ThreadsResponse> {
-  return request<ThreadsResponse>(`/threads?agent_id=${agentId}`);
+export async function fetchThreads(agentId: number, threadType?: string): Promise<ThreadsResponse> {
+  const params = new URLSearchParams({ agent_id: String(agentId) });
+  if (threadType) {
+    params.append("thread_type", threadType);
+  }
+  return request<ThreadsResponse>(`/threads?${params.toString()}`);
 }
 
 export async function fetchThreadMessages(threadId: number): Promise<ThreadMessagesResponse> {

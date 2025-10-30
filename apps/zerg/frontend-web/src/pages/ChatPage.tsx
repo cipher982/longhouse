@@ -87,6 +87,7 @@ export default function ChatPage() {
   const queryClient = useQueryClient();
   const { isShelfOpen, closeShelf } = useShelf();
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const creatingThreadRef = useRef(false);
 
   const agentId = useRequiredNumber(params.agentId);
   const threadIdParam = useRequiredNumber(params.threadId ?? undefined);
@@ -116,13 +117,30 @@ export default function ChatPage() {
     enabled: agentId != null,
   });
 
-  const threadsQuery = useQuery<Thread[]>({
-    queryKey: ["threads", agentId],
+  // Fetch chat threads only
+  const chatThreadsQuery = useQuery<Thread[]>({
+    queryKey: ["threads", agentId, "chat"],
     queryFn: () => {
       if (agentId == null) {
         return Promise.reject(new Error("Missing agent id"));
       }
-      return fetchThreads(agentId);
+      return fetchThreads(agentId, "chat");
+    },
+    enabled: agentId != null,
+  });
+
+  // Fetch automation threads (scheduled and manual)
+  const automationThreadsQuery = useQuery<Thread[]>({
+    queryKey: ["threads", agentId, "automation"],
+    queryFn: () => {
+      if (agentId == null) {
+        return Promise.reject(new Error("Missing agent id"));
+      }
+      // Fetch both scheduled and manual threads
+      return Promise.all([
+        fetchThreads(agentId, "scheduled"),
+        fetchThreads(agentId, "manual"),
+      ]).then(([scheduled, manual]) => [...scheduled, ...manual]);
     },
     enabled: agentId != null,
   });
@@ -138,12 +156,12 @@ export default function ChatPage() {
     if (selectedThreadId != null) {
       return selectedThreadId;
     }
-    const threads = threadsQuery.data;
+    const threads = chatThreadsQuery.data;
     if (threads && threads.length > 0) {
       return threads[0].id;
     }
     return null;
-  }, [selectedThreadId, threadsQuery.data]);
+  }, [selectedThreadId, chatThreadsQuery.data]);
 
   const messagesQuery = useQuery<ThreadMessage[]>({
     queryKey: ["thread-messages", effectiveThreadId],
@@ -277,8 +295,8 @@ export default function ChatPage() {
     },
   });
 
-  const isLoading = agentQuery.isLoading || threadsQuery.isLoading || messagesQuery.isLoading;
-  const hasError = agentQuery.isError || threadsQuery.isError || messagesQuery.isError;
+  const isLoading = agentQuery.isLoading || chatThreadsQuery.isLoading || messagesQuery.isLoading;
+  const hasError = agentQuery.isError || chatThreadsQuery.isError || messagesQuery.isError;
 
   useEffect(() => {
     if (typeof performance === "undefined") {
@@ -304,7 +322,8 @@ export default function ChatPage() {
   const wsQueries = useMemo(() => {
     const queries = [];
     if (agentId != null) {
-      queries.push(["threads", agentId]);
+      queries.push(["threads", agentId, "chat"]);
+      queries.push(["threads", agentId, "automation"]);
     }
     if (effectiveThreadId != null) {
       queries.push(["thread-messages", effectiveThreadId]);
@@ -325,15 +344,25 @@ export default function ChatPage() {
     }
   }, [agentId, effectiveThreadId, navigate]);
 
-  const threads = useMemo(() => {
-    const list = threadsQuery.data ?? [];
+  const chatThreads = useMemo(() => {
+    const list = chatThreadsQuery.data ?? [];
     // Sort threads by updated_at (newest first), falling back to created_at
     return [...list].sort((a, b) => {
       const aTime = a.updated_at || a.created_at;
       const bTime = b.updated_at || b.created_at;
       return bTime.localeCompare(aTime);
     });
-  }, [threadsQuery.data]);
+  }, [chatThreadsQuery.data]);
+
+  const automationThreads = useMemo(() => {
+    const list = automationThreadsQuery.data ?? [];
+    // Sort by created_at (newest first)
+    return [...list].sort((a, b) => {
+      const aTime = a.created_at;
+      const bTime = b.created_at;
+      return bTime.localeCompare(aTime);
+    });
+  }, [automationThreadsQuery.data]);
 
   const messages = messagesQuery.data ?? [];
 
@@ -375,7 +404,7 @@ export default function ChatPage() {
       return;
     }
 
-    const existingThread = threads.find((thread) => thread.id === threadId);
+    const existingThread = chatThreads.find((thread) => thread.id === threadId);
     if (existingThread && existingThread.title === trimmedTitle) {
       handleCancelEdit();
       return;
@@ -402,8 +431,8 @@ export default function ChatPage() {
       return effectiveThreadId;
     }
 
-    if (threads.length > 0) {
-      const firstThreadId = threads[0].id;
+    if (chatThreads.length > 0) {
+      const firstThreadId = chatThreads[0].id;
       setSelectedThreadId(firstThreadId);
       return firstThreadId;
     }
@@ -414,7 +443,7 @@ export default function ChatPage() {
 
     try {
       const thread = await createThread(agentId, "Primary Thread");
-      await queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
+      await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       setSelectedThreadId(thread.id);
       return thread.id;
     } catch (error) {
@@ -423,7 +452,7 @@ export default function ChatPage() {
       });
       return null;
     }
-  }, [agentId, effectiveThreadId, queryClient, threads]);
+  }, [agentId, effectiveThreadId, queryClient, chatThreads]);
 
   const handleSend = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -461,7 +490,7 @@ export default function ChatPage() {
     const chatHistory = messages
       .filter(msg => msg.role !== "system")
       .map(msg => {
-        const timestamp = new Date(msg.sent_at || "").toLocaleString();
+        const timestamp = new Date(msg.created_at || "").toLocaleString();
         return `[${timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`;
       })
       .join("\n\n");
@@ -491,23 +520,30 @@ export default function ChatPage() {
   // Auto-create and select a default thread on component mount if none exists
   useEffect(() => {
     const initializeThread = async () => {
-      if (agentId == null || selectedThreadId != null || threads.length > 0) {
+      if (agentId == null || selectedThreadId != null || chatThreads.length > 0) {
         return;
       }
+
+      // Prevent concurrent creation attempts
+      if (creatingThreadRef.current) return;
+      creatingThreadRef.current = true;
+
       try {
         // Auto-create a default thread for the agent
         const thread = await createThread(agentId, "Thread 1");
-        await queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
+        await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
         setSelectedThreadId(thread.id);
       } catch (error) {
         // Silently fail - user can create thread manually if needed
+      } finally {
+        creatingThreadRef.current = false;
       }
     };
 
-    if (agentId != null && selectedThreadId == null && threads.length === 0) {
+    if (agentId != null && selectedThreadId == null && chatThreads.length === 0) {
       initializeThread();
     }
-  }, [agentId, selectedThreadId, threads.length, queryClient]);
+  }, [agentId, selectedThreadId, chatThreads.length, queryClient]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -531,11 +567,11 @@ export default function ChatPage() {
   const handleCreateThread = async () => {
     if (agentId == null) return;
     // Auto-generate thread name based on the count of existing threads
-    const threadCount = threads.length + 1;
+    const threadCount = chatThreads.length + 1;
     const title = `Thread ${threadCount}`;
     try {
       const thread = await createThread(agentId, title);
-      queryClient.invalidateQueries({ queryKey: ["threads", agentId] });
+      queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       setSelectedThreadId(thread.id);
       navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
     } catch (error) {
@@ -617,7 +653,7 @@ export default function ChatPage() {
             </button>
           </div>
           <div className="thread-list">
-            {threads.map((thread) => {
+            {chatThreads.map((thread) => {
               const threadMessages = messages.filter(m => m.thread_id === thread.id);
               const lastMessage = threadMessages[threadMessages.length - 1];
               const messagePreview = lastMessage
@@ -682,10 +718,48 @@ export default function ChatPage() {
                 </div>
               );
             })}
-            {threads.length === 0 && (
+            {chatThreads.length === 0 && (
               <div className="thread-list-empty">No threads found</div>
             )}
           </div>
+
+          {/* Automation History Section */}
+          {automationThreads.length > 0 && (
+            <div className="automation-history">
+              <h4 className="automation-history-title">Automation Runs</h4>
+              <div className="automation-runs-list">
+                {automationThreads.map((thread) => (
+                  <div
+                    key={thread.id}
+                    className={clsx("automation-run-item", {
+                      selected: thread.id === effectiveThreadId,
+                    })}
+                    data-testid={`automation-run-${thread.id}`}
+                    data-id={thread.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleSelectThread(thread)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleSelectThread(thread);
+                      }
+                    }}
+                  >
+                    <div className="automation-run-title">{thread.title}</div>
+                    <div className="automation-run-time">
+                      {formatTimestamp(thread.created_at)}
+                    </div>
+                    <div className="automation-run-type">
+                      <span className={`run-badge run-badge-${thread.thread_type}`}>
+                        {thread.thread_type === "scheduled" ? "🔄 Scheduled" : "▶️ Manual"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
 
         <section className="conversation-area">
@@ -720,7 +794,7 @@ export default function ChatPage() {
                       >
                         <div className="message-content preserve-whitespace">{msg.content}</div>
                         <div className="message-footer">
-                          <div className="message-time">{formatTimestamp(msg.sent_at)}</div>
+                          <div className="message-time">{formatTimestamp(msg.created_at)}</div>
                           <div className="message-actions">
                             <button
                               type="button"
