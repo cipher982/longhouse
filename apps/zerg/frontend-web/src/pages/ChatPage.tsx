@@ -30,10 +30,10 @@ function useRequiredNumber(param?: string): number | null {
 }
 
 // Helper functions
-function formatTimestamp(timestamp?: string | null): string {
-  if (!timestamp) return "";
+function formatTimestamp(sentAt?: string | null): string {
+  if (!sentAt) return "";
   try {
-    const date = new Date(timestamp);
+    const date = new Date(sentAt);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch {
     return "";
@@ -45,49 +45,6 @@ function truncateText(text: string, maxLength: number): string {
   return text.substring(0, maxLength) + "...";
 }
 
-// Type for messages with optional client-side metadata
-type ThreadMessageWithClientMeta = ThreadMessage & { client_created_at?: number };
-
-// Comparator function for chronological message ordering
-// Sorts by timestamp first (older → newer), then by ID, then by client_created_at
-function compareMessagesChronologically(
-  a: ThreadMessageWithClientMeta,
-  b: ThreadMessageWithClientMeta
-): number {
-  // Extract comparable timestamps from created_at, timestamp, or fallback to client_created_at
-  const getMessageTime = (msg: ThreadMessageWithClientMeta): number => {
-    const timestampStr = msg.created_at || msg.timestamp;
-    if (timestampStr) {
-      const parsed = new Date(timestampStr).getTime();
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-    return msg.client_created_at || 0;
-  };
-
-  const aTime = getMessageTime(a);
-  const bTime = getMessageTime(b);
-
-  // Primary sort: by timestamp
-  if (aTime !== bTime) {
-    return aTime - bTime;
-  }
-
-  // Secondary sort: by ID (prefer messages with real IDs over optimistic ones)
-  const aHasId = a.id != null && a.id > 0;
-  const bHasId = b.id != null && b.id > 0;
-
-  if (aHasId && !bHasId) return -1;
-  if (!aHasId && bHasId) return 1;
-
-  if (aHasId && bHasId) {
-    return a.id - b.id;
-  }
-
-  // Tertiary sort: by client_created_at for optimistic messages
-  return (a.client_created_at || 0) - (b.client_created_at || 0);
-}
 
 // ToolMessage component for rendering collapsible tool call details
 interface ToolMessageProps {
@@ -203,7 +160,7 @@ export default function ChatPage() {
     ThreadMessage,
     Error,
     { threadId: number; content: string },
-    { previousMessages: ThreadMessage[] | undefined; optimisticId: number }
+    number
   >({
     mutationFn: async ({ threadId, content }) => {
       const message = await postThreadMessage(threadId, content);
@@ -212,54 +169,38 @@ export default function ChatPage() {
     },
     onMutate: async ({ threadId, content }) => {
       await queryClient.cancelQueries({ queryKey: ["thread-messages", threadId] });
-      const previousMessages = queryClient.getQueryData<ThreadMessage[]>([
-        "thread-messages",
-        threadId,
-      ]);
 
       const optimisticId = -Date.now();
-      const now = new Date().toISOString();
-      const clientNow = Date.now();
-      const optimisticMessage: ThreadMessageWithClientMeta = {
+      // Optimistic message with current time - server will override with its own timestamp
+      // Since clocks are usually synced, the displayed time won't change noticeably
+      const optimisticMessage = {
         id: optimisticId,
         thread_id: threadId,
         role: "user",
         content,
-        timestamp: now,
-        created_at: now,
+        sent_at: new Date().toISOString(),
         processed: true,
-        client_created_at: clientNow,
-      };
+      } as unknown as ThreadMessage;
 
-      queryClient.setQueryData<ThreadMessage[]>(["thread-messages", threadId], (oldMessages) => {
-        if (!oldMessages) {
-          return [optimisticMessage];
-        }
-        return [...oldMessages, optimisticMessage];
-      });
+      queryClient.setQueryData<ThreadMessage[]>(["thread-messages", threadId], (old) =>
+        old ? [...old, optimisticMessage] : [optimisticMessage]
+      );
 
-      return { previousMessages, optimisticId };
+      return optimisticId;
     },
-    onError: (error, variables, context) => {
-      if (context?.previousMessages) {
-        queryClient.setQueryData(["thread-messages", variables.threadId], context.previousMessages);
-      }
-      toast.error("Failed to send message", {
-        duration: 6000,
-      });
+    onError: (_error, variables, optimisticId) => {
+      queryClient.setQueryData<ThreadMessage[]>(
+        ["thread-messages", variables.threadId],
+        (current) => current?.filter((msg) => msg.id !== optimisticId) ?? []
+      );
+      toast.error("Failed to send message", { duration: 6000 });
     },
-    onSuccess: (data, variables, context) => {
-      queryClient.setQueryData<ThreadMessage[]>(["thread-messages", variables.threadId], (current) => {
-        if (!current) {
-          return [data];
-        }
-        if (context) {
-          return current.map((message) =>
-            message.id === context.optimisticId ? data : message
-          );
-        }
-        return [...current, data];
-      });
+    onSuccess: (data, variables, optimisticId) => {
+      queryClient.setQueryData<ThreadMessage[]>(
+        ["thread-messages", variables.threadId],
+        (current) =>
+          current?.map((msg) => (msg.id === optimisticId ? data : msg)) ?? [data]
+      );
     },
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: ["thread-messages", variables.threadId] });
@@ -394,11 +335,7 @@ export default function ChatPage() {
     });
   }, [threadsQuery.data]);
 
-  const messages = useMemo(() => {
-    const list = messagesQuery.data ?? [];
-    // Sort messages chronologically by timestamp, with tie-breaking by ID and client_created_at
-    return [...list].sort(compareMessagesChronologically);
-  }, [messagesQuery.data]);
+  const messages = messagesQuery.data ?? [];
 
   const agent = agentQuery.data;
 
@@ -524,7 +461,7 @@ export default function ChatPage() {
     const chatHistory = messages
       .filter(msg => msg.role !== "system")
       .map(msg => {
-        const timestamp = new Date(msg.timestamp || msg.created_at || "").toLocaleString();
+        const timestamp = new Date(msg.sent_at || "").toLocaleString();
         return `[${timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`;
       })
       .join("\n\n");
@@ -783,7 +720,7 @@ export default function ChatPage() {
                       >
                         <div className="message-content preserve-whitespace">{msg.content}</div>
                         <div className="message-footer">
-                          <div className="message-time">{formatTimestamp(msg.timestamp)}</div>
+                          <div className="message-time">{formatTimestamp(msg.sent_at)}</div>
                           <div className="message-actions">
                             <button
                               type="button"

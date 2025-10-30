@@ -115,7 +115,7 @@ class ThreadMessageBase(BaseModel):
 
 
 class ThreadMessageCreate(ThreadMessageBase):
-    pass
+    sent_at: Optional[datetime] = None  # Client can provide send timestamp; server validates ±5min, or uses server time
 
 
 class ThreadMessageResponse(ThreadMessageBase):
@@ -123,8 +123,7 @@ class ThreadMessageResponse(ThreadMessageBase):
 
     id: int
     thread_id: int
-    timestamp: datetime
-    created_at: datetime  # For chronological message ordering on frontend
+    sent_at: datetime  # When message was sent (UTC, timezone-aware)
     processed: bool = False
     parent_id: Optional[int] = None
     # Fields for message type and tool display

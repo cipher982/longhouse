@@ -30,7 +30,7 @@ async def test_direct_workflow_execution(db, test_user, sample_agent):
             mock_msg.id = 1
             mock_msg.role = "assistant"
             mock_msg.content = "Test response"
-            mock_msg.timestamp = None
+            mock_msg.sent_at = None
             mock_msg.thread_id = thread.id
             return [mock_msg]
 
