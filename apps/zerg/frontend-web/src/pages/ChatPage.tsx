@@ -389,7 +389,6 @@ export default function ChatPage() {
     onStreamingMessage: handleStreamingMessage,
   });
 
-<<<<<<< HEAD
   // Subscribe to thread topic when thread changes
   useEffect(() => {
     if (effectiveThreadId && wsSendMessage) {
@@ -404,9 +403,9 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (agentId != null && effectiveThreadId != null) {
-      navigate(`/chat/${agentId}/${effectiveThreadId}`, { replace: true });
+      navigate(`/agent/${agentId}/thread/${effectiveThreadId}`, { replace: true });
     } else if (agentId != null) {
-      navigate(`/chat/${agentId}`, { replace: true });
+      navigate(`/agent/${agentId}/thread/`, { replace: true });
     }
   }, [agentId, effectiveThreadId, navigate]);
 
@@ -608,10 +607,15 @@ export default function ChatPage() {
       }
     };
 
-    if (agentId != null && selectedThreadId == null && chatThreads.length === 0) {
+    // Only create thread if:
+    // 1. We have an agentId
+    // 2. No thread is selected
+    // 3. The query has finished loading (not in loading state)
+    // 4. There are no threads
+    if (agentId != null && selectedThreadId == null && !chatThreadsQuery.isLoading && chatThreads.length === 0) {
       initializeThread();
     }
-  }, [agentId, selectedThreadId, chatThreads.length, queryClient, navigate]);
+  }, [agentId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
