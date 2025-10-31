@@ -103,6 +103,7 @@ export default function ChatPage() {
   // Streaming state
   const [streamingMessages, setStreamingMessages] = useState<Map<number, string>>(new Map());
   const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null);
+  const [pendingTokenBuffer, setPendingTokenBuffer] = useState<string>("");
 
   // Sync selectedThreadId from URL parameter - one-way only (URL → state)
   // This ensures state stays consistent with URL, but doesn't override when
@@ -344,24 +345,31 @@ export default function ChatPage() {
       // Reset streaming state for new stream
       setStreamingMessageId(null);
       setStreamingMessages(new Map());
+      setPendingTokenBuffer("");
+    } else if (type === "stream_chunk") {
+      if (data.chunk_type === "assistant_token") {
+        if (streamingMessageId) {
+          // Have ID, accumulate normally
+          setStreamingMessages(prev => {
+            const next = new Map(prev);
+            const current = next.get(streamingMessageId) || "";
+            next.set(streamingMessageId, current + (data.content || ""));
+            return next;
+          });
+        } else {
+          // No ID yet, buffer tokens that arrive before assistant_id
+          setPendingTokenBuffer(prev => prev + (data.content || ""));
+        }
+      }
     } else if (type === "assistant_id") {
-      // Associate streaming with message ID
+      // Associate streaming with message ID and move buffered content
       setStreamingMessageId(data.message_id);
       setStreamingMessages(prev => {
         const next = new Map(prev);
-        next.set(data.message_id, "");
+        next.set(data.message_id, pendingTokenBuffer);
         return next;
       });
-    } else if (type === "stream_chunk") {
-      if (data.chunk_type === "assistant_token" && streamingMessageId) {
-        // Accumulate tokens for the streaming message
-        setStreamingMessages(prev => {
-          const next = new Map(prev);
-          const current = next.get(streamingMessageId) || "";
-          next.set(streamingMessageId, current + (data.content || ""));
-          return next;
-        });
-      }
+      setPendingTokenBuffer("");
     } else if (type === "stream_end") {
       // Finalize: refresh messages from API
       if (data.thread_id === effectiveThreadId) {
@@ -371,8 +379,9 @@ export default function ChatPage() {
       }
       setStreamingMessageId(null);
       setStreamingMessages(new Map());
+      setPendingTokenBuffer("");
     }
-  }, [streamingMessageId, effectiveThreadId, queryClient]);
+  }, [streamingMessageId, pendingTokenBuffer, effectiveThreadId, queryClient]);
 
   const { sendMessage: wsSendMessage } = useWebSocket(agentId != null, {
     includeAuth: true,
@@ -830,6 +839,22 @@ export default function ChatPage() {
 
         <section className="conversation-area">
           <div className="messages-container" data-testid="messages-container" ref={messagesContainerRef}>
+            {/* Show pending buffer as temporary assistant message */}
+            {pendingTokenBuffer && (
+              <div key="pending-stream">
+                <div className="chat-row">
+                  <article
+                    className="message assistant-message streaming"
+                    data-streaming="true"
+                  >
+                    <div className="message-content preserve-whitespace">
+                      {pendingTokenBuffer}
+                      <span className="streaming-cursor">▋</span>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            )}
             {messages
               .filter(msg => msg.role !== "system" && msg.role !== "tool")
               .map((msg, index) => {
