@@ -603,7 +603,7 @@ export default function ChatPage() {
               if (effectiveThreadId != null) {
                 navigate(`/agent/${agent.id}/thread/${effectiveThreadId}`, { replace: true });
               } else {
-                navigate(`/agent/${agent.id}/thread`, { replace: true });
+                navigate(`/agent/${agent.id}/thread/`, { replace: true });
               }
             }}
             aria-hidden="true"
