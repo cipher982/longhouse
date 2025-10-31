@@ -446,7 +446,7 @@ export default function ChatPage() {
       });
       return null;
     }
-  }, [agentId, effectiveThreadId, queryClient, chatThreads]);
+  }, [agentId, effectiveThreadId, queryClient, chatThreads, navigate]);
 
   const handleSend = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -538,7 +538,7 @@ export default function ChatPage() {
     if (agentId != null && selectedThreadId == null && chatThreads.length === 0) {
       initializeThread();
     }
-  }, [agentId, selectedThreadId, chatThreads.length, queryClient]);
+  }, [agentId, selectedThreadId, chatThreads.length, queryClient, navigate]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
