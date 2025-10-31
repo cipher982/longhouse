@@ -62,6 +62,7 @@ const backend = spawn('uv', ['run', 'python', '-m', 'uvicorn', 'zerg.main:app', 
         TESTING: '1',  // Enable testing mode for database reset
         DEV_ADMIN: process.env.DEV_ADMIN || '1',
         ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
+        DATABASE_URL: '',  // Unset DATABASE_URL to force SQLite for E2E tests
     },
     cwd: join(__dirname, '..', 'backend'),
     stdio: 'inherit'

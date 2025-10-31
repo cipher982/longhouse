@@ -96,6 +96,36 @@
     flex: 1;
 }
 
+.chat-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.chat-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s ease;
+}
+
+.chat-settings-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.chat-settings-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
 .agent-name {
     font-size: 16px;
     font-weight: 500;
@@ -221,6 +251,32 @@
 
 .thread-edit-button:disabled {
     opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.thread-edit-form {
+    padding: 0;
+}
+
+.thread-title-input {
+    width: 100%;
+    padding: 8px 12px;
+    background-color: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.thread-title-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+}
+
+.thread-title-input:disabled {
+    opacity: 0.6;
     cursor: not-allowed;
 }
 
@@ -370,25 +426,192 @@
     line-height: 1.5;
 }
 
+.message-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 6px;
+}
+
 .message-time {
     font-size: 11px;
     opacity: 0.7;
-    margin-top: 6px;
-    text-align: right;
+}
+
+.message-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.message-action-btn {
+    background: transparent;
+    border: none;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    border-radius: var(--radius-sm);
+    transition: opacity var(--transition-fast), background-color var(--transition-fast);
+}
+
+.message-action-btn:hover {
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
 .user-message .message-time {
     text-align: left;
 }
 
+/* Input area wrapper (contains tools + input) */
+.chat-input-wrapper {
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-darker);
+    z-index: 5;
+}
+
+/* Chat tools bar above input */
+.chat-tools {
+    display: flex;
+    gap: 8px;
+    padding: 8px 15px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tool-btn {
+    background-color: var(--color-surface-overlay);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-primary);
+    padding: var(--component-toolbar-padding-y) var(--component-toolbar-padding-x);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: var(--component-toolbar-font-size);
+    transition: background-color var(--motion-duration-fast) var(--motion-easing-standard),
+        border-color var(--motion-duration-fast) var(--motion-easing-standard);
+    display: flex;
+    align-items: center;
+    gap: var(--component-toolbar-gap);
+}
+
+.tool-btn:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--color-surface-overlay) 70%, #ffffff 30%);
+    border-color: color-mix(in srgb, var(--color-border-subtle) 70%, #ffffff 30%);
+}
+
+.tool-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Workflow panel below tools bar */
+.workflow-panel {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 12px 15px;
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+.workflow-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.workflow-panel-header h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.close-panel-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 2px 6px;
+    transition: color var(--transition-fast);
+}
+
+.close-panel-btn:hover {
+    color: var(--text-primary);
+}
+
+.workflow-panel-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.workflow-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.workflow-selector label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.workflow-selector select {
+    background-color: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.workflow-selector select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.execute-workflow-btn {
+    background-color: var(--color-primary);
+    border: none;
+    color: white;
+    padding: 8px 16px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color var(--transition-fast);
+}
+
+.execute-workflow-btn:hover:not(:disabled) {
+    background-color: #0069d9;
+}
+
+.execute-workflow-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.no-workflows {
+    text-align: center;
+    padding: 12px;
+    color: var(--text-secondary);
+}
+
+.no-workflows p {
+    margin: 0 0 4px 0;
+    font-size: 13px;
+}
+
+.no-workflows small {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
 /* Input area styles */
 .chat-input-area {
     display: flex;
     padding: 15px;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-darker);
     position: relative;
-    z-index: 5;
     gap: 10px;
     margin-bottom: 30px; /* Account for the fixed status bar at bottom */
 }

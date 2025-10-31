@@ -32,11 +32,6 @@ services:
       target: development
       args:
         BUILD_ENV: development
-      # Local build cache
-      cache_from:
-        - type=local,src=/tmp/docker-cache/backend
-      cache_to:
-        - type=local,dest=/tmp/docker-cache/backend,mode=max
     restart: unless-stopped
     depends_on:
       postgres:
@@ -76,26 +71,34 @@ services:
     networks:
       - zerg-dev-network
 
-  # Frontend Service (Development mode - React UI)
+  # Frontend Service (Development mode - Vite dev server)
   frontend:
     build:
       context: apps/zerg/frontend-web
       dockerfile: Dockerfile
+      target: development
     restart: unless-stopped
     depends_on:
       - backend
     environment:
-      VITE_API_URL: http://localhost:47300
+      # Browser-facing URLs (VITE_ prefix required for client code)
+      VITE_API_BASE_URL: /api
+      VITE_WS_BASE_URL: ws://localhost:${BACKEND_PORT:-47300}/ws
+      # Vite proxy uses Docker Compose DNS (backend:8000) by default
+      # No BACKEND_HOST/PORT needed - Docker handles service name resolution
     ports:
-      - "${FRONTEND_PORT:-47200}:80"
+      - "${FRONTEND_PORT:-47200}:5173"
+    stop_signal: SIGQUIT
+    stop_grace_period: 5s
     volumes:
-      # Hot reload: mount source code
-      - ./apps/zerg/frontend-web/src:/app/src:cached
-      - ./apps/zerg/frontend-web/public:/app/public:cached
+      # Hot reload: mount entire source directory
+      - ./apps/zerg/frontend-web:/app:cached
+      # Prevent node_modules from being overridden by host
+      - /app/node_modules
       # Development logs
-      - ./logs/frontend:/var/log/nginx
+      - ./logs/frontend:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173/"]
       interval: 15s
       timeout: 5s
       retries: 3

@@ -183,6 +183,7 @@ async def update_agent(
             status=agent.status.value if agent.status else None,
             schedule=agent.schedule,
             config=agent.config,
+            allowed_tools=agent.allowed_tools,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

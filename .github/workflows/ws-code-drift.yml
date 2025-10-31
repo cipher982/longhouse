@@ -15,11 +15,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node 18 (for AsyncAPI generator)
+      - name: Setup Node 18
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'npm'
 
       - name: Install build essentials
         run: |

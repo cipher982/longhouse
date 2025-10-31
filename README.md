@@ -1,10 +1,10 @@
 ## Zerg Agent Platform
 
-Create and orchestrate AI agents with real‑time streaming. This monorepo contains the Zerg backend and UIs plus the Jarvis PWA.
+Create and orchestrate AI agents with real‑time streaming. This monorepo contains the Zerg backend (FastAPI) and React UI, plus the Jarvis PWA.
 
 - **Backend**: FastAPI (Python 3.12), WebSockets, LangGraph agents
-- **UI (default in Docker)**: React + Vite (`apps/zerg/frontend-web`)
-- **UI (dev/debug)**: Rust/WASM (`apps/zerg/frontend`)
+- **Frontend**: React + TypeScript + Vite (`apps/zerg/frontend-web`)
+- **Database**: PostgreSQL (prod) / SQLite (dev)
 - **Monorepo**: also includes `apps/jarvis` (PWA) and shared packages
 
 ### Quick start
@@ -23,7 +23,7 @@ make zerg-up           # starts Postgres + backend + React UI
 ```
 - Local dev (no containers):
 ```bash
-make zerg-dev          # uvicorn backend + Rust/WASM UI (ports from .env)
+make zerg-dev          # uvicorn backend + React dev server (ports from .env)
 ```
 - Full monorepo (Jarvis + Zerg):
 ```bash
@@ -55,9 +55,8 @@ make test-jarvis    # Jarvis only
 
 ### Monorepo layout (essentials)
 - `apps/zerg/backend` – FastAPI service, schedulers, WebSocket hub
-- `apps/zerg/frontend-web` – React UI served in Docker images
-- `apps/zerg/frontend` – Rust/WASM UI for power users and debugging
-- `apps/zerg/e2e` – Playwright tests
+- `apps/zerg/frontend-web` – React UI (TypeScript + Vite)
+- `apps/zerg/e2e` – Playwright end-to-end tests
 - `apps/jarvis` – PWA app
 - `packages/contracts` – OpenAPI/AsyncAPI clients and types
 - `packages/tool-manifest` – tool manifest generator

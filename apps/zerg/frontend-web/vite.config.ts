@@ -3,14 +3,18 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig(({ mode }) => {
-  const rootEnv = loadEnv(mode, path.resolve(__dirname, ".."), "");
+  // Load .env from frontend-web directory (where .env.example lives)
+  const rootEnv = loadEnv(mode, __dirname, "");
 
-  const backendHost = rootEnv.BACKEND_HOST || "127.0.0.1";
-  const backendPort = Number(rootEnv.BACKEND_PORT || 8001);
   const frontendPort = Number(rootEnv.FRONTEND_PORT || 3000);
 
-  // Use root path in production, /react/ in development
-  const basePath = mode === "production" ? "/" : "/react/";
+  // Use root path for both dev and production
+  // The /react/ path was legacy and unnecessary - only frontend runs on this port
+  const basePath = "/";
+
+  // Proxy target: use VITE_PROXY_TARGET for local dev outside Docker,
+  // otherwise leverage Docker Compose DNS (backend:8000)
+  const proxyTarget = rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
 
   return {
     plugins: [react()],
@@ -18,9 +22,14 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "127.0.0.1",
       port: frontendPort,
+      // Enable file watching with polling for Docker volumes
+      watch: {
+        usePolling: true,
+        interval: 1000,
+      },
       proxy: {
         "/api": {
-          target: `http://${backendHost}:${backendPort}`,
+          target: proxyTarget,
           changeOrigin: true,
         },
       },

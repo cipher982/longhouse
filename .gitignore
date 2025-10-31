@@ -197,6 +197,7 @@ e2e/playwright-report/
 frontend/tmp/*
 backend/zerg/ws_schema/
 frontend/generated/
+apps/zerg/frontend-web/src/styles/generated/
 node_modules/
 test-results/
 playwright-report/

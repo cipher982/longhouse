@@ -174,7 +174,7 @@ class AgentNodeExecutor(BaseNodeExecutor):
                     "id": msg.id,
                     "role": msg.role,
                     "content": msg.content,
-                    "created_at": msg.timestamp.isoformat() if msg.timestamp else None,
+                    "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
                     "thread_id": msg.thread_id,
                 }
             )

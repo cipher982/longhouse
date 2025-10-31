@@ -13,8 +13,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@jarvis/core": "workspace:*",
-    "@jarvis/data-local": "workspace:*",
+    "@jarvis/core": "file:../../packages/core",
+    "@jarvis/data-local": "file:../../packages/data/local",
     "@openai/agents": "^0.1.1",
     "idb": "^8.0.0",
     "zod": "^3.25.76"

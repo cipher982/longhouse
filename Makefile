@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help start stop postgres-up postgres-down jarvis-dev zerg-dev swarm-dev test generate-sdk generate-tools seed-jarvis-agents validate-contracts validate-deploy test-jarvis test-zerg
+.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset regen-ws-code ws-code-diff-check
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -30,48 +30,23 @@ help:
 	@echo "  make zerg-reset    Reset database (destroys all data)"
 	@echo ""
 	@echo "Development:"
-	@echo "  make jarvis-dev    Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
-	@echo "  make generate-sdk  Generate OpenAPI/AsyncAPI clients and tool manifest"
-	@echo "  make generate-tools Generate tool manifest only"
-	@echo "  make seed-jarvis-agents  Seed baseline Zerg agents for Jarvis integration"
+	@echo "  make jarvis-dev            Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
+	@echo "  make generate-sdk          Generate OpenAPI/AsyncAPI clients and tool manifest"
+	@echo "  make generate-tools        Generate tool manifest only"
+	@echo "  make seed-jarvis-agents    Seed baseline Zerg agents for Jarvis integration"
 	@echo ""
 	@echo "Testing:"
-	@echo "  make test          Run ALL tests (Jarvis + Zerg + integration)"
-	@echo "  make test-jarvis   Run Jarvis tests only"
-	@echo "  make test-zerg     Run Zerg tests (backend + frontend + e2e)"
-	@echo "  make validate-contracts  Run contract validation checks"
-	@echo ""
-	@echo "Deployment:"
-	@echo "  make validate-deploy    Validate environment for deployment"
+	@echo "  make test                  Run ALL tests (Jarvis + Zerg + integration)"
+	@echo "  make test-jarvis           Run Jarvis tests only"
+	@echo "  make test-zerg             Run Zerg tests (backend + frontend + e2e)"
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# Development workflow – Individual apps
+# Development workflow – Jarvis
 # ---------------------------------------------------------------------------
 jarvis-dev:
 	@echo "🤖 Starting Jarvis (PWA + Node server)..."
 	cd apps/jarvis && $(MAKE) start
-
-zerg-dev:
-	@echo "🐝 Starting Zerg (FastAPI backend + frontend)..."
-	@echo "🚀 Starting development servers on ports $(ZERG_BACKEND_PORT) and $(ZERG_FRONTEND_PORT)..."
-	$(MAKE) -j2 _zerg_backend _zerg_frontend
-
-swarm-dev:
-	@echo "🌐 Starting FULL SWARM (Jarvis + Zerg)..."
-	@echo "   Jarvis: http://localhost:$(JARVIS_WEB_PORT)"
-	@echo "   Zerg Backend: http://localhost:$(ZERG_BACKEND_PORT)"
-	@echo "   Zerg Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
-	$(MAKE) -j2 jarvis-dev zerg-dev
-
-_zerg_backend:
-	cd apps/zerg/backend && uv run python -m uvicorn zerg.main:app --reload --port $(ZERG_BACKEND_PORT)
-
-_zerg_frontend:
-	cd apps/zerg/frontend && ./build-debug.sh
-
-# Stop targets removed - use docker compose commands instead
-# See zerg-up/zerg-down below
 
 # ---------------------------------------------------------------------------
 # Testing targets
@@ -90,8 +65,8 @@ test-jarvis:
 test-zerg:
 	@echo "🧪 Running Zerg tests..."
 	cd apps/zerg/backend && ./run_backend_tests.sh
-	cd apps/zerg/frontend && ./run_frontend_tests.sh
-	cd apps/zerg/e2e && ./run_e2e_tests.sh --mode=basic
+	cd apps/zerg/frontend-web && npm test
+	cd apps/zerg/e2e && npx playwright test
 
 # ---------------------------------------------------------------------------
 # SDK Generation
@@ -117,25 +92,12 @@ seed-jarvis-agents:
 	@echo "🌱 Seeding baseline Zerg agents for Jarvis..."
 	cd apps/zerg/backend && uv run python scripts/seed_jarvis_agents.py
 	@echo "✅ Agents seeded"
-
-# ---------------------------------------------------------------------------
-# Contract validation (catches API mismatches at build time)
-# ---------------------------------------------------------------------------
-validate-contracts:
-	@echo "🔍 Running API contract validation..."
-	@echo "⚠️  Contract validation not yet implemented for monorepo"
-
-# ---------------------------------------------------------------------------
-# Deployment validation (checks environment and connectivity)
-# ---------------------------------------------------------------------------
-validate-deploy:
-	@echo "🔍 Validating deployment configuration..."
-	@echo "⚠️  Deployment validation script needs to be updated for monorepo"
 # ---------------------------------------------------------------------------
 # Docker Compose - Everything together
 # ---------------------------------------------------------------------------
 zerg-up:
-	@echo "🚀 Starting Zerg platform (Postgres + Backend + Frontend)..."
+	@echo "🚀 Starting Zerg platform (Dev environment with hot-reload)..."
+	@echo "   Using: docker-compose.dev.yml (development with volume mounts)"
 	docker compose -f docker-compose.dev.yml up -d --build
 	@sleep 3
 	@docker compose -f docker-compose.dev.yml ps
@@ -157,3 +119,25 @@ zerg-reset:
 	docker compose -f docker-compose.dev.yml down -v
 	docker compose -f docker-compose.dev.yml up -d
 	@echo "Run migrations and seed agents"
+
+# ---------------------------------------------------------------------------
+# WebSocket Code Generation
+# ---------------------------------------------------------------------------
+regen-ws-code:
+	@echo "🔄 Regenerating WebSocket contract code..."
+	@bash scripts/regen-ws-code.sh
+	@echo "✅ WebSocket code regenerated"
+
+ws-code-diff-check:
+	@echo "🔍 Checking WebSocket code is in sync with asyncapi/chat.yml..."
+	@bash scripts/regen-ws-code.sh
+	@if git diff --quiet; then \
+		echo "✅ WebSocket code is in sync"; \
+	else \
+		echo "❌ WebSocket code is out of sync with asyncapi/chat.yml"; \
+		echo "   Please run: make regen-ws-code"; \
+		echo "   Then commit the changes"; \
+		git diff; \
+		exit 1; \
+	fi
+
