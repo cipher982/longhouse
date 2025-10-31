@@ -100,6 +100,11 @@ export default function ChatPage() {
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
 
+  // Streaming state
+  const [streamingMessages, setStreamingMessages] = useState<Map<number, string>>(new Map());
+  const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null);
+  const [pendingTokenBuffer, setPendingTokenBuffer] = useState<string>("");
+
   // Sync selectedThreadId from URL parameter - one-way only (URL → state)
   // This ensures state stays consistent with URL, but doesn't override when
   // we're intentionally changing threads via state updates
@@ -332,10 +337,78 @@ export default function ChatPage() {
     return queries;
   }, [agentId, effectiveThreadId]);
 
-  useWebSocket(agentId != null, {
+  // Handle streaming messages
+  const handleStreamingMessage = useCallback((envelope: any) => {
+    const { type, data } = envelope;
+
+    if (type === "stream_start") {
+      // Reset streaming state for new stream
+      setStreamingMessageId(null);
+      setStreamingMessages(new Map());
+      setPendingTokenBuffer("");
+    } else if (type === "stream_chunk") {
+      if (data.chunk_type === "assistant_token") {
+        if (streamingMessageId) {
+          // Have ID, accumulate normally
+          setStreamingMessages(prev => {
+            const next = new Map(prev);
+            const current = next.get(streamingMessageId) || "";
+            next.set(streamingMessageId, current + (data.content || ""));
+            return next;
+          });
+        } else {
+          // No ID yet, buffer tokens that arrive before assistant_id
+          setPendingTokenBuffer(prev => prev + (data.content || ""));
+        }
+      }
+    } else if (type === "assistant_id") {
+      // Associate streaming with message ID and move buffered content
+      setStreamingMessageId(data.message_id);
+      setStreamingMessages(prev => {
+        const next = new Map(prev);
+        next.set(data.message_id, pendingTokenBuffer);
+        return next;
+      });
+      setPendingTokenBuffer("");
+    } else if (type === "stream_end") {
+      // Finalize: refresh messages from API
+      if (data.thread_id === effectiveThreadId) {
+        queryClient.invalidateQueries({ 
+          queryKey: ["thread-messages", data.thread_id] 
+        });
+      }
+      setStreamingMessageId(null);
+      setStreamingMessages(new Map());
+      setPendingTokenBuffer("");
+    }
+  }, [streamingMessageId, pendingTokenBuffer, effectiveThreadId, queryClient]);
+
+  const { sendMessage: wsSendMessage } = useWebSocket(agentId != null, {
     includeAuth: true,
     invalidateQueries: wsQueries,
+    onStreamingMessage: handleStreamingMessage,
   });
+
+<<<<<<< HEAD
+  // Subscribe to thread topic when thread changes
+  useEffect(() => {
+    if (effectiveThreadId && wsSendMessage) {
+      // Subscribe to thread topic for streaming
+      wsSendMessage({
+        type: "subscribe_thread",
+        thread_id: effectiveThreadId,
+        message_id: `sub-${Date.now()}`,
+      });
+    }
+  }, [effectiveThreadId, wsSendMessage]);
+
+  useEffect(() => {
+    if (agentId != null && effectiveThreadId != null) {
+      navigate(`/chat/${agentId}/${effectiveThreadId}`, { replace: true });
+    } else if (agentId != null) {
+      navigate(`/chat/${agentId}`, { replace: true });
+    }
+  }, [agentId, effectiveThreadId, navigate]);
 
   const chatThreads = useMemo(() => {
     const list = chatThreadsQuery.data ?? [];
@@ -769,14 +842,35 @@ export default function ChatPage() {
 
         <section className="conversation-area">
           <div className="messages-container" data-testid="messages-container" ref={messagesContainerRef}>
+            {/* Show pending buffer as temporary assistant message */}
+            {pendingTokenBuffer && (
+              <div key="pending-stream">
+                <div className="chat-row">
+                  <article
+                    className="message assistant-message streaming"
+                    data-streaming="true"
+                  >
+                    <div className="message-content preserve-whitespace">
+                      {pendingTokenBuffer}
+                      <span className="streaming-cursor">▋</span>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            )}
             {messages
               .filter(msg => msg.role !== "system" && msg.role !== "tool")
               .map((msg, index) => {
                 const isLastUserMessage = msg.role === "user" && index === messages.length - 1;
                 const toolMessages = toolMessagesByParent.get(msg.id);
+                
+                // Check if this message is currently streaming
+                const streamingContent = streamingMessages.get(msg.id);
+                const isStreaming = streamingMessageId === msg.id && streamingContent !== undefined;
+                const displayContent = streamingContent !== undefined ? streamingContent : msg.content;
 
                 // Skip rendering empty assistant messages (they only have tool calls)
-                if (msg.role === "assistant" && msg.content.trim() === "") {
+                if (msg.role === "assistant" && msg.content.trim() === "" && !isStreaming) {
                   return (
                     <div key={msg.id}>
                       {toolMessages?.map(toolMsg => (
@@ -793,11 +887,16 @@ export default function ChatPage() {
                         className={clsx("message", {
                           "user-message": msg.role === "user",
                           "assistant-message": msg.role === "assistant",
+                          "streaming": isStreaming,
                         })}
                         data-testid={isLastUserMessage ? "chat-message" : undefined}
                         data-role={`chat-message-${msg.role}`}
+                        data-streaming={isStreaming ? "true" : undefined}
                       >
-                        <div className="message-content preserve-whitespace">{msg.content}</div>
+                        <div className="message-content preserve-whitespace">
+                          {displayContent || (isStreaming ? "" : msg.content)}
+                          {isStreaming && <span className="streaming-cursor">▋</span>}
+                        </div>
                         <div className="message-footer">
                           <div className="message-time">{formatTimestamp(msg.created_at)}</div>
                           <div className="message-actions">

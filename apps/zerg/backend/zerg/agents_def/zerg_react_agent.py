@@ -96,6 +96,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     Return a compiled LangGraph runnable using the Functional API
     for the given Agent ORM row.
     """
+    # Capture token stream setting at runnable creation time
+    enable_token_stream = get_settings().llm_token_stream
+    
     # --- Define tools and model within scope ---
     # ------------------------------------------------------------------
     # MCP INTEGRATION – Dynamically load tools provided by *all* MCP servers
@@ -133,7 +136,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # Model invocation helpers
     # ------------------------------------------------------------------
 
-    def _call_model_sync(messages: List[BaseMessage]):
+    def _call_model_sync(messages: List[BaseMessage], enable_token_stream: bool = False):
         """Blocking LLM call (executes in *current* thread).
 
         We keep this as a *plain* function rather than a LangGraph ``@task``
@@ -146,14 +149,35 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             "Called get_config outside of a runnable context"
         """
 
-        return llm_with_tools.invoke(messages)
+        if enable_token_stream:
+            # For streaming with callbacks, use ainvoke directly (not via thread)
+            # This allows async callbacks to work properly
+            from zerg.callbacks.token_stream import WsTokenCallback
+            callback = WsTokenCallback()
+            # Note: We're in sync context but need async callbacks, so we'll handle this in async version
+            # For sync, we can't easily use async callbacks, so fall back to non-streaming
+            return llm_with_tools.invoke(messages)
+        else:
+            return llm_with_tools.invoke(messages)
 
-    async def _call_model_async(messages: List[BaseMessage]):
-        """Run the blocking LLM call in a worker thread and await the result."""
+    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False):
+        """Run the LLM call with optional token streaming via callbacks."""
 
-        import asyncio
-
-        return await asyncio.to_thread(_call_model_sync, messages)
+        if enable_token_stream:
+            from zerg.callbacks.token_stream import WsTokenCallback
+            
+            callback = WsTokenCallback()
+            # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
+            # ainvoke() returns the complete message while callbacks stream tokens
+            result = await llm_with_tools.ainvoke(
+                messages,
+                config={"callbacks": [callback]}
+            )
+            return result
+        else:
+            # For non-streaming, use sync invoke wrapped in thread
+            import asyncio
+            return await asyncio.to_thread(_call_model_sync, messages, False)
 
     #
     # NOTE ON CONCURRENCY
@@ -196,7 +220,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
     # --- Define main entrypoint ---
     async def _agent_executor_async(
-        messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None
+        messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None, enable_token_stream: bool = False
     ) -> List[BaseMessage]:
         """
         Main entrypoint for the agent. This is a simple ReAct loop:
@@ -227,7 +251,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         current_messages = messages or previous or []
 
         # Start by calling the model with the current context
-        llm_response = await _call_model_async(current_messages)
+        llm_response = await _call_model_async(current_messages, enable_token_stream)
 
         # Until the model stops calling tools, continue the loop
         import asyncio
@@ -250,7 +274,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             current_messages = add_messages(current_messages, [llm_response] + list(tool_results))
 
             # Call model again with updated messages
-            llm_response = await _call_model_async(current_messages)
+            llm_response = await _call_model_async(current_messages, enable_token_stream)
 
         # Add the final response to history
         final_messages = add_messages(current_messages, [llm_response])
@@ -262,26 +286,31 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # Synchronous wrapper for libraries/tests that call ``.invoke``
     # ------------------------------------------------------------------
 
-    def _agent_executor_sync(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
+    def _agent_executor_sync(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None, enable_token_stream: bool = False):
         """Blocking wrapper that delegates to the async implementation."""
 
         import asyncio
 
-        return asyncio.run(_agent_executor_async(messages, previous=previous))
+        return asyncio.run(_agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream))
 
     # ------------------------------------------------------------------
     # Expose BOTH sync & async entrypoints to LangGraph
     # ------------------------------------------------------------------
+    # enable_token_stream is captured from closure above
 
     @entrypoint(checkpointer=checkpointer)
     def agent_executor(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
-        return _agent_executor_sync(messages, previous=previous)
+        return _agent_executor_sync(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     # Attach the *async* implementation manually – LangGraph picks this up so
     # callers can use ``.ainvoke`` while tests and legacy code continue to use
     # the blocking ``.invoke`` API.
+    # We need to create a wrapper that captures enable_token_stream from closure
 
-    agent_executor.afunc = _agent_executor_async  # type: ignore[attr-defined]
+    async def _agent_executor_async_wrapper(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
+        return await _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
+
+    agent_executor.afunc = _agent_executor_async_wrapper  # type: ignore[attr-defined]
 
     return agent_executor
 
