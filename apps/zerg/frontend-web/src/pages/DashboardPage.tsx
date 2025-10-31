@@ -515,7 +515,7 @@ export default function DashboardPage() {
 
   function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, agentName: string) {
     event.stopPropagation();
-    navigate(`/chat/${agentId}?name=${encodeURIComponent(agentName)}`);
+    navigate(`/agent/${agentId}/thread/?name=${encodeURIComponent(agentName)}`);
   }
 
   function handleDebugAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {

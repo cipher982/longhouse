@@ -389,6 +389,7 @@ export default function ChatPage() {
     onStreamingMessage: handleStreamingMessage,
   });
 
+<<<<<<< HEAD
   // Subscribe to thread topic when thread changes
   useEffect(() => {
     if (effectiveThreadId && wsSendMessage) {
@@ -453,7 +454,7 @@ export default function ChatPage() {
 
   const handleSelectThread = (thread: Thread) => {
     setSelectedThreadId(thread.id);
-    navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
+    navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
   };
 
   const handleEditThreadTitle = (thread: Thread, e: React.MouseEvent) => {
@@ -510,6 +511,7 @@ export default function ChatPage() {
       const thread = await createThread(agentId, "Primary Thread");
       await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       setSelectedThreadId(thread.id);
+      navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
       return thread.id;
     } catch (error) {
       toast.error("Failed to create thread", {
@@ -517,7 +519,7 @@ export default function ChatPage() {
       });
       return null;
     }
-  }, [agentId, effectiveThreadId, queryClient, chatThreads]);
+  }, [agentId, effectiveThreadId, queryClient, chatThreads, navigate]);
 
   const handleSend = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -598,6 +600,7 @@ export default function ChatPage() {
         const thread = await createThread(agentId, "Thread 1");
         await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
         setSelectedThreadId(thread.id);
+        navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
       } catch (error) {
         // Silently fail - user can create thread manually if needed
       } finally {
@@ -608,7 +611,7 @@ export default function ChatPage() {
     if (agentId != null && selectedThreadId == null && chatThreads.length === 0) {
       initializeThread();
     }
-  }, [agentId, selectedThreadId, chatThreads.length, queryClient]);
+  }, [agentId, selectedThreadId, chatThreads.length, queryClient, navigate]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -648,7 +651,7 @@ export default function ChatPage() {
       const thread = await createThread(agentId, title);
       queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       setSelectedThreadId(thread.id);
-      navigate(`/chat/${agentId}/${thread.id}`, { replace: true });
+      navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
     } catch (error) {
       toast.error("Failed to create thread", { duration: 6000 });
     }
@@ -671,9 +674,9 @@ export default function ChatPage() {
             data-testid={`chat-agent-${agent.id}`}
             onClick={() => {
               if (effectiveThreadId != null) {
-                navigate(`/chat/${agent.id}/${effectiveThreadId}`, { replace: true });
+                navigate(`/agent/${agent.id}/thread/${effectiveThreadId}`, { replace: true });
               } else {
-                navigate(`/chat/${agent.id}`, { replace: true });
+                navigate(`/agent/${agent.id}/thread/`, { replace: true });
               }
             }}
             aria-hidden="true"

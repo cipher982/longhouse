@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset
+.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset regen-ws-code ws-code-diff-check
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -119,4 +119,25 @@ zerg-reset:
 	docker compose -f docker-compose.dev.yml down -v
 	docker compose -f docker-compose.dev.yml up -d
 	@echo "Run migrations and seed agents"
+
+# ---------------------------------------------------------------------------
+# WebSocket Code Generation
+# ---------------------------------------------------------------------------
+regen-ws-code:
+	@echo "🔄 Regenerating WebSocket contract code..."
+	@bash scripts/regen-ws-code.sh
+	@echo "✅ WebSocket code regenerated"
+
+ws-code-diff-check:
+	@echo "🔍 Checking WebSocket code is in sync with asyncapi/chat.yml..."
+	@bash scripts/regen-ws-code.sh
+	@if git diff --quiet; then \
+		echo "✅ WebSocket code is in sync"; \
+	else \
+		echo "❌ WebSocket code is out of sync with asyncapi/chat.yml"; \
+		echo "   Please run: make regen-ws-code"; \
+		echo "   Then commit the changes"; \
+		git diff; \
+		exit 1; \
+	fi
 
