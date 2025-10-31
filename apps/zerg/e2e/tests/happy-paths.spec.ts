@@ -77,6 +77,10 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Create agent
     await page.locator('[data-testid="create-agent-btn"]').click();
 
+    // Wait for new agent row to appear
+    await page.waitForTimeout(500); // Give time for API response
+    await page.locator('tr[data-agent-id]').nth(initialCount).waitFor({ timeout: 10000 });
+
     // Verify agent appears in list
     const newCount = await page.locator('tr[data-agent-id]').count();
     expect(newCount).toBe(initialCount + 1);
@@ -427,11 +431,17 @@ test.describe('Happy Path Tests - Core User Flows', () => {
 
     // STEP 3: Send message
     console.log('Step 3: Sending message...');
+    const urlBeforeSend = page.url();
+    console.log(`📊 URL before sending message: ${urlBeforeSend}`);
+
     await page.locator('[data-testid="chat-input"]').fill('Test message for journey');
     await page.locator('[data-testid="send-message-btn"]').click();
 
     const messagesContainer = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
     await expect(messagesContainer).toContainText('Test message for journey', { timeout: 15000 });
+
+    const urlAfterSend = page.url();
+    console.log(`📊 URL after sending message: ${urlAfterSend}`);
 
     // STEP 4: Return to dashboard
     console.log('Step 4: Returning to dashboard...');
@@ -446,13 +456,26 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     console.log('Step 5: Verifying message persistence...');
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
+
+    // Log URL immediately after navigation
+    let urlAfterClick = page.url();
+    console.log(`📊 URL after clicking chat button: ${urlAfterClick}`);
+
     await page.waitForTimeout(1000); // Give time for thread to load
+
+    // Log URL after wait
+    let urlAfterWait = page.url();
+    console.log(`📊 URL after waiting: ${urlAfterWait}`);
 
     // Create fresh locator reference after navigation
     const messagesContainerAfterReturn = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
 
     // Wait for messages to load
     await page.waitForTimeout(1000);
+
+    // Check if there are any messages at all
+    const messageCount = await page.locator('[data-role="chat-message-user"], [data-role="chat-message-assistant"]').count();
+    console.log(`📊 Message count in container: ${messageCount}`);
 
     // Message should still be visible
     await expect(messagesContainerAfterReturn).toContainText('Test message for journey', { timeout: 15000 });
