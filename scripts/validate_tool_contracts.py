@@ -6,7 +6,7 @@ import yaml
 from pathlib import Path
 
 # Add backend to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "zerg" / "backend"))
 
 def validate_tool_registry():
     """Validate backend tool registry against schema."""

@@ -56,6 +56,26 @@ export interface ExecutionLogs {
   logs: string;
 }
 
+export interface ContainerPolicy {
+  enabled: boolean;
+  default_image: string | null;
+  network_enabled: boolean;
+  user_id: number | null;
+  memory_limit: string | null;
+  cpus: string | null;
+  timeout_secs: number;
+  seccomp_profile: string | null;
+}
+
+export interface AvailableToolsResponse {
+  builtin: string[];
+  mcp: Record<string, string[]>;
+}
+
+export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
+export type McpServerResponse = components["schemas"]["MCPServerResponse"];
+export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
+
 type AgentCreate = Schemas["AgentCreate"];
 type AgentUpdate = Schemas["AgentUpdate"];
 type ThreadCreate = Schemas["ThreadCreate"];
@@ -233,8 +253,12 @@ export async function fetchAgent(agentId: number): Promise<AgentResponse> {
   return request<AgentResponse>(`/agents/${agentId}`);
 }
 
-export async function fetchThreads(agentId: number): Promise<ThreadsResponse> {
-  return request<ThreadsResponse>(`/threads?agent_id=${agentId}`);
+export async function fetchThreads(agentId: number, threadType?: string): Promise<ThreadsResponse> {
+  const params = new URLSearchParams({ agent_id: String(agentId) });
+  if (threadType) {
+    params.append("thread_type", threadType);
+  }
+  return request<ThreadsResponse>(`/threads?${params.toString()}`);
 }
 
 export async function fetchThreadMessages(threadId: number): Promise<ThreadMessagesResponse> {
@@ -297,6 +321,38 @@ export async function resetAgent(agentId: number): Promise<UpdatedAgentResponse>
 export async function runAgent(agentId: number): Promise<void> {
   await request<void>(`/agents/${agentId}/task`, {
     method: "POST",
+  });
+}
+
+export async function fetchContainerPolicy(): Promise<ContainerPolicy> {
+  return request<ContainerPolicy>(`/config/container-policy`);
+}
+
+export async function fetchAvailableTools(agentId: number): Promise<AvailableToolsResponse> {
+  return request<AvailableToolsResponse>(`/agents/${agentId}/mcp-servers/available-tools`);
+}
+
+export async function fetchMcpServers(agentId: number): Promise<McpServerResponse[]> {
+  return request<McpServerResponse[]>(`/agents/${agentId}/mcp-servers/`);
+}
+
+export async function addMcpServer(agentId: number, payload: McpServerAddRequest): Promise<Agent> {
+  return request<Agent>(`/agents/${agentId}/mcp-servers/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function removeMcpServer(agentId: number, serverName: string): Promise<void> {
+  await request<void>(`/agents/${agentId}/mcp-servers/${encodeURIComponent(serverName)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function testMcpServer(agentId: number, payload: McpServerAddRequest): Promise<McpTestConnectionResponse> {
+  return request<McpTestConnectionResponse>(`/agents/${agentId}/mcp-servers/test`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

@@ -2,6 +2,8 @@
 # Keep stdlib ``datetime`` for type annotations; runtime *now()* comes from
 # ``utc_now``.
 from datetime import datetime
+from datetime import timedelta
+from datetime import timezone as dt_timezone
 
 # Standard library typing helpers
 from typing import Any
@@ -157,6 +159,7 @@ def update_agent(
     status: Optional[str] = None,
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    allowed_tools: Optional[list] = None,
     next_run_at: Optional[datetime] = None,
     last_run_at: Optional[datetime] = None,
     last_error: Optional[str] = None,
@@ -182,6 +185,8 @@ def update_agent(
         db_agent.schedule = schedule
     if config is not None:
         db_agent.config = config
+    if allowed_tools is not None:
+        db_agent.allowed_tools = allowed_tools
     if next_run_at is not None:
         db_agent.next_run_at = next_run_at
     if last_run_at is not None:
@@ -475,12 +480,14 @@ def create_agent_message(db: Session, agent_id: int, role: str, content: str):
 
 
 # Thread CRUD operations
-def get_threads(db: Session, agent_id: Optional[int] = None, skip: int = 0, limit: int = 100):
-    """Get all threads, filtered by agent_id if provided"""
+def get_threads(db: Session, agent_id: Optional[int] = None, thread_type: Optional[str] = None, skip: int = 0, limit: int = 100):
+    """Get threads, optionally filtered by agent_id and/or thread_type"""
     query = db.query(Thread).options(selectinload(Thread.messages))
     if agent_id is not None:
         query = query.filter(Thread.agent_id == agent_id)
-    return query.offset(skip).limit(limit).all()
+    if thread_type is not None:
+        query = query.filter(Thread.thread_type == thread_type)
+    return query.order_by(Thread.created_at.desc()).offset(skip).limit(limit).all()
 
 
 def get_active_thread(db: Session, agent_id: int):
@@ -567,13 +574,21 @@ def delete_thread(db: Session, thread_id: int):
 
 # Thread Message CRUD operations
 def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int = 100):
-    """Get all messages for a specific thread"""
-    # Use the *id* column for deterministic chronological ordering. SQLite
-    # timestamps have a resolution of 1 second which can lead to two messages
-    # inserted within the same second being returned in undefined order.  The
-    # auto-incrementing primary-key is strictly monotonic, therefore provides a
-    # stable ordering even when multiple rows share the same timestamp.
-
+    """
+    Get all messages for a specific thread, ordered strictly by database ID.
+    
+    IMPORTANT: This function returns messages ordered by ThreadMessage.id (insertion order).
+    This ordering is authoritative and must be preserved by clients. The client MUST NOT
+    sort these messages client-side; the server ordering is the source of truth.
+    
+    Rationale: Use the *id* column for deterministic chronological ordering. SQLite
+    timestamps have a resolution of 1 second which can lead to two messages inserted within
+    the same second being returned in undefined order if sorted by timestamp. The
+    auto-incrementing primary-key is strictly monotonic, therefore provides a stable
+    ordering even when multiple rows share the same timestamp.
+    
+    See the API endpoint documentation in zerg.routers.threads.read_thread_messages().
+    """
     return (
         db.query(ThreadMessage)
         .filter(ThreadMessage.thread_id == thread_id)
@@ -594,10 +609,33 @@ def create_thread_message(
     name: Optional[str] = None,
     processed: bool = False,
     parent_id: Optional[int] = None,
+    sent_at: Optional[datetime] = None,
     *,
     commit: bool = True,
 ):
-    """Create a new message for a thread"""
+    """
+    Create a new message for a thread.
+
+    Args:
+        sent_at: Optional client-provided send timestamp. If provided, must be within ±5 minutes
+                 of server time, otherwise uses server time. Timezone-aware datetime in UTC.
+    """
+    # Validate and normalize sent_at
+    if sent_at is not None:
+        # Ensure it's timezone-aware (UTC)
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=dt_timezone.utc)
+
+        # Check it's within ±5 minutes of server time
+        now_utc = datetime.now(dt_timezone.utc)
+        time_diff = abs((now_utc - sent_at).total_seconds())
+        if time_diff > 300:  # 5 minutes in seconds
+            # Reject obviously wrong timestamps
+            sent_at = now_utc
+    else:
+        # Use server time if not provided
+        sent_at = datetime.now(dt_timezone.utc)
+
     db_message = ThreadMessage(
         thread_id=thread_id,
         role=role,
@@ -607,6 +645,7 @@ def create_thread_message(
         name=name,
         processed=processed,
         parent_id=parent_id,
+        sent_at=sent_at,
     )
     db.add(db_message)
 
@@ -678,7 +717,7 @@ def get_unprocessed_messages(db: Session, thread_id: int):
     return (
         db.query(ThreadMessage)
         .filter(ThreadMessage.thread_id == thread_id, ThreadMessage.processed.is_(False))
-        .order_by(ThreadMessage.timestamp)
+        .order_by(ThreadMessage.id)
         .all()
     )
 

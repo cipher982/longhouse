@@ -59,6 +59,7 @@ from zerg.routers.runs import router as runs_router
 from zerg.routers.system import router as system_router
 from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
+from zerg.routers.agent_config import router as agent_config_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.websocket import router as websocket_router
@@ -334,6 +335,7 @@ app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis p
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
 app.include_router(ops_router, prefix=f"{API_PREFIX}")
+app.include_router(agent_config_router, prefix=f"{API_PREFIX}")
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override

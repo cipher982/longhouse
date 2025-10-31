@@ -78,13 +78,13 @@ async def test_conditional_workflow_high_branch(db, test_user, sample_agent):
 
             from zerg.models.models import ThreadMessage
 
-            # Create a proper ThreadMessage object mock with timestamp field
+            # Create a proper ThreadMessage object mock with sent_at field
             mock_msg = ThreadMessage(
                 id=999,
                 thread_id=thread.id,
                 role="assistant",
                 content="High branch executed",
-                timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                sent_at=datetime.now(timezone.utc),
                 processed=True,
             )
             return [mock_msg]
@@ -153,13 +153,13 @@ async def test_conditional_workflow_low_branch(db, test_user, sample_agent):
 
             from zerg.models.models import ThreadMessage
 
-            # Create a proper ThreadMessage object mock with timestamp field
+            # Create a proper ThreadMessage object mock with sent_at field
             mock_msg = ThreadMessage(
                 id=998,
                 thread_id=thread.id,
                 role="assistant",
                 content="Low branch executed",
-                timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                sent_at=datetime.now(timezone.utc),
                 processed=True,
             )
             return [mock_msg]

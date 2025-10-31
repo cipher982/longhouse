@@ -127,11 +127,11 @@ async def test_basic_agent_workflow_execution_e2e(db, test_user, sample_agent):
         assert "messages" in agent_state.output["value"]
         assert len(agent_state.output["value"]["messages"]) > 0
 
-        # Verify the message serialization includes proper timestamp field
-        # (This was the original bug - accessing created_at instead of timestamp)
+        # Verify the message serialization includes proper sent_at field
+        # (This was the original bug - accessing wrong field name)
         message = agent_state.output["value"]["messages"][0]
-        assert "created_at" in message  # Should be serialized with this key
-        assert message["created_at"] is not None  # Should have timestamp
+        assert "sent_at" in message  # Should be serialized with this key
+        assert message["sent_at"] is not None  # Should have sent_at
         assert message["role"] == "assistant"
         assert message["content"] is not None
 

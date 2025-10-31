@@ -1,9 +1,0 @@
-# Rust/WASM build artifacts (copied from pkg/)
-*.wasm
-*.wasm.d.ts
-agent_platform_frontend.js
-agent_platform_frontend.d.ts
-
-# Generated build files
-bootstrap.js
-config.js

@@ -46,25 +46,25 @@ jobs:
     - name: Validate OpenAPI Schema
       run: |
         echo "🔍 Validating OpenAPI 3.0 schema..."
-        python3 -c "
+        python3 << 'EOF'
 import yaml
 import jsonschema
 try:
     with open('api-schema.yml', 'r') as f:
         schema = yaml.safe_load(f)
     print('✅ OpenAPI schema is valid YAML')
-    
+
     # Basic OpenAPI validation
     required_fields = ['openapi', 'info', 'paths']
     for field in required_fields:
         if field not in schema:
             raise ValueError(f'Missing required field: {field}')
-    
+
     print('✅ OpenAPI schema structure is valid')
 except Exception as e:
     print(f'❌ OpenAPI schema validation failed: {e}')
     exit(1)
-"
+EOF
         
     - name: Generate WebSocket Types  
       run: |
@@ -81,9 +81,8 @@ except Exception as e:
       run: |
         echo "🔍 Validating generated contract files..."
         test -f contracts/ws-protocol-v1.json || (echo "❌ Contract JSON not generated" && exit 1)
-        test -f backend/zerg/generated/ws_messages.py || (echo "❌ Python types not generated" && exit 1) 
-        test -f frontend/src/generated/ws_messages.rs || (echo "❌ Rust types not generated" && exit 1)
-        test -f frontend/src/generated/ws_handlers.rs || (echo "❌ Rust handlers not generated" && exit 1)
+        test -f backend/zerg/generated/ws_messages.py || (echo "❌ Python types not generated" && exit 1)
+        test -f apps/zerg/frontend-web/src/generated/ws_messages.ts || (echo "❌ TypeScript types not generated" && exit 1)
         echo "✅ All contract artifacts generated successfully"
 
   # PHASE 1: Tool contracts (existing system)
@@ -133,35 +132,29 @@ except Exception as e:
         cd backend
         ./run_backend_tests.sh
 
-  # PHASE 3: Frontend tests with contract enforcement  
+  # PHASE 3: Frontend tests with contract enforcement
   frontend-tests:
     runs-on: ubuntu-latest
     needs: contract-validation
-    name: "🦀 Frontend Tests (Contract-Enforced)"
-    
+    name: "⚛️  Frontend Tests (Contract-Enforced)"
+
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Set up Rust
-      uses: actions-rs/toolchain@v1
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
       with:
-        toolchain: stable
-        target: wasm32-unknown-unknown
-        override: true
-        
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      
-    - name: Build with Contract Features
+        node-version: '18'
+
+    - name: Install Frontend Dependencies
       run: |
-        cd frontend
-        # Build with schema validation features enabled
-        cargo build --features schema_validation,compile_time_validation
-        
+        cd apps/zerg/frontend-web
+        npm ci
+
     - name: Run Frontend Tests
       run: |
-        cd frontend
-        ./run_frontend_tests.sh || echo "⚠️ Frontend tests skipped (no browser environment)"
+        cd apps/zerg/frontend-web
+        npm test -- --run
 
   # PHASE 4: Integration smoke test
   integration-smoke:

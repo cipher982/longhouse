@@ -111,7 +111,7 @@ def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
         db.query(AgentModel.owner_id)
         .join(ThreadModel, ThreadModel.agent_id == AgentModel.id)
         .join(ThreadMessageModel, ThreadMessageModel.thread_id == ThreadModel.id)
-        .filter(ThreadMessageModel.timestamp >= since_24h)
+        .filter(ThreadMessageModel.sent_at >= since_24h)
         .distinct()
     )
     # Execute both and union in Python for cross-DB simplicity

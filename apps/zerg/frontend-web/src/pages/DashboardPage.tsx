@@ -12,6 +12,7 @@ import {
 import { useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
+import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -52,6 +53,7 @@ export default function DashboardPage() {
   const [loadingRunIds, setLoadingRunIds] = useState<Set<number>>(new Set());
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [pendingRunIds, setPendingRunIds] = useState<Set<number>>(new Set());
+  const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery<AgentSummary[]>({
     queryKey: ["agents", { scope }],
@@ -299,7 +301,7 @@ export default function DashboardPage() {
                           data-testid={`chat-agent-${agent.id}`}
                           title="Chat with Agent"
                           aria-label="Chat with Agent"
-                          onClick={(event) => handleChatAgent(event, agent.id)}
+                          onClick={(event) => handleChatAgent(event, agent.id, agent.name)}
                         >
                           <MessageCircleIcon />
                         </button>
@@ -421,6 +423,13 @@ export default function DashboardPage() {
           </tbody>
         </table>
       </div>
+      {settingsAgentId != null && (
+        <AgentSettingsDrawer
+          agentId={settingsAgentId}
+          isOpen={settingsAgentId != null}
+          onClose={() => setSettingsAgentId(null)}
+        />
+      )}
     </div>
   );
 
@@ -504,14 +513,14 @@ export default function DashboardPage() {
     dispatchDashboardEvent("edit", agentId);
   }
 
-  function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
+  function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, agentName: string) {
     event.stopPropagation();
-    navigate(`/chat/${agentId}`);
+    navigate(`/agent/${agentId}/thread/?name=${encodeURIComponent(agentName)}`);
   }
 
   function handleDebugAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
     event.stopPropagation();
-    dispatchDashboardEvent("debug", agentId);
+    setSettingsAgentId(agentId);
   }
 
   function handleDeleteAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, name: string) {
