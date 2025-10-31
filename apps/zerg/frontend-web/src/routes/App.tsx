@@ -42,7 +42,7 @@ export default function App() {
       )
     },
     {
-      path: "/chat/:agentId?/:threadId?",
+      path: "/agent/:agentId/thread/:threadId?",
       element: (
         <ErrorBoundary>
           <ChatPage />

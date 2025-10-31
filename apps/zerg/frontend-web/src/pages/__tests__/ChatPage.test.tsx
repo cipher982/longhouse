@@ -36,7 +36,7 @@ const {
   fetchContainerPolicy: mockFetchContainerPolicy,
 } = apiMocks;
 
-function renderChatPage(initialEntry = "/chat/1/42") {
+function renderChatPage(initialEntry = "/agent/1/thread/42") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -48,7 +48,7 @@ function renderChatPage(initialEntry = "/chat/1/42") {
       <ShelfProvider>
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
-            <Route path="/chat/:agentId/:threadId" element={<ChatPage />} />
+            <Route path="/agent/:agentId/thread/:threadId?" element={<ChatPage />} />
           </Routes>
         </MemoryRouter>
       </ShelfProvider>
