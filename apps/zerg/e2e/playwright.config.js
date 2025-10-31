@@ -86,7 +86,7 @@ const config = {
       command: `BACKEND_PORT=${BACKEND_PORT} node spawn-test-backend.js`,
       port: BACKEND_PORT,
       cwd: __dirname,
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI, // Allow reusing in development
       timeout: 60_000,
     },
   ],

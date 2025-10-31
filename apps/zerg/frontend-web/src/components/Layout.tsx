@@ -22,7 +22,7 @@ function WelcomeHeader() {
   // Only show shelf toggle on routes that have drawer UI
   const shouldShowShelfToggle =
     location.pathname.startsWith("/canvas") ||
-    location.pathname.startsWith("/chat");
+    location.pathname.startsWith("/agent");
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {
