@@ -341,12 +341,16 @@ export default function ChatPage() {
   }, [agentId, effectiveThreadId]);
 
   // Handle streaming messages
+  const tokenCountRef = useRef(0);
+  const streamStartTimeRef = useRef<number>(0);
+
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { type, data } = envelope;
-    console.log('[CHAT] 📨 handleStreamingMessage:', type, data);
 
     if (type === "stream_start") {
-      console.log('[CHAT] 🎬 STREAM_START - Resetting all streaming state');
+      console.log('[CHAT] 🎬 STREAM_START');
+      tokenCountRef.current = 0;
+      streamStartTimeRef.current = Date.now();
       // Reset streaming state for new stream
       setStreamingMessageId(null);
       setStreamingMessages(new Map());
@@ -354,40 +358,40 @@ export default function ChatPage() {
     } else if (type === "stream_chunk") {
       if (data.chunk_type === "assistant_token") {
         const token = data.content || "";
-        console.log('[CHAT] 🔤 TOKEN:', JSON.stringify(token), '(have msgId:', !!streamingMessageId, ')');
+        tokenCountRef.current++;
+
+        // Sample logging: first token + every 50th token
+        if (tokenCountRef.current === 1 || tokenCountRef.current % 50 === 0) {
+          console.log(`[CHAT] 🔤 Token #${tokenCountRef.current}`);
+        }
+
         if (streamingMessageId) {
           // Have ID, accumulate normally
           setStreamingMessages(prev => {
             const next = new Map(prev);
             const current = next.get(streamingMessageId) || "";
-            const updated = current + token;
-            next.set(streamingMessageId, updated);
-            console.log('[CHAT] ✅ Accumulated token. Total length:', updated.length);
+            next.set(streamingMessageId, current + token);
             return next;
           });
         } else {
           // No ID yet, buffer tokens that arrive before assistant_id
-          setPendingTokenBuffer(prev => {
-            const updated = prev + token;
-            console.log('[CHAT] 📦 Buffered token. Buffer length:', updated.length);
-            return updated;
-          });
+          setPendingTokenBuffer(prev => prev + token);
         }
       }
     } else if (type === "assistant_id") {
-      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, '- Buffer length:', pendingTokenBuffer.length);
+      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id);
       // Associate streaming with message ID and move buffered content
       // Keep pendingTokenBuffer visible until stream_end to avoid blank UI
       setStreamingMessageId(data.message_id);
       setStreamingMessages(prev => {
         const next = new Map(prev);
         next.set(data.message_id, pendingTokenBuffer);
-        console.log('[CHAT] 📋 Moved buffer to streaming map. Content:', pendingTokenBuffer.substring(0, 50));
         return next;
       });
       // DON'T clear pendingTokenBuffer here - it stays visible until stream_end
     } else if (type === "stream_end") {
-      console.log('[CHAT] 🏁 STREAM_END - Finalizing and invalidating queries');
+      const duration = Date.now() - streamStartTimeRef.current;
+      console.log(`[CHAT] 🏁 STREAM_END - ${tokenCountRef.current} tokens in ${duration}ms`);
       // Finalize: refresh messages from API
       if (data.thread_id === effectiveThreadId) {
         queryClient.invalidateQueries({
@@ -875,10 +879,6 @@ export default function ChatPage() {
                 const isStreaming = streamingMessageId === msg.id && streamingContent !== undefined;
                 const displayContent = streamingContent !== undefined ? streamingContent : msg.content;
 
-                if (isStreaming) {
-                  console.log('[CHAT] 🎨 RENDERING streaming msg:', msg.id, 'Length:', streamingContent?.length);
-                }
-
                 // Skip rendering empty assistant messages (they only have tool calls)
                 if (msg.role === "assistant" && msg.content.trim() === "" && !isStreaming) {
                   return (
@@ -932,24 +932,21 @@ export default function ChatPage() {
               <ToolMessage key={toolMsg.id} message={toolMsg} />
             ))}
             {/* Show pending buffer as temporary assistant message at END of messages */}
-            {pendingTokenBuffer && (() => {
-              console.log('[CHAT] 🎨 RENDERING pending buffer. Length:', pendingTokenBuffer.length, 'Content:', pendingTokenBuffer.substring(0, 100));
-              return (
-                <div key="pending-stream">
-                  <div className="chat-row">
-                    <article
-                      className="message assistant-message streaming"
-                      data-streaming="true"
-                    >
-                      <div className="message-content preserve-whitespace">
-                        {pendingTokenBuffer}
-                        <span className="streaming-cursor">▋</span>
-                      </div>
-                    </article>
-                  </div>
+            {pendingTokenBuffer && (
+              <div key="pending-stream">
+                <div className="chat-row">
+                  <article
+                    className="message assistant-message streaming"
+                    data-streaming="true"
+                  >
+                    <div className="message-content preserve-whitespace">
+                      {pendingTokenBuffer}
+                      <span className="streaming-cursor">▋</span>
+                    </div>
+                  </article>
                 </div>
-              );
-            })()}
+              </div>
+            )}
             {messages.length === 0 && (
               <p className="thread-list-empty">No messages yet.</p>
             )}
