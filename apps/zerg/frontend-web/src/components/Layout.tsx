@@ -99,8 +99,7 @@ function WelcomeHeader() {
 
 function StatusFooter() {
   // Use a background WebSocket connection for general status monitoring
-  // TEMPORARILY DISABLED: Backend requires PostgreSQL but SQLite is configured
-  const { connectionStatus } = useWebSocket(false, {
+  const { connectionStatus } = useWebSocket(true, {
     includeAuth: true,
     // Don't invalidate any queries from the layout level
     invalidateQueries: [],
