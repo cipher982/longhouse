@@ -153,6 +153,12 @@ function computeApiBase(override?: string): ApiBaseConfig {
 
   try {
     const url = new URL(override);
+
+    // Fail fast: reject Docker internal hostnames in browser
+    if (typeof window !== 'undefined' && url.hostname === 'backend') {
+      throw new Error(`FATAL: API_BASE_URL='${override}' uses Docker hostname unreachable from browser. Set to '/api' instead.`);
+    }
+
     const normalizedPath = normalizePathname(url.pathname || "/");
     const absolute = `${url.origin}${normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`}`;
     return {
@@ -161,7 +167,7 @@ function computeApiBase(override?: string): ApiBaseConfig {
     };
   } catch (error) {
     console.error("Failed to parse API_BASE_URL", error);
-    return { relative: "/api" };
+    throw error; // Fail fast
   }
 }
 
