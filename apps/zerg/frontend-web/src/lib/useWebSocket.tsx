@@ -158,7 +158,10 @@ export function useWebSocket(
     // Check if this is a streaming message
     const streamingTypes = ['stream_start', 'stream_chunk', 'stream_end', 'assistant_id'];
     if (streamingTypes.includes(message.type)) {
-      console.log('[WS] 🌊 Streaming message:', message.type, message.data);
+      // Only log non-chunk messages to avoid noise (chunks logged with sampling in ChatPage)
+      if (message.type !== 'stream_chunk') {
+        console.log('[WS] 🌊', message.type.toUpperCase());
+      }
       // Call streaming message handler if provided
       onStreamingMessageRef.current?.(message);
     }
