@@ -231,6 +231,10 @@ export default function ChatPage() {
     },
     onSettled: (_data, _error, variables) => {
       queryClient.invalidateQueries({ queryKey: ["thread-messages", variables.threadId] });
+      // Also refresh threads to sync with server state
+      if (agentId != null) {
+        queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
+      }
     },
   });
 
@@ -396,6 +400,12 @@ export default function ChatPage() {
       if (data.thread_id === effectiveThreadId) {
         queryClient.invalidateQueries({
           queryKey: ["thread-messages", data.thread_id]
+        });
+      }
+      // Also refresh thread list to update previews for the thread that got new messages
+      if (agentId != null) {
+        queryClient.invalidateQueries({
+          queryKey: ["threads", agentId, "chat"]
         });
       }
       setStreamingMessageId(null);
@@ -758,7 +768,7 @@ export default function ChatPage() {
           </div>
           <div className="thread-list">
             {chatThreads.map((thread) => {
-              const threadMessages = messages.filter(m => m.thread_id === thread.id);
+              const threadMessages = (thread.messages || []).filter(m => m.role !== "system");
               const lastMessage = threadMessages[threadMessages.length - 1];
               const messagePreview = lastMessage
                 ? truncateText(lastMessage.content, 50)
