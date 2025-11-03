@@ -9,15 +9,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-zerg_dev}
-      POSTGRES_USER: ${POSTGRES_USER:-zerg}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       # Ephemeral database - data is lost when containers stop
       # Development: expose logs  
       - ./logs/postgres:/var/log/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerg} -d ${POSTGRES_DB:-zerg_dev}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -38,7 +38,7 @@ services:
         condition: service_healthy
     environment:
       ENVIRONMENT: development
-      DATABASE_URL: postgresql://${POSTGRES_USER:-zerg}:${POSTGRES_PASSWORD:-dev_password}@postgres:5432/${POSTGRES_DB:-zerg_dev}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       FERNET_SECRET: ${FERNET_SECRET:-dev_fernet_secret_32_chars_long!}
       TRIGGER_SIGNING_SECRET: ${TRIGGER_SIGNING_SECRET:-dev_trigger_secret}
@@ -55,7 +55,7 @@ services:
       DEBUG: true
       LOG_LEVEL: DEBUG
     ports:
-      - "${BACKEND_PORT:-47300}:8000"
+      - "${BACKEND_PORT}:8000"
     volumes:
       # Hot reload: mount source code
       - ./apps/zerg/backend:/app:cached
@@ -83,11 +83,11 @@ services:
     environment:
       # Browser-facing URLs (VITE_ prefix required for client code)
       VITE_API_BASE_URL: /api
-      VITE_WS_BASE_URL: ws://localhost:${BACKEND_PORT:-47300}/ws
+      VITE_WS_BASE_URL: ws://localhost:${BACKEND_PORT}
       # Vite proxy uses Docker Compose DNS (backend:8000) by default
       # No BACKEND_HOST/PORT needed - Docker handles service name resolution
     ports:
-      - "${FRONTEND_PORT:-47200}:5173"
+      - "${FRONTEND_PORT}:5173"
     stop_signal: SIGTERM
     stop_grace_period: 3s
     volumes:
