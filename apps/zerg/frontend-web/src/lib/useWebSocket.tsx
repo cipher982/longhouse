@@ -209,13 +209,17 @@ export function useWebSocket(
   }, [enabled, maxReconnectAttempts, reconnectInterval]);
 
   const handleError = useCallback((error: Event) => {
+    // Skip errors from StrictMode cleanup (socket closed during handshake)
+    const ws = wsRef.current;
+    if (ws && ws.readyState < WebSocket.OPEN) {
+      return; // Self-inflicted closure, not a real error
+    }
+
     console.error('[WS] ❌ WebSocket error:', error);
     setConnectionStatus(ConnectionStatus.ERROR);
     onErrorRef.current?.(error);
 
-    // Show user-friendly error message
     if (reconnectAttemptsRef.current === 0) {
-      console.error('[WS] 🔴 First connection attempt failed - showing error toast');
       toast.error("WebSocket connection failed. Real-time features disabled.", { duration: 5000 });
     } else if (reconnectAttemptsRef.current < maxReconnectAttempts) {
       toast.error("Connection lost. Attempting to reconnect...", { duration: 3000 });
