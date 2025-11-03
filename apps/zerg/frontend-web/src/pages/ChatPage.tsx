@@ -189,9 +189,9 @@ export default function ChatPage() {
     mutationFn: async ({ threadId, content }) => {
       console.log('[CHAT] 📤 Sending message to thread:', threadId);
       const message = await postThreadMessage(threadId, content);
-      console.log('[CHAT] 🚀 Triggering thread run:', threadId);
+      console.log('[CHAT] 🚀 Triggering thread run:', threadId, '(tokens will stream via WebSocket)');
       await runThread(threadId);
-      console.log('[CHAT] ✅ Run triggered, waiting for WebSocket tokens...');
+      console.log('[CHAT] ✅ Run completed');
       return message;
     },
     onMutate: async ({ threadId, content }) => {
