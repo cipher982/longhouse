@@ -96,8 +96,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     Return a compiled LangGraph runnable using the Functional API
     for the given Agent ORM row.
     """
-    # Capture token stream setting at runnable creation time
-    enable_token_stream = get_settings().llm_token_stream
+    # NOTE: Do NOT capture token stream setting here – it must be evaluated
+    # at invocation time, not at runnable creation time. This allows the
+    # LLM_TOKEN_STREAM environment variable to be changed without restarting.
     
     # --- Define tools and model within scope ---
     # ------------------------------------------------------------------
@@ -126,7 +127,8 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         logger.warning(f"No tools available for agent {agent_row.id}")
 
     tools_by_name = {tool.name: tool for tool in tools}
-    llm_with_tools = _make_llm(agent_row, tools)
+    # NOTE: DO NOT create llm_with_tools here - it must be created at invocation time
+    # to respect the enable_token_stream flag which can change at runtime
 
     # Create a simple memory saver for persistence
     checkpointer = MemorySaver()
@@ -148,24 +150,18 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
             "Called get_config outside of a runnable context"
         """
-
-        if enable_token_stream:
-            # For streaming with callbacks, use ainvoke directly (not via thread)
-            # This allows async callbacks to work properly
-            from zerg.callbacks.token_stream import WsTokenCallback
-            callback = WsTokenCallback()
-            # Note: We're in sync context but need async callbacks, so we'll handle this in async version
-            # For sync, we can't easily use async callbacks, so fall back to non-streaming
-            return llm_with_tools.invoke(messages)
-        else:
-            return llm_with_tools.invoke(messages)
+        # Create LLM dynamically to respect current enable_token_stream flag
+        llm_with_tools = _make_llm(agent_row, tools)
+        return llm_with_tools.invoke(messages)
 
     async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False):
         """Run the LLM call with optional token streaming via callbacks."""
+        # Create LLM dynamically with current enable_token_stream flag
+        llm_with_tools = _make_llm(agent_row, tools)
 
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
-            
+
             callback = WsTokenCallback()
             # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
             # ainvoke() returns the complete message while callbacks stream tokens
@@ -296,18 +292,20 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # ------------------------------------------------------------------
     # Expose BOTH sync & async entrypoints to LangGraph
     # ------------------------------------------------------------------
-    # enable_token_stream is captured from closure above
+    # Read enable_token_stream at invocation time, not at runnable creation time
+    # This allows the LLM_TOKEN_STREAM environment variable to be changed dynamically
 
     @entrypoint(checkpointer=checkpointer)
     def agent_executor(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
+        enable_token_stream = get_settings().llm_token_stream
         return _agent_executor_sync(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     # Attach the *async* implementation manually – LangGraph picks this up so
     # callers can use ``.ainvoke`` while tests and legacy code continue to use
     # the blocking ``.invoke`` API.
-    # We need to create a wrapper that captures enable_token_stream from closure
 
     async def _agent_executor_async_wrapper(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
+        enable_token_stream = get_settings().llm_token_stream
         return await _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     agent_executor.afunc = _agent_executor_async_wrapper  # type: ignore[attr-defined]
