@@ -175,11 +175,13 @@ export function useWebSocket(
   }, [queryClient]);
 
   const handleConnect = useCallback(() => {
+    console.log('[WS] ✅ WebSocket connected successfully');
     setConnectionStatus(ConnectionStatus.CONNECTED);
     reconnectAttemptsRef.current = 0;
 
     // Send any queued messages
     if (wsRef.current && messageQueueRef.current.length > 0) {
+      console.log('[WS] 📬 Sending', messageQueueRef.current.length, 'queued messages');
       messageQueueRef.current.forEach(message => {
         wsRef.current?.send(JSON.stringify(message));
       });
@@ -204,14 +206,18 @@ export function useWebSocket(
   }, [enabled, maxReconnectAttempts, reconnectInterval]);
 
   const handleError = useCallback((error: Event) => {
+    console.error('[WS] ❌ WebSocket error:', error);
     setConnectionStatus(ConnectionStatus.ERROR);
     onErrorRef.current?.(error);
 
     // Show user-friendly error message
     if (reconnectAttemptsRef.current === 0) {
-      toast.error("Connection lost. Attempting to reconnect...");
+      console.error('[WS] 🔴 First connection attempt failed - showing error toast');
+      toast.error("WebSocket connection failed. Real-time features disabled.", { duration: 5000 });
+    } else if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+      toast.error("Connection lost. Attempting to reconnect...", { duration: 3000 });
     }
-  }, []);
+  }, [maxReconnectAttempts]);
 
   const connect = useCallback(() => {
     // Clean up existing connection
@@ -242,7 +248,9 @@ export function useWebSocket(
 
     try {
       setConnectionStatus(ConnectionStatus.CONNECTING);
-      wsRef.current = new WebSocket(buildWebSocketUrl());
+      const wsUrl = buildWebSocketUrl();
+      console.log('[WS] 🔌 Attempting to connect to:', wsUrl);
+      wsRef.current = new WebSocket(wsUrl);
 
       if (typeof wsRef.current.addEventListener === 'function') {
         wsRef.current.addEventListener('message', handleMessage);

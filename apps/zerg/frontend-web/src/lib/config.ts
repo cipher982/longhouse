@@ -49,7 +49,7 @@ function loadConfig(): AppConfig {
 
   let wsBaseUrl = typeof window !== 'undefined' && window.WS_BASE_URL
     ? window.WS_BASE_URL
-    : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? window.location.origin.replace('http', 'ws') : ''));
+    : (import.meta.env.VITE_WS_BASE_URL || (isDevelopment && typeof window !== 'undefined' ? 'ws://localhost:47300' : ''));
 
   if (isTesting) {
     if (!apiBaseUrl) {
