@@ -93,6 +93,7 @@ export function useWebSocket(
   const reconnectTimeoutRef = useRef<number | null>(null);
   const messageQueueRef = useRef<WebSocketMessage[]>([]);
   const connectRef = useRef<(() => void) | null>(null);
+  const intentionalCloseRef = useRef(false);
   const onMessageRef = useRef<typeof onMessage>();
   const onConnectRef = useRef<typeof onConnect>();
   const onDisconnectRef = useRef<typeof onDisconnect>();
@@ -209,10 +210,10 @@ export function useWebSocket(
   }, [enabled, maxReconnectAttempts, reconnectInterval]);
 
   const handleError = useCallback((error: Event) => {
-    // Skip errors from StrictMode cleanup (socket closed during handshake)
-    const ws = wsRef.current;
-    if (ws && ws.readyState < WebSocket.OPEN) {
-      return; // Self-inflicted closure, not a real error
+    // Skip self-inflicted errors (StrictMode cleanup during handshake)
+    if (intentionalCloseRef.current) {
+      intentionalCloseRef.current = false;
+      return;
     }
 
     console.error('[WS] ❌ WebSocket error:', error);
@@ -290,6 +291,9 @@ export function useWebSocket(
     }
 
     if (wsRef.current) {
+      // Mark as intentional so handleError ignores self-inflicted closure
+      intentionalCloseRef.current = true;
+
       try {
         if (typeof wsRef.current.removeEventListener === 'function') {
           wsRef.current.removeEventListener('message', handleMessage);
@@ -300,9 +304,9 @@ export function useWebSocket(
         wsRef.current.close();
         wsRef.current = null;
       } catch (error) {
-        // Ignore cleanup errors in test environment
         console.warn('WebSocket disconnect error:', error);
         wsRef.current = null;
+        intentionalCloseRef.current = false;
       }
     }
 
