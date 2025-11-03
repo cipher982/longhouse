@@ -363,13 +363,14 @@ export default function ChatPage() {
       }
     } else if (type === "assistant_id") {
       // Associate streaming with message ID and move buffered content
+      // Keep pendingTokenBuffer visible until stream_end to avoid blank UI
       setStreamingMessageId(data.message_id);
       setStreamingMessages(prev => {
         const next = new Map(prev);
         next.set(data.message_id, pendingTokenBuffer);
         return next;
       });
-      setPendingTokenBuffer("");
+      // DON'T clear pendingTokenBuffer here - it stays visible until stream_end
     } else if (type === "stream_end") {
       // Finalize: refresh messages from API
       if (data.thread_id === effectiveThreadId) {
@@ -622,7 +623,7 @@ export default function ChatPage() {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, pendingTokenBuffer, streamingMessages]);
 
   // Update document title with agent name for better context
   useEffect(() => {
@@ -846,22 +847,6 @@ export default function ChatPage() {
 
         <section className="conversation-area">
           <div className="messages-container" data-testid="messages-container" ref={messagesContainerRef}>
-            {/* Show pending buffer as temporary assistant message */}
-            {pendingTokenBuffer && (
-              <div key="pending-stream">
-                <div className="chat-row">
-                  <article
-                    className="message assistant-message streaming"
-                    data-streaming="true"
-                  >
-                    <div className="message-content preserve-whitespace">
-                      {pendingTokenBuffer}
-                      <span className="streaming-cursor">▋</span>
-                    </div>
-                  </article>
-                </div>
-              </div>
-            )}
             {messages
               .filter(msg => msg.role !== "system" && msg.role !== "tool")
               .map((msg, index) => {
@@ -925,6 +910,22 @@ export default function ChatPage() {
             {orphanedToolMessages.map(toolMsg => (
               <ToolMessage key={toolMsg.id} message={toolMsg} />
             ))}
+            {/* Show pending buffer as temporary assistant message at END of messages */}
+            {pendingTokenBuffer && (
+              <div key="pending-stream">
+                <div className="chat-row">
+                  <article
+                    className="message assistant-message streaming"
+                    data-streaming="true"
+                  >
+                    <div className="message-content preserve-whitespace">
+                      {pendingTokenBuffer}
+                      <span className="streaming-cursor">▋</span>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            )}
             {messages.length === 0 && (
               <p className="thread-list-empty">No messages yet.</p>
             )}
