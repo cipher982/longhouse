@@ -158,6 +158,7 @@ export function useWebSocket(
     // Check if this is a streaming message
     const streamingTypes = ['stream_start', 'stream_chunk', 'stream_end', 'assistant_id'];
     if (streamingTypes.includes(message.type)) {
+      console.log('[WS] 🌊 Streaming message:', message.type, message.data);
       // Call streaming message handler if provided
       onStreamingMessageRef.current?.(message);
     }

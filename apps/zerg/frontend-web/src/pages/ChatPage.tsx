@@ -187,8 +187,11 @@ export default function ChatPage() {
     number
   >({
     mutationFn: async ({ threadId, content }) => {
+      console.log('[CHAT] 📤 Sending message to thread:', threadId);
       const message = await postThreadMessage(threadId, content);
+      console.log('[CHAT] 🚀 Triggering thread run:', threadId);
       await runThread(threadId);
+      console.log('[CHAT] ✅ Run triggered, waiting for WebSocket tokens...');
       return message;
     },
     onMutate: async ({ threadId, content }) => {
@@ -340,42 +343,55 @@ export default function ChatPage() {
   // Handle streaming messages
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { type, data } = envelope;
+    console.log('[CHAT] 📨 handleStreamingMessage:', type, data);
 
     if (type === "stream_start") {
+      console.log('[CHAT] 🎬 STREAM_START - Resetting all streaming state');
       // Reset streaming state for new stream
       setStreamingMessageId(null);
       setStreamingMessages(new Map());
       setPendingTokenBuffer("");
     } else if (type === "stream_chunk") {
       if (data.chunk_type === "assistant_token") {
+        const token = data.content || "";
+        console.log('[CHAT] 🔤 TOKEN:', JSON.stringify(token), '(have msgId:', !!streamingMessageId, ')');
         if (streamingMessageId) {
           // Have ID, accumulate normally
           setStreamingMessages(prev => {
             const next = new Map(prev);
             const current = next.get(streamingMessageId) || "";
-            next.set(streamingMessageId, current + (data.content || ""));
+            const updated = current + token;
+            next.set(streamingMessageId, updated);
+            console.log('[CHAT] ✅ Accumulated token. Total length:', updated.length);
             return next;
           });
         } else {
           // No ID yet, buffer tokens that arrive before assistant_id
-          setPendingTokenBuffer(prev => prev + (data.content || ""));
+          setPendingTokenBuffer(prev => {
+            const updated = prev + token;
+            console.log('[CHAT] 📦 Buffered token. Buffer length:', updated.length);
+            return updated;
+          });
         }
       }
     } else if (type === "assistant_id") {
+      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, '- Buffer length:', pendingTokenBuffer.length);
       // Associate streaming with message ID and move buffered content
       // Keep pendingTokenBuffer visible until stream_end to avoid blank UI
       setStreamingMessageId(data.message_id);
       setStreamingMessages(prev => {
         const next = new Map(prev);
         next.set(data.message_id, pendingTokenBuffer);
+        console.log('[CHAT] 📋 Moved buffer to streaming map. Content:', pendingTokenBuffer.substring(0, 50));
         return next;
       });
       // DON'T clear pendingTokenBuffer here - it stays visible until stream_end
     } else if (type === "stream_end") {
+      console.log('[CHAT] 🏁 STREAM_END - Finalizing and invalidating queries');
       // Finalize: refresh messages from API
       if (data.thread_id === effectiveThreadId) {
-        queryClient.invalidateQueries({ 
-          queryKey: ["thread-messages", data.thread_id] 
+        queryClient.invalidateQueries({
+          queryKey: ["thread-messages", data.thread_id]
         });
       }
       setStreamingMessageId(null);
@@ -393,6 +409,7 @@ export default function ChatPage() {
   // Subscribe to thread topic when thread changes
   useEffect(() => {
     if (effectiveThreadId && wsSendMessage) {
+      console.log('[CHAT] 📡 Subscribing to thread:', effectiveThreadId);
       // Subscribe to thread topic for streaming
       wsSendMessage({
         type: "subscribe_thread",
@@ -858,6 +875,10 @@ export default function ChatPage() {
                 const isStreaming = streamingMessageId === msg.id && streamingContent !== undefined;
                 const displayContent = streamingContent !== undefined ? streamingContent : msg.content;
 
+                if (isStreaming) {
+                  console.log('[CHAT] 🎨 RENDERING streaming msg:', msg.id, 'Length:', streamingContent?.length);
+                }
+
                 // Skip rendering empty assistant messages (they only have tool calls)
                 if (msg.role === "assistant" && msg.content.trim() === "" && !isStreaming) {
                   return (
@@ -911,21 +932,24 @@ export default function ChatPage() {
               <ToolMessage key={toolMsg.id} message={toolMsg} />
             ))}
             {/* Show pending buffer as temporary assistant message at END of messages */}
-            {pendingTokenBuffer && (
-              <div key="pending-stream">
-                <div className="chat-row">
-                  <article
-                    className="message assistant-message streaming"
-                    data-streaming="true"
-                  >
-                    <div className="message-content preserve-whitespace">
-                      {pendingTokenBuffer}
-                      <span className="streaming-cursor">▋</span>
-                    </div>
-                  </article>
+            {pendingTokenBuffer && (() => {
+              console.log('[CHAT] 🎨 RENDERING pending buffer. Length:', pendingTokenBuffer.length, 'Content:', pendingTokenBuffer.substring(0, 100));
+              return (
+                <div key="pending-stream">
+                  <div className="chat-row">
+                    <article
+                      className="message assistant-message streaming"
+                      data-streaming="true"
+                    >
+                      <div className="message-content preserve-whitespace">
+                        {pendingTokenBuffer}
+                        <span className="streaming-cursor">▋</span>
+                      </div>
+                    </article>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {messages.length === 0 && (
               <p className="thread-list-empty">No messages yet.</p>
             )}
