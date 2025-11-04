@@ -86,6 +86,39 @@ export default function ChatPage() {
     }
   }, [agentId, effectiveThreadId, navigate]);
 
+  // Auto-create and select a default thread on component mount if none exists
+  useEffect(() => {
+    const initializeThread = async () => {
+      if (agentId == null || selectedThreadId != null || chatThreads.length > 0 || creatingThreadRef.current) {
+        return;
+      }
+
+      creatingThreadRef.current = true;
+
+      try {
+        // Auto-create a default thread for the agent
+        const thread = await createThread(agentId, "Thread 1");
+        await queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
+        setSelectedThreadId(thread.id);
+        navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
+      } catch (error) {
+        console.error('[ChatPage] Failed to auto-create default thread:', error);
+        toast.error('Failed to create default chat thread. Please try creating one manually.');
+      } finally {
+        creatingThreadRef.current = false;
+      }
+    };
+
+    // Only create thread if:
+    // 1. We have an agentId
+    // 2. No thread is selected
+    // 3. The query has finished loading (not in loading state)
+    // 4. There are no chat threads
+    if (agentId != null && selectedThreadId == null && !chatThreadsQuery.isLoading && chatThreads.length === 0) {
+      initializeThread();
+    }
+  }, [agentId, selectedThreadId, chatThreads.length, chatThreadsQuery.isLoading, queryClient, navigate]);
+
   // Use chat actions hook
   const { sendMutation, executeWorkflowMutation, renameThreadMutation } = useChatActions({
     agentId,
