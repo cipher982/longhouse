@@ -6,6 +6,7 @@ interface StreamingState {
   streamingMessages: Map<number, string>;
   streamingMessageId: number | null;
   pendingTokenBuffer: string;
+  streamingThreadId: number | null;
 }
 
 interface UseThreadStreamingParams {
@@ -22,6 +23,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
     streamingMessages: new Map(),
     streamingMessageId: null,
     pendingTokenBuffer: "",
+    streamingThreadId: null,
   });
 
   const wsQueries = useMemo(() => {
@@ -40,15 +42,28 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
     const { type, data } = envelope;
 
     if (type === "stream_start") {
-      console.log('[CHAT] 🎬 STREAM_START');
+      const streamThreadId = data.thread_id;
+      console.log('[CHAT] 🎬 STREAM_START for thread:', streamThreadId);
       tokenCountRef.current = 0;
       streamStartTimeRef.current = Date.now();
+
+      // Only process streaming if it belongs to the current active thread
+      if (streamThreadId !== effectiveThreadId) {
+        console.log(`[CHAT] ⚠️ Ignoring stream for thread ${streamThreadId} (current: ${effectiveThreadId})`);
+        return;
+      }
+
       setStreamingState({
         streamingMessages: new Map(),
         streamingMessageId: null,
         pendingTokenBuffer: "",
+        streamingThreadId: streamThreadId,
       });
     } else if (type === "stream_chunk") {
+      // Guard: Only process tokens if streaming belongs to current active thread
+      if (streamingState.streamingThreadId !== effectiveThreadId) {
+        return;
+      }
       if (data.chunk_type === "assistant_token") {
         const token = data.content || "";
         tokenCountRef.current++;
@@ -78,6 +93,10 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
         });
       }
     } else if (type === "assistant_id") {
+      // Guard: Only process assistant_id if streaming belongs to current active thread
+      if (streamingState.streamingThreadId !== effectiveThreadId) {
+        return;
+      }
       console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id);
       setStreamingState(prev => {
         const next = new Map(prev.streamingMessages);
@@ -86,6 +105,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
           streamingMessages: next,
           streamingMessageId: data.message_id,
           pendingTokenBuffer: prev.pendingTokenBuffer, // Keep pendingTokenBuffer visible until stream_end
+          streamingThreadId: prev.streamingThreadId,
         };
       });
     } else if (type === "stream_end") {
@@ -107,6 +127,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
         streamingMessages: new Map(),
         streamingMessageId: null,
         pendingTokenBuffer: "",
+        streamingThreadId: null,
       });
     }
   }, [effectiveThreadId, agentId, queryClient]);
