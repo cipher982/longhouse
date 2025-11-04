@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../../lib/useWebSocket";
 
@@ -20,6 +20,10 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
 
   // Map of streaming state by thread ID - stores ALL concurrent streams
   const streamsByThread = useRef<Map<number, StreamingState>>(new Map());
+
+  // Version counter to force re-renders when Map changes
+  const [, setVersion] = useState(0);
+  const forceUpdate = useCallback(() => setVersion(v => v + 1), []);
 
   const wsQueries = useMemo(() => {
     const queries = [];
@@ -49,6 +53,9 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
         startTime: Date.now(),
       });
 
+      // Force re-render to show writing badge immediately
+      forceUpdate();
+
     } else if (type === "stream_chunk") {
       // Accept ALL chunks - no filtering
       const threadId = data.thread_id;
@@ -77,11 +84,8 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
           stream.pendingTokenBuffer += token;
         }
 
-        // Trigger re-render if this is the active thread
-        if (threadId === effectiveThreadId) {
-          // Force update by setting a new Map reference
-          streamsByThread.current = new Map(streamsByThread.current);
-        }
+        // Force re-render to update UI (active thread tokens + badge indicators)
+        forceUpdate();
       }
 
     } else if (type === "assistant_id") {
@@ -97,10 +101,8 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       stream.streamingMessageId = data.message_id;
       stream.streamingMessages.set(data.message_id, stream.pendingTokenBuffer);
 
-      // Trigger re-render if this is the active thread
-      if (threadId === effectiveThreadId) {
-        streamsByThread.current = new Map(streamsByThread.current);
-      }
+      // Force re-render to update UI
+      forceUpdate();
 
     } else if (type === "stream_end") {
       const threadId = data.thread_id;
@@ -126,12 +128,10 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       // Clear stream state for this thread
       streamsByThread.current.delete(threadId);
 
-      // Trigger re-render if this was the active thread
-      if (threadId === effectiveThreadId) {
-        streamsByThread.current = new Map(streamsByThread.current);
-      }
+      // Force re-render to update UI (clear active stream + remove badge)
+      forceUpdate();
     }
-  }, [effectiveThreadId, agentId, queryClient]);
+  }, [agentId, queryClient, forceUpdate]);
 
   const { sendMessage: wsSendMessage } = useWebSocket(agentId != null, {
     includeAuth: true,
