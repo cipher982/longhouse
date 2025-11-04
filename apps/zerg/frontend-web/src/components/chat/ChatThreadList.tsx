@@ -1,3 +1,4 @@
+import { useState } from "react";
 import clsx from "clsx";
 import { Thread } from "../../services/api";
 import { formatTimestamp, truncateText } from "./chatUtils";
@@ -35,6 +36,8 @@ export function ChatThreadList({
   isShelfOpen,
   streamingThreadIds,
 }: ChatThreadListProps) {
+  const [isAutomationCollapsed, setIsAutomationCollapsed] = useState(true);
+
   return (
     <aside className={clsx("thread-sidebar", { active: isShelfOpen })}>
       <div className="sidebar-header">
@@ -129,8 +132,29 @@ export function ChatThreadList({
       {/* Automation History Section */}
       {automationThreads.length > 0 && (
         <div className="automation-history">
-          <h4 className="automation-history-title">Automation Runs</h4>
-          <div className="automation-runs-list">
+          <div
+            className="automation-history-header"
+            onClick={() => setIsAutomationCollapsed(!isAutomationCollapsed)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setIsAutomationCollapsed(!isAutomationCollapsed);
+              }
+            }}
+          >
+            <h4 className="automation-history-title">
+              <span className={clsx("automation-collapse-icon", { collapsed: isAutomationCollapsed })}>
+                ▼
+              </span>
+              Automation Runs
+            </h4>
+            <span className="automation-history-count">
+              {automationThreads.length}
+            </span>
+          </div>
+          <div className={clsx("automation-runs-list", { collapsed: isAutomationCollapsed })}>
             {automationThreads.map((thread) => (
               <div
                 key={thread.id}

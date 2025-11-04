@@ -783,3 +783,125 @@
 @media (max-width: 768px) {
   .thread-scrim { display: block; }
 }
+
+/* Automation History Section */
+.automation-history {
+  border-top: 2px solid var(--border-color);
+  background-color: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+}
+
+.automation-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 15px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s;
+}
+
+.automation-history-header:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.automation-history-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-collapse-icon {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.automation-collapse-icon.collapsed {
+  transform: rotate(-90deg);
+}
+
+.automation-runs-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.automation-runs-list.collapsed {
+  display: none;
+}
+
+.automation-run-item {
+  padding: 12px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background-color 0.2s;
+  position: relative;
+}
+
+.automation-run-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.automation-run-item.selected {
+  background-color: var(--bg-hover);
+  border-left: 3px solid var(--color-primary);
+}
+
+.automation-run-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.automation-run-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.automation-run-type {
+  display: flex;
+  align-items: center;
+}
+
+.run-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.run-badge-scheduled {
+  background-color: rgba(0, 123, 255, 0.15);
+  color: #4da3ff;
+  border: 1px solid rgba(0, 123, 255, 0.3);
+}
+
+.run-badge-manual {
+  background-color: rgba(40, 167, 69, 0.15);
+  color: #5dd589;
+  border: 1px solid rgba(40, 167, 69, 0.3);
+}
+
+.automation-history-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
