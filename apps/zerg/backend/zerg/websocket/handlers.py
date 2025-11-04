@@ -209,31 +209,7 @@ async def handle_pong(client_id: str, envelope: Envelope, _: Session) -> None:  
 
 
 # Topic subscription handlers for different topic types
-async def _subscribe_thread(client_id: str, thread_id: int, message_id: str, db: Session) -> None:
-    """Subscribe to a thread and send initial history.
-
-    Args:
-        client_id: The client ID subscribing
-        thread_id: The thread ID to subscribe to
-        message_id: Message ID for correlation
-        db: Database session
-    """
-    try:
-        # Validate thread exists
-        thread = crud.get_thread(db, thread_id)
-        if not thread:
-            await send_error(client_id, f"Thread {thread_id} not found", message_id)
-            return
-
-        # Subscribe to thread topic
-        topic = f"thread:{thread_id}"
-        await topic_manager.subscribe_to_topic(client_id, topic)
-
-        # No longer send thread history here. REST endpoint is responsible for initial message load.
-
-    except Exception as e:
-        logger.error(f"Error in _subscribe_thread: {str(e)}")
-        await send_error(client_id, "Failed to subscribe to thread", message_id)
+# NOTE: Thread subscriptions removed - all streaming now goes to user:{user_id} topic
 
 
 async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: Session) -> None:
@@ -463,7 +439,12 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                 topic_type, topic_id = topic.split(":", 1)
 
                 if topic_type == "thread":
-                    await _subscribe_thread(client_id, int(topic_id), subscribe_data.message_id, db)
+                    # Thread subscriptions removed - all streaming goes to user:{user_id}
+                    await send_error(
+                        client_id,
+                        "Thread subscriptions no longer supported. All streaming is delivered to user:{user_id}",
+                        subscribe_data.message_id,
+                    )
                 elif topic_type == "agent":
                     await _subscribe_agent(client_id, int(topic_id), subscribe_data.message_id, db)
                 elif topic_type == "user":
@@ -558,20 +539,14 @@ _INBOUND_SCHEMA_MAP: Dict[str, type[BaseModel]] = {
 async def handle_subscribe_thread(client_id: str, message: Dict[str, Any], db: Session) -> None:  # noqa: D401
     """Handle a *subscribe_thread* request.
 
-    This wraps the generic *subscribe* flow for threads. Initial history
-    is now provided via the REST endpoint; WebSocket only delivers updates.
+    DEPRECATED: Thread subscriptions removed. All streaming now goes to user:{user_id} topic.
     """
-    try:
-        # Extract data from message dict - no need for complex validation here
-        thread_id = message.get("thread_id")
-        message_id = message.get("message_id", "")
-        if thread_id is None:
-            await send_error(client_id, "Missing thread_id in subscribe_thread", message_id)
-            return
-        await _subscribe_thread(client_id, thread_id, message_id, db)
-    except Exception as e:  # broad catch ensures client gets feedback
-        logger.error(f"Error in handle_subscribe_thread: {str(e)}")
-        await send_error(client_id, "Failed to subscribe to thread", message.get("message_id"))
+    message_id = message.get("message_id", "")
+    await send_error(
+        client_id,
+        "subscribe_thread is deprecated. All streaming is automatically delivered to user:{user_id}",
+        message_id,
+    )
 
 
 async def handle_send_message(client_id: str, message: Dict[str, Any], db: Session) -> None:  # noqa: D401
@@ -587,10 +562,16 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
             await send_error(client_id, "Missing thread_id or content in send_message", message_id)
             return
 
-        # Validate thread exists
+        # Validate thread exists and get agent owner
         thread = crud.get_thread(db, thread_id)
         if not thread:
             await send_error(client_id, f"Thread {thread_id} not found", message_id)
+            return
+
+        # Get agent to find owner_id
+        agent = crud.get_agent(db, agent_id=thread.agent_id)
+        if not agent:
+            await send_error(client_id, f"Agent for thread {thread_id} not found", message_id)
             return
 
         # Persist the message
@@ -617,15 +598,15 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
             message=msg_dict,
         )
 
-        # Wrap in envelope for broadcast
+        # Broadcast to user-scoped topic (all streaming goes to user:{user_id})
+        topic = f"user:{agent.owner_id}"
         envelope = Envelope.create(
             message_type="thread_message",
-            topic=f"thread:{thread_id}",
+            topic=topic,
             data=thread_msg_data.model_dump(),
             req_id=message_id,
         )
 
-        topic = f"thread:{thread_id}"
         await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
         # We intentionally do **not** publish a secondary

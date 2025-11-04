@@ -22,6 +22,7 @@ from zerg.database import get_db
 
 # New higher-level ThreadService façade
 # Auth dependency
+from zerg.callbacks.token_stream import set_current_user_id
 from zerg.dependencies.auth import get_current_user
 from zerg.generated.ws_messages import AssistantIdData
 from zerg.generated.ws_messages import Envelope
@@ -272,49 +273,71 @@ async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user
 
     runner = AgentRunner(agent)
 
-    topic = f"thread:{thread_id}"
+    # User-scoped topic for ALL streaming events
+    user_id = current_user.id
+    topic = f"user:{user_id}"
 
-    # Notify start of (non token) stream
-    stream_start_data = StreamStartData(thread_id=thread_id)
-    envelope = Envelope.create(
-        message_type="stream_start",
-        topic=topic,
-        data=stream_start_data.model_dump(),
-    )
-    await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
+    # Set user_id context for token streaming
+    set_current_user_id(user_id)
 
-    # Execute the agent turn and record run history/events
-    created_rows = await execute_thread_run_with_history(
-        db=db, agent=agent, thread=thread, runner=runner, trigger="api"
-    )
+    try:
+        # Notify start of (non token) stream
+        stream_start_data = StreamStartData(thread_id=thread_id)
+        envelope = Envelope.create(
+            message_type="stream_start",
+            topic=topic,
+            data=stream_start_data.model_dump(),
+        )
+        await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
-    # We maintain a single *stream* sequence for the entire agent turn so the
-    # frontend can group chunks under one progress indicator.
+        # Execute the agent turn and record run history/events
+        created_rows = await execute_thread_run_with_history(
+            db=db, agent=agent, thread=thread, runner=runner, trigger="api"
+        )
 
-    for row in created_rows:
-        if row.role == "assistant":
-            if runner.enable_token_stream:
-                # Phase-2: emit the new *assistant_id* frame so the frontend
-                # can link upcoming tool_output chunks to this assistant
-                # bubble while streaming is still in progress.
-                assistant_id_data = AssistantIdData(
-                    thread_id=thread_id,
-                    message_id=row.id,
-                )
-                envelope = Envelope.create(
-                    message_type="assistant_id",
-                    topic=topic,
-                    data=assistant_id_data.model_dump(),
-                )
-                await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
-            else:
-                # Non-token mode: keep sending the full assistant_message
+        # We maintain a single *stream* sequence for the entire agent turn so the
+        # frontend can group chunks under one progress indicator.
+
+        for row in created_rows:
+            if row.role == "assistant":
+                if runner.enable_token_stream:
+                    # Phase-2: emit the new *assistant_id* frame so the frontend
+                    # can link upcoming tool_output chunks to this assistant
+                    # bubble while streaming is still in progress.
+                    assistant_id_data = AssistantIdData(
+                        thread_id=thread_id,
+                        message_id=row.id,
+                    )
+                    envelope = Envelope.create(
+                        message_type="assistant_id",
+                        topic=topic,
+                        data=assistant_id_data.model_dump(),
+                    )
+                    await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
+                else:
+                    # Non-token mode: keep sending the full assistant_message
+                    chunk_data = StreamChunkData(
+                        thread_id=thread_id,
+                        content=row.content,
+                        chunk_type="assistant_message",
+                        tool_name=None,
+                        tool_call_id=None,
+                        message_id=row.id,
+                    )
+                    envelope = Envelope.create(
+                        message_type="stream_chunk",
+                        topic=topic,
+                        data=chunk_data.model_dump(),
+                    )
+                    await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
+
+            elif row.role == "tool":
                 chunk_data = StreamChunkData(
                     thread_id=thread_id,
                     content=row.content,
-                    chunk_type="assistant_message",
-                    tool_name=None,
-                    tool_call_id=None,
+                    chunk_type="tool_output",
+                    tool_name=getattr(row, "name", None),
+                    tool_call_id=getattr(row, "tool_call_id", None),
                     message_id=row.id,
                 )
                 envelope = Envelope.create(
@@ -324,29 +347,16 @@ async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user
                 )
                 await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
-        elif row.role == "tool":
-            chunk_data = StreamChunkData(
-                thread_id=thread_id,
-                content=row.content,
-                chunk_type="tool_output",
-                tool_name=getattr(row, "name", None),
-                tool_call_id=getattr(row, "tool_call_id", None),
-                message_id=row.id,
-            )
-            envelope = Envelope.create(
-                message_type="stream_chunk",
-                topic=topic,
-                data=chunk_data.model_dump(),
-            )
-            await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
+        # Close the stream sequence at the end
+        stream_end_data = StreamEndData(thread_id=thread_id)
+        envelope = Envelope.create(
+            message_type="stream_end",
+            topic=topic,
+            data=stream_end_data.model_dump(),
+        )
+        await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
-    # Close the stream sequence at the end
-    stream_end_data = StreamEndData(thread_id=thread_id)
-    envelope = Envelope.create(
-        message_type="stream_end",
-        topic=topic,
-        data=stream_end_data.model_dump(),
-    )
-    await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
-
-    return {"status": "ok"}
+        return {"status": "ok"}
+    finally:
+        # Always clean up user context
+        set_current_user_id(None)
