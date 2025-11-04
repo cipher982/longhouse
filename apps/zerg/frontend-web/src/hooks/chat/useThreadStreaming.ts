@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../../lib/useWebSocket";
 
@@ -18,6 +18,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
   const queryClient = useQueryClient();
   const tokenCountRef = useRef(0);
   const streamStartTimeRef = useRef<number>(0);
+  const streamingThreadIdRef = useRef<number | null>(null);
 
   const [streamingState, setStreamingState] = useState<StreamingState>({
     streamingMessages: new Map(),
@@ -43,9 +44,12 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
 
     if (type === "stream_start") {
       const streamThreadId = data.thread_id;
-      console.log('[CHAT] 🎬 STREAM_START for thread:', streamThreadId);
+      console.log('[CHAT] 🎬 STREAM_START for thread:', streamThreadId, '(current:', effectiveThreadId, ')');
       tokenCountRef.current = 0;
       streamStartTimeRef.current = Date.now();
+
+      // Track the streaming thread ID in a ref to avoid stale closures
+      streamingThreadIdRef.current = streamThreadId;
 
       // Only process streaming if it belongs to the current active thread
       if (streamThreadId !== effectiveThreadId) {
@@ -61,7 +65,11 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       });
     } else if (type === "stream_chunk") {
       // Guard: Only process tokens if streaming belongs to current active thread
-      if (streamingState.streamingThreadId !== effectiveThreadId) {
+      // Use ref to avoid stale closure - always reads current value
+      if (streamingThreadIdRef.current !== effectiveThreadId || streamingThreadIdRef.current === null) {
+        if (streamingThreadIdRef.current !== null) {
+          console.log(`[CHAT] ⚠️ Ignoring chunk for thread ${streamingThreadIdRef.current} (current: ${effectiveThreadId})`);
+        }
         return;
       }
       if (data.chunk_type === "assistant_token") {
@@ -94,10 +102,14 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       }
     } else if (type === "assistant_id") {
       // Guard: Only process assistant_id if streaming belongs to current active thread
-      if (streamingState.streamingThreadId !== effectiveThreadId) {
+      // Use ref to avoid stale closure
+      if (streamingThreadIdRef.current !== effectiveThreadId || streamingThreadIdRef.current === null) {
+        if (streamingThreadIdRef.current !== null) {
+          console.log(`[CHAT] ⚠️ Ignoring assistant_id for thread ${streamingThreadIdRef.current} (current: ${effectiveThreadId})`);
+        }
         return;
       }
-      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id);
+      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, 'for thread:', streamingThreadIdRef.current);
       setStreamingState(prev => {
         const next = new Map(prev.streamingMessages);
         next.set(data.message_id, prev.pendingTokenBuffer);
@@ -110,11 +122,23 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       });
     } else if (type === "stream_end") {
       const duration = Date.now() - streamStartTimeRef.current;
-      console.log(`[CHAT] 🏁 STREAM_END - ${tokenCountRef.current} tokens in ${duration}ms`);
+      const endedThreadId = data.thread_id;
+      const streamingOwner = streamingThreadIdRef.current;
+
+      console.log(`[CHAT] 🏁 STREAM_END - ${tokenCountRef.current} tokens in ${duration}ms (thread: ${endedThreadId}, owner: ${streamingOwner})`);
+
+      // Verify the stream_end matches our tracking
+      if (streamingOwner !== endedThreadId) {
+        console.warn(`[CHAT] ⚠️ MISMATCH: stream_end for thread ${endedThreadId} but tracking ${streamingOwner}`);
+      }
+
+      // Clear the streaming thread ID ref
+      streamingThreadIdRef.current = null;
+
       // Finalize: refresh messages from API
-      if (data.thread_id === effectiveThreadId) {
+      if (endedThreadId === effectiveThreadId) {
         queryClient.invalidateQueries({
-          queryKey: ["thread-messages", data.thread_id]
+          queryKey: ["thread-messages", endedThreadId]
         });
       }
       // Also refresh thread list to update previews for the thread that got new messages
@@ -148,6 +172,20 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       });
     }
   }, [effectiveThreadId, wsSendMessage]);
+
+  // Deterministic teardown: clear streaming if thread changes
+  useEffect(() => {
+    if (effectiveThreadId !== streamingThreadIdRef.current) {
+      console.log('[CHAT] 🧹 Thread changed, clearing stream state');
+      streamingThreadIdRef.current = null;
+      setStreamingState({
+        streamingMessages: new Map(),
+        streamingMessageId: null,
+        pendingTokenBuffer: "",
+        streamingThreadId: null,
+      });
+    }
+  }, [effectiveThreadId]);
 
   return {
     ...streamingState,
