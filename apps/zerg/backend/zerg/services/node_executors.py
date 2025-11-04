@@ -9,6 +9,7 @@ import logging
 from typing import Any
 from typing import Dict
 
+from zerg.callbacks.token_stream import set_current_user_id
 from zerg.crud import crud
 from zerg.database import get_session_factory
 from zerg.managers.agent_runner import AgentRunner
@@ -164,7 +165,15 @@ class AgentNodeExecutor(BaseNodeExecutor):
 
         # Execute via AgentRunner
         runner = AgentRunner(agent)
-        created_messages = await runner.run_thread(db, thread)
+
+        # Set user context for token streaming
+        set_current_user_id(agent.owner_id)
+
+        try:
+            created_messages = await runner.run_thread(db, thread)
+        finally:
+            # Clean up user context
+            set_current_user_id(None)
 
         # Convert SQLAlchemy objects to serializable dictionaries
         serialized_messages = []

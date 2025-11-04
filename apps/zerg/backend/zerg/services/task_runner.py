@@ -27,6 +27,7 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session
 
+from zerg.callbacks.token_stream import set_current_user_id
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.events import EventType
@@ -171,14 +172,82 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
             # ------------------------------------------------------------------
             runner = AgentRunner(agent)
 
-            try:
-                await runner.run_thread(db, thread)
+            # Set user context for token streaming
+            set_current_user_id(agent.owner_id)
 
-            except Exception as exc:
-                # Persist run failure first
+            try:
+                try:
+                    await runner.run_thread(db, thread)
+
+                except Exception as exc:
+                    # Persist run failure first
+                    end_ts = datetime.now(timezone.utc)
+                    duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
+                    crud.mark_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+
+                    await event_bus.publish(
+                        EventType.RUN_UPDATED,
+                        {
+                            "event_type": "run_updated",
+                            "agent_id": agent.id,
+                            "run_id": run_row.id,
+                            "status": "failed",
+                            "finished_at": end_ts.isoformat(),
+                            "duration_ms": duration_ms,
+                            "error": str(exc),
+                        },
+                    )
+
+                    # Persist agent error state & broadcast so dashboards refresh
+                    crud.update_agent(db, agent.id, status="error", last_error=str(exc))
+                    db.commit()
+
+                    await event_bus.publish(
+                        EventType.AGENT_UPDATED,
+                        {
+                            "event_type": "agent_updated",
+                            "id": agent.id,
+                            "status": "error",
+                            "last_error": str(exc),
+                        },
+                    )
+
+                    logger.exception("Task run failed for agent %s", agent.id)
+                    raise
+
+                # ------------------------------------------------------------------
+                # Success – update run + flip agent back to idle.
+                # ------------------------------------------------------------------
                 end_ts = datetime.now(timezone.utc)
                 duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-                crud.mark_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+
+                # Persist usage + cost if available
+                total_tokens = runner.usage_total_tokens
+                total_cost_usd = None
+                if runner.usage_prompt_tokens is not None and runner.usage_completion_tokens is not None:
+                    # Compute cost only when pricing known
+                    from zerg.pricing import get_usd_prices_per_1k
+
+                    prices = get_usd_prices_per_1k(agent.model)
+                    if prices is not None:
+                        in_price, out_price = prices
+                        total_cost_usd = (
+                            (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
+                        ) / 1000.0
+
+                # Mark run as finished (summary auto-extracted if not provided)
+                finished_run = crud.mark_finished(
+                    db,
+                    run_row.id,
+                    finished_at=end_ts,
+                    duration_ms=duration_ms,
+                    total_tokens=total_tokens,
+                    total_cost_usd=total_cost_usd,
+                )
+
+                # Refresh to get the auto-extracted summary
+                if finished_run:
+                    db.refresh(finished_run)
 
                 await event_bus.publish(
                     EventType.RUN_UPDATED,
@@ -186,15 +255,17 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                         "event_type": "run_updated",
                         "agent_id": agent.id,
                         "run_id": run_row.id,
-                        "status": "failed",
+                        "status": "success",
                         "finished_at": end_ts.isoformat(),
                         "duration_ms": duration_ms,
-                        "error": str(exc),
+                        "summary": finished_run.summary if finished_run else None,
                     },
                 )
 
-                # Persist agent error state & broadcast so dashboards refresh
-                crud.update_agent(db, agent.id, status="error", last_error=str(exc))
+                # For scheduled agents, revert to idle (status enum only supports idle/running/error/processing)
+                new_status = "idle"
+
+                crud.update_agent(db, agent.id, status=new_status, last_run_at=end_ts, last_error=None)
                 db.commit()
 
                 await event_bus.publish(
@@ -202,80 +273,17 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                     {
                         "event_type": "agent_updated",
                         "id": agent.id,
-                        "status": "error",
-                        "last_error": str(exc),
+                        "status": new_status,
+                        "last_run_at": end_ts.isoformat(),
+                        "thread_id": thread.id,
+                        "last_error": None,
                     },
                 )
 
-                logger.exception("Task run failed for agent %s", agent.id)
-                raise
-
-            # ------------------------------------------------------------------
-            # Success – update run + flip agent back to idle.
-            # ------------------------------------------------------------------
-            end_ts = datetime.now(timezone.utc)
-            duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-
-            # Persist usage + cost if available
-            total_tokens = runner.usage_total_tokens
-            total_cost_usd = None
-            if runner.usage_prompt_tokens is not None and runner.usage_completion_tokens is not None:
-                # Compute cost only when pricing known
-                from zerg.pricing import get_usd_prices_per_1k
-
-                prices = get_usd_prices_per_1k(agent.model)
-                if prices is not None:
-                    in_price, out_price = prices
-                    total_cost_usd = (
-                        (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
-                    ) / 1000.0
-
-            # Mark run as finished (summary auto-extracted if not provided)
-            finished_run = crud.mark_finished(
-                db,
-                run_row.id,
-                finished_at=end_ts,
-                duration_ms=duration_ms,
-                total_tokens=total_tokens,
-                total_cost_usd=total_cost_usd,
-            )
-
-            # Refresh to get the auto-extracted summary
-            if finished_run:
-                db.refresh(finished_run)
-
-            await event_bus.publish(
-                EventType.RUN_UPDATED,
-                {
-                    "event_type": "run_updated",
-                    "agent_id": agent.id,
-                    "run_id": run_row.id,
-                    "status": "success",
-                    "finished_at": end_ts.isoformat(),
-                    "duration_ms": duration_ms,
-                    "summary": finished_run.summary if finished_run else None,
-                },
-            )
-
-            # For scheduled agents, revert to idle (status enum only supports idle/running/error/processing)
-            new_status = "idle"
-
-            crud.update_agent(db, agent.id, status=new_status, last_run_at=end_ts, last_error=None)
-            db.commit()
-
-            await event_bus.publish(
-                EventType.AGENT_UPDATED,
-                {
-                    "event_type": "agent_updated",
-                    "id": agent.id,
-                    "status": new_status,
-                    "last_run_at": end_ts.isoformat(),
-                    "thread_id": thread.id,
-                    "last_error": None,
-                },
-            )
-
-            return thread
+                return thread
+            finally:
+                # Always clean up user context
+                set_current_user_id(None)
 
     # If we are here, the database is not PostgreSQL; this app requires
     # PostgreSQL for advisory locks. Simplify by failing fast.
