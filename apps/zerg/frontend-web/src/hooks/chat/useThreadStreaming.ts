@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../../lib/useWebSocket";
 
@@ -6,7 +6,8 @@ interface StreamingState {
   streamingMessages: Map<number, string>;
   streamingMessageId: number | null;
   pendingTokenBuffer: string;
-  streamingThreadId: number | null;
+  tokenCount: number;
+  startTime: number;
 }
 
 interface UseThreadStreamingParams {
@@ -16,16 +17,9 @@ interface UseThreadStreamingParams {
 
 export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStreamingParams) {
   const queryClient = useQueryClient();
-  const tokenCountRef = useRef(0);
-  const streamStartTimeRef = useRef<number>(0);
-  const streamingThreadIdRef = useRef<number | null>(null);
 
-  const [streamingState, setStreamingState] = useState<StreamingState>({
-    streamingMessages: new Map(),
-    streamingMessageId: null,
-    pendingTokenBuffer: "",
-    streamingThreadId: null,
-  });
+  // Map of streaming state by thread ID - stores ALL concurrent streams
+  const streamsByThread = useRef<Map<number, StreamingState>>(new Map());
 
   const wsQueries = useMemo(() => {
     const queries = [];
@@ -43,116 +37,99 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
     const { type, data } = envelope;
 
     if (type === "stream_start") {
-      const streamThreadId = data.thread_id;
-      console.log('[CHAT] 🎬 STREAM_START for thread:', streamThreadId, '(current:', effectiveThreadId, ')');
-      tokenCountRef.current = 0;
-      streamStartTimeRef.current = Date.now();
+      const threadId = data.thread_id;
+      console.log('[CHAT] 🎬 STREAM_START for thread:', threadId);
 
-      // Track the streaming thread ID in a ref to avoid stale closures
-      streamingThreadIdRef.current = streamThreadId;
-
-      // Only process streaming if it belongs to the current active thread
-      if (streamThreadId !== effectiveThreadId) {
-        console.log(`[CHAT] ⚠️ Ignoring stream for thread ${streamThreadId} (current: ${effectiveThreadId})`);
-        return;
-      }
-
-      setStreamingState({
+      // Initialize new stream state for this thread
+      streamsByThread.current.set(threadId, {
         streamingMessages: new Map(),
         streamingMessageId: null,
         pendingTokenBuffer: "",
-        streamingThreadId: streamThreadId,
+        tokenCount: 0,
+        startTime: Date.now(),
       });
+
     } else if (type === "stream_chunk") {
-      // Guard: Only process tokens if streaming belongs to current active thread
-      // Use ref to avoid stale closure - always reads current value
-      if (streamingThreadIdRef.current !== effectiveThreadId || streamingThreadIdRef.current === null) {
-        if (streamingThreadIdRef.current !== null) {
-          console.log(`[CHAT] ⚠️ Ignoring chunk for thread ${streamingThreadIdRef.current} (current: ${effectiveThreadId})`);
-        }
+      // Accept ALL chunks - no filtering
+      const threadId = data.thread_id;
+      const stream = streamsByThread.current.get(threadId);
+
+      if (!stream) {
+        console.warn(`[CHAT] ⚠️ Received chunk for unknown thread ${threadId}`);
         return;
       }
+
       if (data.chunk_type === "assistant_token") {
         const token = data.content || "";
-        tokenCountRef.current++;
+        stream.tokenCount++;
 
         // Sample logging: first token + every 50th token
-        if (tokenCountRef.current === 1 || tokenCountRef.current % 50 === 0) {
-          console.log(`[CHAT] 🔤 Token #${tokenCountRef.current}`);
+        if (stream.tokenCount === 1 || stream.tokenCount % 50 === 0) {
+          console.log(`[CHAT] 🔤 Thread ${threadId} token #${stream.tokenCount}`);
         }
 
-        setStreamingState(prev => {
-          if (prev.streamingMessageId) {
-            // Have ID, accumulate normally
-            const next = new Map(prev.streamingMessages);
-            const current = next.get(prev.streamingMessageId) || "";
-            next.set(prev.streamingMessageId, current + token);
-            return {
-              ...prev,
-              streamingMessages: next,
-            };
-          } else {
-            // No ID yet, buffer tokens that arrive before assistant_id
-            return {
-              ...prev,
-              pendingTokenBuffer: prev.pendingTokenBuffer + token,
-            };
-          }
-        });
-      }
-    } else if (type === "assistant_id") {
-      // Guard: Only process assistant_id if streaming belongs to current active thread
-      // Use ref to avoid stale closure
-      if (streamingThreadIdRef.current !== effectiveThreadId || streamingThreadIdRef.current === null) {
-        if (streamingThreadIdRef.current !== null) {
-          console.log(`[CHAT] ⚠️ Ignoring assistant_id for thread ${streamingThreadIdRef.current} (current: ${effectiveThreadId})`);
+        if (stream.streamingMessageId) {
+          // Have ID, accumulate normally
+          const current = stream.streamingMessages.get(stream.streamingMessageId) || "";
+          stream.streamingMessages.set(stream.streamingMessageId, current + token);
+        } else {
+          // No ID yet, buffer tokens
+          stream.pendingTokenBuffer += token;
         }
+
+        // Trigger re-render if this is the active thread
+        if (threadId === effectiveThreadId) {
+          // Force update by setting a new Map reference
+          streamsByThread.current = new Map(streamsByThread.current);
+        }
+      }
+
+    } else if (type === "assistant_id") {
+      const threadId = data.thread_id;
+      const stream = streamsByThread.current.get(threadId);
+
+      if (!stream) {
+        console.warn(`[CHAT] ⚠️ Received assistant_id for unknown thread ${threadId}`);
         return;
       }
-      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, 'for thread:', streamingThreadIdRef.current);
-      setStreamingState(prev => {
-        const next = new Map(prev.streamingMessages);
-        next.set(data.message_id, prev.pendingTokenBuffer);
-        return {
-          streamingMessages: next,
-          streamingMessageId: data.message_id,
-          pendingTokenBuffer: prev.pendingTokenBuffer, // Keep pendingTokenBuffer visible until stream_end
-          streamingThreadId: prev.streamingThreadId,
-        };
-      });
+
+      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, 'for thread:', threadId);
+      stream.streamingMessageId = data.message_id;
+      stream.streamingMessages.set(data.message_id, stream.pendingTokenBuffer);
+
+      // Trigger re-render if this is the active thread
+      if (threadId === effectiveThreadId) {
+        streamsByThread.current = new Map(streamsByThread.current);
+      }
+
     } else if (type === "stream_end") {
-      const duration = Date.now() - streamStartTimeRef.current;
-      const endedThreadId = data.thread_id;
-      const streamingOwner = streamingThreadIdRef.current;
+      const threadId = data.thread_id;
+      const stream = streamsByThread.current.get(threadId);
 
-      console.log(`[CHAT] 🏁 STREAM_END - ${tokenCountRef.current} tokens in ${duration}ms (thread: ${endedThreadId}, owner: ${streamingOwner})`);
-
-      // Verify the stream_end matches our tracking
-      if (streamingOwner !== endedThreadId) {
-        console.warn(`[CHAT] ⚠️ MISMATCH: stream_end for thread ${endedThreadId} but tracking ${streamingOwner}`);
+      if (stream) {
+        const duration = Date.now() - stream.startTime;
+        console.log(`[CHAT] 🏁 STREAM_END - thread ${threadId}: ${stream.tokenCount} tokens in ${duration}ms`);
       }
 
-      // Clear the streaming thread ID ref
-      streamingThreadIdRef.current = null;
+      // Refresh messages from API for this thread
+      queryClient.invalidateQueries({
+        queryKey: ["thread-messages", threadId]
+      });
 
-      // Finalize: refresh messages from API
-      if (endedThreadId === effectiveThreadId) {
-        queryClient.invalidateQueries({
-          queryKey: ["thread-messages", endedThreadId]
-        });
-      }
-      // Also refresh thread list to update previews for the thread that got new messages
+      // Also refresh thread list to update previews
       if (agentId != null) {
         queryClient.invalidateQueries({
           queryKey: ["threads", agentId, "chat"]
         });
       }
-      setStreamingState({
-        streamingMessages: new Map(),
-        streamingMessageId: null,
-        pendingTokenBuffer: "",
-        streamingThreadId: null,
-      });
+
+      // Clear stream state for this thread
+      streamsByThread.current.delete(threadId);
+
+      // Trigger re-render if this was the active thread
+      if (threadId === effectiveThreadId) {
+        streamsByThread.current = new Map(streamsByThread.current);
+      }
     }
   }, [effectiveThreadId, agentId, queryClient]);
 
@@ -162,33 +139,16 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
     onStreamingMessage: handleStreamingMessage,
   });
 
-  const subscribe = useCallback(() => {
-    if (effectiveThreadId && wsSendMessage) {
-      console.log('[CHAT] 📡 Subscribing to thread:', effectiveThreadId);
-      wsSendMessage({
-        type: "subscribe_thread",
-        thread_id: effectiveThreadId,
-        message_id: `sub-${Date.now()}`,
-      });
-    }
-  }, [effectiveThreadId, wsSendMessage]);
+  // Get the active thread's streaming state
+  const activeStream = effectiveThreadId != null
+    ? streamsByThread.current.get(effectiveThreadId)
+    : null;
 
-  // Deterministic teardown: clear streaming if thread changes
-  useEffect(() => {
-    if (effectiveThreadId !== streamingThreadIdRef.current) {
-      console.log('[CHAT] 🧹 Thread changed, clearing stream state');
-      streamingThreadIdRef.current = null;
-      setStreamingState({
-        streamingMessages: new Map(),
-        streamingMessageId: null,
-        pendingTokenBuffer: "",
-        streamingThreadId: null,
-      });
-    }
-  }, [effectiveThreadId]);
-
+  // Return active thread's stream data + list of all streaming threads
   return {
-    ...streamingState,
-    subscribe,
+    streamingMessages: activeStream?.streamingMessages || new Map(),
+    streamingMessageId: activeStream?.streamingMessageId || null,
+    pendingTokenBuffer: activeStream?.pendingTokenBuffer || "",
+    allStreamingThreadIds: Array.from(streamsByThread.current.keys()),
   };
 }

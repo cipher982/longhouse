@@ -125,16 +125,11 @@ export default function ChatPage() {
     effectiveThreadId,
   });
 
-  // Use streaming hook
-  const { streamingMessages, streamingMessageId, pendingTokenBuffer, subscribe } = useThreadStreaming({
+  // Use streaming hook - no subscriptions needed, user:{user_id} is auto-subscribed
+  const { streamingMessages, streamingMessageId, pendingTokenBuffer, allStreamingThreadIds } = useThreadStreaming({
     agentId,
     effectiveThreadId,
   });
-
-  // Subscribe to thread topic when thread changes
-  useEffect(() => {
-    subscribe();
-  }, [effectiveThreadId, subscribe]);
 
   // Event handlers
   const handleSelectThread = (thread: any) => {
@@ -356,6 +351,7 @@ export default function ChatPage() {
             isRenamingPending={renameThreadMutation.isPending}
             onCreateThread={handleCreateThread}
             isShelfOpen={isShelfOpen}
+            streamingThreadIds={allStreamingThreadIds}
           />
 
           <ChatMessageList

@@ -32,12 +32,17 @@ from zerg.websocket.manager import topic_manager
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Context variable – the *current* thread being processed.
+# Context variables – the *current* thread and user being processed.
 # ---------------------------------------------------------------------------
 
 
 current_thread_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(  # noqa: E501
     "current_thread_id_var",
+    default=None,
+)
+
+current_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(  # noqa: E501
+    "current_user_id_var",
     default=None,
 )
 
@@ -93,16 +98,18 @@ class WsTokenCallback(AsyncCallbackHandler):
     # ------------------------------------------------------------------
 
     async def on_llm_new_token(self, token: str, **_: Any) -> None:  # noqa: D401 – interface defined by LangChain
-        """Broadcast *token* to all subscribers of the current thread topic."""
+        """Broadcast *token* to all subscribers of the current user topic."""
 
         thread_id = current_thread_id_var.get()
-        if thread_id is None:
+        user_id = current_user_id_var.get()
+
+        if thread_id is None or user_id is None:
             # If no context is set we skip – this can happen if the LLM is
             # called outside an ``AgentRunner`` (unit-tests, etc.).
-            logger.debug("WsTokenCallback: thread_id context not set – skipping token dispatch")
+            logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
             return
 
-        topic = f"thread:{thread_id}"
+        topic = f"user:{user_id}"
 
         try:
             chunk_data = StreamChunkData(
@@ -119,7 +126,7 @@ class WsTokenCallback(AsyncCallbackHandler):
             )
             await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
         except Exception:  # noqa: BLE001 – we log then swallow; token streaming is best-effort
-            logger.exception("Error broadcasting token chunk for thread %s", thread_id)
+            logger.exception("Error broadcasting token chunk for user %s, thread %s", user_id, thread_id)
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +147,23 @@ def set_current_thread_id(thread_id: int | None):  # noqa: D401 – tiny setter 
     return current_thread_id_var.set(int(thread_id))
 
 
+def set_current_user_id(user_id: int | None):  # noqa: D401 – tiny setter helper
+    """Set *user_id* as the active context for token streaming.
+
+    Returns the *Token* object from ``ContextVar.set`` so callers can restore
+    the previous value via ``ContextVar.reset`` if desired.
+    """
+
+    if user_id is None:
+        return current_user_id_var.set(None)
+
+    return current_user_id_var.set(int(user_id))
+
+
 __all__ = [
     "WsTokenCallback",
     "current_thread_id_var",
+    "current_user_id_var",
     "set_current_thread_id",
+    "set_current_user_id",
 ]

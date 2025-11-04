@@ -16,6 +16,7 @@ interface ChatThreadListProps {
   isRenamingPending: boolean;
   onCreateThread: () => void;
   isShelfOpen?: boolean;
+  streamingThreadIds: number[];
 }
 
 export function ChatThreadList({
@@ -32,6 +33,7 @@ export function ChatThreadList({
   isRenamingPending,
   onCreateThread,
   isShelfOpen,
+  streamingThreadIds,
 }: ChatThreadListProps) {
   return (
     <aside className={clsx("thread-sidebar", { active: isShelfOpen })}>
@@ -53,11 +55,15 @@ export function ChatThreadList({
           const messagePreview = lastMessage
             ? truncateText(lastMessage.content, 50)
             : "No messages";
+          const isWriting = streamingThreadIds.includes(thread.id);
 
           return (
             <div
               key={thread.id}
-              className={clsx("thread-item", { selected: thread.id === effectiveThreadId })}
+              className={clsx("thread-item", {
+                selected: thread.id === effectiveThreadId,
+                writing: isWriting
+              })}
               data-testid={`thread-row-${thread.id}`}
               data-id={thread.id}
               data-thread-id={thread.id}
@@ -91,7 +97,10 @@ export function ChatThreadList({
                 </div>
               ) : (
                 <>
-                  <div className="thread-item-title">{thread.title}</div>
+                  <div className="thread-item-title">
+                    {isWriting && <span className="writing-indicator" title="AI is writing...">✍️ </span>}
+                    {thread.title}
+                  </div>
                   <div className="thread-item-time">
                     {formatTimestamp(thread.updated_at || thread.created_at)}
                   </div>
