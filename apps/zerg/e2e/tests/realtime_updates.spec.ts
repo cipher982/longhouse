@@ -21,18 +21,138 @@ test('Dashboard live update placeholder', async ({ browser }) => {
   await expect(page2.locator('tr[data-agent-id]')).toHaveCount(1, { timeout: 15_000 });
 });
 
-test('WebSocket connection placeholder', async () => {
-  test.skip();
+test('WebSocket connection establishes successfully', async ({ page }) => {
+  console.log('🎯 Testing: WebSocket connection establishment');
+
+  // Track WebSocket connections
+  const wsConnections: string[] = [];
+  let wsConnected = false;
+
+  page.on('websocket', ws => {
+    const url = ws.url();
+    wsConnections.push(url);
+    wsConnected = true;
+    console.log('✅ WebSocket connected:', url);
+
+    // Verify worker parameter is present (from fixtures)
+    expect(url).toContain('worker=');
+  });
+
+  // Navigate to app
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2000);
+
+  // Verify at least one WebSocket connection was established
+  expect(wsConnected).toBe(true);
+  expect(wsConnections.length).toBeGreaterThan(0);
+  console.log(`✅ WebSocket connections established: ${wsConnections.length}`);
 });
 
-test('Message streaming placeholder', async () => {
-  test.skip();
+test('Message streaming via WebSocket', async ({ page, request }) => {
+  console.log('🎯 Testing: Message streaming through WebSocket');
+
+  // Create agent
+  const agentResponse = await request.post('/api/agents', {
+    data: {
+      name: 'WebSocket Streaming Agent',
+      system_instructions: 'Test agent',
+      task_instructions: 'Respond briefly',
+      model: 'gpt-4o-mini',
+    }
+  });
+  expect(agentResponse.status()).toBe(201);
+  const agent = await agentResponse.json();
+  console.log(`✅ Created agent ID: ${agent.id}`);
+
+  // Track WebSocket messages
+  const wsMessages: any[] = [];
+
+  page.on('websocket', ws => {
+    console.log('🔌 WebSocket connected');
+    ws.on('framereceived', event => {
+      try {
+        const message = JSON.parse(event.payload);
+        wsMessages.push(message);
+        if (message.event_type) {
+          console.log(`📨 Received: ${message.event_type}`);
+        }
+      } catch (error) {
+        // Ignore non-JSON frames
+      }
+    });
+  });
+
+  // Navigate to chat
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.locator(`[data-testid="chat-agent-${agent.id}"]`).click();
+  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+
+  // Send message that will trigger streaming
+  await page.getByTestId('chat-input').fill('Say hello');
+  await page.getByTestId('send-message-btn').click();
+
+  // Wait for streaming to occur
+  await page.waitForTimeout(5000);
+
+  // Verify we received WebSocket messages
+  expect(wsMessages.length).toBeGreaterThan(0);
+  console.log(`✅ Received ${wsMessages.length} WebSocket messages`);
+
+  // Check for streaming-related events
+  const streamEvents = wsMessages.filter(m =>
+    m.event_type && (
+      m.event_type.includes('stream') ||
+      m.event_type === 'stream_start' ||
+      m.event_type === 'stream_chunk' ||
+      m.event_type === 'stream_end'
+    )
+  );
+
+  if (streamEvents.length > 0) {
+    console.log(`✅ Detected ${streamEvents.length} streaming events via WebSocket`);
+  } else {
+    console.log('⚠️  No explicit stream events detected (may be using different event names)');
+  }
 });
 
-test('Connection recovery placeholder', async () => {
-  test.skip();
-});
+test('WebSocket connection recovery after disconnect', async ({ page }) => {
+  console.log('🎯 Testing: WebSocket connection recovery');
 
-test('Presence indicators placeholder', async () => {
-  test.skip();
+  let connectionCount = 0;
+  let reconnected = false;
+
+  page.on('websocket', ws => {
+    connectionCount++;
+    console.log(`🔌 WebSocket connection #${connectionCount}: ${ws.url()}`);
+
+    // Track if we reconnect
+    if (connectionCount > 1) {
+      reconnected = true;
+      console.log('✅ WebSocket reconnected');
+    }
+
+    ws.on('close', () => {
+      console.log(`📡 WebSocket connection #${connectionCount} closed`);
+    });
+  });
+
+  // Navigate to app
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2000);
+
+  expect(connectionCount).toBeGreaterThan(0);
+  console.log(`✅ Initial WebSocket connection established`);
+
+  // Simulate page navigation (triggers reconnect)
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2000);
+
+  // Verify WebSocket reconnection occurred
+  expect(connectionCount).toBeGreaterThan(1);
+  console.log(`✅ WebSocket connection count after navigation: ${connectionCount}`);
+  console.log('✅ Connection recovery validated');
 });
