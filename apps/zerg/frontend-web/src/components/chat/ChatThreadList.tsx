@@ -131,9 +131,10 @@ export function ChatThreadList({
 
       {/* Automation History Section */}
       {automationThreads.length > 0 && (
-        <div className="automation-history">
+        <div className="automation-history" data-testid="automation-history">
           <div
             className="automation-history-header"
+            data-testid="automation-history-header"
             onClick={() => setIsAutomationCollapsed(!isAutomationCollapsed)}
             role="button"
             tabIndex={0}
@@ -145,16 +146,22 @@ export function ChatThreadList({
             }}
           >
             <h4 className="automation-history-title">
-              <span className={clsx("automation-collapse-icon", { collapsed: isAutomationCollapsed })}>
+              <span
+                className={clsx("automation-collapse-icon", { collapsed: isAutomationCollapsed })}
+                data-testid="automation-collapse-icon"
+              >
                 ▼
               </span>
               Automation Runs
             </h4>
-            <span className="automation-history-count">
+            <span className="automation-history-count" data-testid="automation-count">
               {automationThreads.length}
             </span>
           </div>
-          <div className={clsx("automation-runs-list", { collapsed: isAutomationCollapsed })}>
+          <div
+            className={clsx("automation-runs-list", { collapsed: isAutomationCollapsed })}
+            data-testid="automation-runs-list"
+          >
             {automationThreads.map((thread) => (
               <div
                 key={thread.id}
@@ -163,6 +170,8 @@ export function ChatThreadList({
                 })}
                 data-testid={`automation-run-${thread.id}`}
                 data-id={thread.id}
+                data-thread-id={thread.id}
+                data-thread-type={thread.thread_type}
                 role="button"
                 tabIndex={0}
                 onClick={() => onSelectThread(thread)}
@@ -178,7 +187,10 @@ export function ChatThreadList({
                   {formatTimestamp(thread.created_at)}
                 </div>
                 <div className="automation-run-type">
-                  <span className={`run-badge run-badge-${thread.thread_type}`}>
+                  <span
+                    className={`run-badge run-badge-${thread.thread_type}`}
+                    data-testid={`run-badge-${thread.thread_type}`}
+                  >
                     {thread.thread_type === "scheduled" ? "🔄 Scheduled" : "▶️ Manual"}
                   </span>
                 </div>
