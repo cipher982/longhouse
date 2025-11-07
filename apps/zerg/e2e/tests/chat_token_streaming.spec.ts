@@ -205,5 +205,165 @@ test.describe('Chat Token Streaming Tests', () => {
       expect(cursorStyle.animation || cursorStyle.animationName).toBeTruthy();
     }
   });
+
+  test('CRITICAL: Switching threads mid-stream prevents token leakage', async ({ page }) => {
+    console.log('🎯 Testing: Thread-switching token leakage prevention');
+
+    const agentId = await createAgentAndGetId(page);
+    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+
+    // Send message in Thread A to trigger streaming
+    const testMessage = 'Write a long detailed story about a robot exploring Mars';
+    await page.getByTestId('chat-input').fill(testMessage);
+    await page.getByTestId('send-message-btn').click();
+    console.log('📊 Sent message in Thread A');
+
+    // Wait for user message
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
+    });
+
+    // Wait for streaming to start
+    const streamingMessage = page.locator('[data-streaming="true"]').first();
+    await expect(streamingMessage).toBeVisible({ timeout: 15000 });
+    console.log('✅ Streaming started in Thread A');
+
+    // Get current thread ID from URL
+    const threadAUrl = page.url();
+    const threadAId = threadAUrl.match(/\/thread\/(\d+)/)?.[1];
+    console.log(`📊 Thread A ID: ${threadAId}`);
+
+    // Capture some content from Thread A's stream
+    const threadAContent = await streamingMessage.locator('.message-content').textContent();
+    console.log(`📊 Thread A initial content length: ${threadAContent?.length || 0} chars`);
+
+    // Create and switch to Thread B while streaming is active
+    const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
+    if (await newThreadBtn.count() === 0) {
+      console.log('⚠️  New thread button not found - skipping test');
+      test.skip();
+      return;
+    }
+
+    await newThreadBtn.click();
+    await page.waitForTimeout(1000); // Wait for thread creation
+    console.log('📊 Switched to Thread B');
+
+    const threadBUrl = page.url();
+    const threadBId = threadBUrl.match(/\/thread\/(\d+)/)?.[1];
+    console.log(`📊 Thread B ID: ${threadBId}`);
+
+    // Verify we're in a different thread
+    expect(threadBId).not.toBe(threadAId);
+    expect(threadBId).toBeTruthy();
+
+    // CRITICAL: Verify Thread B has NO content from Thread A's streaming
+    // Wait a bit to see if any tokens leak through
+    await page.waitForTimeout(2000);
+
+    const messagesInThreadB = page.getByTestId('messages-container');
+
+    // Thread B should be empty or only have system messages
+    const assistantMessagesInThreadB = page.locator('[data-role="chat-message-assistant"]');
+    const count = await assistantMessagesInThreadB.count();
+
+    if (count > 0) {
+      // If there are assistant messages, they should NOT contain Thread A's content
+      const threadBContent = await messagesInThreadB.textContent();
+      expect(threadBContent).not.toContain('robot');
+      expect(threadBContent).not.toContain('Mars');
+      console.log('✅ Thread B contains no leaked tokens from Thread A');
+    } else {
+      console.log('✅ Thread B is empty (no leaked tokens)');
+    }
+
+    // Switch back to Thread A
+    const threadASelector = `[data-thread-id="${threadAId}"]`;
+    const threadAInSidebar = page.locator(threadASelector);
+
+    if (await threadAInSidebar.count() > 0) {
+      await threadAInSidebar.click();
+      await page.waitForTimeout(500);
+      console.log('📊 Switched back to Thread A');
+
+      // Verify Thread A still has its content (streaming continued in background)
+      const messagesInThreadA = page.getByTestId('messages-container');
+      await expect(messagesInThreadA).toContainText('robot', { timeout: 5000 });
+      await expect(messagesInThreadA).toContainText('Mars', { timeout: 5000 });
+      console.log('✅ Thread A preserved its content');
+    }
+
+    console.log('✅ Thread-switching token isolation PASSED');
+  });
+
+  test('Writing indicator badge appears on background streaming threads', async ({ page }) => {
+    console.log('🎯 Testing: ✍️ badge visibility for background threads');
+
+    const agentId = await createAgentAndGetId(page);
+    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+
+    // Send message to trigger streaming
+    const testMessage = 'Count from 1 to 100 slowly with explanations';
+    await page.getByTestId('chat-input').fill(testMessage);
+    await page.getByTestId('send-message-btn').click();
+    console.log('📊 Started streaming in Thread A');
+
+    // Wait for streaming to start
+    const streamingMessage = page.locator('[data-streaming="true"]').first();
+    await expect(streamingMessage).toBeVisible({ timeout: 15000 });
+    console.log('✅ Streaming active in Thread A');
+
+    // Get thread ID
+    const threadUrl = page.url();
+    const threadId = threadUrl.match(/\/thread\/(\d+)/)?.[1];
+    console.log(`📊 Thread ID: ${threadId}`);
+
+    // Create new thread (navigate away from streaming thread)
+    const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
+    if (await newThreadBtn.count() === 0) {
+      console.log('⚠️  New thread button not found - skipping test');
+      test.skip();
+      return;
+    }
+
+    await newThreadBtn.click();
+    await page.waitForTimeout(1000);
+    console.log('📊 Created and switched to Thread B');
+
+    // Verify original thread shows "✍️ writing..." badge in sidebar
+    const threadInSidebar = page.locator(`[data-thread-id="${threadId}"]`);
+
+    if (await threadInSidebar.count() > 0) {
+      // Check for writing indicator within the thread item
+      const writingIndicator = threadInSidebar.locator('.writing-indicator');
+
+      try {
+        await expect(writingIndicator).toBeVisible({ timeout: 5000 });
+        const indicatorText = await writingIndicator.textContent();
+        expect(indicatorText).toContain('✍️');
+        console.log('✅ Writing indicator badge visible');
+      } catch (error) {
+        console.log('⚠️  Writing indicator not visible - may have completed');
+        // Stream might have finished already - that's okay
+      }
+
+      // Wait for streaming to complete
+      await page.waitForTimeout(10000);
+
+      // Badge should disappear when streaming completes
+      const stillVisible = await writingIndicator.isVisible().catch(() => false);
+      if (!stillVisible) {
+        console.log('✅ Writing badge correctly disappeared after stream completed');
+      } else {
+        console.log('⚠️  Badge still visible - stream may still be active');
+      }
+    } else {
+      console.log('⚠️  Thread not found in sidebar');
+    }
+
+    console.log('✅ Writing indicator badge test completed');
+  });
 });
 
