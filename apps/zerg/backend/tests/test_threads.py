@@ -357,3 +357,264 @@ def test_run_thread_not_found(client: TestClient):
     assert response.status_code == 404
     assert "detail" in response.json()
     assert response.json()["detail"] == "Thread not found"
+
+
+# ============================================================================
+# AUTOMATION THREADS API CONTRACT TESTS
+# ============================================================================
+
+
+def test_create_thread_with_scheduled_type(client: TestClient, sample_agent: Agent):
+    """Test creating a scheduled automation thread"""
+    thread_data = {
+        "title": "Scheduled Automation",
+        "agent_id": sample_agent.id,
+        "thread_type": "scheduled",
+        "active": True,
+    }
+
+    response = client.post("/api/threads", json=thread_data)
+    assert response.status_code == 201
+    created_thread = response.json()
+    assert created_thread["thread_type"] == "scheduled"
+    assert created_thread["title"] == thread_data["title"]
+    assert "id" in created_thread
+
+
+def test_create_thread_with_manual_type(client: TestClient, sample_agent: Agent):
+    """Test creating a manual automation thread"""
+    thread_data = {
+        "title": "Manual Run",
+        "agent_id": sample_agent.id,
+        "thread_type": "manual",
+        "active": True,
+    }
+
+    response = client.post("/api/threads", json=thread_data)
+    assert response.status_code == 201
+    created_thread = response.json()
+    assert created_thread["thread_type"] == "manual"
+    assert created_thread["title"] == thread_data["title"]
+
+
+def test_create_thread_with_chat_type(client: TestClient, sample_agent: Agent):
+    """Test creating a regular chat thread (default type)"""
+    thread_data = {
+        "title": "Chat Thread",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+        "active": True,
+    }
+
+    response = client.post("/api/threads", json=thread_data)
+    assert response.status_code == 201
+    created_thread = response.json()
+    assert created_thread["thread_type"] == "chat"
+
+
+def test_filter_threads_by_type_scheduled(client: TestClient, sample_agent: Agent):
+    """Test filtering threads by thread_type='scheduled'"""
+    # Create threads of different types
+    chat_thread = {
+        "title": "Chat Thread",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+    }
+    scheduled_thread = {
+        "title": "Scheduled Run",
+        "agent_id": sample_agent.id,
+        "thread_type": "scheduled",
+    }
+    manual_thread = {
+        "title": "Manual Run",
+        "agent_id": sample_agent.id,
+        "thread_type": "manual",
+    }
+
+    client.post("/api/threads", json=chat_thread)
+    client.post("/api/threads", json=scheduled_thread)
+    client.post("/api/threads", json=manual_thread)
+
+    # Filter by scheduled
+    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    assert response.status_code == 200
+    threads = response.json()
+    assert len(threads) == 1
+    assert threads[0]["thread_type"] == "scheduled"
+    assert threads[0]["title"] == "Scheduled Run"
+
+
+def test_filter_threads_by_type_manual(client: TestClient, sample_agent: Agent):
+    """Test filtering threads by thread_type='manual'"""
+    # Create threads
+    chat_thread = {
+        "title": "Chat Thread",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+    }
+    manual_thread = {
+        "title": "Manual Run",
+        "agent_id": sample_agent.id,
+        "thread_type": "manual",
+    }
+
+    client.post("/api/threads", json=chat_thread)
+    client.post("/api/threads", json=manual_thread)
+
+    # Filter by manual
+    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    assert response.status_code == 200
+    threads = response.json()
+    assert len(threads) == 1
+    assert threads[0]["thread_type"] == "manual"
+    assert threads[0]["title"] == "Manual Run"
+
+
+def test_filter_threads_by_type_chat(client: TestClient, sample_agent: Agent):
+    """Test filtering threads by thread_type='chat'"""
+    # Create threads
+    chat_thread = {
+        "title": "Chat Thread",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+    }
+    scheduled_thread = {
+        "title": "Scheduled Run",
+        "agent_id": sample_agent.id,
+        "thread_type": "scheduled",
+    }
+
+    client.post("/api/threads", json=chat_thread)
+    client.post("/api/threads", json=scheduled_thread)
+
+    # Filter by chat
+    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=chat")
+    assert response.status_code == 200
+    threads = response.json()
+    assert len(threads) == 1
+    assert threads[0]["thread_type"] == "chat"
+    assert threads[0]["title"] == "Chat Thread"
+
+
+def test_automation_threads_api_contract(client: TestClient, sample_agent: Agent):
+    """
+    Contract test: Verify automation threads API returns structure expected by UI.
+
+    The frontend displays automation runs in a collapsible section with:
+    - Thread title
+    - Created timestamp
+    - Badge based on thread_type ('scheduled' or 'manual')
+
+    This test ensures the API contract matches UI expectations.
+    """
+    # Create automation threads
+    scheduled_data = {
+        "title": "Scheduled Automation",
+        "agent_id": sample_agent.id,
+        "thread_type": "scheduled",
+    }
+    manual_data = {
+        "title": "Manual Automation",
+        "agent_id": sample_agent.id,
+        "thread_type": "manual",
+    }
+
+    scheduled_response = client.post("/api/threads", json=scheduled_data)
+    manual_response = client.post("/api/threads", json=manual_data)
+
+    assert scheduled_response.status_code == 201
+    assert manual_response.status_code == 201
+
+    # Fetch scheduled threads
+    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    assert response.status_code == 200
+    scheduled_threads = response.json()
+    assert len(scheduled_threads) == 1
+
+    # Verify API contract for scheduled thread
+    thread = scheduled_threads[0]
+    assert "id" in thread
+    assert "title" in thread
+    assert "thread_type" in thread
+    assert "created_at" in thread
+    assert "updated_at" in thread
+    assert thread["thread_type"] == "scheduled"
+
+    # Fetch manual threads
+    response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    assert response.status_code == 200
+    manual_threads = response.json()
+    assert len(manual_threads) == 1
+
+    # Verify API contract for manual thread
+    thread = manual_threads[0]
+    assert "id" in thread
+    assert "title" in thread
+    assert "thread_type" in thread
+    assert "created_at" in thread
+    assert thread["thread_type"] == "manual"
+
+
+def test_automation_threads_separated_from_chat(client: TestClient, sample_agent: Agent):
+    """
+    Test that automation threads (scheduled/manual) are properly separated
+    from chat threads when filtering by type.
+
+    This validates the UI can fetch chat threads and automation threads
+    separately for display in different sections.
+    """
+    # Create 2 chat threads
+    client.post("/api/threads", json={
+        "title": "Chat 1",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+    })
+    client.post("/api/threads", json={
+        "title": "Chat 2",
+        "agent_id": sample_agent.id,
+        "thread_type": "chat",
+    })
+
+    # Create 1 scheduled thread
+    client.post("/api/threads", json={
+        "title": "Scheduled",
+        "agent_id": sample_agent.id,
+        "thread_type": "scheduled",
+    })
+
+    # Create 1 manual thread
+    client.post("/api/threads", json={
+        "title": "Manual",
+        "agent_id": sample_agent.id,
+        "thread_type": "manual",
+    })
+
+    # Fetch chat threads only
+    chat_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=chat")
+    assert chat_response.status_code == 200
+    chat_threads = chat_response.json()
+    assert len(chat_threads) == 2
+    assert all(t["thread_type"] == "chat" for t in chat_threads)
+
+    # Fetch automation threads (scheduled)
+    scheduled_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=scheduled")
+    assert scheduled_response.status_code == 200
+    scheduled_threads = scheduled_response.json()
+    assert len(scheduled_threads) == 1
+    assert scheduled_threads[0]["thread_type"] == "scheduled"
+
+    # Fetch automation threads (manual)
+    manual_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=manual")
+    assert manual_response.status_code == 200
+    manual_threads = manual_response.json()
+    assert len(manual_threads) == 1
+    assert manual_threads[0]["thread_type"] == "manual"
+
+    # Verify no overlap
+    chat_ids = {t["id"] for t in chat_threads}
+    scheduled_ids = {t["id"] for t in scheduled_threads}
+    manual_ids = {t["id"] for t in manual_threads}
+
+    assert len(chat_ids & scheduled_ids) == 0, "Chat threads should not appear in scheduled"
+    assert len(chat_ids & manual_ids) == 0, "Chat threads should not appear in manual"
+    assert len(scheduled_ids & manual_ids) == 0, "Scheduled should not appear in manual"
