@@ -110,19 +110,19 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
     )
   );
 
-  // CRITICAL: Must detect at least some streaming events to prove streaming works
-  // If no streaming events found, list what we got to help debug
+  // CRITICAL: Must detect actual streaming events to prove streaming works
+  // Logging event types for debugging, but FAILING if no stream events found
   if (streamEvents.length === 0) {
     const eventTypes = wsMessages
       .map(m => m.event_type)
       .filter(Boolean)
       .slice(0, 10);
     console.log(`❌ No streaming events found. Event types received: ${eventTypes.join(', ')}`);
+    console.log(`Total WebSocket messages: ${wsMessages.length}`);
 
-    // Assert we at least got SOME recognizable events (not all noise)
-    const hasEvents = wsMessages.some(m => m.event_type);
-    expect(hasEvents).toBe(true);
-    console.log('✅ WebSocket messages received, but streaming event detection may need refinement');
+    // FAIL the test - streaming must be detected
+    expect(streamEvents.length).toBeGreaterThan(0);
+    console.log('❌ Test failed: No stream_start/stream_chunk/stream_end events detected');
   } else {
     expect(streamEvents.length).toBeGreaterThan(0);
     console.log(`✅ Detected ${streamEvents.length} streaming events via WebSocket`);

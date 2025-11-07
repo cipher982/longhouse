@@ -127,7 +127,7 @@ test.describe('Worker Database Isolation', () => {
       },
       data: {
         name: 'Worker 0 Workflow',
-        graph_data: { nodes: [], edges: [] },
+        canvas: { nodes: [], edges: [] },
       }
     });
 
