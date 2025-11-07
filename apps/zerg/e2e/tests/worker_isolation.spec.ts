@@ -131,24 +131,27 @@ test.describe('Worker Database Isolation', () => {
       }
     });
 
-    // Workflows might not require agent ownership, so 201 or 403 are both acceptable
-    if (worker0WorkflowResponse.status() === 201) {
-      const worker0Workflow = await worker0WorkflowResponse.json();
-      console.log(`✅ Worker 0 created workflow ID: ${worker0Workflow.id}`);
-
-      // Worker 1 should not see it
-      const worker1WorkflowsResponse = await request.get('/api/workflows', {
-        headers: { 'X-Test-Worker': '1' }
-      });
-      const worker1Workflows = await worker1WorkflowsResponse.json();
-
-      // Worker 1 should have empty list (or at least not contain worker 0's workflow)
-      const hasWorker0Workflow = worker1Workflows.some((w: any) => w.id === worker0Workflow.id);
-      expect(hasWorker0Workflow).toBe(false);
-      console.log('✅ Worker 1 cannot see worker 0 workflows');
-    } else {
-      console.log('⚠️  Workflow creation requires additional setup - skipping workflow isolation test');
+    // CRITICAL: If workflow creation fails, test cannot validate isolation
+    if (worker0WorkflowResponse.status() !== 201) {
+      console.log(`❌ Workflow creation failed with status ${worker0WorkflowResponse.status()}`);
+      test.skip(true, 'Workflow creation requires additional setup - cannot test isolation');
+      return;
     }
+
+    const worker0Workflow = await worker0WorkflowResponse.json();
+    console.log(`✅ Worker 0 created workflow ID: ${worker0Workflow.id}`);
+
+    // Worker 1 should not see it
+    const worker1WorkflowsResponse = await request.get('/api/workflows', {
+      headers: { 'X-Test-Worker': '1' }
+    });
+    expect(worker1WorkflowsResponse.status()).toBe(200);
+    const worker1Workflows = await worker1WorkflowsResponse.json();
+
+    // Worker 1 should have empty list (or at least not contain worker 0's workflow)
+    const hasWorker0Workflow = worker1Workflows.some((w: any) => w.id === worker0Workflow.id);
+    expect(hasWorker0Workflow).toBe(false);
+    console.log('✅ Worker 1 cannot see worker 0 workflows');
   });
 
   test('WebSocket URLs include worker parameter', async ({ page, request }) => {
@@ -182,14 +185,16 @@ test.describe('Worker Database Isolation', () => {
 
     // Verify WebSocket URLs include worker parameter
     // fixtures.ts:113-136 injects worker=<id> into all WebSocket URLs
-    if (wsUrls.length > 0) {
-      const hasWorkerParam = wsUrls.some(url => url.includes('worker='));
-      expect(hasWorkerParam).toBe(true);
-      console.log('✅ WebSocket URLs include worker parameter');
-      console.log(`✅ Sample URL: ${wsUrls[0]}`);
-    } else {
-      console.log('⚠️  No WebSocket connections detected (may not be needed for this page)');
-    }
+
+    // CRITICAL: Must have at least one WebSocket connection to validate
+    expect(wsUrls.length).toBeGreaterThan(0);
+    console.log(`✅ WebSocket connections detected: ${wsUrls.length}`);
+
+    // Verify worker parameter is present in WebSocket URLs
+    const hasWorkerParam = wsUrls.some(url => url.includes('worker='));
+    expect(hasWorkerParam).toBe(true);
+    console.log('✅ WebSocket URLs include worker parameter');
+    console.log(`✅ Sample URL: ${wsUrls[0]}`);
 
     console.log('✅ WebSocket worker isolation verified');
   });

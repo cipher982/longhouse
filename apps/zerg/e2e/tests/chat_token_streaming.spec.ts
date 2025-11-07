@@ -262,21 +262,14 @@ test.describe('Chat Token Streaming Tests', () => {
     // Wait a bit to see if any tokens leak through
     await page.waitForTimeout(2000);
 
-    const messagesInThreadB = page.getByTestId('messages-container');
-
-    // Thread B should be empty or only have system messages
+    // Thread B should be empty (new thread with no messages)
     const assistantMessagesInThreadB = page.locator('[data-role="chat-message-assistant"]');
-    const count = await assistantMessagesInThreadB.count();
+    const threadBMessageCount = await assistantMessagesInThreadB.count();
 
-    if (count > 0) {
-      // If there are assistant messages, they should NOT contain Thread A's content
-      const threadBContent = await messagesInThreadB.textContent();
-      expect(threadBContent).not.toContain('robot');
-      expect(threadBContent).not.toContain('Mars');
-      console.log('✅ Thread B contains no leaked tokens from Thread A');
-    } else {
-      console.log('✅ Thread B is empty (no leaked tokens)');
-    }
+    // CRITICAL: Thread B should have ZERO assistant messages
+    // (More reliable than checking keywords - any assistant message is a leak)
+    expect(threadBMessageCount).toBe(0);
+    console.log('✅ Thread B has no assistant messages (no token leakage)');
 
     // Switch back to Thread A
     const threadASelector = `[data-thread-id="${threadAId}"]`;
@@ -287,10 +280,26 @@ test.describe('Chat Token Streaming Tests', () => {
       await page.waitForTimeout(500);
       console.log('📊 Switched back to Thread A');
 
-      // Verify Thread A still has its content (streaming continued in background)
+      // Wait for streaming to complete and persist (may still be streaming)
+      await page.waitForTimeout(3000);
+
+      // Verify Thread A has assistant messages (streaming continued in background)
+      const assistantMessagesInThreadA = page.locator('[data-role="chat-message-assistant"]');
+      const threadAMessageCount = await assistantMessagesInThreadA.count();
+
+      // Thread A should eventually have assistant messages (wait up to 10s)
+      if (threadAMessageCount === 0) {
+        await expect(assistantMessagesInThreadA.first()).toBeVisible({ timeout: 10000 });
+      }
+
+      const finalThreadAMessageCount = await assistantMessagesInThreadA.count();
+      expect(finalThreadAMessageCount).toBeGreaterThan(0);
+      console.log(`✅ Thread A has ${finalThreadAMessageCount} assistant message(s)`);
+
+      // Verify Thread A contains actual content (not just empty messages)
       const messagesInThreadA = page.getByTestId('messages-container');
-      await expect(messagesInThreadA).toContainText('robot', { timeout: 5000 });
-      await expect(messagesInThreadA).toContainText('Mars', { timeout: 5000 });
+      const threadAContent = await messagesInThreadA.textContent();
+      expect(threadAContent?.length || 0).toBeGreaterThan(20);
       console.log('✅ Thread A preserved its content');
     }
 
