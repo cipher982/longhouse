@@ -66,6 +66,13 @@ export default function DashboardPage() {
   const subscribedAgentIdsRef = useRef<Set<number>>(new Set());
   const [wsReconnectToken, setWsReconnectToken] = useState(0);
   const sendMessageRef = useRef<((message: any) => void) | null>(null);
+  const messageIdCounterRef = useRef(0);
+
+  // Generate unique message IDs to prevent collision
+  const generateMessageId = useCallback(() => {
+    messageIdCounterRef.current += 1;
+    return `dashboard-${Date.now()}-${messageIdCounterRef.current}`;
+  }, []);
 
   const handleWebSocketMessage = useCallback(
     (message: { type?: string; topic?: string; data?: Record<string, unknown> }) => {
@@ -320,7 +327,7 @@ export default function DashboardPage() {
       sendMessageRef.current?.({
         type: "subscribe",
         topics: topicsToSubscribe,
-        message_id: `dashboard-sub-${Date.now()}`,
+        message_id: generateMessageId(),
       });
     }
 
@@ -328,7 +335,7 @@ export default function DashboardPage() {
       sendMessageRef.current?.({
         type: "unsubscribe",
         topics: topicsToUnsubscribe,
-        message_id: `dashboard-unsub-${Date.now()}`,
+        message_id: generateMessageId(),
       });
     }
   }, [agents, connectionStatus, isAuthenticated, wsReconnectToken]);
@@ -346,7 +353,7 @@ export default function DashboardPage() {
     sendMessageRef.current?.({
       type: "unsubscribe",
       topics,
-      message_id: `dashboard-auth-${Date.now()}`,
+      message_id: generateMessageId(),
     });
     subscribedAgentIdsRef.current.clear();
   }, [isAuthenticated]);
@@ -361,7 +368,7 @@ export default function DashboardPage() {
       sendMessageRef.current?.({
         type: "unsubscribe",
         topics,
-        message_id: `dashboard-cleanup-${Date.now()}`,
+        message_id: generateMessageId(),
       });
       subscribedAgentIdsRef.current.clear();
     };
