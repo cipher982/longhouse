@@ -3,6 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { getWebSocketConfig } from './config';
 
+// Maximum number of messages to queue when disconnected
+// Prevents memory leak if user performs many actions while offline
+const MAX_QUEUED_MESSAGES = 100;
+
 export enum ConnectionStatus {
   DISCONNECTED = 'disconnected',
   CONNECTING = 'connecting',
@@ -322,7 +326,14 @@ export function useWebSocket(
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
-      // Queue message if not connected
+      // Queue message if not connected, but enforce bounds to prevent memory leak
+      if (messageQueueRef.current.length >= MAX_QUEUED_MESSAGES) {
+        console.warn(
+          `[WS] Message queue full (${MAX_QUEUED_MESSAGES} messages). Dropping oldest message.`
+        );
+        // Remove oldest message (FIFO)
+        messageQueueRef.current.shift();
+      }
       messageQueueRef.current.push(message);
 
       // Try to connect if not already connecting

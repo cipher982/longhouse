@@ -54,19 +54,14 @@ export default function DashboardPage() {
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
 
-  const { data, isLoading, error } = useQuery<AgentSummary[]>({
-    queryKey: ["agents", { scope }],
-    queryFn: () => fetchAgents({ scope }),
-    // Disable polling when WebSocket is connected (WebSocket provides real-time updates)
-    // Only poll when disconnected to maintain basic UI updates
-    refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
-  });
-
-  const agents: AgentSummary[] = useMemo(() => data ?? [], [data]);
+  // WebSocket state - must be declared before useQuery to avoid reference errors
   const subscribedAgentIdsRef = useRef<Set<number>>(new Set());
   const [wsReconnectToken, setWsReconnectToken] = useState(0);
   const sendMessageRef = useRef<((message: any) => void) | null>(null);
   const messageIdCounterRef = useRef(0);
+
+  // Track pending subscriptions to handle confirmations and timeouts
+  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number }>>(new Map());
 
   // Generate unique message IDs to prevent collision
   const generateMessageId = useCallback(() => {
@@ -74,9 +69,35 @@ export default function DashboardPage() {
     return `dashboard-${Date.now()}-${messageIdCounterRef.current}`;
   }, []);
 
+  // WebSocket message handler must be defined before useWebSocket hook
   const handleWebSocketMessage = useCallback(
-    (message: { type?: string; topic?: string; data?: Record<string, unknown> }) => {
+    (message: { type?: string; topic?: string; data?: unknown; message_id?: string; [key: string]: unknown }) => {
       if (!message || typeof message !== "object") {
+        return;
+      }
+
+      // Handle subscription acknowledgments
+      if (message.type === "subscribe_ack" || message.type === "subscribe_error") {
+        const messageId = typeof message.message_id === "string" ? message.message_id : "";
+        if (messageId && pendingSubscriptionsRef.current.has(messageId)) {
+          const pending = pendingSubscriptionsRef.current.get(messageId);
+          if (pending) {
+            clearTimeout(pending.timeoutId);
+            pendingSubscriptionsRef.current.delete(messageId);
+
+            if (message.type === "subscribe_error") {
+              console.error("[WS] Subscription failed for topics:", pending.topics);
+              // On error, remove these IDs from subscribed set so we can retry
+              pending.topics.forEach((topic) => {
+                const [, agentIdRaw] = topic.split(":");
+                const agentId = Number.parseInt(agentIdRaw ?? "", 10);
+                if (Number.isFinite(agentId)) {
+                  subscribedAgentIdsRef.current.delete(agentId);
+                }
+              });
+            }
+          }
+        }
         return;
       }
 
@@ -91,7 +112,10 @@ export default function DashboardPage() {
         return;
       }
 
-      const dataPayload = (message.data ?? {}) as Record<string, unknown>;
+      // Safely cast data payload with runtime check
+      const dataPayload = typeof message.data === "object" && message.data !== null
+        ? (message.data as Record<string, unknown>)
+        : {};
       const eventType = message.type;
 
       if (eventType === "agent_state" || eventType === "agent_updated") {
@@ -201,9 +225,25 @@ export default function DashboardPage() {
     onMessage: handleWebSocketMessage,
     onConnect: () => {
       subscribedAgentIdsRef.current.clear();
+      // Clear any pending subscriptions from previous connection
+      pendingSubscriptionsRef.current.forEach((pending) => {
+        clearTimeout(pending.timeoutId);
+      });
+      pendingSubscriptionsRef.current.clear();
       setWsReconnectToken((token) => token + 1);
     },
   });
+
+  // Query for agent list - uses connectionStatus to adapt polling
+  const { data, isLoading, error } = useQuery<AgentSummary[]>({
+    queryKey: ["agents", { scope }],
+    queryFn: () => fetchAgents({ scope }),
+    // Disable polling when WebSocket is connected (WebSocket provides real-time updates)
+    // Only poll when disconnected to maintain basic UI updates
+    refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
+  });
+
+  const agents: AgentSummary[] = useMemo(() => data ?? [], [data]);
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
@@ -324,10 +364,31 @@ export default function DashboardPage() {
     }
 
     if (topicsToSubscribe.length > 0) {
+      const messageId = generateMessageId();
+
+      // Set timeout for subscription confirmation (5 seconds)
+      const timeoutId = window.setTimeout(() => {
+        if (pendingSubscriptionsRef.current.has(messageId)) {
+          console.warn("[WS] Subscription timeout for topics:", topicsToSubscribe);
+          pendingSubscriptionsRef.current.delete(messageId);
+          // Remove from subscribed set so we can retry
+          topicsToSubscribe.forEach((topic) => {
+            const [, agentIdRaw] = topic.split(":");
+            const agentId = Number.parseInt(agentIdRaw ?? "", 10);
+            if (Number.isFinite(agentId)) {
+              subscribedAgentIdsRef.current.delete(agentId);
+            }
+          });
+        }
+      }, 5000);
+
+      // Track pending subscription
+      pendingSubscriptionsRef.current.set(messageId, { topics: topicsToSubscribe, timeoutId });
+
       sendMessageRef.current?.({
         type: "subscribe",
         topics: topicsToSubscribe,
-        message_id: generateMessageId(),
+        message_id: messageId,
       });
     }
 
@@ -360,6 +421,12 @@ export default function DashboardPage() {
 
   useEffect(() => {
     return () => {
+      // Clear pending subscription timeouts
+      pendingSubscriptionsRef.current.forEach((pending) => {
+        clearTimeout(pending.timeoutId);
+      });
+      pendingSubscriptionsRef.current.clear();
+
       if (subscribedAgentIdsRef.current.size === 0) {
         return;
       }
