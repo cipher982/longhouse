@@ -317,7 +317,7 @@ export default function DashboardPage() {
     }
 
     if (topicsToSubscribe.length > 0) {
-      sendMessage({
+      sendMessageRef.current?.({
         type: "subscribe",
         topics: topicsToSubscribe,
         message_id: `dashboard-sub-${Date.now()}`,
@@ -325,13 +325,13 @@ export default function DashboardPage() {
     }
 
     if (topicsToUnsubscribe.length > 0) {
-      sendMessage({
+      sendMessageRef.current?.({
         type: "unsubscribe",
         topics: topicsToUnsubscribe,
         message_id: `dashboard-unsub-${Date.now()}`,
       });
     }
-  }, [agents, connectionStatus, isAuthenticated, sendMessage, wsReconnectToken]);
+  }, [agents, connectionStatus, isAuthenticated, wsReconnectToken]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -343,13 +343,13 @@ export default function DashboardPage() {
     }
 
     const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
-    sendMessage({
+    sendMessageRef.current?.({
       type: "unsubscribe",
       topics,
       message_id: `dashboard-auth-${Date.now()}`,
     });
     subscribedAgentIdsRef.current.clear();
-  }, [isAuthenticated, sendMessage]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     return () => {
