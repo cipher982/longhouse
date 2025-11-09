@@ -62,6 +62,12 @@ describe("DashboardPage", () => {
   beforeAll(() => {
     class MockWebSocket {
       public onmessage: ((event: MessageEvent) => void) | null = null;
+      public onopen: ((event: Event) => void) | null = null;
+      public onclose: ((event: Event) => void) | null = null;
+      public onerror: ((event: Event) => void) | null = null;
+      public static OPEN = 1;
+      public readyState = MockWebSocket.OPEN;
+      public send = vi.fn<(data: string) => void>();
 
       constructor() {
         mockSockets.push(this);
@@ -298,6 +304,55 @@ describe("DashboardPage", () => {
     await waitFor(() => {
       const rowOrder = Array.from(document.querySelectorAll<HTMLTableRowElement>("tr[data-agent-id]")).map((row) => row.getAttribute("data-agent-id")).slice(0, agents.length);
       expect(rowOrder).toEqual(["1", "2"]);
+    });
+  });
+
+  test("applies agent status updates from websocket events", async () => {
+    const agent = buildAgent({
+      id: 42,
+      name: "Speedy",
+      status: "idle",
+      owner_id: 9,
+    });
+
+    renderDashboard([agent]);
+
+    // Ensure agent row rendered
+    await screen.findByText("Speedy");
+    const socket = mockSockets[0];
+    expect(socket).toBeDefined();
+
+    // Simulate successful websocket connection
+    socket.onopen?.(new Event("open"));
+
+    // Wait for subscribe message to be sent
+    await waitFor(() => {
+      expect(socket.send).toHaveBeenCalledWith(expect.stringContaining("\"type\":\"subscribe\""));
+    });
+
+    const statusCell = document.querySelector<HTMLTableCellElement>('tr[data-agent-id="42"] td[data-label="Status"]');
+    expect(statusCell).not.toBeNull();
+    if (!statusCell) {
+      throw new Error("Status cell not found");
+    }
+    expect(statusCell.textContent).toContain("Idle");
+
+    const payload = {
+      type: "agent_updated",
+      topic: "agent:42",
+      data: {
+        id: 42,
+        status: "running",
+        last_error: null,
+        last_run_at: "2025-11-08T23:59:00.000Z",
+        next_run_at: null,
+      },
+    };
+
+    socket.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent);
+
+    await waitFor(() => {
+      expect(statusCell.textContent).toContain("Running");
     });
   });
 });
