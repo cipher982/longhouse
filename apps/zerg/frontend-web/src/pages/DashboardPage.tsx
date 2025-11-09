@@ -87,8 +87,12 @@ export default function DashboardPage() {
       const eventType = message.type;
 
       if (eventType === "agent_state" || eventType === "agent_updated") {
+        // Runtime validation for status to prevent invalid values
+        const validStatuses = ["idle", "running", "processing", "error"] as const;
         const statusValue =
-          typeof dataPayload.status === "string" ? (dataPayload.status as AgentSummary["status"]) : undefined;
+          typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as typeof validStatuses[number])
+            ? (dataPayload.status as AgentSummary["status"])
+            : undefined;
         const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
         const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
         const lastErrorValue =
