@@ -61,7 +61,8 @@ export default function DashboardPage() {
   const messageIdCounterRef = useRef(0);
 
   // Track pending subscriptions to handle confirmations and timeouts
-  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number }>>(new Map());
+  // Don't mark as subscribed until we get subscribe_ack to enable automatic retry
+  const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number; agentIds: number[] }>>(new Map());
 
   // Generate unique message IDs to prevent collision
   const generateMessageId = useCallback(() => {
@@ -85,16 +86,14 @@ export default function DashboardPage() {
             clearTimeout(pending.timeoutId);
             pendingSubscriptionsRef.current.delete(messageId);
 
-            if (message.type === "subscribe_error") {
-              console.error("[WS] Subscription failed for topics:", pending.topics);
-              // On error, remove these IDs from subscribed set so we can retry
-              pending.topics.forEach((topic) => {
-                const [, agentIdRaw] = topic.split(":");
-                const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-                if (Number.isFinite(agentId)) {
-                  subscribedAgentIdsRef.current.delete(agentId);
-                }
+            if (message.type === "subscribe_ack") {
+              // Success: mark these agents as subscribed
+              pending.agentIds.forEach((agentId) => {
+                subscribedAgentIdsRef.current.add(agentId);
               });
+            } else {
+              // Error: don't mark as subscribed, effect will retry on next run
+              console.error("[WS] Subscription failed for topics:", pending.topics);
             }
           }
         }
@@ -347,11 +346,18 @@ export default function DashboardPage() {
 
     const activeIds = new Set(agents.map((agent) => agent.id));
 
+    // Find agents that need subscription (not currently subscribed AND not pending)
+    const pendingAgentIds = new Set<number>();
+    pendingSubscriptionsRef.current.forEach((pending) => {
+      pending.agentIds.forEach((id) => pendingAgentIds.add(id));
+    });
+
     const topicsToSubscribe: string[] = [];
+    const agentIdsToSubscribe: number[] = [];
     for (const id of activeIds) {
-      if (!subscribedAgentIdsRef.current.has(id)) {
-        subscribedAgentIdsRef.current.add(id);
+      if (!subscribedAgentIdsRef.current.has(id) && !pendingAgentIds.has(id)) {
         topicsToSubscribe.push(`agent:${id}`);
+        agentIdsToSubscribe.push(id);
       }
     }
 
@@ -371,19 +377,18 @@ export default function DashboardPage() {
         if (pendingSubscriptionsRef.current.has(messageId)) {
           console.warn("[WS] Subscription timeout for topics:", topicsToSubscribe);
           pendingSubscriptionsRef.current.delete(messageId);
-          // Remove from subscribed set so we can retry
-          topicsToSubscribe.forEach((topic) => {
-            const [, agentIdRaw] = topic.split(":");
-            const agentId = Number.parseInt(agentIdRaw ?? "", 10);
-            if (Number.isFinite(agentId)) {
-              subscribedAgentIdsRef.current.delete(agentId);
-            }
-          });
+          // Don't mark as subscribed - effect will retry on next render
+          // Force retry by incrementing reconnect token
+          setWsReconnectToken((token) => token + 1);
         }
       }, 5000);
 
-      // Track pending subscription
-      pendingSubscriptionsRef.current.set(messageId, { topics: topicsToSubscribe, timeoutId });
+      // Track pending subscription (don't mark as subscribed yet)
+      pendingSubscriptionsRef.current.set(messageId, {
+        topics: topicsToSubscribe,
+        timeoutId,
+        agentIds: agentIdsToSubscribe
+      });
 
       sendMessageRef.current?.({
         type: "subscribe",
