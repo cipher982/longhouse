@@ -324,8 +324,12 @@ export async function resetAgent(agentId: number): Promise<UpdatedAgentResponse>
   return updateAgent(agentId, { status: "idle", last_error: "" });
 }
 
-export async function runAgent(agentId: number): Promise<void> {
-  await request<void>(`/agents/${agentId}/task`, {
+type RunAgentResponse = {
+  thread_id: number;
+};
+
+export async function runAgent(agentId: number): Promise<RunAgentResponse> {
+  return request<RunAgentResponse>(`/agents/${agentId}/task`, {
     method: "POST",
   });
 }

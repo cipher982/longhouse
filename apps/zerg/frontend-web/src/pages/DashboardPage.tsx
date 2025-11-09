@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -9,7 +9,7 @@ import {
   type AgentRun,
   type AgentSummary,
 } from "../services/api";
-import { useWebSocket } from "../lib/useWebSocket";
+import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
@@ -52,16 +52,188 @@ export default function DashboardPage() {
   const [runsByAgent, setRunsByAgent] = useState<AgentRunsState>({});
   const [loadingRunIds, setLoadingRunIds] = useState<Set<number>>(new Set());
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
-  const [pendingRunIds, setPendingRunIds] = useState<Set<number>>(new Set());
   const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
 
-  const { data, isLoading, error, refetch } = useQuery<AgentSummary[]>({
+  const { data, isLoading, error } = useQuery<AgentSummary[]>({
     queryKey: ["agents", { scope }],
     queryFn: () => fetchAgents({ scope }),
-    refetchInterval: 2000,
+    // Reduce polling when WebSocket is connected (10s vs 2s)
+    refetchInterval: 10000,
   });
 
   const agents: AgentSummary[] = useMemo(() => data ?? [], [data]);
+  const subscribedAgentIdsRef = useRef<Set<number>>(new Set());
+  const [wsReconnectToken, setWsReconnectToken] = useState(0);
+  const sendMessageRef = useRef<((message: any) => void) | null>(null);
+
+  const handleWebSocketMessage = useCallback(
+    (message: { type?: string; topic?: string; data?: Record<string, unknown> }) => {
+      if (!message || typeof message !== "object") {
+        return;
+      }
+
+      const topic = typeof message.topic === "string" ? message.topic : "";
+      if (!topic.startsWith("agent:")) {
+        return;
+      }
+
+      const [, agentIdRaw] = topic.split(":");
+      const agentId = Number.parseInt(agentIdRaw ?? "", 10);
+      if (!Number.isFinite(agentId)) {
+        return;
+      }
+
+      const dataPayload = (message.data ?? {}) as Record<string, unknown>;
+      const eventType = message.type;
+
+      if (eventType === "agent_state" || eventType === "agent_updated") {
+        const statusValue =
+          typeof dataPayload.status === "string" ? (dataPayload.status as AgentSummary["status"]) : undefined;
+        const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
+        const nextRunAtValue = typeof dataPayload.next_run_at === "string" ? dataPayload.next_run_at : undefined;
+        const lastErrorValue =
+          dataPayload.last_error === null || typeof dataPayload.last_error === "string"
+            ? (dataPayload.last_error as string | null)
+            : undefined;
+
+        queryClient.setQueryData<AgentSummary[]>(["agents", { scope }], (current) => {
+          if (!current) {
+            return current;
+          }
+
+          let changed = false;
+          const updated = current.map((agent) => {
+            if (agent.id !== agentId) {
+              return agent;
+            }
+
+            const nextAgent: AgentSummary = {
+              ...agent,
+              status: statusValue ?? agent.status,
+              last_run_at: lastRunAtValue ?? agent.last_run_at,
+              next_run_at: nextRunAtValue ?? agent.next_run_at,
+              last_error: lastErrorValue !== undefined ? lastErrorValue : agent.last_error,
+            };
+            changed = true;
+            return nextAgent;
+          });
+
+          return changed ? updated : current;
+        });
+
+        return;
+      }
+
+      if (eventType === "run_update") {
+        const runIdCandidate = dataPayload.id ?? dataPayload.run_id;
+        const runId = typeof runIdCandidate === "number" ? runIdCandidate : null;
+        if (runId == null) {
+          return;
+        }
+
+        setRunsByAgent((prev) => {
+          const existingRuns = prev[agentId];
+          if (!existingRuns) {
+            return prev;
+          }
+
+          const index = existingRuns.findIndex((run) => run.id === runId);
+          if (index === -1) {
+            return prev;
+          }
+
+          const nextRuns = [...existingRuns];
+          nextRuns[index] = {
+            ...nextRuns[index],
+            status:
+              typeof dataPayload.status === "string"
+                ? (dataPayload.status as AgentRun["status"])
+                : nextRuns[index].status,
+            started_at:
+              typeof dataPayload.started_at === "string"
+                ? (dataPayload.started_at as AgentRun["started_at"])
+                : nextRuns[index].started_at,
+            finished_at:
+              typeof dataPayload.finished_at === "string"
+                ? (dataPayload.finished_at as AgentRun["finished_at"])
+                : nextRuns[index].finished_at,
+            duration_ms:
+              typeof dataPayload.duration_ms === "number"
+                ? (dataPayload.duration_ms as AgentRun["duration_ms"])
+                : nextRuns[index].duration_ms,
+            total_tokens:
+              typeof dataPayload.total_tokens === "number"
+                ? (dataPayload.total_tokens as AgentRun["total_tokens"])
+                : nextRuns[index].total_tokens,
+            total_cost_usd:
+              typeof dataPayload.total_cost_usd === "number"
+                ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
+                : nextRuns[index].total_cost_usd,
+            error:
+              dataPayload.error === undefined
+                ? nextRuns[index].error
+                : ((dataPayload.error as string | null) ?? null),
+          };
+
+          return {
+            ...prev,
+            [agentId]: nextRuns,
+          };
+        });
+      }
+    },
+    [queryClient, scope]
+  );
+
+  const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
+    onMessage: handleWebSocketMessage,
+    onConnect: () => {
+      subscribedAgentIdsRef.current.clear();
+      setWsReconnectToken((token) => token + 1);
+    },
+  });
+
+  // Keep sendMessage ref up-to-date for stable cleanup
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+
+  // Mutation for starting an agent run (hybrid: optimistic + WebSocket)
+  const runAgentMutation = useMutation({
+    mutationFn: runAgent,
+    onMutate: async (agentId: number) => {
+      // Cancel any outgoing refetches to avoid race conditions
+      await queryClient.cancelQueries({ queryKey: ["agents", { scope }] });
+
+      // Snapshot the previous value for potential rollback
+      const previousAgents = queryClient.getQueryData<AgentSummary[]>(["agents", { scope }]);
+
+      // Optimistically update to "running" for instant UI feedback
+      queryClient.setQueryData<AgentSummary[]>(["agents", { scope }], (old) =>
+        old?.map((agent) =>
+          agent.id === agentId
+            ? { ...agent, status: "running" as const }
+            : agent
+        )
+      );
+
+      // Return context for rollback
+      return { previousAgents };
+    },
+    onError: (err: Error, agentId: number, context) => {
+      // Rollback to previous state on error
+      if (context?.previousAgents) {
+        queryClient.setQueryData(["agents", { scope }], context.previousAgents);
+      }
+      console.error("Failed to run agent:", err);
+    },
+    onSettled: (_, __, agentId) => {
+      // Fallback sync in case WebSocket updates are delayed
+      // WebSocket will provide the authoritative status update
+      queryClient.invalidateQueries({ queryKey: ["agents", { scope }] });
+      dispatchDashboardEvent("run", agentId);
+    },
+  });
 
   useEffect(() => {
     // Persist sort preferences whenever they change.
@@ -114,13 +286,82 @@ export default function DashboardPage() {
 
   // Use unified WebSocket hook for real-time updates
   // Only connect when authenticated to avoid auth failure spam
-  useWebSocket(isAuthenticated, {
-    invalidateQueries: [["agents", { scope }]],
-    onMessage: () => {
-      // Additional refetch for immediate updates
-      void refetch();
-    },
-  });
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+    if (connectionStatus !== ConnectionStatus.CONNECTED) {
+      return;
+    }
+
+    const activeIds = new Set(agents.map((agent) => agent.id));
+
+    const topicsToSubscribe: string[] = [];
+    for (const id of activeIds) {
+      if (!subscribedAgentIdsRef.current.has(id)) {
+        subscribedAgentIdsRef.current.add(id);
+        topicsToSubscribe.push(`agent:${id}`);
+      }
+    }
+
+    const topicsToUnsubscribe: string[] = [];
+    for (const id of Array.from(subscribedAgentIdsRef.current)) {
+      if (!activeIds.has(id)) {
+        subscribedAgentIdsRef.current.delete(id);
+        topicsToUnsubscribe.push(`agent:${id}`);
+      }
+    }
+
+    if (topicsToSubscribe.length > 0) {
+      sendMessage({
+        type: "subscribe",
+        topics: topicsToSubscribe,
+        message_id: `dashboard-sub-${Date.now()}`,
+      });
+    }
+
+    if (topicsToUnsubscribe.length > 0) {
+      sendMessage({
+        type: "unsubscribe",
+        topics: topicsToUnsubscribe,
+        message_id: `dashboard-unsub-${Date.now()}`,
+      });
+    }
+  }, [agents, connectionStatus, isAuthenticated, sendMessage, wsReconnectToken]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      return;
+    }
+
+    if (subscribedAgentIdsRef.current.size === 0) {
+      return;
+    }
+
+    const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
+    sendMessage({
+      type: "unsubscribe",
+      topics,
+      message_id: `dashboard-auth-${Date.now()}`,
+    });
+    subscribedAgentIdsRef.current.clear();
+  }, [isAuthenticated, sendMessage]);
+
+  useEffect(() => {
+    return () => {
+      if (subscribedAgentIdsRef.current.size === 0) {
+        return;
+      }
+      const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
+      // Use ref to avoid cleanup re-registration on every render
+      sendMessageRef.current?.({
+        type: "unsubscribe",
+        topics,
+        message_id: `dashboard-cleanup-${Date.now()}`,
+      });
+      subscribedAgentIdsRef.current.clear();
+    };
+  }, []); // Empty deps - cleanup only runs on unmount
 
   const createAgentMutation = useMutation({
     mutationFn: async () => {
@@ -234,7 +475,8 @@ export default function DashboardPage() {
               const successStats = computeSuccessStats(runs);
               const lastRunIndicator = determineLastRunIndicator(runs);
               const isRunning = agent.status === "running";
-              const isPendingRun = pendingRunIds.has(agent.id);
+              // Check if this specific agent is being mutated
+              const isPendingRun = runAgentMutation.isPending && runAgentMutation.variables === agent.id;
 
               return (
                 <Fragment key={agent.id}>
@@ -486,26 +728,14 @@ export default function DashboardPage() {
     rows[nextIndex]?.focus();
   }
 
-  async function handleRunAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, status: string) {
+  function handleRunAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, status: string) {
     event.stopPropagation();
-    if (status === "running" || pendingRunIds.has(agentId)) {
+    // Don't run if already running
+    if (status === "running") {
       return;
     }
-
-    setPendingRunIds((prev) => new Set(prev).add(agentId));
-    try {
-      await runAgent(agentId);
-      await queryClient.invalidateQueries({ queryKey: ["agents"] });
-      dispatchDashboardEvent("run", agentId);
-    } catch (runError) {
-      console.error("Failed to run agent", runError);
-    } finally {
-      setPendingRunIds((prev) => {
-        const next = new Set(prev);
-        next.delete(agentId);
-        return next;
-      });
-    }
+    // Use the optimistic mutation
+    runAgentMutation.mutate(agentId);
   }
 
   function handleEditAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
