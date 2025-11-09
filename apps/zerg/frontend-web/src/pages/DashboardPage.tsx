@@ -228,9 +228,8 @@ export default function DashboardPage() {
       console.error("Failed to run agent:", err);
     },
     onSettled: (_, __, agentId) => {
-      // Fallback sync in case WebSocket updates are delayed
-      // WebSocket will provide the authoritative status update
-      queryClient.invalidateQueries({ queryKey: ["agents", { scope }] });
+      // Trust optimistic update and WebSocket for state
+      // No refetch - would cause race condition and flicker
       dispatchDashboardEvent("run", agentId);
     },
   });
