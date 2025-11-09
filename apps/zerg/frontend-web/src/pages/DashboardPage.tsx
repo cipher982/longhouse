@@ -57,8 +57,9 @@ export default function DashboardPage() {
   const { data, isLoading, error } = useQuery<AgentSummary[]>({
     queryKey: ["agents", { scope }],
     queryFn: () => fetchAgents({ scope }),
-    // Reduce polling when WebSocket is connected (10s vs 2s)
-    refetchInterval: 10000,
+    // Disable polling when WebSocket is connected (WebSocket provides real-time updates)
+    // Only poll when disconnected to maintain basic UI updates
+    refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
   const agents: AgentSummary[] = useMemo(() => data ?? [], [data]);
