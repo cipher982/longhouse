@@ -116,20 +116,20 @@ def create_agent(
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
 ):
-    """Create a new agent with auto-generated sequential name.
+    """Create a new agent with 'New Agent' placeholder name.
 
     ``owner_id`` is **required** – every agent belongs to exactly one user.
-    Name is always auto-generated as "Agent #<id>" where <id> is the database primary key.
+    Name is always set to "New Agent" by default.
     Users can rename via the update endpoint after creation.
     """
 
     # Validate cron expression if provided
     _validate_cron_or_raise(schedule)
 
-    # Create agent with placeholder name
+    # Create agent with "New Agent" placeholder
     db_agent = Agent(
         owner_id=owner_id,
-        name="",  # Temporary placeholder
+        name="New Agent",
         system_instructions=system_instructions,
         task_instructions=task_instructions,
         model=model,
@@ -140,21 +140,12 @@ def create_agent(
         last_run_at=None,
     )
     db.add(db_agent)
-
-    # Flush assigns ID without committing transaction
-    db.flush()
-
-    # Now set real name using database-assigned ID
-    db_agent.name = f"Agent #{db_agent.id}"
-
-    # Commit once with correct name
     db.commit()
     db.refresh(db_agent)
 
     # Force load relationships to avoid detached instance errors
-    # This ensures they're available even after session closes
-    _ = db_agent.owner  # Load owner relationship
-    _ = db_agent.messages  # Load messages relationship (should be empty for new agent)
+    _ = db_agent.owner
+    _ = db_agent.messages
 
     return db_agent
 

@@ -5,7 +5,7 @@ test.describe('Agent Creation', () => {
     await request.post('/admin/reset-database');
   });
 
-  test('creates agents with sequential ID-based names', async ({ page }) => {
+  test('creates agents with "New Agent" placeholder name', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -29,22 +29,18 @@ test.describe('Agent Creation', () => {
     const count = await agentRows.count();
     expect(count).toBeGreaterThanOrEqual(3);
 
-    // Check agent names are sequential
+    // Check agent names are all "New Agent"
     const firstAgentName = await agentRows.nth(0).locator('td[data-label="Name"]').textContent();
     const secondAgentName = await agentRows.nth(1).locator('td[data-label="Name"]').textContent();
     const thirdAgentName = await agentRows.nth(2).locator('td[data-label="Name"]').textContent();
 
-    // Should be "Agent #1", "Agent #2", "Agent #3" (IDs are sequential in clean DB)
-    expect(firstAgentName).toMatch(/^Agent #\d+$/);
-    expect(secondAgentName).toMatch(/^Agent #\d+$/);
-    expect(thirdAgentName).toMatch(/^Agent #\d+$/);
-
-    // Verify they're NOT all the same name
-    const names = new Set([firstAgentName, secondAgentName, thirdAgentName]);
-    expect(names.size).toBe(3);  // All three names should be unique
+    // Should all be "New Agent"
+    expect(firstAgentName).toBe('New Agent');
+    expect(secondAgentName).toBe('New Agent');
+    expect(thirdAgentName).toBe('New Agent');
   });
 
-  test('backend auto-generates sequential ID-based names', async ({ request }) => {
+  test('backend auto-generates "New Agent" placeholder name', async ({ request }) => {
     // Create agent (no name field sent)
     const response = await request.post('/api/agents', {
       data: {
@@ -57,9 +53,8 @@ test.describe('Agent Creation', () => {
     expect(response.ok()).toBeTruthy();
     const agent = await response.json();
 
-    // Should have auto-generated name "Agent #<id>"
-    expect(agent.name).toMatch(/^Agent #\d+$/);
-    expect(agent.name).toBe(`Agent #${agent.id}`);
+    // Should have auto-generated name "New Agent"
+    expect(agent.name).toBe('New Agent');
   });
 
   test('idempotency key prevents duplicate creation', async ({ request }) => {
