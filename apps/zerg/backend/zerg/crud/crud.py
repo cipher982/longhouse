@@ -126,14 +126,10 @@ def create_agent(
     # Validate cron expression if provided
     _validate_cron_or_raise(schedule)
 
-    # Use temporary unique name (required by NOT NULL constraint)
-    # Will be replaced with ID-based name after commit
-    from uuid import uuid4
-    temp_name = f"_temp_{uuid4().hex[:8]}"
-
+    # Create agent with placeholder name
     db_agent = Agent(
         owner_id=owner_id,
-        name=temp_name,
+        name="",  # Temporary placeholder
         system_instructions=system_instructions,
         task_instructions=task_instructions,
         model=model,
@@ -144,11 +140,14 @@ def create_agent(
         last_run_at=None,
     )
     db.add(db_agent)
-    db.commit()
-    db.refresh(db_agent)
 
-    # Set real name using database-assigned ID
+    # Flush assigns ID without committing transaction
+    db.flush()
+
+    # Now set real name using database-assigned ID
     db_agent.name = f"Agent #{db_agent.id}"
+
+    # Commit once with correct name
     db.commit()
     db.refresh(db_agent)
 
