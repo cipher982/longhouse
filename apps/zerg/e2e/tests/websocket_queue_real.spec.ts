@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 /**
  * Real E2E tests for bounded WebSocket message queue.
@@ -10,8 +10,9 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('WebSocket Bounded Message Queue (Real E2E)', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.beforeEach(async ({ request }) => {
+    // Use fixture-provided request context with auth headers
+    await request.post('/admin/reset-database');
   });
 
   test('messages sent immediately when WebSocket is open', async ({ page }) => {
