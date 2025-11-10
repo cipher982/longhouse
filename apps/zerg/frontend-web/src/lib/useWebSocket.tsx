@@ -365,10 +365,18 @@ export function useWebSocket(
   }, [disconnect]);
 
   // Expose sendMessage for E2E testing of queue behavior
+  // This allows tests to directly call sendMessage to test queue bounds
+  // Only active when __TEST_WORKER_ID__ is set by Playwright fixtures
   useEffect(() => {
     if (typeof window !== 'undefined' && (window as any).__TEST_WORKER_ID__ !== undefined) {
       (window as any).__testSendMessage = sendMessage;
     }
+    // Cleanup when component unmounts
+    return () => {
+      if (typeof window !== 'undefined') {
+        delete (window as any).__testSendMessage;
+      }
+    };
   }, [sendMessage]);
 
   return {

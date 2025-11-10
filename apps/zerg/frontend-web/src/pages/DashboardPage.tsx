@@ -13,7 +13,7 @@ import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
-import type { WebSocketMessage, SubscribeAckMessage, SubscribeErrorMessage } from "../generated/ws-messages";
+import type { WebSocketMessage } from "../generated/ws-messages";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -407,7 +407,7 @@ export default function DashboardPage() {
         message_id: generateMessageId(),
       });
     }
-  }, [agents, connectionStatus, isAuthenticated, wsReconnectToken]);
+  }, [agents, connectionStatus, isAuthenticated, wsReconnectToken, generateMessageId]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -425,7 +425,7 @@ export default function DashboardPage() {
       message_id: generateMessageId(),
     });
     subscribedAgentIdsRef.current.clear();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, generateMessageId]);
 
   useEffect(() => {
     return () => {
@@ -447,7 +447,8 @@ export default function DashboardPage() {
       });
       subscribedAgentIdsRef.current.clear();
     };
-  }, []); // Empty deps - cleanup only runs on unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally empty - cleanup runs only on unmount, uses refs for stable access // Empty deps - cleanup only runs on unmount
 
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);
