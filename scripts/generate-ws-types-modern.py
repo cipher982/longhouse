@@ -98,7 +98,7 @@ class ModernProtocolGenerator:
         code += self._generate_typescript_payloads()
         code += self._generate_typescript_message_types()
         code += self._generate_typescript_discriminated_union()
-        code += self._generate_typescript_guards()
+        # Type guards removed - unused in codebase, simple type === 'foo' checks are clearer
 
         with open(output_path, 'w') as f:
             f.write(code)

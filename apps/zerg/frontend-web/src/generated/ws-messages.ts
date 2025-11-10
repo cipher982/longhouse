@@ -1,5 +1,5 @@
 // AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from ws-protocol-asyncapi.yml at 2025-11-10T17:33:49.181326Z
+// Generated from ws-protocol-asyncapi.yml at 2025-11-10T18:50:50.033837Z
 // Using AsyncAPI 3.0 + TypeScript Code Generation
 //
 // This file contains strongly-typed WebSocket message definitions.
@@ -333,90 +333,4 @@ export type WebSocketMessage =
   | ExecutionFinished
   | NodeLog
   | OpsEvent
-
-// Type guard functions for runtime checking
-
-export function isPingMessage(msg: WebSocketMessage): msg is PingMessage {
-  return msg.type === 'ping';
-}
-
-export function isPongMessage(msg: WebSocketMessage): msg is PongMessage {
-  return msg.type === 'pong';
-}
-
-export function isErrorMessage(msg: WebSocketMessage): msg is ErrorMessage {
-  return msg.type === 'error';
-}
-
-export function isSubscribeMessage(msg: WebSocketMessage): msg is SubscribeMessage {
-  return msg.type === 'subscribe';
-}
-
-export function isSubscribeAckMessage(msg: WebSocketMessage): msg is SubscribeAckMessage {
-  return msg.type === 'subscribe_ack';
-}
-
-export function isSubscribeErrorMessage(msg: WebSocketMessage): msg is SubscribeErrorMessage {
-  return msg.type === 'subscribe_error';
-}
-
-export function isUnsubscribeMessage(msg: WebSocketMessage): msg is UnsubscribeMessage {
-  return msg.type === 'unsubscribe';
-}
-
-export function isSendMessageRequest(msg: WebSocketMessage): msg is SendMessageRequest {
-  return msg.type === 'send_message';
-}
-
-export function isThreadMessage(msg: WebSocketMessage): msg is ThreadMessage {
-  return msg.type === 'thread_message';
-}
-
-export function isThreadEvent(msg: WebSocketMessage): msg is ThreadEvent {
-  return msg.type === 'thread_event';
-}
-
-export function isStreamStart(msg: WebSocketMessage): msg is StreamStart {
-  return msg.type === 'stream_start';
-}
-
-export function isStreamChunk(msg: WebSocketMessage): msg is StreamChunk {
-  return msg.type === 'stream_chunk';
-}
-
-export function isStreamEnd(msg: WebSocketMessage): msg is StreamEnd {
-  return msg.type === 'stream_end';
-}
-
-export function isAssistantId(msg: WebSocketMessage): msg is AssistantId {
-  return msg.type === 'assistant_id';
-}
-
-export function isAgentEvent(msg: WebSocketMessage): msg is AgentEvent {
-  return msg.type === 'agent_event';
-}
-
-export function isRunUpdate(msg: WebSocketMessage): msg is RunUpdate {
-  return msg.type === 'run_update';
-}
-
-export function isUserUpdate(msg: WebSocketMessage): msg is UserUpdate {
-  return msg.type === 'user_update';
-}
-
-export function isNodeState(msg: WebSocketMessage): msg is NodeState {
-  return msg.type === 'node_state';
-}
-
-export function isExecutionFinished(msg: WebSocketMessage): msg is ExecutionFinished {
-  return msg.type === 'execution_finished';
-}
-
-export function isNodeLog(msg: WebSocketMessage): msg is NodeLog {
-  return msg.type === 'node_log';
-}
-
-export function isOpsEvent(msg: WebSocketMessage): msg is OpsEvent {
-  return msg.type === 'ops_event';
-}
 
