@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 /**
  * Real E2E tests for WebSocket subscription confirmation.
@@ -13,9 +13,9 @@ import { test, expect } from '@playwright/test';
  */
 
 test.describe('WebSocket Subscription Confirmation (Real E2E)', () => {
-  test.beforeEach(async ({ page }) => {
-    // Setup database
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.beforeEach(async ({ request }) => {
+    // Use fixture-provided request context with auth headers
+    await request.post('/admin/reset-database');
   });
 
   test('successful subscription tracks message ID and waits for ack', async ({ page }) => {
