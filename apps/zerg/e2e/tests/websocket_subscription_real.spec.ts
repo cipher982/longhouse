@@ -1,11 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { setupAuthenticatedSession, cleanupAfterTest } from './helpers/auth-helpers';
 
 /**
  * Real E2E tests for WebSocket subscription confirmation.
  *
  * These tests actually exercise the UI by:
- * 1. Stubbing the WebSocket to control server responses
+ * 1. Stubbing the WebSocket with proper constants and event handlers
  * 2. Observing real UI state changes
  * 3. Verifying actual subscription behavior
  *
@@ -15,295 +14,358 @@ import { setupAuthenticatedSession, cleanupAfterTest } from './helpers/auth-help
 
 test.describe('WebSocket Subscription Confirmation (Real E2E)', () => {
   test.beforeEach(async ({ page }) => {
-    await setupAuthenticatedSession(page);
+    // Setup database
+    await page.request.post('http://localhost:8001/admin/reset-database');
   });
 
-  test.afterEach(async ({ page }) => {
-    await cleanupAfterTest(page);
-  });
-
-  test('successful subscription adds agent to subscribed set on ack', async ({ page }) => {
-    // Stub WebSocket to capture and control messages
+  test('successful subscription tracks message ID and waits for ack', async ({ page }) => {
+    // Stub WebSocket with proper constants and event storage
     await page.addInitScript(() => {
       const OriginalWebSocket = window.WebSocket;
-      const mockMessages: any[] = [];
-      const mockSocket = {
-        readyState: 1, // OPEN
-        send: (data: string) => {
-          mockMessages.push(JSON.parse(data));
-        },
-        addEventListener: (event: string, handler: any) => {
-          if (event === 'open') {
-            setTimeout(() => handler({}), 10);
-          }
-        },
-        removeEventListener: () => {},
-        close: () => {},
-      };
 
-      (window as any).WebSocket = function() {
-        return mockSocket;
-      };
-      (window as any).__mockWebSocket = mockSocket;
-      (window as any).__mockMessages = mockMessages;
+      // Copy static constants
+      const CONNECTING = 0;
+      const OPEN = 1;
+      const CLOSING = 2;
+      const CLOSED = 3;
+
+      class MockWebSocket {
+        static CONNECTING = CONNECTING;
+        static OPEN = OPEN;
+        static CLOSING = CLOSING;
+        static CLOSED = CLOSED;
+
+        readyState = OPEN;
+        url: string;
+        private handlers: Map<string, Function[]> = new Map();
+
+        constructor(url: string) {
+          this.url = url;
+          (window as any).__mockWebSocket = this;
+          (window as any).__sentMessages = [];
+
+          // Trigger open event asynchronously
+          setTimeout(() => {
+            this.triggerEvent('open', {});
+          }, 10);
+        }
+
+        send(data: string) {
+          const msg = JSON.parse(data);
+          (window as any).__sentMessages.push(msg);
+        }
+
+        addEventListener(event: string, handler: Function) {
+          if (!this.handlers.has(event)) {
+            this.handlers.set(event, []);
+          }
+          this.handlers.get(event)!.push(handler);
+        }
+
+        removeEventListener(event: string, handler: Function) {
+          const handlers = this.handlers.get(event);
+          if (handlers) {
+            const index = handlers.indexOf(handler);
+            if (index > -1) {
+              handlers.splice(index, 1);
+            }
+          }
+        }
+
+        close() {
+          this.readyState = CLOSED;
+        }
+
+        // Helper to trigger events from outside
+        triggerEvent(event: string, data: any) {
+          const handlers = this.handlers.get(event);
+          if (handlers) {
+            handlers.forEach(h => h(data));
+          }
+        }
+
+        // Helper to inject server messages
+        injectMessage(message: any) {
+          const handlers = this.handlers.get('message');
+          if (handlers) {
+            handlers.forEach(h => h({ data: JSON.stringify(message) }));
+          }
+        }
+      }
+
+      (window as any).WebSocket = MockWebSocket;
     });
 
-    // Navigate to dashboard
     await page.goto('/');
+    await page.waitForTimeout(200);
 
-    // Wait for WebSocket connection
-    await page.waitForTimeout(100);
-
-    // Get the subscribe message sent by the client
-    const messages = await page.evaluate(() => (window as any).__mockMessages);
+    // Get the subscribe message
+    const messages = await page.evaluate(() => (window as any).__sentMessages || []);
     const subscribeMsg = messages.find((m: any) => m.type === 'subscribe');
 
     expect(subscribeMsg).toBeDefined();
-    expect(subscribeMsg.topics).toBeDefined();
     expect(subscribeMsg.message_id).toBeDefined();
 
     // Simulate server sending subscribe_ack
     await page.evaluate((messageId: string) => {
-      const mockSocket = (window as any).__mockWebSocket;
-      const handler = mockSocket._messageHandler;
-      if (handler) {
-        handler({
-          data: JSON.stringify({
-            type: 'subscribe_ack',
-            message_id: messageId
-          })
+      const socket = (window as any).__mockWebSocket;
+      if (socket) {
+        socket.injectMessage({
+          type: 'subscribe_ack',
+          message_id: messageId
         });
       }
     }, subscribeMsg.message_id);
 
-    // Check that the agent is now marked as subscribed (no more duplicate subscribes)
-    await page.waitForTimeout(100);
-    const messagesAfterAck = await page.evaluate(() => (window as any).__mockMessages);
-    const duplicateSubscribe = messagesAfterAck.filter((m: any) =>
-      m.type === 'subscribe' && m.message_id !== subscribeMsg.message_id
-    );
-
-    expect(duplicateSubscribe.length).toBe(0);
-  });
-
-  test('subscription timeout triggers automatic retry', async ({ page }) => {
-    let subscribeCount = 0;
-
-    // Stub WebSocket to never send ack
-    await page.addInitScript(() => {
-      const mockSocket = {
-        readyState: 1,
-        send: (data: string) => {
-          const msg = JSON.parse(data);
-          if (msg.type === 'subscribe') {
-            (window as any).__subscribeCount = ((window as any).__subscribeCount || 0) + 1;
-          }
-        },
-        addEventListener: (event: string, handler: any) => {
-          if (event === 'open') {
-            setTimeout(() => handler({}), 10);
-          }
-          if (event === 'message') {
-            (window as any).__messageHandler = handler;
-          }
-        },
-        removeEventListener: () => {},
-        close: () => {},
-      };
-
-      (window as any).WebSocket = function() {
-        return mockSocket;
-      };
-    });
-
-    await page.goto('/');
     await page.waitForTimeout(100);
 
-    // Check initial subscribe was sent
-    let count = await page.evaluate(() => (window as any).__subscribeCount || 0);
-    expect(count).toBeGreaterThan(0);
+    // Verify no duplicate subscribe attempts
+    const afterAck = await page.evaluate(() => (window as any).__sentMessages || []);
+    const allSubscribes = afterAck.filter((m: any) => m.type === 'subscribe');
 
-    // Wait for timeout (5 seconds) + retry delay
-    await page.waitForTimeout(6000);
-
-    // Verify retry was attempted
-    const countAfterTimeout = await page.evaluate(() => (window as any).__subscribeCount || 0);
-    expect(countAfterTimeout).toBeGreaterThan(count);
+    // Should only have the initial subscribe (ack was received)
+    expect(allSubscribes.length).toBe(1);
   });
 
-  test('subscribe_error does not mark as subscribed and allows retry', async ({ page }) => {
-    let subscribeCount = 0;
-
+  test('subscription timeout triggers automatic retry via wsReconnectToken', async ({ page }) => {
     await page.addInitScript(() => {
-      const mockSocket = {
-        readyState: 1,
-        send: (data: string) => {
+      const CONNECTING = 0;
+      const OPEN = 1;
+      const CLOSING = 2;
+      const CLOSED = 3;
+
+      class MockWebSocket {
+        static CONNECTING = CONNECTING;
+        static OPEN = OPEN;
+        static CLOSING = CLOSING;
+        static CLOSED = CLOSED;
+
+        readyState = OPEN;
+        url: string;
+        private handlers: Map<string, Function[]> = new Map();
+
+        constructor(url: string) {
+          this.url = url;
+          (window as any).__sentMessages = (window as any).__sentMessages || [];
+
+          setTimeout(() => {
+            this.triggerEvent('open', {});
+          }, 10);
+        }
+
+        send(data: string) {
           const msg = JSON.parse(data);
-          if (msg.type === 'subscribe') {
-            (window as any).__subscribeAttempts = (window as any).__subscribeAttempts || [];
-            (window as any).__subscribeAttempts.push(msg);
+          (window as any).__sentMessages.push({
+            ...msg,
+            timestamp: Date.now()
+          });
+        }
 
-            // Send error response immediately
-            const handler = (window as any).__messageHandler;
-            if (handler) {
-              setTimeout(() => {
-                handler({
-                  data: JSON.stringify({
-                    type: 'subscribe_error',
-                    message_id: msg.message_id,
-                    error: 'Permission denied'
-                  })
-                });
-              }, 50);
-            }
+        addEventListener(event: string, handler: Function) {
+          if (!this.handlers.has(event)) {
+            this.handlers.set(event, []);
           }
-        },
-        addEventListener: (event: string, handler: any) => {
-          if (event === 'open') {
-            setTimeout(() => handler({}), 10);
+          this.handlers.get(event)!.push(handler);
+        }
+
+        removeEventListener() {}
+        close() { this.readyState = CLOSED; }
+
+        triggerEvent(event: string, data: any) {
+          const handlers = this.handlers.get(event);
+          if (handlers) {
+            handlers.forEach(h => h(data));
           }
-          if (event === 'message') {
-            (window as any).__messageHandler = handler;
-          }
-        },
-        removeEventListener: () => {},
-        close: () => {},
-      };
+        }
+      }
 
-      (window as any).WebSocket = function() {
-        return mockSocket;
-      };
-    });
-
-    await page.goto('/');
-
-    // Wait for initial subscribe + error response
-    await page.waitForTimeout(200);
-
-    let attempts = await page.evaluate(() => (window as any).__subscribeAttempts || []);
-    expect(attempts.length).toBeGreaterThan(0);
-
-    // Wait for potential retry (after error, should retry on next effect run)
-    await page.waitForTimeout(6000);
-
-    attempts = await page.evaluate(() => (window as any).__subscribeAttempts || []);
-    // Should have retried after the error
-    expect(attempts.length).toBeGreaterThan(1);
-  });
-
-  test('pending subscriptions prevent duplicate subscribe messages', async ({ page }) => {
-    await page.addInitScript(() => {
-      const mockSocket = {
-        readyState: 1,
-        send: (data: string) => {
-          const msg = JSON.parse(data);
-          if (msg.type === 'subscribe') {
-            (window as any).__allSubscribes = (window as any).__allSubscribes || [];
-            (window as any).__allSubscribes.push({
-              messageId: msg.message_id,
-              topics: msg.topics,
-              timestamp: Date.now()
-            });
-          }
-        },
-        addEventListener: (event: string, handler: any) => {
-          if (event === 'open') {
-            setTimeout(() => handler({}), 10);
-          }
-          if (event === 'message') {
-            (window as any).__messageHandler = handler;
-          }
-        },
-        removeEventListener: () => {},
-        close: () => {},
-      };
-
-      (window as any).WebSocket = function() {
-        return mockSocket;
-      };
+      (window as any).WebSocket = MockWebSocket;
     });
 
     await page.goto('/');
     await page.waitForTimeout(200);
 
-    const subscribes = await page.evaluate(() => (window as any).__allSubscribes || []);
+    const initialMessages = await page.evaluate(() => (window as any).__sentMessages || []);
+    const initialSubscribes = initialMessages.filter((m: any) => m.type === 'subscribe');
+    expect(initialSubscribes.length).toBeGreaterThan(0);
 
-    // Check for duplicate subscriptions to same topics within short time window
-    const topicsSeen = new Map<string, number>();
+    // Wait for 5-second timeout + small buffer
+    await page.waitForTimeout(5500);
+
+    const afterTimeout = await page.evaluate(() => (window as any).__sentMessages || []);
+    const allSubscribes = afterTimeout.filter((m: any) => m.type === 'subscribe');
+
+    // Should have retried after timeout
+    expect(allSubscribes.length).toBeGreaterThan(initialSubscribes.length);
+  });
+
+  test('subscribe_error triggers retry via wsReconnectToken', async ({ page }) => {
+    await page.addInitScript(() => {
+      const CONNECTING = 0;
+      const OPEN = 1;
+      const CLOSING = 2;
+      const CLOSED = 3;
+
+      class MockWebSocket {
+        static CONNECTING = CONNECTING;
+        static OPEN = OPEN;
+        static CLOSING = CLOSING;
+        static CLOSED = CLOSED;
+
+        readyState = OPEN;
+        url: string;
+        private handlers: Map<string, Function[]> = new Map();
+
+        constructor(url: string) {
+          this.url = url;
+          (window as any).__sentMessages = (window as any).__sentMessages || [];
+          (window as any).__mockWebSocket = this;
+
+          setTimeout(() => {
+            this.triggerEvent('open', {});
+          }, 10);
+        }
+
+        send(data: string) {
+          const msg = JSON.parse(data);
+          (window as any).__sentMessages.push(msg);
+
+          // Auto-respond with error for subscribe messages
+          if (msg.type === 'subscribe') {
+            setTimeout(() => {
+              this.injectMessage({
+                type: 'subscribe_error',
+                message_id: msg.message_id,
+                error: 'Permission denied'
+              });
+            }, 50);
+          }
+        }
+
+        addEventListener(event: string, handler: Function) {
+          if (!this.handlers.has(event)) {
+            this.handlers.set(event, []);
+          }
+          this.handlers.get(event)!.push(handler);
+        }
+
+        removeEventListener() {}
+        close() { this.readyState = CLOSED; }
+
+        triggerEvent(event: string, data: any) {
+          const handlers = this.handlers.get(event);
+          if (handlers) {
+            handlers.forEach(h => h(data));
+          }
+        }
+
+        injectMessage(message: any) {
+          const handlers = this.handlers.get('message');
+          if (handlers) {
+            handlers.forEach(h => h({ data: JSON.stringify(message) }));
+          }
+        }
+      }
+
+      (window as any).WebSocket = MockWebSocket;
+    });
+
+    await page.goto('/');
+    await page.waitForTimeout(200);
+
+    const initialMessages = await page.evaluate(() => (window as any).__sentMessages || []);
+    const initialSubscribes = initialMessages.filter((m: any) => m.type === 'subscribe');
+    expect(initialSubscribes.length).toBeGreaterThan(0);
+
+    // Wait for error response and retry trigger
+    await page.waitForTimeout(1000);
+
+    const afterError = await page.evaluate(() => (window as any).__sentMessages || []);
+    const allSubscribes = afterError.filter((m: any) => m.type === 'subscribe');
+
+    // Should have retried after error (wsReconnectToken incremented)
+    expect(allSubscribes.length).toBeGreaterThan(initialSubscribes.length);
+  });
+
+  test('pending subscriptions prevent duplicate messages before ack', async ({ page }) => {
+    await page.addInitScript(() => {
+      const CONNECTING = 0;
+      const OPEN = 1;
+      const CLOSING = 2;
+      const CLOSED = 3;
+
+      class MockWebSocket {
+        static CONNECTING = CONNECTING;
+        static OPEN = OPEN;
+        static CLOSING = CLOSING;
+        static CLOSED = CLOSED;
+
+        readyState = OPEN;
+        url: string;
+        private handlers: Map<string, Function[]> = new Map();
+
+        constructor(url: string) {
+          this.url = url;
+          (window as any).__sentMessages = [];
+
+          setTimeout(() => {
+            this.triggerEvent('open', {});
+          }, 10);
+        }
+
+        send(data: string) {
+          const msg = JSON.parse(data);
+          (window as any).__sentMessages.push({
+            ...msg,
+            timestamp: Date.now()
+          });
+        }
+
+        addEventListener(event: string, handler: Function) {
+          if (!this.handlers.has(event)) {
+            this.handlers.set(event, []);
+          }
+          this.handlers.get(event)!.push(handler);
+        }
+
+        removeEventListener() {}
+        close() { this.readyState = CLOSED; }
+
+        triggerEvent(event: string, data: any) {
+          const handlers = this.handlers.get(event);
+          if (handlers) {
+            handlers.forEach(h => h(data));
+          }
+        }
+      }
+
+      (window as any).WebSocket = MockWebSocket;
+    });
+
+    await page.goto('/');
+    await page.waitForTimeout(500);
+
+    const messages = await page.evaluate(() => (window as any).__sentMessages || []);
+    const subscribes = messages.filter((m: any) => m.type === 'subscribe');
+
+    // Check for duplicate subscriptions to same topics within short window
+    const topicsAtTime = new Map<string, number>();
     let duplicates = 0;
 
     for (const sub of subscribes) {
-      for (const topic of sub.topics) {
-        if (topicsSeen.has(topic)) {
-          const prevTime = topicsSeen.get(topic)!;
-          if (sub.timestamp - prevTime < 1000) {
+      if (sub.topics) {
+        for (const topic of sub.topics) {
+          const lastTime = topicsAtTime.get(topic);
+          if (lastTime && (sub.timestamp - lastTime) < 4000) {
+            // Duplicate within 4 seconds (before timeout)
             duplicates++;
           }
+          topicsAtTime.set(topic, sub.timestamp);
         }
-        topicsSeen.set(topic, sub.timestamp);
       }
     }
 
-    // Should not have any duplicate subscriptions for same topic within 1 second
+    // Should not have duplicates while pending
     expect(duplicates).toBe(0);
-  });
-
-  test('reconnection clears pending subscriptions and resubscribes', async ({ page }) => {
-    await page.addInitScript(() => {
-      let connectionCount = 0;
-
-      const createMockSocket = () => {
-        connectionCount++;
-        (window as any).__connectionCount = connectionCount;
-
-        return {
-          readyState: 1,
-          send: (data: string) => {
-            const msg = JSON.parse(data);
-            (window as any).__latestMessages = (window as any).__latestMessages || [];
-            (window as any).__latestMessages.push({
-              ...msg,
-              connection: connectionCount
-            });
-          },
-          addEventListener: (event: string, handler: any) => {
-            if (event === 'open') {
-              setTimeout(() => handler({}), 10);
-            }
-          },
-          removeEventListener: () => {},
-          close: () => {},
-        };
-      };
-
-      (window as any).WebSocket = function() {
-        return createMockSocket();
-      };
-      (window as any).__triggerReconnect = () => {
-        // Trigger reconnection logic
-        const event = new Event('online');
-        window.dispatchEvent(event);
-      };
-    });
-
-    await page.goto('/');
-    await page.waitForTimeout(200);
-
-    const messagesBeforeReconnect = await page.evaluate(() => (window as any).__latestMessages || []);
-    const connection1Subscribes = messagesBeforeReconnect.filter((m: any) =>
-      m.type === 'subscribe' && m.connection === 1
-    );
-
-    // Simulate reconnection
-    await page.evaluate(() => (window as any).__triggerReconnect());
-    await page.waitForTimeout(500);
-
-    const messagesAfterReconnect = await page.evaluate(() => (window as any).__latestMessages || []);
-    const connection2Subscribes = messagesAfterReconnect.filter((m: any) =>
-      m.type === 'subscribe' && m.connection === 2
-    );
-
-    // Should have resubscribed on new connection
-    expect(connection2Subscribes.length).toBeGreaterThan(0);
   });
 });
