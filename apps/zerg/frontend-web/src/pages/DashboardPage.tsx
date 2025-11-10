@@ -92,8 +92,9 @@ export default function DashboardPage() {
                 subscribedAgentIdsRef.current.add(agentId);
               });
             } else {
-              // Error: don't mark as subscribed, effect will retry on next run
+              // Error: don't mark as subscribed, trigger retry by incrementing token
               console.error("[WS] Subscription failed for topics:", pending.topics);
+              setWsReconnectToken((token) => token + 1);
             }
           }
         }
