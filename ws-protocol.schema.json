@@ -142,6 +142,58 @@
         }
       }
     },
+    "SubscribeAckData": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "topics"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Correlation ID matching the original subscribe request"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "List of topics that were successfully subscribed"
+        }
+      }
+    },
+    "SubscribeErrorData": {
+      "type": "object",
+      "required": [
+        "message_id",
+        "error"
+      ],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Correlation ID matching the original subscribe request"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of topics that failed to subscribe"
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable error message"
+        },
+        "error_code": {
+          "type": "string",
+          "description": "Machine-readable error code (e.g., NOT_FOUND, FORBIDDEN)"
+        }
+      }
+    },
     "UnsubscribeData": {
       "type": "object",
       "required": [

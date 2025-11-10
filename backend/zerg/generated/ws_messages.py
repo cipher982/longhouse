@@ -6,25 +6,29 @@
 # To update, modify the schema file and run: python scripts/generate-ws-types-modern.py
 
 import time
-import jsonschema
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union, Literal, Protocol
-from pydantic import BaseModel, Field, ValidationError
-from pydantic.json_schema import GenerateJsonSchema
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Literal
+from typing import Optional
+from typing import Protocol
 
 import jsonschema
+from pydantic import BaseModel
+from pydantic import Field
 
 
 class Envelope(BaseModel):
     """Unified envelope for all WebSocket messages with validation."""
-    
+
     v: int = Field(default=1, description="Protocol version")
-    type: str = Field(description="Message type identifier") 
+    type: str = Field(description="Message type identifier")
     topic: str = Field(description="Topic routing string")
     req_id: Optional[str] = Field(default=None, description="Request correlation ID")
     ts: int = Field(description="Timestamp in milliseconds since epoch")
     data: Dict[str, Any] = Field(description="Message payload")
-    
+
     @classmethod
     def create(
         cls,
@@ -51,43 +55,52 @@ class Envelope(BaseModel):
         validate_envelope_fast(data)
         return data
 
+
 # Message payload schemas
+
 
 class AgentRef(BaseModel):
     """Payload for AgentRef messages"""
 
-    id: int = Field(ge=1, description='')
+    id: int = Field(ge=1, description="")
+
 
 class ThreadRef(BaseModel):
     """Payload for ThreadRef messages"""
 
-    thread_id: int = Field(ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
+
 
 class UserRef(BaseModel):
     """Payload for UserRef messages"""
 
-    id: int = Field(ge=1, description='')
+    id: int = Field(ge=1, description="")
+
 
 class ExecutionRef(BaseModel):
     """Payload for ExecutionRef messages"""
 
-    execution_id: int = Field(ge=1, description='')
+    execution_id: int = Field(ge=1, description="")
+
 
 class PingData(BaseModel):
     """Payload for PingData messages"""
 
-    timestamp: Optional[int] = Field(default=None, ge=0, description='')
+    timestamp: Optional[int] = Field(default=None, ge=0, description="")
+
 
 class PongData(BaseModel):
     """Payload for PongData messages"""
 
-    timestamp: Optional[int] = Field(default=None, ge=0, description='')
+    timestamp: Optional[int] = Field(default=None, ge=0, description="")
+
 
 class ErrorData(BaseModel):
     """Payload for ErrorData messages"""
 
-    error: str = Field(min_length=1, description='')
+    error: str = Field(min_length=1, description="")
     details: Optional[Dict[str, Any]] = None
+
 
 class SubscribeData(BaseModel):
     """Payload for SubscribeData messages"""
@@ -95,19 +108,24 @@ class SubscribeData(BaseModel):
     topics: List[str]
     message_id: Optional[str] = None
 
+
 class SubscribeAckData(BaseModel):
     """Payload for SubscribeAckData messages"""
 
-    message_id: str = Field(min_length=1, description='Correlation ID matching the original subscribe request')
-    topics: List[str] = Field(description='List of topics that were successfully subscribed')
+    message_id: str = Field(min_length=1, description="Correlation ID matching the original subscribe request")
+    topics: List[str] = Field(description="List of topics that were successfully subscribed")
+
 
 class SubscribeErrorData(BaseModel):
     """Payload for SubscribeErrorData messages"""
 
-    message_id: str = Field(min_length=1, description='Correlation ID matching the original subscribe request')
-    topics: Optional[List[str]] = Field(default=None, description='List of topics that failed to subscribe')
-    error: str = Field(min_length=1, description='Human-readable error message')
-    error_code: Optional[str] = Field(default=None, description='Machine-readable error code (e.g., NOT_FOUND, FORBIDDEN)')
+    message_id: str = Field(min_length=1, description="Correlation ID matching the original subscribe request")
+    topics: Optional[List[str]] = Field(default=None, description="List of topics that failed to subscribe")
+    error: str = Field(min_length=1, description="Human-readable error message")
+    error_code: Optional[str] = Field(
+        default=None, description="Machine-readable error code (e.g., NOT_FOUND, FORBIDDEN)"
+    )
+
 
 class UnsubscribeData(BaseModel):
     """Payload for UnsubscribeData messages"""
@@ -115,58 +133,66 @@ class UnsubscribeData(BaseModel):
     topics: List[str]
     message_id: Optional[str] = None
 
+
 class SendMessageData(BaseModel):
     """Payload for SendMessageData messages"""
 
-    thread_id: int = Field(ge=1, description='')
-    content: str = Field(min_length=1, description='')
+    thread_id: int = Field(ge=1, description="")
+    content: str = Field(min_length=1, description="")
     metadata: Optional[Dict[str, Any]] = None
+
 
 class ThreadMessageData(BaseModel):
     """Payload for ThreadMessageData messages"""
 
-    thread_id: int = Field(ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
     message: Dict[str, Any]
+
 
 class ThreadEventData(BaseModel):
     """Payload for ThreadEventData messages"""
 
-    thread_id: int = Field(ge=1, description='')
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
+    agent_id: Optional[int] = Field(default=None, ge=1, description="")
     title: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
+
 class StreamStartData(BaseModel):
     """Payload for StreamStartData messages"""
 
-    thread_id: int = Field(ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
+
 
 class StreamChunkData(BaseModel):
     """Payload for StreamChunkData messages"""
 
-    thread_id: int = Field(ge=1, description='')
-    chunk_type: Literal['assistant_token', 'assistant_message', 'tool_output']
+    thread_id: int = Field(ge=1, description="")
+    chunk_type: Literal["assistant_token", "assistant_message", "tool_output"]
     content: Optional[str] = None
     tool_name: Optional[str] = None
     tool_call_id: Optional[str] = None
-    message_id: Optional[int] = Field(default=None, ge=1, description='')
+    message_id: Optional[int] = Field(default=None, ge=1, description="")
+
 
 class StreamEndData(BaseModel):
     """Payload for StreamEndData messages"""
 
-    thread_id: int = Field(ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
+
 
 class AssistantIdData(BaseModel):
     """Payload for AssistantIdData messages"""
 
-    thread_id: int = Field(ge=1, description='')
-    message_id: int = Field(ge=1, description='')
+    thread_id: int = Field(ge=1, description="")
+    message_id: int = Field(ge=1, description="")
+
 
 class AgentEventData(BaseModel):
     """Payload for AgentEventData messages"""
 
-    id: int = Field(ge=1, description='')
+    id: int = Field(ge=1, description="")
     status: Optional[str] = None
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
@@ -174,73 +200,96 @@ class AgentEventData(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
 
+
 class RunUpdateData(BaseModel):
     """Payload for RunUpdateData messages"""
 
-    id: int = Field(ge=1, description='')
-    agent_id: int = Field(ge=1, description='')
-    thread_id: Optional[int] = Field(default=None, ge=1, description='')
-    status: Literal['queued', 'running', 'success', 'failed']
-    trigger: Optional[Literal['manual', 'schedule', 'api']] = None
+    id: int = Field(ge=1, description="")
+    agent_id: int = Field(ge=1, description="")
+    thread_id: Optional[int] = Field(default=None, ge=1, description="")
+    status: Literal["queued", "running", "success", "failed"]
+    trigger: Optional[Literal["manual", "schedule", "api"]] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='')
+    duration_ms: Optional[int] = Field(default=None, ge=0, description="")
     error: Optional[str] = None
+
 
 class UserUpdateData(BaseModel):
     """Payload for UserUpdateData messages"""
 
-    id: int = Field(ge=1, description='')
+    id: int = Field(ge=1, description="")
     email: Optional[str] = None
     display_name: Optional[str] = None
     avatar_url: Optional[str] = None
 
+
 class NodeStateData(BaseModel):
     """Payload for NodeStateData messages"""
 
-    execution_id: int = Field(ge=1, description='')
-    node_id: str = Field(min_length=1, description='')
-    phase: Literal['waiting', 'running', 'finished'] = Field(description='Current execution phase - what is happening NOW')
-    result: Optional[Literal['success', 'failure', 'cancelled']] = Field(default=None, description='Execution result - how did it END (only when phase=finished)')
-    attempt_no: Optional[int] = Field(default=None, ge=1, description='Attempt number for retry tracking')
-    failure_kind: Optional[Literal['user', 'system', 'timeout', 'external', 'unknown']] = Field(default=None, description='Classification of failure type (only when result=failure)')
-    error_message: Optional[str] = Field(default=None, description='Detailed error message for failures')
+    execution_id: int = Field(ge=1, description="")
+    node_id: str = Field(min_length=1, description="")
+    phase: Literal["waiting", "running", "finished"] = Field(
+        description="Current execution phase - what is happening NOW"
+    )
+    result: Optional[Literal["success", "failure", "cancelled"]] = Field(
+        default=None, description="Execution result - how did it END (only when phase=finished)"
+    )
+    attempt_no: Optional[int] = Field(default=None, ge=1, description="Attempt number for retry tracking")
+    failure_kind: Optional[Literal["user", "system", "timeout", "external", "unknown"]] = Field(
+        default=None, description="Classification of failure type (only when result=failure)"
+    )
+    error_message: Optional[str] = Field(default=None, description="Detailed error message for failures")
     output: Optional[Dict[str, Any]] = None
+
 
 class ExecutionFinishedData(BaseModel):
     """Payload for ExecutionFinishedData messages"""
 
-    execution_id: int = Field(ge=1, description='')
-    result: Literal['success', 'failure', 'cancelled'] = Field(description='How the execution ended')
-    attempt_no: Optional[int] = Field(default=None, ge=1, description='Final attempt number')
-    failure_kind: Optional[Literal['user', 'system', 'timeout', 'external', 'unknown']] = Field(default=None, description='Classification of failure type (only when result=failure)')
-    error_message: Optional[str] = Field(default=None, description='Detailed error message for failures')
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='Total execution time in milliseconds')
+    execution_id: int = Field(ge=1, description="")
+    result: Literal["success", "failure", "cancelled"] = Field(description="How the execution ended")
+    attempt_no: Optional[int] = Field(default=None, ge=1, description="Final attempt number")
+    failure_kind: Optional[Literal["user", "system", "timeout", "external", "unknown"]] = Field(
+        default=None, description="Classification of failure type (only when result=failure)"
+    )
+    error_message: Optional[str] = Field(default=None, description="Detailed error message for failures")
+    duration_ms: Optional[int] = Field(default=None, ge=0, description="Total execution time in milliseconds")
+
 
 class NodeLogData(BaseModel):
     """Payload for NodeLogData messages"""
 
-    execution_id: int = Field(ge=1, description='')
-    node_id: str = Field(min_length=1, description='')
-    stream: Literal['stdout', 'stderr']
+    execution_id: int = Field(ge=1, description="")
+    node_id: str = Field(min_length=1, description="")
+    stream: Literal["stdout", "stderr"]
     text: str
+
 
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['run_started', 'run_success', 'run_failed', 'agent_created', 'agent_updated', 'thread_message_created', 'budget_denied']
-    agent_id: Optional[int] = Field(default=None, ge=1, description='')
-    run_id: Optional[int] = Field(default=None, ge=1, description='')
-    thread_id: Optional[int] = Field(default=None, ge=1, description='')
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='')
+    type: Literal[
+        "run_started",
+        "run_success",
+        "run_failed",
+        "agent_created",
+        "agent_updated",
+        "thread_message_created",
+        "budget_denied",
+    ]
+    agent_id: Optional[int] = Field(default=None, ge=1, description="")
+    run_id: Optional[int] = Field(default=None, ge=1, description="")
+    thread_id: Optional[int] = Field(default=None, ge=1, description="")
+    duration_ms: Optional[int] = Field(default=None, ge=0, description="")
     error: Optional[str] = None
     agent_name: Optional[str] = None
     status: Optional[str] = None
-    scope: Optional[Literal['user', 'global']] = None
+    scope: Optional[Literal["user", "global"]] = None
     percent: Optional[float] = None
     used_usd: Optional[float] = None
-    limit_cents: Optional[int] = Field(default=None, ge=0, description='')
+    limit_cents: Optional[int] = Field(default=None, ge=0, description="")
     user_email: Optional[str] = None
+
 
 class MessageType(str, Enum):
     """Enumeration of all WebSocket message types."""
@@ -270,50 +319,41 @@ class MessageType(str, Enum):
 
 # Typed emitter for contract enforcement
 
+
 class TypedEmitter(Protocol):
     """Protocol for typed WebSocket message emission."""
-    
-    async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
-        payload: BaseModel
-    ) -> None:
+
+    async def send_typed(self, topic: str, message_type: MessageType, payload: BaseModel) -> None:
         """Send a typed message with validation."""
         ...
 
+
 class TypedEmitterImpl:
     """Implementation of typed emitter with runtime validation."""
-    
+
     def __init__(self, raw_emitter):
         """Initialize with raw broadcast function."""
         self.raw_emitter = raw_emitter
-        
-    async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
-        payload: BaseModel
-    ) -> None:
+
+    async def send_typed(self, topic: str, message_type: MessageType, payload: BaseModel) -> None:
         """Send a typed message with full validation."""
         # Validate payload matches expected type for message
         validate_payload_for_message_type(message_type, payload)
-        
+
         # Create envelope with validation
-        envelope = Envelope.create(
-            message_type=message_type.value,
-            topic=topic,
-            data=payload.model_dump()
-        )
-        
+        envelope = Envelope.create(message_type=message_type.value, topic=topic, data=payload.model_dump())
+
         # Send via raw emitter
         await self.raw_emitter(topic, envelope.model_dump_validated())
+
 
 def create_typed_emitter(raw_emitter) -> TypedEmitter:
     """Factory for typed emitter."""
     return TypedEmitterImpl(raw_emitter)
 
+
 # Fast validation functions
+
 
 def validate_envelope_fast(data: Dict[str, Any]) -> None:
     """Envelope validation using jsonschema."""
@@ -321,13 +361,16 @@ def validate_envelope_fast(data: Dict[str, Any]) -> None:
         jsonschema.validate(data, ENVELOPE_SCHEMA)
     except jsonschema.ValidationError as e:
         from pydantic import ValidationError as PydanticValidationError
+
         raise PydanticValidationError(f"Envelope validation failed: {e}")
+
 
 def validate_payload_for_message_type(message_type: MessageType, payload: BaseModel) -> None:
     """Validate payload matches expected type for message."""
     # This will be populated by specific payload type checks
     # TODO: Generate type-specific validation from schema
     pass
+
 
 # Schema constants for validation
 ENVELOPE_SCHEMA = {
@@ -340,7 +383,6 @@ ENVELOPE_SCHEMA = {
         "topic": {"type": "string"},
         "req_id": {"type": ["string", "null"]},
         "ts": {"type": "integer"},
-        "data": {"type": "object"}
-    }
+        "data": {"type": "object"},
+    },
 }
-

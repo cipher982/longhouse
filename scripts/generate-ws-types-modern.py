@@ -55,6 +55,7 @@ class ModernProtocolGenerator:
         # Generate in parallel for speed
         await asyncio.gather(
             self._generate_python_types(),
+            self._generate_typescript_types(),
             self._generate_rust_types_modelina(),
             self._generate_json_schema(),
             self._generate_handler_interfaces(),
@@ -84,7 +85,187 @@ class ModernProtocolGenerator:
             f.write(code)
             
         print(f"✅ Python types: {output_path}")
-        
+
+    async def _generate_typescript_types(self):
+        """Generate TypeScript types with discriminated unions."""
+        print("📘 Generating TypeScript types...")
+
+        output_path = self.output_dir / "apps" / "zerg" / "frontend-web" / "src" / "generated" / "ws-messages.ts"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        code = self._generate_typescript_header()
+        code += self._generate_typescript_envelope()
+        code += self._generate_typescript_payloads()
+        code += self._generate_typescript_message_types()
+        code += self._generate_typescript_discriminated_union()
+        code += self._generate_typescript_guards()
+
+        with open(output_path, 'w') as f:
+            f.write(code)
+
+        print(f"✅ TypeScript types: {output_path}")
+
+    def _generate_typescript_header(self) -> str:
+        """Generate TypeScript file header."""
+        return f'''// AUTO-GENERATED FILE - DO NOT EDIT
+// Generated from {self.schema_path.name} at {datetime.utcnow().isoformat()}Z
+// Using AsyncAPI 3.0 + TypeScript Code Generation
+//
+// This file contains strongly-typed WebSocket message definitions.
+// To update, modify the schema file and run: python scripts/generate-ws-types-modern.py
+
+'''
+
+    def _generate_typescript_envelope(self) -> str:
+        """Generate TypeScript Envelope interface."""
+        return '''// Base envelope structure for all WebSocket messages
+export interface Envelope<T = unknown> {
+  /** Protocol version */
+  v: number;
+  /** Message type identifier */
+  type: string;
+  /** Topic routing string (e.g., 'agent:123', 'thread:456') */
+  topic: string;
+  /** Optional request correlation ID */
+  req_id?: string;
+  /** Timestamp in milliseconds since epoch */
+  ts: number;
+  /** Message payload - structure depends on type */
+  data: T;
+}
+
+'''
+
+    def _generate_typescript_payloads(self) -> str:
+        """Generate TypeScript payload interfaces from AsyncAPI schemas."""
+        code = "// Message payload types\n\n"
+
+        schemas = self.schema.get("components", {}).get("schemas", {})
+
+        for name, schema_def in schemas.items():
+            if name == "Envelope":
+                continue
+
+            if schema_def.get("type") == "object":
+                code += self._typescript_schema_to_interface(name, schema_def)
+                code += "\n\n"
+
+        return code
+
+    def _typescript_schema_to_interface(self, name: str, schema: Dict[str, Any]) -> str:
+        """Convert AsyncAPI schema to TypeScript interface."""
+        lines = []
+
+        description = schema.get("description", "")
+        if description:
+            lines.append(f"/** {description} */")
+
+        lines.append(f"export interface {name} {{")
+
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        if not properties:
+            lines.append("  // No properties")
+        else:
+            for prop_name, prop_schema in properties.items():
+                ts_type = self._json_type_to_typescript(prop_schema)
+                is_required = prop_name in required
+                optional_marker = "" if is_required else "?"
+
+                prop_desc = prop_schema.get("description", "")
+                if prop_desc:
+                    lines.append(f"  /** {prop_desc} */")
+
+                lines.append(f"  {prop_name}{optional_marker}: {ts_type};")
+
+        lines.append("}")
+
+        return "\n".join(lines)
+
+    def _json_type_to_typescript(self, schema: Dict[str, Any]) -> str:
+        """Convert JSON schema type to TypeScript type."""
+        if "$ref" in schema:
+            ref_name = schema["$ref"].split("/")[-1]
+            return ref_name
+
+        json_type = schema.get("type", "unknown")
+
+        if json_type == "string":
+            if "enum" in schema:
+                enum_values = " | ".join(f'"{v}"' for v in schema["enum"])
+                return enum_values
+            return "string"
+        elif json_type == "integer" or json_type == "number":
+            return "number"
+        elif json_type == "boolean":
+            return "boolean"
+        elif json_type == "array":
+            items = schema.get("items", {})
+            item_type = self._json_type_to_typescript(items)
+            return f"{item_type}[]"
+        elif json_type == "object":
+            # For generic objects, use Record or any
+            if "additionalProperties" in schema:
+                return "Record<string, any>"
+            return "Record<string, any>"
+        else:
+            return "unknown"
+
+    def _generate_typescript_message_types(self) -> str:
+        """Generate TypeScript message type definitions."""
+        code = "// Typed message definitions with envelopes\n\n"
+
+        messages = self.schema.get("components", {}).get("messages", {})
+
+        for msg_name, msg_data in messages.items():
+            msg_type_name = msg_data.get("name", "")
+            payload_ref = msg_data.get("payload", {}).get("$ref", "")
+            summary = msg_data.get("summary", "")
+
+            if payload_ref:
+                payload_type = payload_ref.split("/")[-1]
+
+                if summary:
+                    code += f"/** {summary} */\n"
+
+                code += f"export interface {msg_name} extends Envelope<{payload_type}> {{\n"
+                code += f"  type: '{msg_type_name}';\n"
+                code += f"}}\n\n"
+
+        return code
+
+    def _generate_typescript_discriminated_union(self) -> str:
+        """Generate discriminated union of all message types."""
+        code = "// Discriminated union of all WebSocket messages\n"
+        code += "export type WebSocketMessage =\n"
+
+        messages = self.schema.get("components", {}).get("messages", {})
+        msg_names = list(messages.keys())
+
+        for i, msg_name in enumerate(msg_names):
+            separator = " |" if i < len(msg_names) - 1 else ";"
+            code += f"  | {msg_name}\n"
+
+        code += "\n"
+        return code
+
+    def _generate_typescript_guards(self) -> str:
+        """Generate type guard functions for runtime type checking."""
+        code = "// Type guard functions for runtime checking\n\n"
+
+        messages = self.schema.get("components", {}).get("messages", {})
+
+        for msg_name, msg_data in messages.items():
+            msg_type_name = msg_data.get("name", "")
+            func_name = f"is{msg_name}"
+
+            code += f"export function {func_name}(msg: WebSocketMessage): msg is {msg_name} {{\n"
+            code += f"  return msg.type === '{msg_type_name}';\n"
+            code += f"}}\n\n"
+
+        return code
+
     async def _generate_rust_types_modelina(self):
         """Generate Rust types using custom generation."""
         print("🦀 Generating Rust types...")

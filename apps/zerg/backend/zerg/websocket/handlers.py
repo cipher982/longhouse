@@ -33,11 +33,165 @@ from zerg.generated.ws_messages import UnsubscribeData
 from zerg.generated.ws_messages import UserUpdateData
 from zerg.websocket.manager import topic_manager
 
+# Import decorator framework
+from zerg.websocket.decorators import (
+    SubscriptionContext,
+    subscription_handler,
+    route_subscription,
+)
+
 logger = logging.getLogger(__name__)
 
 
 # SubscribeMessage and UnsubscribeMessage now use generated SubscribeData/UnsubscribeData
 
+
+# ---------------------------------------------------------------------------
+# Modern decorator-based subscription handlers
+# ---------------------------------------------------------------------------
+
+@subscription_handler("agent")
+async def handle_agent_subscription(ctx: SubscriptionContext):
+    """Subscribe to agent events using clean decorator pattern."""
+    agent_id = ctx.params.get("agent_id")
+    if not agent_id:
+        return await ctx.error("Invalid agent topic format", "INVALID_FORMAT")
+
+    agent = crud.get_agent(ctx.db, agent_id)
+    if not agent:
+        return await ctx.error(f"Agent {agent_id} not found", "NOT_FOUND")
+
+    # Build agent data
+    last_run_at = getattr(agent, "last_run_at", None)
+    next_run_at = getattr(agent, "next_run_at", None)
+
+    agent_data = AgentEventData(
+        id=agent.id,
+        status=getattr(agent, "status", None),
+        name=getattr(agent, "name", None),
+        description=getattr(agent, "system_instructions", None),
+        last_run_at=last_run_at.isoformat() if last_run_at else None,
+        next_run_at=next_run_at.isoformat() if next_run_at else None,
+        last_error=getattr(agent, "last_error", None),
+    )
+
+    # Success automatically subscribes, sends initial state, and sends ack
+    return await ctx.success(initial_state=agent_data)
+
+
+@subscription_handler("user")
+async def handle_user_subscription(ctx: SubscriptionContext):
+    """Subscribe to user profile updates using clean decorator pattern."""
+    user_id = ctx.params.get("user_id")
+    if not user_id:
+        return await ctx.error("Invalid user topic format", "INVALID_FORMAT")
+
+    # Allow placeholder subscription for user:0
+    if user_id <= 0:
+        # Subscribe without initial payload for placeholder
+        await topic_manager.subscribe_to_topic(ctx.client_id, ctx.topic)
+        return
+
+    user = crud.get_user(ctx.db, user_id)
+    if not user:
+        return await ctx.error(f"User {user_id} not found", "NOT_FOUND")
+
+    user_data = UserUpdateData(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        avatar_url=user.avatar_url,
+    )
+
+    return await ctx.success(initial_state=user_data, message_type="user_update")
+
+
+@subscription_handler("workflow_execution")
+async def handle_workflow_execution_subscription(ctx: SubscriptionContext):
+    """Subscribe to workflow execution events using clean decorator pattern."""
+    execution_id = ctx.params.get("execution_id")
+    if not execution_id:
+        return await ctx.error("Invalid workflow_execution topic format", "INVALID_FORMAT")
+
+    # Allow subscription before execution starts (for future executions)
+    await topic_manager.subscribe_to_topic(ctx.client_id, ctx.topic)
+
+    # Try to send current state if execution exists
+    try:
+        from zerg.workflow.execution_manager import execution_manager
+        from zerg.generated.ws_messages import ExecutionFinishedData
+
+        execution = execution_manager.get_execution(execution_id)
+        if execution and execution.get("phase") == "finished":
+            # Send final state for late subscribers
+            finished_data = ExecutionFinishedData(
+                execution_id=execution_id,
+                result=execution.get("result", "unknown"),
+                attempt_no=execution.get("attempt_no", 1),
+                failure_kind=execution.get("failure_kind"),
+                error_message=execution.get("error_message"),
+                duration_ms=execution.get("duration_ms", 0),
+            )
+
+            envelope = Envelope.create(
+                message_type="execution_finished",
+                topic=ctx.topic,
+                data=finished_data.model_dump(),
+                req_id=ctx.message_id,
+            )
+
+            await send_to_client(ctx.client_id, envelope.model_dump(), topic=ctx.topic)
+
+    except Exception as e:
+        logger.debug(f"Could not fetch execution state for {execution_id}: {e}")
+
+    # Send ack regardless
+    from zerg.generated.ws_messages import SubscribeAckData
+    ack_data = SubscribeAckData(message_id=ctx.message_id, topics=[ctx.topic])
+    ack_envelope = Envelope.create(
+        message_type="subscribe_ack",
+        topic="system",
+        data=ack_data.model_dump(),
+        req_id=ctx.message_id,
+    )
+    await send_to_client(ctx.client_id, ack_envelope.model_dump(), topic="system")
+
+
+@subscription_handler("ops")
+async def handle_ops_subscription(ctx: SubscriptionContext):
+    """Subscribe to ops events (admin-only) using clean decorator pattern."""
+    # Check if topic is "ops:events"
+    if ctx.topic != "ops:events":
+        return await ctx.error(f"Invalid ops topic: {ctx.topic}", "INVALID_TOPIC")
+
+    # Determine user id for this client
+    user_id = topic_manager.client_users.get(ctx.client_id)
+    if not user_id:
+        return await ctx.error("Unauthorized", "UNAUTHORIZED")
+
+    user = crud.get_user(ctx.db, int(user_id))
+    if not user or getattr(user, "role", "USER") != "ADMIN":
+        return await ctx.error("Admin privileges required for ops:events", "FORBIDDEN")
+
+    # Subscribe without initial payload (ticker is live-only)
+    await topic_manager.subscribe_to_topic(ctx.client_id, ctx.topic)
+
+    # Send ack manually since we're not sending initial state
+    from zerg.generated.ws_messages import SubscribeAckData
+    ack_data = SubscribeAckData(message_id=ctx.message_id, topics=[ctx.topic])
+    ack_envelope = Envelope.create(
+        message_type="subscribe_ack",
+        topic="system",
+        data=ack_data.model_dump(),
+        req_id=ctx.message_id,
+    )
+    await send_to_client(ctx.client_id, ack_envelope.model_dump(), topic="system")
+    logger.info(f"Client {ctx.client_id} subscribed to ops topic")
+
+
+# ---------------------------------------------------------------------------
+# Core message sending utilities
+# ---------------------------------------------------------------------------
 
 async def send_to_client(
     client_id: str,
@@ -423,7 +577,7 @@ async def _subscribe_ops_events(client_id: str, message_id: str, db: Session) ->
 
 
 async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> None:
-    """Handle topic subscription requests.
+    """Handle topic subscription requests using modern router.
 
     Args:
         client_id: The client ID that sent the message
@@ -432,42 +586,73 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
     """
     try:
         subscribe_data = SubscribeData.model_validate(envelope.data)
+        message_id = subscribe_data.message_id or envelope.req_id or "unknown"
 
         for topic in subscribe_data.topics:
             try:
-                # Parse topic to validate and get initial data if needed
-                topic_type, topic_id = topic.split(":", 1)
+                # Check for deprecated thread subscriptions
+                if topic.startswith("thread:"):
+                    from zerg.generated.ws_messages import SubscribeErrorData
+                    error_data = SubscribeErrorData(
+                        message_id=message_id,
+                        topics=[topic],
+                        error="Thread subscriptions no longer supported. All streaming is delivered to user:{user_id}",
+                        error_code="DEPRECATED"
+                    )
+                    error_envelope = Envelope.create(
+                        message_type="subscribe_error",
+                        topic="system",
+                        data=error_data.model_dump(),
+                        req_id=message_id
+                    )
+                    await send_to_client(client_id, error_envelope.model_dump(), topic="system")
+                    continue
 
-                if topic_type == "thread":
-                    # Thread subscriptions removed - all streaming goes to user:{user_id}
-                    await send_error(
-                        client_id,
-                        "Thread subscriptions no longer supported. All streaming is delivered to user:{user_id}",
-                        subscribe_data.message_id,
-                    )
-                elif topic_type == "agent":
-                    await _subscribe_agent(client_id, int(topic_id), subscribe_data.message_id, db)
-                elif topic_type == "user":
-                    await _subscribe_user(client_id, int(topic_id), subscribe_data.message_id, db)
-                elif topic_type == "workflow_execution":
-                    await _subscribe_workflow_execution(client_id, int(topic_id), subscribe_data.message_id, db)
-                elif topic_type == "ops" and topic_id == "events":
-                    await _subscribe_ops_events(client_id, subscribe_data.message_id, db)
-                else:
-                    await send_error(
-                        client_id,
-                        f"Invalid topic format: Unsupported topic type '{topic_type}'",
-                        subscribe_data.message_id,
-                    )
-            except ValueError as e:
-                await send_error(
-                    client_id,
-                    f"Invalid topic format: {topic}. Error: {str(e)}",
-                    subscribe_data.message_id,
+                # Route to appropriate handler using decorator registry
+                handled = await route_subscription(
+                    client_id=client_id,
+                    topic=topic,
+                    message_id=message_id,
+                    db=db
                 )
 
-    except ValueError as e:
-        await send_error(client_id, f"Invalid topic format: {str(e)}", envelope.req_id)
+                if not handled:
+                    # No handler found for this topic type
+                    topic_type = topic.split(":")[0]
+                    from zerg.generated.ws_messages import SubscribeErrorData
+                    error_data = SubscribeErrorData(
+                        message_id=message_id,
+                        topics=[topic],
+                        error=f"Unsupported topic type: {topic_type}",
+                        error_code="UNSUPPORTED_TOPIC"
+                    )
+                    error_envelope = Envelope.create(
+                        message_type="subscribe_error",
+                        topic="system",
+                        data=error_data.model_dump(),
+                        req_id=message_id
+                    )
+                    await send_to_client(client_id, error_envelope.model_dump(), topic="system")
+
+            except ValueError as e:
+                from zerg.generated.ws_messages import SubscribeErrorData
+                error_data = SubscribeErrorData(
+                    message_id=message_id,
+                    topics=[topic],
+                    error=f"Invalid topic format: {str(e)}",
+                    error_code="INVALID_FORMAT"
+                )
+                error_envelope = Envelope.create(
+                    message_type="subscribe_error",
+                    topic="system",
+                    data=error_data.model_dump(),
+                    req_id=message_id
+                )
+                await send_to_client(client_id, error_envelope.model_dump(), topic="system")
+
+    except ValidationError as e:
+        logger.error(f"Invalid subscription data: {e}")
+        await send_error(client_id, f"Invalid subscription format: {str(e)}", envelope.req_id)
     except Exception as e:
         logger.error(f"Error handling subscription: {str(e)}")
         await send_error(client_id, "Failed to process subscription", envelope.req_id)

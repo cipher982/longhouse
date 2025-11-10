@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2025-09-11T21:23:53.188229Z",
+  "generated_at": "2025-11-10T17:33:49.182533Z",
   "asyncapi_version": "3.0.0",
   "info": {
     "title": "Zerg WebSocket Protocol",
@@ -17,6 +17,8 @@
         "PongMessage",
         "ErrorMessage",
         "SubscribeMessage",
+        "SubscribeAckMessage",
+        "SubscribeErrorMessage",
         "UnsubscribeMessage"
       ]
     },
@@ -133,6 +135,22 @@
         "$ref": "#/components/schemas/SubscribeData"
       },
       "handler_method": "handle_subscribe",
+      "aliases": []
+    },
+    "subscribe_ack": {
+      "summary": "Subscription confirmation (server to client)",
+      "payload_schema": {
+        "$ref": "#/components/schemas/SubscribeAckData"
+      },
+      "handler_method": null,
+      "aliases": []
+    },
+    "subscribe_error": {
+      "summary": "Subscription failure notification (server to client)",
+      "payload_schema": {
+        "$ref": "#/components/schemas/SubscribeErrorData"
+      },
+      "handler_method": null,
       "aliases": []
     },
     "unsubscribe": {
