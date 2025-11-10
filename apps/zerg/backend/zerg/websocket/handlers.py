@@ -336,65 +336,31 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
 
         for topic in subscribe_data.topics:
             try:
-                # Check for deprecated thread subscriptions
-                if topic.startswith("thread:"):
-                    from zerg.generated.ws_messages import SubscribeErrorData
-                    error_data = SubscribeErrorData(
-                        message_id=message_id,
-                        topics=[topic],
-                        error="Thread subscriptions no longer supported. All streaming is delivered to user:{user_id}",
-                        error_code="DEPRECATED"
-                    )
-                    error_envelope = Envelope.create(
-                        message_type="subscribe_error",
-                        topic="system",
-                        data=error_data.model_dump(),
-                        req_id=message_id
-                    )
-                    await send_to_client(client_id, error_envelope.model_dump(), topic="system")
-                    continue
+                prefix, topic_id = topic.split(":", 1)
 
-                # Route to appropriate handler using decorator registry
-                handled = await route_subscription(
-                    client_id=client_id,
-                    topic=topic,
-                    message_id=message_id,
-                    db=db
-                )
-
-                if not handled:
-                    # No handler found for this topic type
-                    topic_type = topic.split(":")[0]
-                    from zerg.generated.ws_messages import SubscribeErrorData
-                    error_data = SubscribeErrorData(
-                        message_id=message_id,
-                        topics=[topic],
-                        error=f"Unsupported topic type: {topic_type}",
-                        error_code="UNSUPPORTED_TOPIC"
+                # Simple routing - no fancy abstraction needed
+                if prefix == "agent":
+                    await handle_agent_subscription(client_id, int(topic_id), message_id, db)
+                elif prefix == "user":
+                    await handle_user_subscription(client_id, int(topic_id), message_id, db)
+                elif prefix == "workflow_execution":
+                    await handle_workflow_subscription(client_id, int(topic_id), message_id, db)
+                elif prefix == "ops" and topic_id == "events":
+                    await handle_ops_subscription(client_id, message_id, db)
+                elif prefix == "thread":
+                    await send_subscribe_error(
+                        client_id,
+                        message_id,
+                        "Thread subscriptions deprecated. Use user:{user_id}",
+                        [topic],
+                        send_to_client,
+                        "DEPRECATED",
                     )
-                    error_envelope = Envelope.create(
-                        message_type="subscribe_error",
-                        topic="system",
-                        data=error_data.model_dump(),
-                        req_id=message_id
-                    )
-                    await send_to_client(client_id, error_envelope.model_dump(), topic="system")
+                else:
+                    await send_subscribe_error(client_id, message_id, f"Unknown topic type: {prefix}", [topic], send_to_client, "UNKNOWN")
 
-            except ValueError as e:
-                from zerg.generated.ws_messages import SubscribeErrorData
-                error_data = SubscribeErrorData(
-                    message_id=message_id,
-                    topics=[topic],
-                    error=f"Invalid topic format: {str(e)}",
-                    error_code="INVALID_FORMAT"
-                )
-                error_envelope = Envelope.create(
-                    message_type="subscribe_error",
-                    topic="system",
-                    data=error_data.model_dump(),
-                    req_id=message_id
-                )
-                await send_to_client(client_id, error_envelope.model_dump(), topic="system")
+            except (ValueError, IndexError):
+                await send_subscribe_error(client_id, message_id, f"Invalid topic format: {topic}", [topic], send_to_client, "INVALID_FORMAT")
 
     except ValidationError as e:
         logger.error(f"Invalid subscription data: {e}")
