@@ -83,8 +83,9 @@ type ThreadMessageCreate = Schemas["ThreadMessageCreate"];
 type WorkflowCreate = Schemas["WorkflowCreate"];
 type CanvasUpdate = Schemas["CanvasUpdate"];
 
-export type AgentCreatePayload = Pick<AgentCreate, "name" | "system_instructions" | "task_instructions" | "model"> &
-  Partial<Omit<AgentCreate, "name" | "system_instructions" | "task_instructions" | "model">>;
+export type AgentCreatePayload = Pick<AgentCreate, "system_instructions" | "task_instructions" | "model"> &
+  Partial<Omit<AgentCreate, "system_instructions" | "task_instructions" | "model">>;
+// name removed - backend auto-generates "Agent #<id>"
 
 export type AgentUpdatePayload = AgentUpdate;
 
@@ -173,7 +174,7 @@ function computeApiBase(override?: string): ApiBaseConfig {
 
 const API_BASE = computeApiBase(apiBaseOverride);
 
-function buildUrl(path: string): string {
+export function buildUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
 
   if (API_BASE.absolute) {

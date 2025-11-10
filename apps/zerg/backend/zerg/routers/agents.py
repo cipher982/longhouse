@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter
 from fastapi import Body
 from fastapi import Depends
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Response
@@ -90,6 +91,29 @@ from zerg.dependencies.auth import get_current_user  # noqa: E402
 
 router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
 
+# Simple in-memory idempotency cache
+# Maps (idempotency_key, user_id) -> agent_id
+# For production, use Redis or database table
+IDEMPOTENCY_CACHE: dict[tuple[str, int], int] = {}
+
+
+def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Agent]:
+    """Check if this request was already processed."""
+    cache_key = (key, user_id)
+    if cache_key in IDEMPOTENCY_CACHE:
+        agent_id = IDEMPOTENCY_CACHE[cache_key]
+        agent = crud.get_agent(db, agent_id)
+        if agent:
+            logger.info(f"Idempotency: Returning existing agent {agent_id} for key {key}")
+            return agent
+    return None
+
+
+def _store_idempotency_cache(key: str, user_id: int, agent_id: int) -> None:
+    """Store successful agent creation in cache."""
+    cache_key = (key, user_id)
+    IDEMPOTENCY_CACHE[cache_key] = agent_id
+
 
 # ---------------------------------------------------------------------------
 # List / create
@@ -129,34 +153,37 @@ async def create_agent(
     agent: AgentCreate = Body(...),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
     _validate_model_or_400(agent.model)
     # Enforce role-based allowlist for non-admin users
     model_to_use = _enforce_model_allowlist_or_422(agent.model, current_user)
 
+    # Check idempotency cache to prevent double-creation
+    if idempotency_key:
+        cached_agent = _check_idempotency_cache(idempotency_key, current_user.id, db)
+        if cached_agent:
+            return cached_agent
+
     try:
-        return crud.create_agent(
+        created_agent = crud.create_agent(
             db=db,
             owner_id=current_user.id,
-            name=agent.name,
+            # name removed - backend auto-generates
             system_instructions=agent.system_instructions,
             task_instructions=agent.task_instructions,
             model=model_to_use,
             schedule=agent.schedule,
             config=agent.config,
         )
+
+        # Store in idempotency cache
+        if idempotency_key:
+            _store_idempotency_cache(idempotency_key, current_user.id, created_agent.id)
+
+        return created_agent
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except Exception as exc:
-        # Handle duplicate name constraint violations
-        from sqlalchemy.exc import IntegrityError
-
-        if isinstance(exc, IntegrityError) and "uq_agent_owner_name" in str(exc):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"You already have an agent named '{agent.name}'. Please choose a different name.",
-            ) from exc
-        raise
 
 
 @router.get("/{agent_id}", response_model=Agent)
