@@ -147,6 +147,16 @@ async def create_agent(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        # Handle duplicate name constraint violations
+        from sqlalchemy.exc import IntegrityError
+
+        if isinstance(exc, IntegrityError) and "uq_agent_owner_name" in str(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"You already have an agent named '{agent.name}'. Please choose a different name.",
+            ) from exc
+        raise
 
 
 @router.get("/{agent_id}", response_model=Agent)

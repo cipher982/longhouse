@@ -451,7 +451,7 @@ export default function DashboardPage() {
 
   const createAgentMutation = useMutation({
     mutationFn: async () => {
-      // Use temporary name - will be replaced with ID-based name after creation
+      // Backend will replace "New Agent" with "Agent #<id>" automatically
       return createAgent({
         name: "New Agent",
         system_instructions: "You are a helpful AI assistant.",
@@ -459,15 +459,7 @@ export default function DashboardPage() {
         model: "gpt-4o",
       });
     },
-    onSuccess: (createdAgent) => {
-      // Update the agent name to use sequential ID
-      queryClient.setQueryData<AgentSummary[]>(["agents", { scope }], (old) =>
-        old?.map((agent) =>
-          agent.id === createdAgent.id
-            ? { ...agent, name: `Agent #${createdAgent.id}` }
-            : agent
-        )
-      );
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });

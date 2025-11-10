@@ -120,6 +120,7 @@ def create_agent(
     """Create a new agent row and persist it.
 
     ``owner_id`` is **required** – every agent belongs to exactly one user.
+    If name is generic placeholder, it will be replaced with sequential ID.
     """
 
     # Validate cron expression if provided
@@ -140,6 +141,12 @@ def create_agent(
     db.add(db_agent)
     db.commit()
     db.refresh(db_agent)
+
+    # Replace generic placeholder name with ID-based name
+    if name == "New Agent":
+        db_agent.name = f"Agent #{db_agent.id}"
+        db.commit()
+        db.refresh(db_agent)
 
     # Force load relationships to avoid detached instance errors
     # This ensures they're available even after session closes
