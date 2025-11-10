@@ -34,6 +34,10 @@ channels:
         $ref: '#/components/messages/ErrorMessage'
       SubscribeMessage:
         $ref: '#/components/messages/SubscribeMessage'
+      SubscribeAckMessage:
+        $ref: '#/components/messages/SubscribeAckMessage'
+      SubscribeErrorMessage:
+        $ref: '#/components/messages/SubscribeErrorMessage'
       UnsubscribeMessage:
         $ref: '#/components/messages/UnsubscribeMessage'
 
@@ -189,6 +193,22 @@ components:
       payload:
         $ref: '#/components/schemas/SubscribeData'
       x-handler-method: handle_subscribe
+      x-aliases: []
+
+    SubscribeAckMessage:
+      name: subscribe_ack
+      summary: Subscription confirmation (server to client)
+      payload:
+        $ref: '#/components/schemas/SubscribeAckData'
+      x-handler-method: null
+      x-aliases: []
+
+    SubscribeErrorMessage:
+      name: subscribe_error
+      summary: Subscription failure notification (server to client)
+      payload:
+        $ref: '#/components/schemas/SubscribeErrorData'
+      x-handler-method: null
       x-aliases: []
 
     UnsubscribeMessage:
@@ -411,6 +431,42 @@ components:
           minItems: 1
         message_id:
           type: string
+
+    SubscribeAckData:
+      type: object
+      required: [message_id, topics]
+      properties:
+        message_id:
+          type: string
+          minLength: 1
+          description: Correlation ID matching the original subscribe request
+        topics:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: List of topics that were successfully subscribed
+
+    SubscribeErrorData:
+      type: object
+      required: [message_id, error]
+      properties:
+        message_id:
+          type: string
+          minLength: 1
+          description: Correlation ID matching the original subscribe request
+        topics:
+          type: array
+          items:
+            type: string
+          description: List of topics that failed to subscribe
+        error:
+          type: string
+          minLength: 1
+          description: Human-readable error message
+        error_code:
+          type: string
+          description: Machine-readable error code (e.g., NOT_FOUND, FORBIDDEN)
 
     UnsubscribeData:
       type: object

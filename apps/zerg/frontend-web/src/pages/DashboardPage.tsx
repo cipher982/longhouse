@@ -13,6 +13,7 @@ import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
+import type { WebSocketMessage, SubscribeAckMessage, SubscribeErrorMessage } from "../generated/ws-messages";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -72,14 +73,15 @@ export default function DashboardPage() {
 
   // WebSocket message handler must be defined before useWebSocket hook
   const handleWebSocketMessage = useCallback(
-    (message: { type?: string; topic?: string; data?: unknown; message_id?: string; [key: string]: unknown }) => {
+    (message: WebSocketMessage | { type: string; topic?: string; data?: any; message_id?: string }) => {
       if (!message || typeof message !== "object") {
         return;
       }
 
-      // Handle subscription acknowledgments
+      // Handle subscription acknowledgments (with type safety!)
       if (message.type === "subscribe_ack" || message.type === "subscribe_error") {
-        const messageId = typeof message.message_id === "string" ? message.message_id : "";
+        const messageData = (message as any).data || message;
+        const messageId = typeof messageData.message_id === "string" ? messageData.message_id : "";
         if (messageId && pendingSubscriptionsRef.current.has(messageId)) {
           const pending = pendingSubscriptionsRef.current.get(messageId);
           if (pending) {
