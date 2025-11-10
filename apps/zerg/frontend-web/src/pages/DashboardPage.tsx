@@ -2,13 +2,13 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Keybo
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  createAgent,
   fetchAgents,
   fetchAgentRuns,
   runAgent,
   type AgentRun,
   type AgentSummary,
 } from "../services/api";
+import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
@@ -449,18 +449,40 @@ export default function DashboardPage() {
     };
   }, []); // Empty deps - cleanup only runs on unmount
 
+  // Generate idempotency key per mutation to prevent double-creates
+  const idempotencyKeyRef = useRef<string | null>(null);
+
   const createAgentMutation = useMutation({
     mutationFn: async () => {
-      // Backend will replace "New Agent" with "Agent #<id>" automatically
-      return createAgent({
-        name: "New Agent",
-        system_instructions: "You are a helpful AI assistant.",
-        task_instructions: "Complete the given task.",
-        model: "gpt-4o",
+      // Generate fresh key for each create attempt
+      const key = `create-agent-${Date.now()}-${Math.random()}`;
+      idempotencyKeyRef.current = key;
+
+      // Backend auto-generates name as "Agent #<id>"
+      const response = await fetch(buildUrl("/agents"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("zerg_jwt")}`,
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify({
+          system_instructions: "You are a helpful AI assistant.",
+          task_instructions: "Complete the given task.",
+          model: "gpt-4o",
+        }),
       });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create agent: ${response.status}`);
+      }
+
+      return response.json();
     },
     onSuccess: () => {
+      // WebSocket will deliver the agent with real name
       queryClient.invalidateQueries({ queryKey: ["agents"] });
+      idempotencyKeyRef.current = null; // Reset for next creation
     },
   });
 

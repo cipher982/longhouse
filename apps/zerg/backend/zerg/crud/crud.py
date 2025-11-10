@@ -110,25 +110,30 @@ def create_agent(
     db: Session,
     *,
     owner_id: int,
-    name: str,
     system_instructions: str,
     task_instructions: str,
     model: str,
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
 ):
-    """Create a new agent row and persist it.
+    """Create a new agent with auto-generated sequential name.
 
     ``owner_id`` is **required** – every agent belongs to exactly one user.
-    If name is generic placeholder, it will be replaced with sequential ID.
+    Name is always auto-generated as "Agent #<id>" where <id> is the database primary key.
+    Users can rename via the update endpoint after creation.
     """
 
     # Validate cron expression if provided
     _validate_cron_or_raise(schedule)
 
+    # Use temporary unique name (required by NOT NULL constraint)
+    # Will be replaced with ID-based name after commit
+    from uuid import uuid4
+    temp_name = f"_temp_{uuid4().hex[:8]}"
+
     db_agent = Agent(
         owner_id=owner_id,
-        name=name,
+        name=temp_name,
         system_instructions=system_instructions,
         task_instructions=task_instructions,
         model=model,
@@ -142,11 +147,10 @@ def create_agent(
     db.commit()
     db.refresh(db_agent)
 
-    # Replace generic placeholder name with ID-based name
-    if name == "New Agent":
-        db_agent.name = f"Agent #{db_agent.id}"
-        db.commit()
-        db.refresh(db_agent)
+    # Set real name using database-assigned ID
+    db_agent.name = f"Agent #{db_agent.id}"
+    db.commit()
+    db.refresh(db_agent)
 
     # Force load relationships to avoid detached instance errors
     # This ensures they're available even after session closes

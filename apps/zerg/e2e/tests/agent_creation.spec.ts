@@ -44,38 +44,10 @@ test.describe('Agent Creation', () => {
     expect(names.size).toBe(3);  // All three names should be unique
   });
 
-  test('backend prevents duplicate agent names for same owner', async ({ request }) => {
-    // Create agent with specific name
-    const response1 = await request.post('/api/agents', {
-      data: {
-        name: 'Test Agent',
-        system_instructions: 'Test instructions',
-        task_instructions: 'Test task',
-        model: 'gpt-4o'
-      }
-    });
-    expect(response1.ok()).toBeTruthy();
-
-    // Try to create another agent with same name
-    const response2 = await request.post('/api/agents', {
-      data: {
-        name: 'Test Agent',
-        system_instructions: 'Different instructions',
-        task_instructions: 'Different task',
-        model: 'gpt-4o'
-      }
-    });
-
-    // Should fail with 400 or 409 (Conflict)
-    expect(response2.status()).toBeGreaterThanOrEqual(400);
-    expect(response2.status()).toBeLessThan(500);
-  });
-
-  test('replaces generic "New Agent" with ID-based name', async ({ request }) => {
-    // Create agent with generic name
+  test('backend auto-generates sequential ID-based names', async ({ request }) => {
+    // Create agent (no name field sent)
     const response = await request.post('/api/agents', {
       data: {
-        name: 'New Agent',
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
         model: 'gpt-4o'
@@ -85,8 +57,40 @@ test.describe('Agent Creation', () => {
     expect(response.ok()).toBeTruthy();
     const agent = await response.json();
 
-    // Should have been renamed to "Agent #<id>"
+    // Should have auto-generated name "Agent #<id>"
     expect(agent.name).toMatch(/^Agent #\d+$/);
     expect(agent.name).toBe(`Agent #${agent.id}`);
+  });
+
+  test('idempotency key prevents duplicate creation', async ({ request }) => {
+    const idempotencyKey = `test-${Date.now()}-${Math.random()}`;
+
+    // Create agent with idempotency key
+    const response1 = await request.post('/api/agents', {
+      headers: { 'Idempotency-Key': idempotencyKey },
+      data: {
+        system_instructions: 'Test instructions',
+        task_instructions: 'Test task',
+        model: 'gpt-4o'
+      }
+    });
+    expect(response1.ok()).toBeTruthy();
+    const agent1 = await response1.json();
+
+    // Retry with same idempotency key (simulates double-click)
+    const response2 = await request.post('/api/agents', {
+      headers: { 'Idempotency-Key': idempotencyKey },
+      data: {
+        system_instructions: 'Different instructions',
+        task_instructions: 'Different task',
+        model: 'gpt-4o'
+      }
+    });
+    expect(response2.ok()).toBeTruthy();
+    const agent2 = await response2.json();
+
+    // Should return the SAME agent (not create a new one)
+    expect(agent2.id).toBe(agent1.id);
+    expect(agent2.name).toBe(agent1.name);
   });
 });
