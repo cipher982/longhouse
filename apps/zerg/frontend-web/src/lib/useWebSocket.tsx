@@ -364,6 +364,13 @@ export function useWebSocket(
     };
   }, [disconnect]);
 
+  // Expose sendMessage for E2E testing of queue behavior
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).__TEST_WORKER_ID__ !== undefined) {
+      (window as any).__testSendMessage = sendMessage;
+    }
+  }, [sendMessage]);
+
   return {
     connectionStatus,
     sendMessage,
