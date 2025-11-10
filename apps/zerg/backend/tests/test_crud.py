@@ -71,7 +71,6 @@ def test_create_agent(db_session: Session):
     agent = create_agent(
         db=db_session,
         owner_id=owner.id,
-        name="New CRUD Agent",
         system_instructions="System instructions for testing",
         task_instructions="Testing CRUD operations",
         model="gpt-4o-mini",
@@ -80,7 +79,7 @@ def test_create_agent(db_session: Session):
     )
 
     assert agent.id is not None
-    assert agent.name == "New CRUD Agent"
+    assert agent.name == "New Agent"  # Auto-generated placeholder name
     assert agent.system_instructions == "System instructions for testing"
     assert agent.task_instructions == "Testing CRUD operations"
     assert agent.model == "gpt-4o-mini"
@@ -92,7 +91,7 @@ def test_create_agent(db_session: Session):
     db_agent = get_agent(db_session, agent.id)
     assert db_agent is not None
     assert db_agent.id == agent.id
-    assert db_agent.name == agent.name
+    assert db_agent.name == "New Agent"
 
 
 def test_update_agent(db_session: Session, sample_agent: Agent):

@@ -139,11 +139,6 @@ class Connector(Base):
 
 class Agent(Base):
     __tablename__ = "agents"
-    __table_args__ = (
-        # Prevent duplicate agent names for the same owner
-        # Different users can have agents with the same name
-        UniqueConstraint('owner_id', 'name', name='uq_agent_owner_name'),
-    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
