@@ -30,7 +30,6 @@ def test_read_agents(client: TestClient, sample_agent: Agent):
 def test_create_agent(client: TestClient):
     """Test the POST /api/agents endpoint"""
     agent_data = {
-        "name": "New Test Agent",
         "system_instructions": "System instructions for new test agent",
         "task_instructions": "This is a new test agent",
         "model": "gpt-4o",
@@ -39,7 +38,8 @@ def test_create_agent(client: TestClient):
     response = client.post("/api/agents", json=agent_data)
     assert response.status_code == 201
     created_agent = response.json()
-    assert created_agent["name"] == agent_data["name"]
+    # Backend auto-generates "New Agent" as placeholder
+    assert created_agent["name"] == "New Agent"
     assert created_agent["system_instructions"] == agent_data["system_instructions"]
     assert created_agent["task_instructions"] == agent_data["task_instructions"]
     assert created_agent["model"] == agent_data["model"]
@@ -51,7 +51,28 @@ def test_create_agent(client: TestClient):
     assert response.status_code == 200
     fetched_agent = response.json()
     assert fetched_agent["id"] == created_agent["id"]
-    assert fetched_agent["name"] == agent_data["name"]
+    assert fetched_agent["name"] == "New Agent"
+
+
+def test_create_and_rename_agent(client: TestClient):
+    """Test that user can rename agent after creation"""
+    # Create agent
+    agent_data = {
+        "system_instructions": "System instructions",
+        "task_instructions": "Task instructions",
+        "model": "gpt-4o",
+    }
+    response = client.post("/api/agents", json=agent_data)
+    assert response.status_code == 201
+    created_agent = response.json()
+    assert created_agent["name"] == "New Agent"
+
+    # Rename the agent
+    update_data = {"name": "My Custom Agent"}
+    response = client.put(f"/api/agents/{created_agent['id']}", json=update_data)
+    assert response.status_code == 200
+    updated_agent = response.json()
+    assert updated_agent["name"] == "My Custom Agent"
 
 
 def test_read_agent(client: TestClient, sample_agent: Agent):

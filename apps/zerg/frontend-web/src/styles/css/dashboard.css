@@ -469,6 +469,31 @@
 
 
 
+/* Inline name editing */
+.editable-name {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+}
+
+.editable-name:hover {
+  border-bottom-color: currentColor;
+}
+
+.inline-edit-input {
+  width: 100%;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+  background: var(--bg-dark);
+  color: var(--text-primary);
+}
+
+.inline-edit-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
 /* Empty-state */
 .empty-state {
     display: flex;

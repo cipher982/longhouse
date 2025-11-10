@@ -5,13 +5,14 @@ import {
   fetchAgents,
   fetchAgentRuns,
   runAgent,
+  updateAgent,
   type AgentRun,
   type AgentSummary,
 } from "../services/api";
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
-import { EditIcon, MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
+import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import type { WebSocketMessage } from "../generated/ws-messages";
 
@@ -54,6 +55,8 @@ export default function DashboardPage() {
   const [loadingRunIds, setLoadingRunIds] = useState<Set<number>>(new Set());
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
+  const [editingAgentId, setEditingAgentId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState<string>("");
 
   // WebSocket state - must be declared before useQuery to avoid reference errors
   const subscribedAgentIdsRef = useRef<Set<number>>(new Set());
@@ -487,6 +490,51 @@ export default function DashboardPage() {
     },
   });
 
+  // Delete agent mutation
+  const deleteAgentMutation = useMutation({
+    mutationFn: async (agentId: number) => {
+      const response = await fetch(buildUrl(`/agents/${agentId}`), {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("zerg_jwt")}`,
+        },
+      });
+      if (!response.ok) throw new Error("Delete failed");
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+
+  // Inline name editing handlers
+  function startEditingName(agentId: number, currentName: string) {
+    setEditingAgentId(agentId);
+    setEditingName(currentName);
+  }
+
+  async function saveNameAndExit(agentId: number) {
+    if (!editingName.trim()) {
+      // Don't allow empty names
+      return;
+    }
+
+    try {
+      await updateAgent(agentId, { name: editingName });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    } catch (error) {
+      console.error("Failed to rename:", error);
+    }
+
+    setEditingAgentId(null);
+    setEditingName("");
+  }
+
+  function cancelEditing() {
+    setEditingAgentId(null);
+    setEditingName("");
+  }
+
   const sortedRows: LegacyAgentRow[] = useMemo(() => {
     return sortAgents(agents, runsByAgent, sortConfig).map((agent) => ({
       agent,
@@ -597,7 +645,29 @@ export default function DashboardPage() {
                     onClick={() => toggleAgentRow(agent.id)}
                     onKeyDown={(event) => handleRowKeyDown(event, agent.id)}
                   >
-                    <td data-label="Name">{agent.name}</td>
+                    <td data-label="Name" onClick={(e) => e.stopPropagation()}>
+                      {editingAgentId === agent.id ? (
+                        <input
+                          className="inline-edit-input"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onBlur={() => saveNameAndExit(agent.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveNameAndExit(agent.id);
+                            if (e.key === "Escape") cancelEditing();
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <span
+                          className="editable-name"
+                          onClick={() => startEditingName(agent.id, agent.name)}
+                          title="Click to rename"
+                        >
+                          {agent.name}
+                        </span>
+                      )}
+                    </td>
                     {includeOwner && (
                       <td className="owner-cell" data-label="Owner">
                         {renderOwnerCell(agent)}
@@ -635,16 +705,6 @@ export default function DashboardPage() {
                           onClick={(event) => handleRunAgent(event, agent.id, agent.status)}
                         >
                           <PlayIcon />
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn edit-btn"
-                          data-testid={`edit-agent-${agent.id}`}
-                          title="Edit Agent"
-                          aria-label="Edit Agent"
-                          onClick={(event) => handleEditAgent(event, agent.id)}
-                        >
-                          <EditIcon />
                         </button>
                         <button
                           type="button"
@@ -847,11 +907,6 @@ export default function DashboardPage() {
     runAgentMutation.mutate(agentId);
   }
 
-  function handleEditAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number) {
-    event.stopPropagation();
-    dispatchDashboardEvent("edit", agentId);
-  }
-
   function handleChatAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, agentName: string) {
     event.stopPropagation();
     navigate(`/agent/${agentId}/thread/?name=${encodeURIComponent(agentName)}`);
@@ -868,7 +923,7 @@ export default function DashboardPage() {
     if (!confirmed) {
       return;
     }
-    dispatchDashboardEvent("delete", agentId);
+    deleteAgentMutation.mutate(agentId);
   }
 }
 
