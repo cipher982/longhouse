@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 import time
 from typing import Any
 from typing import Dict
@@ -20,8 +21,23 @@ from zerg.config import get_settings
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.generated.ws_messages import Envelope
+from zerg.metrics import websocket_run_update_latency_seconds
+from zerg.metrics import websocket_run_updates_total
+from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    """Parse ISO8601 string to datetime if possible."""
+
+    try:
+        sanitized = value.strip()
+        if sanitized.endswith("Z"):
+            sanitized = sanitized[:-1] + "+00:00"
+        return datetime.fromisoformat(sanitized)
+    except Exception:  # noqa: BLE001 - defensive parsing helper
+        return None
 
 
 class TopicConnectionManager:
@@ -524,6 +540,42 @@ class TopicConnectionManager:
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
         if "run_id" in clean_data:
             clean_data["id"] = clean_data.pop("run_id")
+
+        run_id = clean_data.get("id")
+        source_event = str(data.get("event_type") or "unknown")
+        status_value = str(clean_data.get("status") or "unknown")
+
+        websocket_run_updates_total.labels(status=status_value, source_event=source_event).inc()
+
+        elapsed_seconds: float | None = None
+        started_at = clean_data.get("started_at")
+        if isinstance(started_at, str):
+            started_dt = _parse_iso8601(started_at)
+            if started_dt is not None:
+                elapsed_seconds = max(0.0, (utc_now() - started_dt).total_seconds())
+        elif isinstance(clean_data.get("duration_ms"), (int, float)):
+            elapsed_seconds = max(0.0, float(clean_data["duration_ms"]) / 1000.0)
+
+        if elapsed_seconds is not None:
+            websocket_run_update_latency_seconds.observe(elapsed_seconds)
+
+        thread_id = clean_data.get("thread_id")
+        if thread_id is None:
+            logger.warning(
+                "run_update payload missing thread_id (agent=%s run=%s source=%s)",
+                agent_id,
+                run_id,
+                source_event,
+            )
+
+        logger.info(
+            "Broadcasting run_update (agent=%s run=%s status=%s thread=%s elapsed=%s)",
+            agent_id,
+            run_id,
+            status_value,
+            thread_id if thread_id is not None else "unknown",
+            f"{elapsed_seconds:.3f}s" if elapsed_seconds is not None else "n/a",
+        )
 
         serialized_data = jsonable_encoder(clean_data)
 
