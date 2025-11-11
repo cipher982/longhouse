@@ -83,7 +83,11 @@
   color: var(--text-primary);
 }
 
-.agents-table tr:hover {
+.agents-table tr.agent-row {
+  cursor: pointer;
+}
+
+.agents-table tr.agent-row:hover {
   background: rgba(255,255,255,0.04);
 }
 
@@ -173,6 +177,21 @@
   gap: var(--spacing-sm);
   flex-wrap: wrap;
   align-items: center;
+}
+
+.last-updated-label {
+  font-size: 13px;
+  color: var(--text-muted, #9aa0ac);
+  white-space: nowrap;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: rgba(255, 255, 255, 0.75);
+  animation: spin 0.8s linear infinite;
 }
 
 /* Search bar */
@@ -470,9 +489,15 @@
 
 
 /* Inline name editing */
+.name-cell {
+  position: relative;
+  z-index: 2;
+}
+
 .editable-name {
-  cursor: pointer;
+  cursor: text;
   border-bottom: 1px dashed transparent;
+  display: inline-block;
 }
 
 .editable-name:hover {

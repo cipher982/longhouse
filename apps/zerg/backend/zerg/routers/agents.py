@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 from typing import Any
 from typing import List
 from typing import Optional
@@ -24,12 +25,19 @@ from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.events.event_bus import event_bus
+from zerg.metrics import dashboard_snapshot_agents_returned
+from zerg.metrics import dashboard_snapshot_latency_seconds
+from zerg.metrics import dashboard_snapshot_requests_total
+from zerg.metrics import dashboard_snapshot_runs_returned
 from zerg.schemas.schemas import Agent
 from zerg.schemas.schemas import AgentCreate
 from zerg.schemas.schemas import AgentDetails
+from zerg.schemas.schemas import AgentRunsBundle
 from zerg.schemas.schemas import AgentUpdate
+from zerg.schemas.schemas import DashboardSnapshot
 from zerg.schemas.schemas import MessageCreate
 from zerg.schemas.schemas import MessageResponse
+from zerg.utils.time import utc_now_naive
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -97,6 +105,27 @@ router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
 IDEMPOTENCY_CACHE: dict[tuple[str, int], int] = {}
 
 
+def _get_agents_for_scope(
+    db: Session,
+    current_user,
+    scope: str,
+    *,
+    skip: int = 0,
+    limit: int = 100,
+):
+    if scope == "my":
+        return crud.get_agents(db, skip=skip, limit=limit, owner_id=current_user.id)
+
+    from zerg.dependencies.auth import AUTH_DISABLED  # local import to avoid cycle
+
+    if AUTH_DISABLED:
+        return crud.get_agents(db, skip=skip, limit=limit)
+
+    if getattr(current_user, "role", "USER") != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required for scope=all")
+    return crud.get_agents(db, skip=skip, limit=limit)
+
+
 def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Agent]:
     """Check if this request was already processed."""
     cache_key = (key, user_id)
@@ -130,20 +159,61 @@ def read_agents(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if scope == "my":
-        return crud.get_agents(db, skip=skip, limit=limit, owner_id=current_user.id)
+    return _get_agents_for_scope(db, current_user, scope, skip=skip, limit=limit)
 
-    from zerg.dependencies.auth import AUTH_DISABLED  # local import to avoid cycle
 
-    if AUTH_DISABLED:
-        # Dev/test mode – return entire list regardless of role so the SPA
-        # dashboard (which always requests *scope=all*) continues to work
-        # without requiring admin privileges or a bearer token.
-        return crud.get_agents(db, skip=skip, limit=limit)
+@router.get("/dashboard", response_model=DashboardSnapshot)
+def read_dashboard_snapshot(
+    *,
+    scope: str = Query("my", pattern="^(my|all)$"),
+    runs_limit: int = Query(50, ge=0, le=500),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    start = perf_counter()
+    status_label = "success"
+    agents: List[Agent] = []
+    bundles: List[AgentRunsBundle] = []
+    total_runs = 0
 
-    if getattr(current_user, "role", "USER") != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required for scope=all")
-    return crud.get_agents(db, skip=skip, limit=limit)
+    try:
+        agents = _get_agents_for_scope(db, current_user, scope, skip=skip, limit=limit)
+
+        if runs_limit > 0:
+            for agent in agents:
+                runs = crud.list_runs(db, agent.id, limit=runs_limit)
+                bundles.append(AgentRunsBundle(agent_id=agent.id, runs=runs))
+        else:
+            bundles = [AgentRunsBundle(agent_id=agent.id, runs=[]) for agent in agents]
+
+        total_runs = sum(len(bundle.runs) for bundle in bundles)
+
+        logger.info(
+            "Dashboard snapshot fetched (scope=%s, runs_limit=%s, agents=%s, total_runs=%s)",
+            scope,
+            runs_limit,
+            len(agents),
+            total_runs,
+        )
+
+        return DashboardSnapshot(
+            scope=scope,
+            fetched_at=utc_now_naive(),
+            runs_limit=runs_limit,
+            agents=agents,
+            runs=bundles,
+        )
+    except Exception:
+        status_label = "error"
+        raise
+    finally:
+        duration = perf_counter() - start
+        dashboard_snapshot_requests_total.labels(scope=scope, status=status_label).inc()
+        dashboard_snapshot_latency_seconds.observe(duration)
+        dashboard_snapshot_agents_returned.observe(float(len(agents)))
+        dashboard_snapshot_runs_returned.observe(float(total_runs))
 
 
 @router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)

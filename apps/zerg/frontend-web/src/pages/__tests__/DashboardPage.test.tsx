@@ -6,18 +6,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import DashboardPage from "../DashboardPage";
 import {
-  fetchAgents,
+  fetchDashboardSnapshot,
   createAgent,
-  fetchAgentRuns,
   runAgent,
   type AgentSummary,
   type AgentRun,
+  type DashboardSnapshot,
 } from "../../services/api";
 
 vi.mock("../../services/api", () => ({
-  fetchAgents: vi.fn(),
+  fetchDashboardSnapshot: vi.fn(),
   createAgent: vi.fn(),
-  fetchAgentRuns: vi.fn(),
   resetAgent: vi.fn(),
   runAgent: vi.fn(),
 }));
@@ -53,9 +52,8 @@ function buildAgent(
 }
 
 describe("DashboardPage", () => {
-  const fetchAgentsMock = fetchAgents as unknown as vi.MockedFunction<typeof fetchAgents>;
+  const fetchDashboardSnapshotMock = fetchDashboardSnapshot as unknown as vi.MockedFunction<typeof fetchDashboardSnapshot>;
   const createAgentMock = createAgent as unknown as vi.MockedFunction<typeof createAgent>;
-  const fetchAgentRunsMock = fetchAgentRuns as unknown as vi.MockedFunction<typeof fetchAgentRuns>;
   const runAgentMock = runAgent as unknown as vi.MockedFunction<typeof runAgent>;
   const mockSockets: MockWebSocketInstance[] = [];
 
@@ -87,11 +85,9 @@ describe("DashboardPage", () => {
 
   beforeEach(() => {
     mockSockets.length = 0;
-    fetchAgentsMock.mockReset();
+    fetchDashboardSnapshotMock.mockReset();
     createAgentMock.mockReset();
-    fetchAgentRunsMock.mockReset();
     runAgentMock.mockReset();
-    fetchAgentRunsMock.mockResolvedValue([]);
     runAgentMock.mockResolvedValue(undefined);
   });
 
@@ -101,9 +97,19 @@ describe("DashboardPage", () => {
   });
 
   function renderDashboard(initialAgents: AgentSummary[], runsByAgent?: Record<number, AgentRun[]>) {
-    fetchAgentsMock.mockResolvedValue(initialAgents);
     const runsLookup = runsByAgent ?? {};
-    fetchAgentRunsMock.mockImplementation(async (agentId: number) => runsLookup[agentId] ?? []);
+    const snapshot: DashboardSnapshot = {
+      scope: "my",
+      fetchedAt: new Date().toISOString(),
+      runsLimit: 50,
+      agents: initialAgents,
+      runs: initialAgents.map((agent) => ({
+        agentId: agent.id,
+        runs: runsLookup[agent.id] ?? [],
+      })),
+    };
+
+    fetchDashboardSnapshotMock.mockResolvedValue(snapshot);
 
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -262,7 +268,7 @@ describe("DashboardPage", () => {
     const row = await screen.findByRole("row", { name: /Runner/ });
     await userEvent.click(row);
 
-    await waitFor(() => expect(fetchAgentRunsMock).toHaveBeenCalledWith(1, 50));
+    await waitFor(() => expect(fetchDashboardSnapshotMock).toHaveBeenCalledTimes(1));
 
     await screen.findByText("Show all (6)");
     const tables = screen.getAllByRole("table");
@@ -305,6 +311,20 @@ describe("DashboardPage", () => {
       const rowOrder = Array.from(document.querySelectorAll<HTMLTableRowElement>("tr[data-agent-id]")).map((row) => row.getAttribute("data-agent-id")).slice(0, agents.length);
       expect(rowOrder).toEqual(["1", "2"]);
     });
+  });
+
+  test("shows last updated timestamp", async () => {
+    const agent = buildAgent({
+      id: 99,
+      name: "Refreshable",
+      status: "idle",
+      owner_id: 1,
+    });
+
+    renderDashboard([agent]);
+
+    const lastUpdated = await screen.findByTestId("dashboard-last-updated");
+    expect(lastUpdated.textContent).toMatch(/Last updated:/);
   });
 
   test("applies agent status updates from websocket events", async () => {
