@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str = "manual") -> ThreadModel:
+async def execute_agent_task(
+    db: Session, agent: AgentModel, *, thread_type: str = "manual", trigger: str | None = None
+) -> ThreadModel:
     """Run *agent.task_instructions* exactly once and return the created thread.
 
     Parameters
@@ -57,6 +59,9 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
     thread_type
         One of ``"manual"`` (▶ Play button) or ``"scheduled"`` (cron).  The
         value is persisted on the thread row for analytics.
+    trigger
+        Optional explicit trigger type. If not provided, inferred from thread_type.
+        One of: "manual", "schedule", "chat", "webhook", "api".
 
     Raises
     ------
@@ -135,11 +140,13 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
             # ------------------------------------------------------------------
             # Persist an *AgentRun* row so dashboards can display progress.
             # ------------------------------------------------------------------
+            # Use explicit trigger if provided, otherwise infer from thread_type
+            run_trigger = trigger if trigger else (thread_type if thread_type in {"manual", "schedule"} else "api")
             run_row = crud.create_run(
                 db,
                 agent_id=agent.id,
                 thread_id=thread.id,
-                trigger=thread_type if thread_type in {"manual", "schedule"} else "api",
+                trigger=run_trigger,
                 status="queued",
             )
 

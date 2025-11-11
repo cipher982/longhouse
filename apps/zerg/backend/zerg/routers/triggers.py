@@ -189,7 +189,7 @@ async def fire_trigger_event(
         pass
 
     # 5) Fire agent immediately (non-blocking)
-    await scheduler_service.run_agent_task(trg.agent_id)  # type: ignore[arg-type]
+    await scheduler_service.run_agent_task(trg.agent_id, trigger="webhook")  # type: ignore[arg-type]
 
     return {"status": "accepted"}
 

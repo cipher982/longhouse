@@ -200,7 +200,7 @@ class SchedulerService:
             if agent:
                 agent.next_run_at = None
 
-    async def run_agent_task(self, agent_id: int):
+    async def run_agent_task(self, agent_id: int, trigger: str = "schedule"):
         """
         Execute an agent's task.
 
@@ -210,6 +210,13 @@ class SchedulerService:
         - Loading the agent
         - Creating a new thread for this run using the execute_task method
         - Running the agent's task instructions
+
+        Parameters
+        ----------
+        agent_id
+            The ID of the agent to run.
+        trigger
+            The trigger type: "schedule" for cron jobs, "webhook" for webhook triggers.
         """
         try:
             with db_session(self.session_factory) as db:
@@ -222,10 +229,10 @@ class SchedulerService:
                 # Delegate to shared helper (handles status flips & events).
                 # Scheduler runs silently skip if agent is already running.
                 # ------------------------------------------------------------------
-                logger.info("Running scheduled task for agent %s", agent_id)
-                # Use "schedule" to match RunTrigger.schedule and CRUD trigger logic
+                logger.info("Running task for agent %s with trigger=%s", agent_id, trigger)
+                # Pass explicit trigger type to distinguish schedule vs webhook
                 try:
-                    thread = await execute_agent_task(db, agent, thread_type="schedule")
+                    thread = await execute_agent_task(db, agent, thread_type="schedule", trigger=trigger)
                 except ValueError as exc:
                     if "already running" in str(exc).lower():
                         logger.info("Skipping scheduled run for agent %s - already running", agent_id)
