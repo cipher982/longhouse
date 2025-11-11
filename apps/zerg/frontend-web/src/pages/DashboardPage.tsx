@@ -386,6 +386,21 @@ export default function DashboardPage() {
   }, [dashboardData]);
 
   const runsDataLoading = isLoading && !dashboardData;
+  const lastUpdatedDate = useMemo(() => {
+    if (!dashboardData?.fetchedAt) {
+      return null;
+    }
+    const parsed = new Date(dashboardData.fetchedAt);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [dashboardData?.fetchedAt]);
+  const lastUpdatedAbsolute = lastUpdatedDate
+    ? lastUpdatedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : null;
+  const lastUpdatedRelative = lastUpdatedDate ? formatRelativeTime(lastUpdatedDate) : null;
+
+  const handleManualRefresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
+  }, [dashboardQueryKey, queryClient]);
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
@@ -701,6 +716,25 @@ export default function DashboardPage() {
             </label>
           </div>
           <div className="button-container">
+            {lastUpdatedAbsolute && (
+              <span
+                className="last-updated-label"
+                title={lastUpdatedDate ? lastUpdatedDate.toLocaleString() : undefined}
+                data-testid="dashboard-last-updated"
+              >
+                Last updated: {lastUpdatedAbsolute}
+                {lastUpdatedRelative ? ` (${lastUpdatedRelative})` : ""}
+                {isFetching && !isLoading ? " – refreshing…" : ""}
+              </span>
+            )}
+            <button
+              type="button"
+              className={`refresh-button${isFetching ? " loading" : ""}`}
+              onClick={handleManualRefresh}
+              disabled={isFetching}
+            >
+              {isFetching ? <span className="spinner" /> : "Refresh"}
+            </button>
             <button
               id="create-agent-button"
               type="button"
@@ -1234,6 +1268,23 @@ function formatCost(cost?: number | null): string {
     return `$${cost.toFixed(3)}`;
   }
   return `$${cost.toFixed(4)}`;
+}
+
+function formatRelativeTime(date: Date): string {
+  const diffSeconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (diffSeconds < 60) {
+    return `${diffSeconds}s ago`;
+  }
+  const diffMinutes = Math.round(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+  const diffDays = Math.round(diffHours / 24);
+  return `${diffDays}d ago`;
 }
 
 function formatRunStatusIcon(status: AgentRun["status"]): string {
