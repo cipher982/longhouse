@@ -386,6 +386,7 @@ export default function DashboardPage() {
   }, [dashboardData]);
 
   const runsDataLoading = isLoading && !dashboardData;
+  const [relativeClockTick, setRelativeClockTick] = useState(0);
   const lastUpdatedDate = useMemo(() => {
     if (!dashboardData?.fetchedAt) {
       return null;
@@ -396,11 +397,26 @@ export default function DashboardPage() {
   const lastUpdatedAbsolute = lastUpdatedDate
     ? lastUpdatedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : null;
-  const lastUpdatedRelative = lastUpdatedDate ? formatRelativeTime(lastUpdatedDate) : null;
+  const lastUpdatedRelative = useMemo(
+    () => (lastUpdatedDate ? formatRelativeTime(lastUpdatedDate) : null),
+    [lastUpdatedDate, relativeClockTick]
+  );
 
   const handleManualRefresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
   }, [dashboardQueryKey, queryClient]);
+
+  useEffect(() => {
+    if (!lastUpdatedDate) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setRelativeClockTick((tick) => tick + 1);
+    }, 30_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [lastUpdatedDate]);
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
