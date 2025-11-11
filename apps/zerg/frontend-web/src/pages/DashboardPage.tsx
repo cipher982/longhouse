@@ -402,10 +402,6 @@ export default function DashboardPage() {
     [lastUpdatedDate, relativeClockTick]
   );
 
-  const handleManualRefresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
-  }, [dashboardQueryKey, queryClient]);
-
   useEffect(() => {
     if (!lastUpdatedDate) {
       return;
@@ -740,17 +736,8 @@ export default function DashboardPage() {
               >
                 Last updated: {lastUpdatedAbsolute}
                 {lastUpdatedRelative ? ` (${lastUpdatedRelative})` : ""}
-                {isFetching && !isLoading ? " – refreshing…" : ""}
               </span>
             )}
-            <button
-              type="button"
-              className={`refresh-button${isFetching ? " loading" : ""}`}
-              onClick={handleManualRefresh}
-              disabled={isFetching}
-            >
-              {isFetching ? <span className="spinner" /> : "Refresh"}
-            </button>
             <button
               id="create-agent-button"
               type="button"
