@@ -292,7 +292,7 @@ async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user
 
         # Execute the agent turn and record run history/events
         created_rows = await execute_thread_run_with_history(
-            db=db, agent=agent, thread=thread, runner=runner, trigger="api"
+            db=db, agent=agent, thread=thread, runner=runner, trigger="chat"
         )
 
         # We maintain a single *stream* sequence for the entire agent turn so the
