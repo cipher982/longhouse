@@ -83,7 +83,11 @@
   color: var(--text-primary);
 }
 
-.agents-table tr:hover {
+.agents-table tr.agent-row {
+  cursor: pointer;
+}
+
+.agents-table tr.agent-row:hover {
   background: rgba(255,255,255,0.04);
 }
 
@@ -485,9 +489,15 @@
 
 
 /* Inline name editing */
+.name-cell {
+  position: relative;
+  z-index: 2;
+}
+
 .editable-name {
-  cursor: pointer;
+  cursor: text;
   border-bottom: 1px dashed transparent;
+  display: inline-block;
 }
 
 .editable-name:hover {

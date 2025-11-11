@@ -788,12 +788,12 @@ export default function DashboardPage() {
                   <tr
                     data-agent-id={agent.id}
                     aria-expanded={isExpanded ? "true" : "false"}
-                    className={agent.status === "error" ? "error-row" : undefined}
+                    className={`agent-row ${agent.status === "error" ? "error-row" : ""}`}
                     tabIndex={0}
                     onClick={() => toggleAgentRow(agent.id)}
                     onKeyDown={(event) => handleRowKeyDown(event, agent.id)}
                   >
-                    <td data-label="Name" onClick={(e) => e.stopPropagation()}>
+                    <td data-label="Name" className="name-cell">
                       {editingAgentId === agent.id ? (
                         <input
                           className="inline-edit-input"
@@ -811,6 +811,7 @@ export default function DashboardPage() {
                             }
                           }}
                           onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
                           autoFocus
                         />
                       ) : (
