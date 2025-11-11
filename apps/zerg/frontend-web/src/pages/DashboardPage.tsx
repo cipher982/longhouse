@@ -2,12 +2,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Keybo
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
-  fetchAgents,
-  fetchAgentRuns,
+  fetchDashboardSnapshot,
   runAgent,
   updateAgent,
   type AgentRun,
   type AgentSummary,
+  type DashboardSnapshot,
 } from "../services/api";
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
@@ -43,6 +43,7 @@ const NBSP = "\u00A0";
 
 const STORAGE_KEY_SORT = "dashboard_sort_key";
 const STORAGE_KEY_ASC = "dashboard_sort_asc";
+const RUNS_LIMIT = 50;
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -51,8 +52,7 @@ export default function DashboardPage() {
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedAgentId, setExpandedAgentId] = useState<number | null>(null);
-  const [runsByAgent, setRunsByAgent] = useState<AgentRunsState>({});
-  const [loadingRunIds, setLoadingRunIds] = useState<Set<number>>(new Set());
+  const dashboardQueryKey = useMemo(() => ["dashboard", scope, RUNS_LIMIT] as const, [scope]);
   const [expandedRunHistory, setExpandedRunHistory] = useState<Set<number>>(new Set());
   const [settingsAgentId, setSettingsAgentId] = useState<number | null>(null);
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null);
@@ -74,6 +74,18 @@ export default function DashboardPage() {
     return `dashboard-${Date.now()}-${messageIdCounterRef.current}`;
   }, []);
 
+  const applyDashboardUpdate = useCallback(
+    (updater: (current: DashboardSnapshot) => DashboardSnapshot) => {
+      queryClient.setQueryData<DashboardSnapshot>(dashboardQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
+        return updater(current);
+      });
+    },
+    [dashboardQueryKey, queryClient]
+  );
+
   // WebSocket message handler must be defined before useWebSocket hook
   const handleWebSocketMessage = useCallback(
     (message: WebSocketMessage | { type: string; topic?: string; data?: any; message_id?: string }) => {
@@ -81,7 +93,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // Handle subscription acknowledgments (with type safety!)
       if (message.type === "subscribe_ack" || message.type === "subscribe_error") {
         const messageData = (message as any).data || message;
         const messageId = typeof messageData.message_id === "string" ? messageData.message_id : "";
@@ -92,12 +103,10 @@ export default function DashboardPage() {
             pendingSubscriptionsRef.current.delete(messageId);
 
             if (message.type === "subscribe_ack") {
-              // Success: mark these agents as subscribed
               pending.agentIds.forEach((agentId) => {
                 subscribedAgentIdsRef.current.add(agentId);
               });
             } else {
-              // Error: don't mark as subscribed, trigger retry by incrementing token
               console.error("[WS] Subscription failed for topics:", pending.topics);
               setWsReconnectToken((token) => token + 1);
             }
@@ -117,17 +126,14 @@ export default function DashboardPage() {
         return;
       }
 
-      // Safely cast data payload with runtime check
-      const dataPayload = typeof message.data === "object" && message.data !== null
-        ? (message.data as Record<string, unknown>)
-        : {};
+      const dataPayload =
+        typeof message.data === "object" && message.data !== null ? (message.data as Record<string, unknown>) : {};
       const eventType = message.type;
 
       if (eventType === "agent_state" || eventType === "agent_updated") {
-        // Runtime validation for status to prevent invalid values
         const validStatuses = ["idle", "running", "processing", "error"] as const;
         const statusValue =
-          typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as typeof validStatuses[number])
+          typeof dataPayload.status === "string" && validStatuses.includes(dataPayload.status as (typeof validStatuses)[number])
             ? (dataPayload.status as AgentSummary["status"])
             : undefined;
         const lastRunAtValue = typeof dataPayload.last_run_at === "string" ? dataPayload.last_run_at : undefined;
@@ -137,13 +143,9 @@ export default function DashboardPage() {
             ? (dataPayload.last_error as string | null)
             : undefined;
 
-        queryClient.setQueryData<AgentSummary[]>(["agents", { scope }], (current) => {
-          if (!current) {
-            return current;
-          }
-
+        applyDashboardUpdate((current) => {
           let changed = false;
-          const updated = current.map((agent) => {
+          const nextAgents = current.agents.map((agent) => {
             if (agent.id !== agentId) {
               return agent;
             }
@@ -155,11 +157,27 @@ export default function DashboardPage() {
               next_run_at: nextRunAtValue ?? agent.next_run_at,
               last_error: lastErrorValue !== undefined ? lastErrorValue : agent.last_error,
             };
-            changed = true;
-            return nextAgent;
+
+            if (
+              nextAgent.status !== agent.status ||
+              nextAgent.last_run_at !== agent.last_run_at ||
+              nextAgent.next_run_at !== agent.next_run_at ||
+              nextAgent.last_error !== agent.last_error
+            ) {
+              changed = true;
+              return nextAgent;
+            }
+            return agent;
           });
 
-          return changed ? updated : current;
+          if (!changed) {
+            return current;
+          }
+
+          return {
+            ...current,
+            agents: nextAgents,
+          };
         });
 
         return;
@@ -172,58 +190,154 @@ export default function DashboardPage() {
           return;
         }
 
-        setRunsByAgent((prev) => {
-          const existingRuns = prev[agentId];
-          if (!existingRuns) {
-            return prev;
+        const threadId =
+          typeof dataPayload.thread_id === "number" ? (dataPayload.thread_id as number) : undefined;
+
+        applyDashboardUpdate((current) => {
+          const runsBundles = current.runs.slice();
+          let bundleIndex = runsBundles.findIndex((bundle) => bundle.agentId === agentId);
+          let runsChanged = false;
+
+          if (bundleIndex === -1) {
+            runsBundles.push({ agentId, runs: [] });
+            bundleIndex = runsBundles.length - 1;
+            runsChanged = true;
           }
 
-          const index = existingRuns.findIndex((run) => run.id === runId);
-          if (index === -1) {
-            return prev;
+          const targetBundle = runsBundles[bundleIndex];
+          const existingRuns = targetBundle.runs ?? [];
+          const existingIndex = existingRuns.findIndex((run) => run.id === runId);
+          let nextRuns = existingRuns;
+
+          if (existingIndex === -1) {
+            if (threadId === undefined) {
+              return current;
+            }
+
+            const newRun: AgentRun = {
+              id: runId,
+              agent_id: agentId,
+              thread_id: threadId,
+              status:
+                typeof dataPayload.status === "string"
+                  ? (dataPayload.status as AgentRun["status"])
+                  : "running",
+              trigger:
+                typeof dataPayload.trigger === "string"
+                  ? (dataPayload.trigger as AgentRun["trigger"])
+                  : "manual",
+              started_at: typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : null,
+              finished_at: typeof dataPayload.finished_at === "string" ? (dataPayload.finished_at as string) : null,
+              duration_ms: typeof dataPayload.duration_ms === "number" ? (dataPayload.duration_ms as number) : null,
+              total_tokens: typeof dataPayload.total_tokens === "number" ? (dataPayload.total_tokens as number) : null,
+              total_cost_usd:
+                typeof dataPayload.total_cost_usd === "number" ? (dataPayload.total_cost_usd as number) : null,
+              error:
+                dataPayload.error === undefined
+                  ? null
+                  : (dataPayload.error as string | null) ?? null,
+            };
+
+            nextRuns = [newRun, ...existingRuns];
+            if (nextRuns.length > current.runsLimit) {
+              nextRuns = nextRuns.slice(0, current.runsLimit);
+            }
+            runsChanged = true;
+          } else {
+            const previousRun = existingRuns[existingIndex];
+            const updatedRun: AgentRun = {
+              ...previousRun,
+              status:
+                typeof dataPayload.status === "string"
+                  ? (dataPayload.status as AgentRun["status"])
+                  : previousRun.status,
+              started_at:
+                typeof dataPayload.started_at === "string"
+                  ? (dataPayload.started_at as AgentRun["started_at"])
+                  : previousRun.started_at,
+              finished_at:
+                typeof dataPayload.finished_at === "string"
+                  ? (dataPayload.finished_at as AgentRun["finished_at"])
+                  : previousRun.finished_at,
+              duration_ms:
+                typeof dataPayload.duration_ms === "number"
+                  ? (dataPayload.duration_ms as AgentRun["duration_ms"])
+                  : previousRun.duration_ms,
+              total_tokens:
+                typeof dataPayload.total_tokens === "number"
+                  ? (dataPayload.total_tokens as AgentRun["total_tokens"])
+                  : previousRun.total_tokens,
+              total_cost_usd:
+                typeof dataPayload.total_cost_usd === "number"
+                  ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
+                  : previousRun.total_cost_usd,
+              error:
+                dataPayload.error === undefined
+                  ? previousRun.error
+                  : ((dataPayload.error as string | null) ?? null),
+            };
+
+            const hasRunDiff =
+              updatedRun.status !== previousRun.status ||
+              updatedRun.started_at !== previousRun.started_at ||
+              updatedRun.finished_at !== previousRun.finished_at ||
+              updatedRun.duration_ms !== previousRun.duration_ms ||
+              updatedRun.total_tokens !== previousRun.total_tokens ||
+              updatedRun.total_cost_usd !== previousRun.total_cost_usd ||
+              updatedRun.error !== previousRun.error;
+
+            if (hasRunDiff) {
+              nextRuns = [...existingRuns];
+              nextRuns[existingIndex] = updatedRun;
+              runsChanged = true;
+            }
           }
 
-          const nextRuns = [...existingRuns];
-          nextRuns[index] = {
-            ...nextRuns[index],
-            status:
+          if (runsChanged) {
+            runsBundles[bundleIndex] = {
+              agentId,
+              runs: nextRuns,
+            };
+          }
+
+          let agentsChanged = false;
+          const updatedAgents = current.agents.map((agent) => {
+            if (agent.id !== agentId) {
+              return agent;
+            }
+
+            const statusValue =
               typeof dataPayload.status === "string"
-                ? (dataPayload.status as AgentRun["status"])
-                : nextRuns[index].status,
-            started_at:
-              typeof dataPayload.started_at === "string"
-                ? (dataPayload.started_at as AgentRun["started_at"])
-                : nextRuns[index].started_at,
-            finished_at:
-              typeof dataPayload.finished_at === "string"
-                ? (dataPayload.finished_at as AgentRun["finished_at"])
-                : nextRuns[index].finished_at,
-            duration_ms:
-              typeof dataPayload.duration_ms === "number"
-                ? (dataPayload.duration_ms as AgentRun["duration_ms"])
-                : nextRuns[index].duration_ms,
-            total_tokens:
-              typeof dataPayload.total_tokens === "number"
-                ? (dataPayload.total_tokens as AgentRun["total_tokens"])
-                : nextRuns[index].total_tokens,
-            total_cost_usd:
-              typeof dataPayload.total_cost_usd === "number"
-                ? (dataPayload.total_cost_usd as AgentRun["total_cost_usd"])
-                : nextRuns[index].total_cost_usd,
-            error:
-              dataPayload.error === undefined
-                ? nextRuns[index].error
-                : ((dataPayload.error as string | null) ?? null),
-          };
+                ? (dataPayload.status as AgentSummary["status"])
+                : agent.status;
+            const lastRunValue =
+              typeof dataPayload.started_at === "string" ? (dataPayload.started_at as string) : agent.last_run_at;
+
+            if (statusValue === agent.status && lastRunValue === agent.last_run_at) {
+              return agent;
+            }
+
+            agentsChanged = true;
+            return {
+              ...agent,
+              status: statusValue,
+              last_run_at: lastRunValue,
+            };
+          });
+
+          if (!runsChanged && !agentsChanged) {
+            return current;
+          }
 
           return {
-            ...prev,
-            [agentId]: nextRuns,
+            ...current,
+            agents: agentsChanged ? updatedAgents : current.agents,
+            runs: runsChanged ? runsBundles : current.runs,
           };
         });
       }
     },
-    [queryClient, scope]
+    [applyDashboardUpdate]
   );
 
   const { connectionStatus, sendMessage } = useWebSocket(isAuthenticated, {
@@ -239,16 +353,39 @@ export default function DashboardPage() {
     },
   });
 
-  // Query for agent list - uses connectionStatus to adapt polling
-  const { data, isLoading, error } = useQuery<AgentSummary[]>({
-    queryKey: ["agents", { scope }],
-    queryFn: () => fetchAgents({ scope }),
-    // Disable polling when WebSocket is connected (WebSocket provides real-time updates)
-    // Only poll when disconnected to maintain basic UI updates
+  const {
+    data: dashboardData,
+    isLoading,
+    isFetching,
+    error,
+  } = useQuery<DashboardSnapshot>({
+    queryKey: dashboardQueryKey,
+    queryFn: () => fetchDashboardSnapshot({ scope, runsLimit: RUNS_LIMIT }),
     refetchInterval: connectionStatus === ConnectionStatus.CONNECTED ? false : 2000,
   });
 
-  const agents: AgentSummary[] = useMemo(() => data ?? [], [data]);
+  const agents: AgentSummary[] = useMemo(() => dashboardData?.agents ?? [], [dashboardData]);
+
+  const runsByAgent: AgentRunsState = useMemo(() => {
+    if (!dashboardData) {
+      return {};
+    }
+
+    const lookup: AgentRunsState = {};
+    for (const bundle of dashboardData.runs) {
+      lookup[bundle.agentId] = bundle.runs;
+    }
+
+    for (const agent of dashboardData.agents) {
+      if (!lookup[agent.id]) {
+        lookup[agent.id] = [];
+      }
+    }
+
+    return lookup;
+  }, [dashboardData]);
+
+  const runsDataLoading = isLoading && !dashboardData;
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
@@ -259,34 +396,32 @@ export default function DashboardPage() {
   const runAgentMutation = useMutation({
     mutationFn: runAgent,
     onMutate: async (agentId: number) => {
-      // Cancel any outgoing refetches to avoid race conditions
-      await queryClient.cancelQueries({ queryKey: ["agents", { scope }] });
+      await queryClient.cancelQueries({ queryKey: dashboardQueryKey });
 
-      // Snapshot the previous value for potential rollback
-      const previousAgents = queryClient.getQueryData<AgentSummary[]>(["agents", { scope }]);
+      const previousSnapshot = queryClient.getQueryData<DashboardSnapshot>(dashboardQueryKey);
 
-      // Optimistically update to "running" for instant UI feedback
-      queryClient.setQueryData<AgentSummary[]>(["agents", { scope }], (old) =>
-        old?.map((agent) =>
-          agent.id === agentId
-            ? { ...agent, status: "running" as const }
-            : agent
-        )
-      );
+      queryClient.setQueryData<DashboardSnapshot>(dashboardQueryKey, (current) => {
+        if (!current) {
+          return current;
+        }
 
-      // Return context for rollback
-      return { previousAgents };
+        return {
+          ...current,
+          agents: current.agents.map((agent) =>
+            agent.id === agentId ? { ...agent, status: "running" as const } : agent
+          ),
+        };
+      });
+
+      return { previousSnapshot };
     },
     onError: (err: Error, agentId: number, context) => {
-      // Rollback to previous state on error
-      if (context?.previousAgents) {
-        queryClient.setQueryData(["agents", { scope }], context.previousAgents);
+      if (context?.previousSnapshot) {
+        queryClient.setQueryData(dashboardQueryKey, context.previousSnapshot);
       }
       console.error("Failed to run agent:", err);
     },
     onSettled: (_, __, agentId) => {
-      // Trust optimistic update and WebSocket for state
-      // No refetch - would cause race condition and flicker
       dispatchDashboardEvent("run", agentId);
     },
   });
@@ -315,30 +450,6 @@ export default function DashboardPage() {
     }
     setExpandedAgentId(null);
   }, [agents, expandedAgentId]);
-
-  useEffect(() => {
-    const id = expandedAgentId;
-    if (id === null) {
-      return;
-    }
-    if (runsByAgent[id] || loadingRunIds.has(id)) {
-      return;
-    }
-
-    setLoadingRunIds((prev) => new Set(prev).add(id));
-
-    void fetchAgentRuns(id, 50)
-      .then((runs) => {
-        setRunsByAgent((prev) => ({ ...prev, [id]: runs }));
-      })
-      .finally(() => {
-        setLoadingRunIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      });
-  }, [expandedAgentId, loadingRunIds, runsByAgent]);
 
   // Use unified WebSocket hook for real-time updates
   // Only connect when authenticated to avoid auth failure spam
@@ -653,9 +764,16 @@ export default function DashboardPage() {
                           onChange={(e) => setEditingName(e.target.value)}
                           onBlur={() => saveNameAndExit(agent.id)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") saveNameAndExit(agent.id);
-                            if (e.key === "Escape") cancelEditing();
+                            if (e.key === "Enter") {
+                              e.stopPropagation();
+                              saveNameAndExit(agent.id);
+                            }
+                            if (e.key === "Escape") {
+                              e.stopPropagation();
+                              cancelEditing();
+                            }
                           }}
+                          onClick={(e) => e.stopPropagation()}
                           autoFocus
                         />
                       ) : (
@@ -743,11 +861,11 @@ export default function DashboardPage() {
                     <tr className="agent-detail-row" key={`detail-${agent.id}`}>
                       <td colSpan={emptyColspan}>
                         <div className="agent-detail-container">
-                          {loadingRunIds.has(agent.id) && <span>Loading run history...</span>}
-                          {!loadingRunIds.has(agent.id) && runs && runs.length === 0 && (
+                          {runsDataLoading && <span>Loading run history...</span>}
+                          {!runsDataLoading && runs && runs.length === 0 && (
                             <span>No runs recorded yet.</span>
                           )}
-                          {!loadingRunIds.has(agent.id) && runs && runs.length > 0 && (
+                          {!runsDataLoading && runs && runs.length > 0 && (
                             <>
                               <table className="run-history-table">
                                 <thead>
