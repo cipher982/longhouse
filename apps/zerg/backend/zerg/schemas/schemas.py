@@ -279,6 +279,24 @@ class AgentRunOut(BaseModel):
     error: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# Dashboard payload schemas
+# ---------------------------------------------------------------------------
+
+
+class AgentRunsBundle(BaseModel):
+    agent_id: int
+    runs: List[AgentRunOut] = []
+
+
+class DashboardSnapshot(BaseModel):
+    scope: str
+    fetched_at: datetime
+    runs_limit: int
+    agents: List[Agent]
+    runs: List[AgentRunsBundle]
+
+
 # ------------------------------------------------------------
 # Workflow schemas
 # ------------------------------------------------------------

@@ -109,6 +109,39 @@ type FetchAgentsParams = {
   skip?: number;
 };
 
+type DashboardRunsBundleResponse = {
+  agent_id: number;
+  runs: AgentRun[];
+};
+
+type DashboardSnapshotResponse = {
+  scope: "my" | "all";
+  fetched_at: string;
+  runs_limit: number;
+  agents: AgentSummary[];
+  runs: DashboardRunsBundleResponse[];
+};
+
+export type DashboardRunsBundle = {
+  agentId: number;
+  runs: AgentRun[];
+};
+
+export type DashboardSnapshot = {
+  scope: "my" | "all";
+  fetchedAt: string;
+  runsLimit: number;
+  agents: AgentSummary[];
+  runs: DashboardRunsBundle[];
+};
+
+type FetchDashboardParams = {
+  scope?: "my" | "all";
+  runsLimit?: number;
+  skip?: number;
+  limit?: number;
+};
+
 type ApiBaseConfig = {
   absolute?: string;
   relative: string;
@@ -247,6 +280,37 @@ export async function fetchAgents(params: FetchAgentsParams = {}): Promise<Agent
   });
 
   return request<AgentsResponse>(`/agents?${searchParams.toString()}`);
+}
+
+export async function fetchDashboardSnapshot(params: FetchDashboardParams = {}): Promise<DashboardSnapshot> {
+  const scope = params.scope ?? "my";
+  const runsLimit = params.runsLimit ?? 50;
+  const limit = params.limit;
+  const skip = params.skip;
+
+  const searchParams = new URLSearchParams({
+    scope,
+    runs_limit: String(runsLimit),
+  });
+
+  if (typeof limit === "number") {
+    searchParams.set("limit", String(limit));
+  }
+  if (typeof skip === "number") {
+    searchParams.set("skip", String(skip));
+  }
+
+  const response = await request<DashboardSnapshotResponse>(`/agents/dashboard?${searchParams.toString()}`);
+  return {
+    scope: response.scope,
+    fetchedAt: response.fetched_at,
+    runsLimit: response.runs_limit,
+    agents: response.agents,
+    runs: response.runs.map((bundle) => ({
+      agentId: bundle.agent_id,
+      runs: bundle.runs,
+    })),
+  };
 }
 
 export async function createAgent(payload: AgentCreatePayload): Promise<CreatedAgentResponse> {

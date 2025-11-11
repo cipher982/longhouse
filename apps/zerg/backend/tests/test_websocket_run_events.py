@@ -39,6 +39,7 @@ async def test_run_update_ws_events(ws_client, client, sample_agent):
         if msg.get("type") != "run_update":
             continue
         data = msg.get("data", {})
+        assert data.get("thread_id") is not None, f"run_update missing thread_id: {data}"
         status = data.get("status")
         if status:
             statuses.add(status)

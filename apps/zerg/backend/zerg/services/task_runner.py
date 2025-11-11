@@ -150,6 +150,7 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                     "agent_id": agent.id,
                     "run_id": run_row.id,
                     "status": "queued",
+                    "thread_id": thread.id,
                 },
             )
 
@@ -164,6 +165,7 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                     "run_id": run_row.id,
                     "status": "running",
                     "started_at": start_ts.isoformat(),
+                    "thread_id": thread.id,
                 },
             )
 
@@ -195,6 +197,7 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                             "finished_at": end_ts.isoformat(),
                             "duration_ms": duration_ms,
                             "error": str(exc),
+                            "thread_id": thread.id,
                         },
                     )
 
@@ -259,6 +262,7 @@ async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str
                         "finished_at": end_ts.isoformat(),
                         "duration_ms": duration_ms,
                         "summary": finished_run.summary if finished_run else None,
+                        "thread_id": thread.id,
                     },
                 )
 

@@ -189,14 +189,14 @@ from langchain_core.messages import AIMessage  # noqa: E402
 class _StubLlm:
     """Stub LLM that returns deterministic response for both sync and async APIs."""
 
-    def invoke(self, _messages):  # noqa: D401 – sync path used in production
+    def invoke(self, _messages, **_kwargs):  # noqa: D401 – sync path used in production
         return AIMessage(content="stub-response")
 
     # Async variants retained for completeness (never awaited in current tests)
-    async def ainvoke(self, _messages):  # noqa: D401 – preferred async method
+    async def ainvoke(self, _messages, **_kwargs):  # noqa: D401 – preferred async method
         return AIMessage(content="stub-response")
 
-    async def invoke_async(self, _messages):  # noqa: D401 – legacy async method
+    async def invoke_async(self, _messages, **_kwargs):  # noqa: D401 – legacy async method
         return AIMessage(content="stub-response")
 
 

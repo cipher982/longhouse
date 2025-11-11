@@ -40,6 +40,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Dashboard Snapshot */
+        get: operations["read_dashboard_snapshot_api_agents_dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/{agent_id}": {
         parameters: {
             query?: never;
@@ -204,7 +221,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id
+         * @description Get all threads, optionally filtered by agent_id and/or thread_type
          */
         get: operations["read_threads_api_threads_get"];
         put?: never;
@@ -228,7 +245,7 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id
+         * @description Get all threads, optionally filtered by agent_id and/or thread_type
          */
         get: operations["read_threads_api_threads__get"];
         put?: never;
@@ -280,7 +297,13 @@ export interface paths {
         };
         /**
          * Read Thread Messages
-         * @description Get all messages for a thread
+         * @description Get all messages for a thread.
+         *
+         *     IMPORTANT: Messages are returned strictly ordered by database ID (insertion order).
+         *     This provides deterministic ordering regardless of timestamp precision or creation time.
+         *     The client MUST NOT sort these messages client-side; the server ordering is authoritative.
+         *
+         *     See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
          */
         get: operations["read_thread_messages_api_threads__thread_id__messages_get"];
         put?: never;
@@ -1020,6 +1043,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/dev-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dev Login
+         * @description Development-only login endpoint that bypasses Google OAuth.
+         *
+         *     Only works when AUTH_DISABLED=1 is set in environment.
+         *     Creates/returns a token for dev@local admin user.
+         */
+        post: operations["dev_login_api_auth_dev_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/google": {
         parameters: {
             query?: never;
@@ -1221,6 +1267,177 @@ export interface paths {
         patch: operations["patch_layout_api_graph_layout_patch"];
         trace?: never;
     };
+    "/api/jarvis/auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Auth
+         * @description Authenticate Jarvis device and establish an authenticated session.
+         *
+         *     Validates the device secret against environment configuration and issues
+         *     a short-lived session cookie that Jarvis can use for subsequent API calls.
+         *
+         *     Args:
+         *         request: Contains device_secret for authentication
+         *         db: Database session
+         *
+         *     Returns:
+         *         JarvisAuthResponse with session metadata
+         *
+         *     Raises:
+         *         401: Invalid device secret
+         */
+        post: operations["jarvis_auth_api_jarvis_auth_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Jarvis Agents
+         * @description List available agents for Jarvis UI.
+         *
+         *     Returns a minimal summary of all active agents including their schedules
+         *     and next run times. This powers the agent selection UI in Jarvis.
+         *
+         *     Args:
+         *         db: Database session
+         *         current_user: Authenticated user (Jarvis service account)
+         *
+         *     Returns:
+         *         List of agent summaries
+         */
+        get: operations["list_jarvis_agents_api_jarvis_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Jarvis Runs
+         * @description List recent agent runs for Jarvis Task Inbox.
+         *
+         *     Returns recent run history with summaries, filtered by agent if specified.
+         *     This powers the Task Inbox UI in Jarvis showing all automated activity.
+         *
+         *     Args:
+         *         limit: Maximum number of runs to return (default 50)
+         *         agent_id: Optional filter by specific agent
+         *         db: Database session
+         *         current_user: Authenticated user (Jarvis service account)
+         *
+         *     Returns:
+         *         List of run summaries ordered by created_at descending
+         */
+        get: operations["list_jarvis_runs_api_jarvis_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/dispatch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Dispatch
+         * @description Dispatch agent task from Jarvis.
+         *
+         *     Triggers immediate execution of an agent task and returns run/thread IDs
+         *     for tracking. Jarvis can then listen to the SSE stream for updates.
+         *
+         *     Args:
+         *         request: Dispatch request with agent_id and optional task override
+         *         db: Database session
+         *         current_user: Authenticated user (Jarvis service account)
+         *
+         *     Returns:
+         *         JarvisDispatchResponse with run and thread IDs
+         *
+         *     Raises:
+         *         404: Agent not found
+         *         409: Agent already running
+         *         500: Execution error
+         */
+        post: operations["jarvis_dispatch_api_jarvis_dispatch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jarvis Events
+         * @description Server-Sent Events stream for Jarvis.
+         *
+         *     Provides real-time updates for agent and run events. Jarvis listens to this
+         *     stream to update the Task Inbox UI without polling.
+         *
+         *     Authentication:
+         *     - HttpOnly session cookie set by `/api/jarvis/auth`
+         *     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
+         *
+         *     Event types:
+         *     - connected: Initial connection confirmation
+         *     - heartbeat: Keep-alive ping every 30 seconds
+         *     - agent_updated: Agent status or configuration changed
+         *     - run_created: New agent run started
+         *     - run_updated: Agent run status changed (running → success/failed)
+         *
+         *     Args:
+         *         current_user: Authenticated user (Jarvis service account)
+         *
+         *     Returns:
+         *         EventSourceResponse streaming SSE events
+         */
+        get: operations["jarvis_events_api_jarvis_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/info": {
         parameters: {
             query?: never;
@@ -1318,6 +1535,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config/container-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Container Policy
+         * @description Return the container execution policy derived from environment settings.
+         */
+        get: operations["read_container_policy_api_config_container_policy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reset-database": {
         parameters: {
             query?: never;
@@ -1327,7 +1564,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**  Legacy Reset Database */
+        /** Legacy Reset Database */
         post: operations["_legacy_reset_database_admin_reset_database_post"];
         delete?: never;
         options?: never;
@@ -1424,10 +1661,11 @@ export interface components {
             /** Last Run At */
             last_run_at?: string | null;
         };
-        /** AgentCreate */
+        /**
+         * AgentCreate
+         * @description Schema for agent creation. Name is auto-generated by backend.
+         */
         AgentCreate: {
-            /** Name */
-            name: string;
             /** System Instructions */
             system_instructions: string;
             /** Task Instructions */
@@ -1438,8 +1676,6 @@ export interface components {
             schedule?: string | null;
             /** Config */
             config?: Record<string, never> | null;
-            /** Last Error */
-            last_error?: string | null;
             /** Allowed Tools */
             allowed_tools?: string[] | null;
         };
@@ -1500,6 +1736,16 @@ export interface components {
             /** Error */
             error?: string | null;
         };
+        /** AgentRunsBundle */
+        AgentRunsBundle: {
+            /** Agent Id */
+            agent_id: number;
+            /**
+             * Runs
+             * @default []
+             */
+            runs: components["schemas"]["AgentRunOut"][];
+        };
         /**
          * AgentStatus
          * @enum {string}
@@ -1559,6 +1805,44 @@ export interface components {
             canvas: components["schemas"]["WorkflowData-Input"];
         };
         /**
+         * ContainerPolicyResponse
+         * @description Response model describing container execution policy.
+         */
+        ContainerPolicyResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Default Image */
+            default_image: string | null;
+            /** Network Enabled */
+            network_enabled: boolean;
+            /** User Id */
+            user_id: number | null;
+            /** Memory Limit */
+            memory_limit: string | null;
+            /** Cpus */
+            cpus: string | null;
+            /** Timeout Secs */
+            timeout_secs: number;
+            /** Seccomp Profile */
+            seccomp_profile: string | null;
+        };
+        /** DashboardSnapshot */
+        DashboardSnapshot: {
+            /** Scope */
+            scope: string;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /** Runs Limit */
+            runs_limit: number;
+            /** Agents */
+            agents: components["schemas"]["Agent"][];
+            /** Runs */
+            runs: components["schemas"]["AgentRunsBundle"][];
+        };
+        /**
          * DatabaseResetRequest
          * @description Request model for database reset with optional password confirmation.
          */
@@ -1592,6 +1876,121 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * JarvisAgentSummary
+         * @description Minimal agent summary for Jarvis UI.
+         */
+        JarvisAgentSummary: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Schedule */
+            schedule?: string | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Description */
+            description?: string | null;
+        };
+        /**
+         * JarvisAuthRequest
+         * @description Jarvis authentication request with device secret.
+         */
+        JarvisAuthRequest: {
+            /**
+             * Device Secret
+             * @description Device secret for Jarvis authentication
+             */
+            device_secret: string;
+        };
+        /**
+         * JarvisAuthResponse
+         * @description Jarvis authentication response metadata.
+         */
+        JarvisAuthResponse: {
+            /**
+             * Session Expires In
+             * @description Session expiry window in seconds
+             */
+            session_expires_in: number;
+            /**
+             * Session Cookie Name
+             * @description Name of session cookie storing Jarvis session
+             */
+            session_cookie_name: string;
+        };
+        /**
+         * JarvisDispatchRequest
+         * @description Jarvis dispatch request to trigger agent execution.
+         */
+        JarvisDispatchRequest: {
+            /**
+             * Agent Id
+             * @description ID of agent to execute
+             */
+            agent_id: number;
+            /**
+             * Task Override
+             * @description Optional task instruction override
+             */
+            task_override?: string | null;
+        };
+        /**
+         * JarvisDispatchResponse
+         * @description Jarvis dispatch response with run/thread IDs.
+         */
+        JarvisDispatchResponse: {
+            /**
+             * Run Id
+             * @description AgentRun ID for tracking execution
+             */
+            run_id: number;
+            /**
+             * Thread Id
+             * @description Thread ID containing conversation
+             */
+            thread_id: number;
+            /**
+             * Status
+             * @description Initial run status
+             */
+            status: string;
+            /**
+             * Agent Name
+             * @description Name of agent being executed
+             */
+            agent_name: string;
+        };
+        /**
+         * JarvisRunSummary
+         * @description Minimal run summary for Jarvis Task Inbox.
+         */
+        JarvisRunSummary: {
+            /** Id */
+            id: number;
+            /** Agent Id */
+            agent_id: number;
+            /** Agent Name */
+            agent_name: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Completed At */
+            completed_at?: string | null;
         };
         /**
          * LatencyStats
@@ -1711,8 +2110,8 @@ export interface components {
          * @description Single point in a time series.
          */
         OpsSeriesPoint: {
-            /** Timestamp */
-            timestamp: string;
+            /** Hour Iso */
+            hour_iso: string;
             /** Value */
             value: number;
         };
@@ -1886,6 +2285,8 @@ export interface components {
             tool_call_id?: string | null;
             /** Name */
             name?: string | null;
+            /** Sent At */
+            sent_at?: string | null;
         };
         /** ThreadMessageResponse */
         ThreadMessageResponse: {
@@ -1904,10 +2305,10 @@ export interface components {
             /** Thread Id */
             thread_id: number;
             /**
-             * Timestamp
+             * Sent At
              * Format: date-time
              */
-            timestamp: string;
+            sent_at: string;
             /**
              * Processed
              * @default false
@@ -2254,7 +2655,9 @@ export interface operations {
             query?: {
                 session_factory?: unknown;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2323,7 +2726,9 @@ export interface operations {
             query?: {
                 session_factory?: unknown;
             };
-            header?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2340,6 +2745,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Agent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_dashboard_snapshot_api_agents_dashboard_get: {
+        parameters: {
+            query?: {
+                scope?: string;
+                runs_limit?: number;
+                skip?: number;
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardSnapshot"];
                 };
             };
             /** @description Validation Error */
@@ -2769,6 +3209,7 @@ export interface operations {
         parameters: {
             query?: {
                 agent_id?: number | null;
+                thread_type?: string | null;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -2838,6 +3279,7 @@ export interface operations {
         parameters: {
             query?: {
                 agent_id?: number | null;
+                thread_type?: string | null;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -3931,7 +4373,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExecutionStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3964,7 +4406,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExecutionStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3997,7 +4439,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExecutionStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4366,6 +4808,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dev_login_api_auth_dev_login_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
                 };
             };
             /** @description Validation Error */
@@ -4791,6 +5264,171 @@ export interface operations {
             };
         };
     };
+    jarvis_auth_api_jarvis_auth_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisAuthRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisAuthResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jarvis_agents_api_jarvis_agents_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisAgentSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_jarvis_runs_api_jarvis_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                agent_id?: number | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisRunSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_dispatch_api_jarvis_dispatch_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisDispatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisDispatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_events_api_jarvis_events_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     system_info_api_system_info_get: {
         parameters: {
             query?: never;
@@ -4916,6 +5554,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TopAgentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_container_policy_api_config_container_policy_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerPolicyResponse"];
                 };
             };
             /** @description Validation Error */
