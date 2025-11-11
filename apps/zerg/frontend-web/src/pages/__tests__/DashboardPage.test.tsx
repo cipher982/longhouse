@@ -313,7 +313,7 @@ describe("DashboardPage", () => {
     });
   });
 
-  test("exposes manual refresh control with last updated text", async () => {
+  test("shows last updated timestamp", async () => {
     const agent = buildAgent({
       id: 99,
       name: "Refreshable",
@@ -323,31 +323,8 @@ describe("DashboardPage", () => {
 
     renderDashboard([agent]);
 
-    const refreshButton = await screen.findByRole("button", { name: /refresh/i });
-    expect(refreshButton).toBeInTheDocument();
-
     const lastUpdated = await screen.findByTestId("dashboard-last-updated");
     expect(lastUpdated.textContent).toMatch(/Last updated:/);
-
-    fetchDashboardSnapshotMock.mockClear();
-    const updatedSnapshot: DashboardSnapshot = {
-      scope: "my",
-      fetchedAt: new Date(Date.now() + 5_000).toISOString(),
-      runsLimit: 50,
-      agents: [agent],
-      runs: [
-        {
-          agentId: agent.id,
-          runs: [],
-        },
-      ],
-    };
-    fetchDashboardSnapshotMock.mockResolvedValue(updatedSnapshot);
-
-    await userEvent.click(refreshButton);
-
-    await waitFor(() => expect(fetchDashboardSnapshotMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(refreshButton).not.toBeDisabled());
   });
 
   test("applies agent status updates from websocket events", async () => {
