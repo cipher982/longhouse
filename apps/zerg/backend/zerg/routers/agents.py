@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 from typing import Any
 from typing import List
 from typing import Optional
@@ -24,6 +25,10 @@ from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.events.event_bus import event_bus
+from zerg.metrics import dashboard_snapshot_agents_returned
+from zerg.metrics import dashboard_snapshot_latency_seconds
+from zerg.metrics import dashboard_snapshot_requests_total
+from zerg.metrics import dashboard_snapshot_runs_returned
 from zerg.schemas.schemas import Agent
 from zerg.schemas.schemas import AgentCreate
 from zerg.schemas.schemas import AgentDetails
@@ -167,30 +172,48 @@ def read_dashboard_snapshot(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    agents = _get_agents_for_scope(db, current_user, scope, skip=skip, limit=limit)
+    start = perf_counter()
+    status_label = "success"
+    agents: List[Agent] = []
     bundles: List[AgentRunsBundle] = []
+    total_runs = 0
 
-    if runs_limit > 0:
-        for agent in agents:
-            runs = crud.list_runs(db, agent.id, limit=runs_limit)
-            bundles.append(AgentRunsBundle(agent_id=agent.id, runs=runs))
-    else:
-        bundles = [AgentRunsBundle(agent_id=agent.id, runs=[]) for agent in agents]
+    try:
+        agents = _get_agents_for_scope(db, current_user, scope, skip=skip, limit=limit)
 
-    logger.info(
-        "Dashboard snapshot fetched (scope=%s, runs_limit=%s, agents=%s)",
-        scope,
-        runs_limit,
-        len(agents),
-    )
+        if runs_limit > 0:
+            for agent in agents:
+                runs = crud.list_runs(db, agent.id, limit=runs_limit)
+                bundles.append(AgentRunsBundle(agent_id=agent.id, runs=runs))
+        else:
+            bundles = [AgentRunsBundle(agent_id=agent.id, runs=[]) for agent in agents]
 
-    return DashboardSnapshot(
-        scope=scope,
-        fetched_at=utc_now_naive(),
-        runs_limit=runs_limit,
-        agents=agents,
-        runs=bundles,
-    )
+        total_runs = sum(len(bundle.runs) for bundle in bundles)
+
+        logger.info(
+            "Dashboard snapshot fetched (scope=%s, runs_limit=%s, agents=%s, total_runs=%s)",
+            scope,
+            runs_limit,
+            len(agents),
+            total_runs,
+        )
+
+        return DashboardSnapshot(
+            scope=scope,
+            fetched_at=utc_now_naive(),
+            runs_limit=runs_limit,
+            agents=agents,
+            runs=bundles,
+        )
+    except Exception:
+        status_label = "error"
+        raise
+    finally:
+        duration = perf_counter() - start
+        dashboard_snapshot_requests_total.labels(scope=scope, status=status_label).inc()
+        dashboard_snapshot_latency_seconds.observe(duration)
+        dashboard_snapshot_agents_returned.observe(float(len(agents)))
+        dashboard_snapshot_runs_returned.observe(float(total_runs))
 
 
 @router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)

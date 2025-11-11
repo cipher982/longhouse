@@ -45,6 +45,7 @@ async def execute_thread_run_with_history(
             "agent_id": agent.id,
             "run_id": run_row.id,
             "status": run_row.status,
+            "thread_id": thread.id,
         },
     )
 
@@ -59,6 +60,7 @@ async def execute_thread_run_with_history(
             "run_id": run_row.id,
             "status": "running",
             "started_at": start_ts.isoformat(),
+            "thread_id": thread.id,
         },
     )
 
@@ -72,16 +74,17 @@ async def execute_thread_run_with_history(
         crud.mark_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
         await event_bus.publish(
             EventType.RUN_UPDATED,
-            {
-                "event_type": "run_updated",
-                "agent_id": agent.id,
-                "run_id": run_row.id,
-                "status": "failed",
-                "finished_at": end_ts.isoformat(),
-                "duration_ms": duration_ms,
-                "error": str(exc),
-            },
-        )
+        {
+            "event_type": "run_updated",
+            "agent_id": agent.id,
+            "run_id": run_row.id,
+            "status": "failed",
+            "finished_at": end_ts.isoformat(),
+            "duration_ms": duration_ms,
+            "error": str(exc),
+            "thread_id": thread.id,
+        },
+    )
         raise
 
     # Success path
@@ -127,6 +130,7 @@ async def execute_thread_run_with_history(
             "finished_at": end_ts.isoformat(),
             "duration_ms": duration_ms,
             "summary": finished_run.summary if finished_run else None,
+            "thread_id": thread.id,
         },
     )
 
