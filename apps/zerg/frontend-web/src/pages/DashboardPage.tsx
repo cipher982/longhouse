@@ -627,7 +627,7 @@ export default function DashboardPage() {
     },
     onSuccess: () => {
       // WebSocket will deliver the agent with real name
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
       idempotencyKeyRef.current = null; // Reset for next creation
     },
   });
@@ -645,7 +645,7 @@ export default function DashboardPage() {
       return response;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     },
   });
 
@@ -663,7 +663,7 @@ export default function DashboardPage() {
 
     try {
       await updateAgent(agentId, { name: editingName });
-      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      queryClient.invalidateQueries({ queryKey: dashboardQueryKey });
     } catch (error) {
       console.error("Failed to rename:", error);
     }
