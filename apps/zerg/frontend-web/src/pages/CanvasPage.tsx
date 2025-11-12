@@ -939,7 +939,10 @@ function CanvasPageContent() {
 
   // WebSocket for real-time execution updates
   const handleStreamingMessage = useCallback((envelope: any) => {
-    console.log('[CanvasPage] 📨 RAW MESSAGE:', JSON.stringify(envelope, null, 2));
+    // Only log non-token messages to reduce console spam
+    if (envelope.type !== 'stream_chunk') {
+      console.log('[CanvasPage] 📨 RAW MESSAGE:', JSON.stringify(envelope, null, 2));
+    }
 
     const { message_type, data } = envelope;
 
