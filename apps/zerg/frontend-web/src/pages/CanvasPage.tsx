@@ -203,7 +203,7 @@ function CanvasPageContent() {
   const [showLogs, setShowLogs] = useState(false);
 
   // Draggable logs panel state
-  const [logsPanelPosition, setLogsPanelPosition] = useState({ x: 0, y: 0 });
+  const [logsPanelPosition, setLogsPanelPosition] = useState<{ x: number; y: number } | null>(null);
   const [isDraggingLogsPanel, setIsDraggingLogsPanel] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const logsPanelRef = useRef<HTMLDivElement | null>(null);
@@ -780,7 +780,7 @@ function CanvasPageContent() {
   }, []);
 
   const handleLogsPanelMouseMove = useCallback((event: MouseEvent) => {
-    if (!isDraggingLogsPanel || !logsPanelRef.current) return;
+    if (!isDraggingLogsPanel || !logsPanelRef.current || !logsPanelPosition) return;
 
     const panel = logsPanelRef.current;
     const panelRect = panel.getBoundingClientRect();
@@ -801,7 +801,7 @@ function CanvasPageContent() {
     newY = Math.max(0, Math.min(newY, viewportHeight - minVisible));
 
     setLogsPanelPosition({ x: newX, y: newY });
-  }, [isDraggingLogsPanel, dragOffset]);
+  }, [isDraggingLogsPanel, dragOffset, logsPanelPosition]);
 
   const handleLogsPanelMouseUp = useCallback(() => {
     setIsDraggingLogsPanel(false);
@@ -819,9 +819,9 @@ function CanvasPageContent() {
     }
   }, [isDraggingLogsPanel, handleLogsPanelMouseMove, handleLogsPanelMouseUp]);
 
-  // Reset panel position when logs are opened
+  // Initialize panel position on first open only
   useEffect(() => {
-    if (showLogs && logsPanelRef.current) {
+    if (showLogs && logsPanelRef.current && logsPanelPosition === null) {
       // Center the panel on first open
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
@@ -833,7 +833,7 @@ function CanvasPageContent() {
         y: Math.max(80, (viewportHeight - panelHeight) / 2),
       });
     }
-  }, [showLogs]);
+  }, [showLogs, logsPanelPosition]);
 
   // Save workflow mutation with hash-based deduplication
   const saveWorkflowMutation = useMutation({
@@ -1497,13 +1497,13 @@ function CanvasPageContent() {
               <aside
                 ref={logsPanelRef}
                 id="execution-logs-drawer"
-                className={`execution-logs-drawer execution-logs-draggable ${isDraggingLogsPanel ? 'dragging' : ''}`}
+                className={`execution-logs-draggable ${isDraggingLogsPanel ? 'dragging' : ''}`}
                 role="complementary"
                 aria-label="Execution logs"
-                style={{
+                style={logsPanelPosition ? {
                   left: `${logsPanelPosition.x}px`,
                   top: `${logsPanelPosition.y}px`,
-                }}
+                } : {}}
               >
                 <div
                   className="logs-header"
