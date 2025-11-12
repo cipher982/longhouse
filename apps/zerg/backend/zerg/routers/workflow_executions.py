@@ -97,11 +97,19 @@ async def start_workflow_execution(
         ExecutionStateMachine.mark_running(execution)
         db.commit()
 
-        # Start workflow in background
-        workflow_engine.start_workflow_in_background(workflow_id, execution.id)
+        # Return immediately so frontend can subscribe BEFORE workflow starts
+        execution_id = execution.id
+
+        # Start workflow in background with small delay to allow subscription
+        import asyncio
+        async def delayed_start():
+            await asyncio.sleep(0.1)  # 100ms delay for subscription to register
+            workflow_engine.start_workflow_in_background(workflow_id, execution_id)
+
+        asyncio.create_task(delayed_start())
 
         return ExecutionStatusResponse(
-            execution_id=execution.id,
+            execution_id=execution_id,
             phase="running",
             result=None
         )
