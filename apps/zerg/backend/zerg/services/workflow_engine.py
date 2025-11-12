@@ -7,6 +7,8 @@ Clean, focused workflow execution using WorkflowData schema.
 
 import asyncio
 import logging
+import operator
+from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import List
@@ -33,13 +35,30 @@ from zerg.utils.time import utc_now_naive
 logger = logging.getLogger(__name__)
 
 
-class WorkflowState(TypedDict):
-    """State passed between nodes in the workflow."""
+def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two dictionaries, with right taking precedence."""
+    return {**left, **right}
 
-    execution_id: int
-    node_outputs: Dict[str, Any]
-    completed_nodes: List[str]
-    error: Union[str, None]
+
+def first_error(left: Union[str, None], right: Union[str, None]) -> Union[str, None]:
+    """Return the first non-None error (fail-fast semantics)."""
+    return left if left is not None else right
+
+
+class WorkflowState(TypedDict):
+    """State passed between nodes in the workflow.
+
+    Uses Annotated types with reducers for concurrency-safe parallel execution:
+    - node_outputs: merges outputs from parallel nodes
+    - completed_nodes: concatenates completion lists from parallel branches
+    - error: takes first error (fail-fast semantics for parallel failures)
+
+    execution_id is passed via config, not state, as it's immutable metadata.
+    """
+
+    node_outputs: Annotated[Dict[str, Any], merge_dicts]
+    completed_nodes: Annotated[List[str], operator.add]
+    error: Annotated[Union[str, None], first_error]
 
 
 class WorkflowEngine:
@@ -122,7 +141,7 @@ class WorkflowEngine:
         """Build LangGraph from WorkflowData."""
         graph = StateGraph(WorkflowState)
 
-        # Add nodes
+        # Add nodes (execution_id will be passed via config, not state)
         for node in workflow_data.nodes:
             executor = create_node_executor(node, self._publish_node_event)
             graph.add_node(node.id, executor.execute)
@@ -209,14 +228,20 @@ class WorkflowEngine:
 
     async def _execute_graph(self, graph, execution: WorkflowExecution, db, workflow_id: int):
         """Execute the compiled graph."""
+        # Remove execution_id from state - it's immutable metadata, passed via config
         initial_state = {
-            "execution_id": execution.id,
             "node_outputs": {},
             "completed_nodes": [],
             "error": None,
         }
 
-        config = {"configurable": {"thread_id": f"workflow_{execution.id}"}}
+        # Pass execution_id as immutable config, not mutable state
+        config = {
+            "configurable": {
+                "thread_id": f"workflow_{execution.id}",
+                "execution_id": execution.id,  # Immutable metadata
+            }
+        }
         logger.info(f"[WorkflowEngine] Starting streaming execution – workflow_id={workflow_id}")
 
         # Stream execution for real-time updates

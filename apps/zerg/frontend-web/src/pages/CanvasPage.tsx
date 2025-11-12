@@ -820,8 +820,8 @@ function CanvasPageContent() {
     },
     onSuccess: (execution) => {
       setCurrentExecution(execution);
-      toast.success("Workflow execution started!");
-      setShowLogs(true);
+      toast.success("Workflow execution started! Click the status badge to view details.");
+      // Don't auto-open logs - let user click the badge
     },
     onError: (error: Error) => {
       toast.error(`Failed to start workflow: ${error.message || "Unknown error"}`);
@@ -1235,7 +1235,12 @@ function CanvasPageContent() {
 
             {/* Execution Status */}
             {currentExecution && (
-              <div className={`execution-status execution-status--${currentExecution.phase}`}>
+              <div
+                className={`execution-status execution-status--${currentExecution.phase}`}
+                onClick={() => setShowLogs(!showLogs)}
+                style={{ cursor: 'pointer' }}
+                title={showLogs ? "Click to hide execution details" : "Click to show execution details"}
+              >
                 <span className="execution-phase">
                   {currentExecution.phase === 'waiting' && '⏳ Waiting'}
                   {currentExecution.phase === 'running' && '🔄 Running'}
@@ -1243,6 +1248,9 @@ function CanvasPageContent() {
                   {currentExecution.phase === 'cancelled' && '❌ Cancelled'}
                 </span>
                 <span className="execution-id">ID: {currentExecution.execution_id}</span>
+                <span className="execution-toggle-hint" style={{ fontSize: '0.8em', opacity: 0.7, marginLeft: '8px' }}>
+                  {showLogs ? '▼' : '▶'}
+                </span>
               </div>
             )}
           </div>
@@ -1343,20 +1351,30 @@ function CanvasPageContent() {
                 </div>
                 <div className="logs-content">
                   <div className="execution-info">
-                    <div>Execution ID: {currentExecution.execution_id}</div>
-                    <div>Status: {currentExecution.phase}</div>
+                    <div><strong>Execution ID:</strong> {currentExecution.execution_id}</div>
+                    <div><strong>Status:</strong> {currentExecution.phase}</div>
                     {currentExecution.result !== undefined && currentExecution.result !== null && (
                       <div>
-                        Result: <pre>{String(JSON.stringify(currentExecution.result, null, 2) || 'null')}</pre>
+                        <strong>Result:</strong> <code>{String(currentExecution.result)}</code>
                       </div>
                     )}
                   </div>
-                  <div className="logs-output">
-                    <h5>Logs:</h5>
-                    <pre className="logs-text">
-                      {executionLogs || "No logs available yet..."}
-                    </pre>
-                  </div>
+                  {executionLogs ? (
+                    <div className="logs-output">
+                      <h5>Execution Logs:</h5>
+                      <pre className="logs-text">{executionLogs}</pre>
+                    </div>
+                  ) : (
+                    <div className="logs-output">
+                      <p style={{ opacity: 0.7, fontStyle: 'italic' }}>
+                        No detailed logs were captured for this execution.
+                        The workflow completed successfully but did not generate text logs.
+                      </p>
+                      <p style={{ opacity: 0.6, fontSize: '0.9em', marginTop: '8px' }}>
+                        Note: Node execution states are stored in the database but not currently displayed here.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </aside>
             )}

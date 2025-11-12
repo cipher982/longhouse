@@ -6,11 +6,25 @@ export class ApiError extends Error {
   readonly body: unknown;
 
   constructor({ url, status, body }: { url: string; status: number; body: unknown }) {
-    super(`Request to ${url} failed with status ${status}`);
+    // Extract detailed error message from body if available
+    let detailMessage = `Request to ${url} failed with status ${status}`;
+    if (body && typeof body === 'object' && 'detail' in body) {
+      detailMessage = `${detailMessage}: ${body.detail}`;
+    }
+
+    super(detailMessage);
     this.name = "ApiError";
     this.status = status;
     this.url = url;
     this.body = body;
+
+    // Log full error details to console for debugging
+    console.error('[API Error]', {
+      url,
+      status,
+      body,
+      message: detailMessage,
+    });
   }
 }
 

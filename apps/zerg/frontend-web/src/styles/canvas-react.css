@@ -43,7 +43,7 @@
 }
 
 .execution-logs-drawer {
-  flex: 0 0 clamp(320px, 30vw, 400px);
+  flex: 0 0 clamp(280px, 25vw, 350px);
   height: 100%;
   background: var(--dark-card, #2a2a3a);
   border-left: 1px solid var(--border-color, #3d3d5c);
