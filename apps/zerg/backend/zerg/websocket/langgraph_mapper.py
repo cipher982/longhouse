@@ -33,28 +33,38 @@ class LangGraphMapper:
 
         logger.debug(f"[LangGraphMapper] Processing chunk type: {type(chunk)}, value: {chunk}")
 
-        # Handle tuple format: (node_name, state_update)
+        # Handle tuple format from stream_mode: ('updates', {node_updates_dict})
         if isinstance(chunk, tuple) and len(chunk) == 2:
-            node_id, state_update = chunk
-            logger.debug(f"[LangGraphMapper] Tuple format - node: {node_id}, update type: {type(state_update)}")
+            mode_name, updates_dict = chunk
+            logger.info(f"[LangGraphMapper] Tuple format - mode: {mode_name}, updates type: {type(updates_dict)}")
 
-            # Skip special keys
-            if isinstance(node_id, str) and node_id.startswith("__"):
-                logger.debug(f"[LangGraphMapper] Skipping special key: {node_id}")
+            # The tuple is (stream_mode_name, data), not (node_id, update)
+            # Extract the actual updates dict from the second element
+            if mode_name == 'updates' and isinstance(updates_dict, dict):
+                # Process each node update in the dict
+                for node_id, state_update in updates_dict.items():
+                    # Skip special keys
+                    if isinstance(node_id, str) and node_id.startswith("__"):
+                        logger.debug(f"[LangGraphMapper] Skipping special key: {node_id}")
+                        continue
+
+                    logger.info(f"[LangGraphMapper] Processing node: {node_id}")
+
+                    # Map this node's update to a node_state envelope
+                    envelope = LangGraphMapper._map_node_update(node_id, state_update, execution_id)
+                    if envelope:
+                        envelopes.append(envelope)
+
+                    # Also generate workflow_progress if this update includes completed nodes
+                    if isinstance(state_update, dict) and "completed_nodes" in state_update:
+                        progress_envelope = LangGraphMapper._map_workflow_progress(state_update, execution_id)
+                        if progress_envelope:
+                            envelopes.append(progress_envelope)
+
                 return envelopes
-
-            # Map this node's update to a node_state envelope
-            envelope = LangGraphMapper._map_node_update(node_id, state_update, execution_id)
-            if envelope:
-                envelopes.append(envelope)
-
-            # Also generate workflow_progress if this update includes completed nodes
-            if isinstance(state_update, dict) and "completed_nodes" in state_update:
-                progress_envelope = LangGraphMapper._map_workflow_progress(state_update, execution_id)
-                if progress_envelope:
-                    envelopes.append(progress_envelope)
-
-            return envelopes
+            else:
+                logger.warning(f"[LangGraphMapper] Unknown tuple format: mode={mode_name}")
+                return envelopes
 
         # Handle dict format: {node_name: state_update}
         if isinstance(chunk, dict):
