@@ -179,7 +179,7 @@ async def fire_trigger_event(
     # 4) Publish event on internal bus
     await event_bus.publish(
         EventType.TRIGGER_FIRED,
-        {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload},
+        {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload, "trigger_type": "webhook"},
     )
 
     # Metrics -----------------------------------------------------------
@@ -189,7 +189,7 @@ async def fire_trigger_event(
         pass
 
     # 5) Fire agent immediately (non-blocking)
-    await scheduler_service.run_agent_task(trg.agent_id)  # type: ignore[arg-type]
+    await scheduler_service.run_agent_task(trg.agent_id, trigger="webhook")  # type: ignore[arg-type]
 
     return {"status": "accepted"}
 

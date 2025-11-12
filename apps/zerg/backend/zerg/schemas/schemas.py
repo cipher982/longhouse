@@ -260,6 +260,8 @@ class Trigger(TriggerBase):
 class RunTrigger(str, Enum):
     manual = "manual"
     schedule = "schedule"
+    chat = "chat"
+    webhook = "webhook"
     api = "api"
 
 

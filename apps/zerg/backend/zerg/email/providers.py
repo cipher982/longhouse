@@ -328,9 +328,10 @@ class GmailProvider:  # noqa: D101 – obvious from context
                             "agent_id": trg.agent_id,
                             "provider": "gmail",
                             "message_id": mid,
+                            "trigger_type": "webhook",
                         },
                     )
-                    await scheduler_service.run_agent_task(trg.agent_id)  # type: ignore[arg-type]
+                    await scheduler_service.run_agent_task(trg.agent_id, trigger="webhook")  # type: ignore[arg-type]
                     fired_total += 1
 
             # Update connector history id

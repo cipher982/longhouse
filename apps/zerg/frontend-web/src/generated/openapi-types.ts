@@ -2181,7 +2181,7 @@ export interface components {
          * RunTrigger
          * @enum {string}
          */
-        RunTrigger: "manual" | "schedule" | "api";
+        RunTrigger: "manual" | "schedule" | "chat" | "webhook" | "api";
         /** ScheduleWorkflowPayload */
         ScheduleWorkflowPayload: {
             /** Cron Expression */
