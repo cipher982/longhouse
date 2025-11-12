@@ -616,7 +616,7 @@ class TopicConnectionManager:
 
     async def _handle_execution_started(self, data: Dict[str, Any]) -> None:
         """Broadcast execution started event."""
-        logger.info(f"🔥 _handle_execution_started CALLED with data: {data}")
+        print(f"🔥🔥🔥 _handle_execution_started CALLED", flush=True)
         execution_id = data["execution_id"]
         topic = f"workflow_execution:{execution_id}"
 
@@ -626,17 +626,18 @@ class TopicConnectionManager:
 
         # Use envelope format
         envelope = Envelope.create(message_type="execution_started", topic=topic, data=serialized_data)
-        logger.info(f"📡 Broadcasting execution_started to topic {topic}, envelope: {envelope.model_dump()}")
+        print(f"📡 Broadcasting execution_started to topic {topic}", flush=True)
         await self.broadcast_to_topic(topic, envelope.model_dump())
-        logger.info(f"✅ Broadcast complete for execution {execution_id}")
+        print(f"✅ Broadcast complete for execution {execution_id}", flush=True)
 
     async def _handle_node_state_event(self, data: Dict[str, Any]) -> None:
         """Broadcast per-node state changes during workflow execution."""
-        logger.info(f"🔥 _handle_node_state_event CALLED with data: {data}")
+        print(f"🔥🔥🔥 _handle_node_state_event CALLED", flush=True)
 
         execution_id = data["execution_id"]
-
         topic = f"workflow_execution:{execution_id}"
+
+        print(f"📡 Broadcasting node_state to topic {topic}", flush=True)
 
         # Create clean data payload without event_type (since it's in message type)
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
@@ -644,9 +645,8 @@ class TopicConnectionManager:
 
         # Use envelope format
         envelope = Envelope.create(message_type="node_state", topic=topic, data=serialized_data)
-        logger.info(f"📡 Broadcasting node_state to topic {topic}")
         await self.broadcast_to_topic(topic, envelope.model_dump())
-        logger.info(f"✅ Broadcast complete for node_state")
+        print(f"✅ node_state broadcast complete", flush=True)
 
     async def _handle_workflow_progress(self, data: Dict[str, Any]) -> None:
         """Broadcast workflow progress updates."""
