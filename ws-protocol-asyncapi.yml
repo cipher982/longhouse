@@ -626,7 +626,7 @@ components:
           enum: [queued, running, success, failed]
         trigger:
           type: string
-          enum: [manual, schedule, api]
+          enum: [manual, schedule, chat, webhook, api]
         started_at:
           type: string
           format: date-time

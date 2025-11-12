@@ -34,7 +34,9 @@ class RunStatus(str, Enum):
 class RunTrigger(str, Enum):
     MANUAL = "manual"
     SCHEDULE = "schedule"
-    API = "api"
+    CHAT = "chat"
+    WEBHOOK = "webhook"
+    API = "api"  # Generic fallback for other API calls
 
 
 class ThreadType(str, Enum):

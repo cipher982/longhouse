@@ -446,6 +446,8 @@
           "enum": [
             "manual",
             "schedule",
+            "chat",
+            "webhook",
             "api"
           ]
         },

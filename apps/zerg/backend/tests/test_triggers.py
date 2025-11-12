@@ -31,11 +31,12 @@ def test_webhook_trigger_flow(client):
     trigger_id = trg_resp.json()["id"]
 
     # 3. Monkey‑patch SchedulerService.run_agent_task so we can assert it was called
-    called = {"flag": False, "agent_id": None}
+    called = {"flag": False, "agent_id": None, "trigger": None}
 
-    async def _stub_run_agent_task(agent_id: int):  # type: ignore
+    async def _stub_run_agent_task(agent_id: int, trigger: str = "schedule"):  # type: ignore
         called["flag"] = True
         called["agent_id"] = agent_id
+        called["trigger"] = trigger
 
     original = scheduler_service.run_agent_task  # Save original
     scheduler_service.run_agent_task = _stub_run_agent_task  # type: ignore
@@ -68,6 +69,7 @@ def test_webhook_trigger_flow(client):
 
         assert called["flag"], "run_agent_task should have been invoked by trigger"
         assert called["agent_id"] == agent_id
+        assert called["trigger"] == "webhook", "Webhook trigger should pass trigger='webhook'"
     finally:
         # Restore original coroutine to avoid cross‑test contamination
         scheduler_service.run_agent_task = original  # type: ignore
