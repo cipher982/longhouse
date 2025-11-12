@@ -81,8 +81,9 @@ async def start_workflow_execution(
     try:
         from zerg.models.models import WorkflowExecution
         from zerg.utils.time import utc_now_naive
+        from zerg.services.execution_state import ExecutionStateMachine
 
-        # Create execution record
+        # Create execution record in WAITING state
         execution = WorkflowExecution(
             workflow_id=workflow_id,
             started_at=utc_now_naive(),
@@ -91,6 +92,10 @@ async def start_workflow_execution(
         db.add(execution)
         db.commit()
         db.refresh(execution)
+
+        # Mark as RUNNING before starting background task
+        ExecutionStateMachine.mark_running(execution)
+        db.commit()
 
         # Start workflow in background
         workflow_engine.start_workflow_in_background(workflow_id, execution.id)
