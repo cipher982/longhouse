@@ -105,7 +105,7 @@ async def test_history_id_advancement_and_dedup(client, db_session, _dev_user, m
     # --------------------------------- 5) Count agent executions
     exec_counter = {"runs": 0}
 
-    async def _stub_run(aid: int):  # noqa: D401 – async stub
+    async def _stub_run(aid: int, trigger: str = "schedule"):  # noqa: D401 – async stub
         exec_counter["runs"] += 1
         exec_counter["last_aid"] = aid
 

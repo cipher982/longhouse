@@ -101,7 +101,7 @@ async def test_gmail_webhook_triggers_agent(client, db_session, _dev_user):
 
     called = {"count": 0, "agent_id": None}
 
-    async def _stub_run_agent_task(aid: int):  # noqa: D401 – stub async
+    async def _stub_run_agent_task(aid: int, trigger: str = "schedule"):  # noqa: D401 – stub async
         called["count"] += 1
         called["agent_id"] = aid
 

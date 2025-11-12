@@ -179,7 +179,7 @@ async def fire_trigger_event(
     # 4) Publish event on internal bus
     await event_bus.publish(
         EventType.TRIGGER_FIRED,
-        {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload},
+        {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload, "trigger_type": "webhook"},
     )
 
     # Metrics -----------------------------------------------------------
