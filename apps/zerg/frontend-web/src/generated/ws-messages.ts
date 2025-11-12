@@ -1,5 +1,5 @@
 // AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from ws-protocol-asyncapi.yml at 2025-11-10T18:50:50.033837Z
+// Generated from ws-protocol-asyncapi.yml at 2025-11-12T00:33:46.586165Z
 // Using AsyncAPI 3.0 + TypeScript Code Generation
 //
 // This file contains strongly-typed WebSocket message definitions.
@@ -136,7 +136,7 @@ export interface RunUpdateData {
   agent_id: number;
   thread_id?: number;
   status: "queued" | "running" | "success" | "failed";
-  trigger?: "manual" | "schedule" | "api";
+  trigger?: "manual" | "schedule" | "chat" | "webhook" | "api";
   started_at?: string;
   finished_at?: string;
   duration_ms?: number;

@@ -1,5 +1,5 @@
 # AUTO-GENERATED FILE - DO NOT EDIT
-# Generated from ws-protocol-asyncapi.yml at 2025-11-10T17:33:49.180661Z
+# Generated from ws-protocol-asyncapi.yml at 2025-11-12T00:33:46.585322Z
 # Using AsyncAPI 3.0 + Modern Python Code Generation
 #
 # This file contains strongly-typed WebSocket message definitions.
@@ -181,7 +181,7 @@ class RunUpdateData(BaseModel):
     agent_id: int = Field(ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     status: Literal['queued', 'running', 'success', 'failed']
-    trigger: Optional[Literal['manual', 'schedule', 'api']] = None
+    trigger: Optional[Literal['manual', 'schedule', 'chat', 'webhook', 'api']] = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
