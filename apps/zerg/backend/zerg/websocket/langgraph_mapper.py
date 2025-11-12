@@ -18,12 +18,12 @@ class LangGraphMapper:
     """Transforms LangGraph streaming chunks into WebSocket event envelopes."""
 
     @staticmethod
-    def map_chunk_to_envelopes(chunk: Dict[str, Any], execution_id: int) -> List[Dict[str, Any]]:
+    def map_chunk_to_envelopes(chunk: Any, execution_id: int) -> List[Dict[str, Any]]:
         """
         Convert a single LangGraph chunk into 0+ WebSocket envelopes.
 
         Args:
-            chunk: LangGraph stream chunk (from stream_mode=["updates", "values"])
+            chunk: LangGraph stream chunk - can be dict or tuple depending on stream_mode
             execution_id: Current workflow execution ID
 
         Returns:
@@ -31,18 +31,17 @@ class LangGraphMapper:
         """
         envelopes = []
 
-        # Log the chunk structure for debugging
-        logger.debug(f"[LangGraphMapper] Processing chunk keys: {list(chunk.keys())}")
+        logger.debug(f"[LangGraphMapper] Processing chunk type: {type(chunk)}, value: {chunk}")
 
-        # Each chunk is a dict like: {"node_id": state_update}
-        # The chunk structure from LangGraph is: {node_name: node_state_result}
-        for node_id, state_update in chunk.items():
+        # Handle tuple format: (node_name, state_update)
+        if isinstance(chunk, tuple) and len(chunk) == 2:
+            node_id, state_update = chunk
+            logger.debug(f"[LangGraphMapper] Tuple format - node: {node_id}, update type: {type(state_update)}")
+
             # Skip special keys
-            if node_id.startswith("__"):
+            if isinstance(node_id, str) and node_id.startswith("__"):
                 logger.debug(f"[LangGraphMapper] Skipping special key: {node_id}")
-                continue
-
-            logger.debug(f"[LangGraphMapper] Processing node: {node_id}, update type: {type(state_update)}")
+                return envelopes
 
             # Map this node's update to a node_state envelope
             envelope = LangGraphMapper._map_node_update(node_id, state_update, execution_id)
@@ -55,6 +54,33 @@ class LangGraphMapper:
                 if progress_envelope:
                     envelopes.append(progress_envelope)
 
+            return envelopes
+
+        # Handle dict format: {node_name: state_update}
+        if isinstance(chunk, dict):
+            for node_id, state_update in chunk.items():
+                # Skip special keys
+                if node_id.startswith("__"):
+                    logger.debug(f"[LangGraphMapper] Skipping special key: {node_id}")
+                    continue
+
+                logger.debug(f"[LangGraphMapper] Dict format - node: {node_id}, update type: {type(state_update)}")
+
+                # Map this node's update to a node_state envelope
+                envelope = LangGraphMapper._map_node_update(node_id, state_update, execution_id)
+                if envelope:
+                    envelopes.append(envelope)
+
+                # Also generate workflow_progress if this update includes completed nodes
+                if isinstance(state_update, dict) and "completed_nodes" in state_update:
+                    progress_envelope = LangGraphMapper._map_workflow_progress(state_update, execution_id)
+                    if progress_envelope:
+                        envelopes.append(progress_envelope)
+
+            return envelopes
+
+        # Unknown format
+        logger.warning(f"[LangGraphMapper] Unknown chunk format: {type(chunk)}")
         return envelopes
 
     @staticmethod

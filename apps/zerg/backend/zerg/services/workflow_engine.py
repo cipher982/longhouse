@@ -253,7 +253,9 @@ class WorkflowEngine:
             # Stream execution for real-time updates with granular node state events
             # Using stream_mode=["updates"] to get per-node state transitions
             async for chunk in graph.astream(initial_state, config, stream_mode=["updates"]):
-                logger.info(f"[WorkflowEngine] Processing chunk: {list(chunk.keys()) if chunk else 'None'}")
+                # Debug: log chunk type and structure
+                logger.info(f"[WorkflowEngine] Processing chunk type: {type(chunk)}, value: {chunk}")
+
                 if chunk:
                     # Map LangGraph chunks to our event envelopes
                     envelopes = LangGraphMapper.map_chunk_to_envelopes(chunk, execution.id)
@@ -263,12 +265,6 @@ class WorkflowEngine:
                         event_type = envelope.pop("event_type")  # Extract event type
                         await publish_event(event_type, envelope)
                         logger.debug(f"[WorkflowEngine] Published {event_type} for execution {execution.id}")
-
-                    # Keep legacy progress tracking for database state
-                    for node_id, state_update in chunk.items():
-                        if state_update and hasattr(state_update, "get"):
-                            # Still update internal state for compatibility
-                            pass
 
             # Mark as successful using state machine
             ExecutionStateMachine.mark_success(execution)
