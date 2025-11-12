@@ -247,7 +247,9 @@ class WorkflowEngine:
 
         # Emit execution started event
         started_envelope = LangGraphMapper.create_execution_started_envelope(execution.id)
+        logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: About to publish EXECUTION_STARTED for execution_id={execution.id}")
         await publish_event(EventType.EXECUTION_STARTED, started_envelope)
+        logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: Published EXECUTION_STARTED successfully")
 
         try:
             # Stream execution for real-time updates with granular node state events
@@ -263,8 +265,9 @@ class WorkflowEngine:
                     # Broadcast each envelope
                     for envelope in envelopes:
                         event_type = envelope.pop("event_type")  # Extract event type
+                        logger.info(f"🔥🔥🔥 WORKFLOW_ENGINE: Publishing {event_type} for execution {execution.id}, envelope={envelope}")
                         await publish_event(event_type, envelope)
-                        logger.debug(f"[WorkflowEngine] Published {event_type} for execution {execution.id}")
+                        logger.info(f"✅✅✅ WORKFLOW_ENGINE: Published {event_type} successfully")
 
             # Mark as successful using state machine
             ExecutionStateMachine.mark_success(execution)
