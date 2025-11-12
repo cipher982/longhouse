@@ -25,6 +25,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "../styles/canvas-react.css";
 import toast from "react-hot-toast";
+import { ExecutionLogStream, type LogEntry } from "../components/ExecutionLogStream";
 import {
   fetchAgents,
   fetchCurrentWorkflow,
@@ -196,7 +197,7 @@ function CanvasPageContent() {
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
-  const [executionLogs, setExecutionLogs] = useState<string>("");
+  const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -816,12 +817,15 @@ function CanvasPageContent() {
       if (!workflow?.id) {
         throw new Error("No workflow loaded");
       }
+      // Clear previous logs before starting
+      setExecutionLogs([]);
       return startWorkflowExecution(workflow.id);
     },
     onSuccess: (execution) => {
       setCurrentExecution(execution);
-      toast.success("Workflow execution started! Click the status badge to view details.");
-      // Don't auto-open logs - let user click the badge
+      toast.success("Workflow execution started! Watch the logs panel for real-time updates.");
+      // Auto-open logs panel to show real-time stream
+      setShowLogs(true);
     },
     onError: (error: Error) => {
       toast.error(`Failed to start workflow: ${error.message || "Unknown error"}`);
@@ -847,38 +851,113 @@ function CanvasPageContent() {
   const isSaving = saveWorkflowMutation.isPending;
 
   // WebSocket for real-time execution updates
-  const handleExecutionMessage = useCallback(async () => {
-    const execution = currentExecutionRef.current;
-    if (!execution?.execution_id) {
-      return;
-    }
+  const handleStreamingMessage = useCallback((envelope: any) => {
+    const { message_type, data } = envelope;
 
-    try {
-      const updatedStatus = await getExecutionStatus(execution.execution_id);
+    console.log('[CanvasPage] Received WebSocket message:', message_type, data);
 
-      setCurrentExecution((prevExecution) => ({
-        ...updatedStatus,
-        execution_id: prevExecution?.execution_id || execution.execution_id,
-      }));
-
-      if (updatedStatus.phase === "finished" || updatedStatus.phase === "cancelled") {
-        try {
-          const logs = await getExecutionLogs(execution.execution_id);
-          setExecutionLogs(logs.logs);
-        } catch (error) {
-          console.error("Failed to fetch execution logs:", error);
-        }
+    switch (message_type) {
+      case 'execution_started': {
+        console.log('[CanvasPage] Execution started');
+        setExecutionLogs([{
+          timestamp: Date.now(),
+          type: 'execution',
+          message: `EXECUTION STARTED [ID: ${data.execution_id}]`,
+          metadata: data
+        }]);
+        break;
       }
-    } catch (error) {
-      console.error("Failed to fetch execution status:", error);
+
+      case 'node_state': {
+        const { node_id, phase, result, output, error_message } = data;
+
+        // Append to log stream
+        const logType = error_message ? 'error' : (phase === 'running' ? 'node' : 'output');
+        const logMessage = `NODE ${node_id} → ${phase.toUpperCase()}${result ? ` [${result}]` : ''}`;
+
+        console.log('[CanvasPage] Node state:', { node_id, phase, result });
+
+        setExecutionLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: logType,
+          message: logMessage,
+          metadata: data
+        }]);
+
+        // Update node visual state (future enhancement)
+        // setNodes(currentNodes =>
+        //   currentNodes.map(node =>
+        //     node.id === node_id
+        //       ? { ...node, data: { ...node.data, executionState: phase } }
+        //       : node
+        //   )
+        // );
+        break;
+      }
+
+      case 'workflow_progress': {
+        const { completed_nodes } = data;
+        console.log('[CanvasPage] Workflow progress:', { completed: completed_nodes.length });
+        // Optional: update progress indicator
+        break;
+      }
+
+      case 'execution_finished': {
+        const { result, error_message, duration_ms } = data;
+
+        setExecutionLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: 'execution',
+          message: `EXECUTION ${result.toUpperCase()}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
+        }]);
+
+        console.log('[CanvasPage] Execution finished:', result);
+
+        // Refresh execution status via REST (to sync DB state)
+        if (currentExecutionRef.current?.execution_id) {
+          getExecutionStatus(currentExecutionRef.current.execution_id).then(status => {
+            setCurrentExecution(status);
+          }).catch(err => {
+            console.error('[CanvasPage] Failed to fetch final execution status:', err);
+          });
+        }
+        break;
+      }
+
+      default:
+        console.log('[CanvasPage] Unknown message type:', message_type);
     }
   }, []);
 
-  useWebSocket(currentExecution?.execution_id != null, {
+  const { sendMessage } = useWebSocket(currentExecution?.execution_id != null, {
     includeAuth: true,
     invalidateQueries: [],
-    onMessage: handleExecutionMessage,
+    onStreamingMessage: handleStreamingMessage,
   });
+
+  // Subscribe to workflow execution topic when execution starts
+  useEffect(() => {
+    if (!currentExecution?.execution_id) return;
+
+    const topic = `workflow_execution:${currentExecution.execution_id}`;
+
+    console.log('[CanvasPage] Subscribing to topic:', topic);
+
+    // Subscribe to topic
+    sendMessage({
+      type: 'subscribe',
+      topics: [topic]
+    });
+
+    // Cleanup: unsubscribe when execution changes or component unmounts
+    return () => {
+      console.log('[CanvasPage] Unsubscribing from topic:', topic);
+      sendMessage({
+        type: 'unsubscribe',
+        topics: [topic]
+      });
+    };
+  }, [currentExecution?.execution_id, sendMessage]);
 
   // Handle connection creation
   const onConnect: OnConnect = useCallback(
@@ -1350,31 +1429,10 @@ function CanvasPageContent() {
                   </button>
                 </div>
                 <div className="logs-content">
-                  <div className="execution-info">
-                    <div><strong>Execution ID:</strong> {currentExecution.execution_id}</div>
-                    <div><strong>Status:</strong> {currentExecution.phase}</div>
-                    {currentExecution.result !== undefined && currentExecution.result !== null && (
-                      <div>
-                        <strong>Result:</strong> <code>{String(currentExecution.result)}</code>
-                      </div>
-                    )}
-                  </div>
-                  {executionLogs ? (
-                    <div className="logs-output">
-                      <h5>Execution Logs:</h5>
-                      <pre className="logs-text">{executionLogs}</pre>
-                    </div>
-                  ) : (
-                    <div className="logs-output">
-                      <p style={{ opacity: 0.7, fontStyle: 'italic' }}>
-                        No detailed logs were captured for this execution.
-                        The workflow completed successfully but did not generate text logs.
-                      </p>
-                      <p style={{ opacity: 0.6, fontSize: '0.9em', marginTop: '8px' }}>
-                        Note: Node execution states are stored in the database but not currently displayed here.
-                      </p>
-                    </div>
-                  )}
+                  <ExecutionLogStream
+                    logs={executionLogs}
+                    isRunning={currentExecution.phase === 'running'}
+                  />
                 </div>
               </aside>
             )}
