@@ -201,6 +201,12 @@ function CanvasPageContent() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+
+  // Draggable logs panel state
+  const [logsPanelPosition, setLogsPanelPosition] = useState({ x: 0, y: 0 });
+  const [isDraggingLogsPanel, setIsDraggingLogsPanel] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const logsPanelRef = useRef<HTMLDivElement | null>(null);
   const [dragPreviewData, setDragPreviewData] = useState<DragPreviewData | null>(null);
   const [dragPreviewPosition, setDragPreviewPosition] = useState<{ x: number; y: number } | null>(
     null
@@ -752,6 +758,82 @@ function CanvasPageContent() {
   useEffect(() => {
     currentExecutionRef.current = currentExecution;
   }, [currentExecution]);
+
+  // Logs panel drag handlers
+  const handleLogsPanelMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // Only initiate drag if clicking on the header, not the close button
+    if ((event.target as HTMLElement).closest('.close-logs')) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!logsPanelRef.current) return;
+
+    const rect = logsPanelRef.current.getBoundingClientRect();
+    setDragOffset({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+    setIsDraggingLogsPanel(true);
+  }, []);
+
+  const handleLogsPanelMouseMove = useCallback((event: MouseEvent) => {
+    if (!isDraggingLogsPanel || !logsPanelRef.current) return;
+
+    const panel = logsPanelRef.current;
+    const panelRect = panel.getBoundingClientRect();
+
+    // Calculate new position
+    let newX = event.clientX - dragOffset.x;
+    let newY = event.clientY - dragOffset.y;
+
+    // Get viewport bounds
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const panelWidth = panelRect.width;
+    const panelHeight = panelRect.height;
+
+    // Constrain to viewport bounds (leave at least 50px visible)
+    const minVisible = 50;
+    newX = Math.max(-panelWidth + minVisible, Math.min(newX, viewportWidth - minVisible));
+    newY = Math.max(0, Math.min(newY, viewportHeight - minVisible));
+
+    setLogsPanelPosition({ x: newX, y: newY });
+  }, [isDraggingLogsPanel, dragOffset]);
+
+  const handleLogsPanelMouseUp = useCallback(() => {
+    setIsDraggingLogsPanel(false);
+  }, []);
+
+  // Effect for logs panel dragging
+  useEffect(() => {
+    if (isDraggingLogsPanel) {
+      document.addEventListener('mousemove', handleLogsPanelMouseMove);
+      document.addEventListener('mouseup', handleLogsPanelMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleLogsPanelMouseMove);
+        document.removeEventListener('mouseup', handleLogsPanelMouseUp);
+      };
+    }
+  }, [isDraggingLogsPanel, handleLogsPanelMouseMove, handleLogsPanelMouseUp]);
+
+  // Reset panel position when logs are opened
+  useEffect(() => {
+    if (showLogs && logsPanelRef.current) {
+      // Center the panel on first open
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const panelWidth = 400; // Default width
+      const panelHeight = 500; // Default max-height
+
+      setLogsPanelPosition({
+        x: (viewportWidth - panelWidth) / 2,
+        y: Math.max(80, (viewportHeight - panelHeight) / 2),
+      });
+    }
+  }, [showLogs]);
 
   // Save workflow mutation with hash-based deduplication
   const saveWorkflowMutation = useMutation({
@@ -1413,12 +1495,21 @@ function CanvasPageContent() {
             </div>
             {showLogs && currentExecution && (
               <aside
+                ref={logsPanelRef}
                 id="execution-logs-drawer"
-                className="execution-logs-drawer"
+                className={`execution-logs-drawer execution-logs-draggable ${isDraggingLogsPanel ? 'dragging' : ''}`}
                 role="complementary"
                 aria-label="Execution logs"
+                style={{
+                  left: `${logsPanelPosition.x}px`,
+                  top: `${logsPanelPosition.y}px`,
+                }}
               >
-                <div className="logs-header">
+                <div
+                  className="logs-header"
+                  onMouseDown={handleLogsPanelMouseDown}
+                  style={{ cursor: isDraggingLogsPanel ? 'grabbing' : 'grab' }}
+                >
                   <h4>Execution Logs</h4>
                   <button
                     className="close-logs"
