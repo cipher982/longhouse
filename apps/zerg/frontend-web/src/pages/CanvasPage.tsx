@@ -1045,7 +1045,8 @@ function CanvasPageContent() {
         topics: [topic]
       });
     };
-  }, [currentExecution?.execution_id, sendMessage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentExecution?.execution_id]); // Only re-subscribe when execution ID changes
 
   // Handle connection creation
   const onConnect: OnConnect = useCallback(

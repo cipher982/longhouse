@@ -281,7 +281,7 @@ class TopicConnectionManager:
 
             self.topic_subscriptions[topic].add(client_id)
             self.client_topics[client_id].add(topic)
-        logger.info("Client %s subscribed to topic %s", client_id, topic)
+        logger.info("✅ Client %s subscribed to topic %s (total subscribers: %d)", client_id, topic, len(self.topic_subscriptions[topic]))
 
     async def unsubscribe_from_topic(self, client_id: str, topic: str) -> None:
         """Unsubscribe a client from a topic.
@@ -428,12 +428,14 @@ class TopicConnectionManager:
             topic: The topic to broadcast to
             message: The message to broadcast (must be in envelope format)
         """
+        logger.info(f"🔔 broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
         # spam – this situation is perfectly normal when scheduled agents or
         # background jobs emit updates while no browser is connected.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
-                logger.debug("broadcast_to_topic: no subscribers for topic %s", topic)
+                logger.warning(f"❌ NO SUBSCRIBERS for topic {topic}")
+                logger.warning(f"   Available topics: {list(self.topic_subscriptions.keys())}")
                 return
 
             # Take a *snapshot* of client IDs and their queues to send to outside the lock
@@ -441,6 +443,7 @@ class TopicConnectionManager:
                 client_id: self.client_queues.get(client_id)  # *None* when no dedicated queue
                 for client_id in self.topic_subscriptions[topic]
             }
+            logger.info(f"📤 Broadcasting to {len(client_queues)} subscribers on topic {topic}")
 
         # Envelope format is mandatory - no legacy format support
         # All callers must provide properly formatted envelope messages
@@ -603,6 +606,7 @@ class TopicConnectionManager:
 
     async def _handle_execution_started(self, data: Dict[str, Any]) -> None:
         """Broadcast execution started event."""
+        logger.info(f"🔥 _handle_execution_started CALLED with data: {data}")
         execution_id = data["execution_id"]
         topic = f"workflow_execution:{execution_id}"
 
@@ -612,11 +616,13 @@ class TopicConnectionManager:
 
         # Use envelope format
         envelope = Envelope.create(message_type="execution_started", topic=topic, data=serialized_data)
+        logger.info(f"📡 Broadcasting execution_started to topic {topic}, envelope: {envelope.model_dump()}")
         await self.broadcast_to_topic(topic, envelope.model_dump())
-        logger.debug(f"Broadcasted execution_started for execution {execution_id} to topic {topic}")
+        logger.info(f"✅ Broadcast complete for execution {execution_id}")
 
     async def _handle_node_state_event(self, data: Dict[str, Any]) -> None:
         """Broadcast per-node state changes during workflow execution."""
+        logger.info(f"🔥 _handle_node_state_event CALLED with data: {data}")
 
         execution_id = data["execution_id"]
 
@@ -628,7 +634,9 @@ class TopicConnectionManager:
 
         # Use envelope format
         envelope = Envelope.create(message_type="node_state", topic=topic, data=serialized_data)
+        logger.info(f"📡 Broadcasting node_state to topic {topic}")
         await self.broadcast_to_topic(topic, envelope.model_dump())
+        logger.info(f"✅ Broadcast complete for node_state")
 
     async def _handle_workflow_progress(self, data: Dict[str, Any]) -> None:
         """Broadcast workflow progress updates."""
@@ -649,6 +657,7 @@ class TopicConnectionManager:
     # ------------------------------------------------------------------
 
     async def _handle_execution_finished(self, data: Dict[str, Any]) -> None:
+        logger.info(f"🔥 _handle_execution_finished CALLED with data: {data}")
         exec_id = data["execution_id"]
         topic = f"workflow_execution:{exec_id}"
 
@@ -656,11 +665,12 @@ class TopicConnectionManager:
         clean_data = {k: v for k, v in data.items() if k != "event_type"}
         serialized_data = jsonable_encoder(clean_data)
 
-        logger.info("Broadcasting execution_finished for execution %s to topic %s", exec_id, topic)
+        logger.info(f"📡 Broadcasting execution_finished to topic {topic}")
 
         # Use envelope format
         envelope = Envelope.create(message_type="execution_finished", topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
+        logger.info(f"✅ Broadcast complete for execution_finished")
 
     # ------------------------------------------------------------------
     # Node log streaming
