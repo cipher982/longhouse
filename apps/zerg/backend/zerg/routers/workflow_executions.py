@@ -78,13 +78,30 @@ async def start_workflow_execution(
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     # Execute workflow with LangGraph engine (non-blocking)
-    execution_id = await workflow_engine.execute_workflow(workflow_id)
+    try:
+        execution_id = await workflow_engine.execute_workflow(workflow_id)
+        return ExecutionStatusResponse(
+            execution_id=execution_id,
+            phase="running",
+            result=None
+        )
+    except Exception as e:
+        # Log the full error for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Failed to start workflow {workflow_id}")
 
-    return ExecutionStatusResponse(
-        execution_id=execution_id,
-        phase="running",
-        result=None
-    )
+        # Return user-friendly error message
+        error_msg = str(e)
+        if "InvalidUpdateError" in error_msg:
+            error_msg = "Workflow execution failed: concurrent state update error. Check backend logs for details."
+        elif "execution_id not found" in error_msg:
+            error_msg = "Workflow execution failed: missing execution context. This is a configuration error."
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start workflow: {error_msg}"
+        )
 
 
 @router.post("/executions/{execution_id}/start", response_model=ExecutionStatusResponse)
