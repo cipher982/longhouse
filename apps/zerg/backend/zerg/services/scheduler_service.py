@@ -120,13 +120,15 @@ class SchedulerService:
             logger.warning("trigger_fired event missing agent_id – ignoring")
             return
 
-        logger.info(f"Trigger fired for agent {agent_id}; executing run task now")
+        # Extract trigger type from event payload, default to "webhook" for backwards compatibility
+        trigger_type = data.get("trigger_type", "webhook")
+        logger.info(f"Trigger fired for agent {agent_id} with trigger={trigger_type}; executing run task now")
 
         # Execute the agent task immediately (await) so tests can observe the
         # call synchronously; the actual work done inside `run_agent_task` is
         # asynchronous and non‑blocking.  If later we need true fire‑and‑forget
         # behaviour we can switch back to `asyncio.create_task`.
-        await self.run_agent_task(agent_id)
+        await self.run_agent_task(agent_id, trigger=trigger_type)
 
     async def load_scheduled_agents(self):
         """Load all agents that define a cron schedule and register them."""
