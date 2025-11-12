@@ -154,12 +154,16 @@ async def lifespan(app: FastAPI):
             await scheduler_service.start()
             ops_events_bridge.start()
 
+            # Initialize WebSocket topic manager (sets up event subscriptions)
+            from zerg.websocket.manager import topic_manager
+            logger.info("🔌 WebSocket topic manager initialized")
+
             # Start watch renewal service for Gmail connectors
             from zerg.services.watch_renewal_service import watch_renewal_service
 
             await watch_renewal_service.start()
 
-        logger.info("Background services initialised (scheduler + email triggers + watch renewal)")
+        logger.info("Background services initialised (scheduler + email triggers + watch renewal + websocket)")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
 

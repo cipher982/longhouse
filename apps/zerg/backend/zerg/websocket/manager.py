@@ -102,6 +102,8 @@ class TopicConnectionManager:
 
     def _setup_event_handlers(self) -> None:
         """Set up handlers for events we want to broadcast."""
+        print("🚀🚀🚀 TopicConnectionManager._setup_event_handlers() STARTING", flush=True)
+        logger.info("🚀🚀🚀 TopicConnectionManager._setup_event_handlers() STARTING")
         # Agent events
         event_bus.subscribe(EventType.AGENT_CREATED, self._handle_agent_event)
         event_bus.subscribe(EventType.AGENT_UPDATED, self._handle_agent_event)
@@ -117,14 +119,22 @@ class TopicConnectionManager:
         event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
 
         # Workflow execution events
+        print("🔥 About to subscribe to EXECUTION_STARTED", flush=True)
         event_bus.subscribe(EventType.EXECUTION_STARTED, self._handle_execution_started)
+        print("🔥 About to subscribe to NODE_STATE_CHANGED", flush=True)
         event_bus.subscribe(EventType.NODE_STATE_CHANGED, self._handle_node_state_event)
+        print("🔥 About to subscribe to WORKFLOW_PROGRESS", flush=True)
         event_bus.subscribe(EventType.WORKFLOW_PROGRESS, self._handle_workflow_progress)
+        print("🔥 About to subscribe to EXECUTION_FINISHED", flush=True)
         event_bus.subscribe(EventType.EXECUTION_FINISHED, self._handle_execution_finished)
+        print("🔥 About to subscribe to NODE_LOG", flush=True)
         event_bus.subscribe(EventType.NODE_LOG, self._handle_node_log)
+        print("✅✅✅ ALL WORKFLOW EVENT SUBSCRIPTIONS COMPLETE", flush=True)
 
         # User events (e.g., profile updated) – broadcast to dedicated topic
         event_bus.subscribe(EventType.USER_UPDATED, self._handle_user_event)
+        print("🚀🚀🚀 TopicConnectionManager._setup_event_handlers() COMPLETE", flush=True)
+        logger.info("🚀🚀🚀 TopicConnectionManager._setup_event_handlers() COMPLETE")
 
     async def connect(
         self,
