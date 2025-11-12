@@ -76,6 +76,8 @@ from zerg.routers.workflows import router as workflows_router
 # friction-free we skip service start-up when the environment variable
 # ``TESTING`` is truthy (set automatically by `backend/tests/conftest.py`).
 from zerg.services.ops_events import ops_events_bridge  # noqa: E402
+# Import topic_manager at module level so event subscriptions register in worker process
+from zerg.websocket.manager import topic_manager  # noqa: E402, F401
 from zerg.services.scheduler_service import scheduler_service  # noqa: E402
 
 _log_level_name = _settings.log_level.upper()
@@ -153,10 +155,6 @@ async def lifespan(app: FastAPI):
         if not _settings.testing:
             await scheduler_service.start()
             ops_events_bridge.start()
-
-            # Initialize WebSocket topic manager (sets up event subscriptions)
-            from zerg.websocket.manager import topic_manager
-            logger.info("🔌 WebSocket topic manager initialized")
 
             # Start watch renewal service for Gmail connectors
             from zerg.services.watch_renewal_service import watch_renewal_service

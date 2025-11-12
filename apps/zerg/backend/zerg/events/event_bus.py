@@ -64,7 +64,12 @@ class EventBus:
             event_type: The type of event being published
             data: Event payload data
         """
+        # Debug: Always log subscriber count
+        subscriber_count = len(self._subscribers.get(event_type, set()))
+        print(f"🔥🔥🔥 EVENT_BUS.publish({event_type}): {subscriber_count} subscribers", flush=True)
+
         if event_type not in self._subscribers:
+            print(f"❌ NO SUBSCRIBERS for {event_type}", flush=True)
             return
 
         logger.debug("Publishing event %s with data: %s", event_type, data)

@@ -939,9 +939,9 @@ function CanvasPageContent() {
 
   // WebSocket for real-time execution updates
   const handleStreamingMessage = useCallback((envelope: any) => {
-    const { message_type, data } = envelope;
+    console.log('[CanvasPage] 📨 RAW MESSAGE:', JSON.stringify(envelope, null, 2));
 
-    console.log('[CanvasPage] 📨 Received:', message_type, data);
+    const { message_type, data } = envelope;
 
     switch (message_type) {
       case 'execution_started': {
