@@ -819,19 +819,22 @@ function CanvasPageContent() {
     }
   }, [isDraggingLogsPanel, handleLogsPanelMouseMove, handleLogsPanelMouseUp]);
 
-  // Initialize panel position on first open only
+  // Initialize panel position when logs are opened
   useEffect(() => {
-    if (showLogs && logsPanelRef.current && logsPanelPosition === null) {
-      // Center the panel on first open
+    if (showLogs && logsPanelPosition === null) {
+      // Center the panel
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       const panelWidth = 400; // Default width
       const panelHeight = 500; // Default max-height
 
-      setLogsPanelPosition({
+      const newPosition = {
         x: (viewportWidth - panelWidth) / 2,
         y: Math.max(80, (viewportHeight - panelHeight) / 2),
-      });
+      };
+
+      console.log('[CanvasPage] 🪟 Initializing panel position:', newPosition);
+      setLogsPanelPosition(newPosition);
     }
   }, [showLogs, logsPanelPosition]);
 
@@ -899,11 +902,13 @@ function CanvasPageContent() {
       if (!workflow?.id) {
         throw new Error("No workflow loaded");
       }
+      console.log('[CanvasPage] 🚀 Starting workflow execution, workflow_id:', workflow.id);
       // Clear previous logs before starting
       setExecutionLogs([]);
       return startWorkflowExecution(workflow.id);
     },
     onSuccess: (execution) => {
+      console.log('[CanvasPage] 🎯 Workflow started, execution_id:', execution.execution_id);
       setCurrentExecution(execution);
       toast.success("Workflow execution started! Watch the logs panel for real-time updates.");
       // Auto-open logs panel to show real-time stream
@@ -936,11 +941,11 @@ function CanvasPageContent() {
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { message_type, data } = envelope;
 
-    // console.log('[CanvasPage] Received WebSocket message:', message_type, data);
+    console.log('[CanvasPage] 📨 Received:', message_type, data);
 
     switch (message_type) {
       case 'execution_started': {
-        // console.log('[CanvasPage] Execution started');
+        console.log('[CanvasPage] ✅ Execution started:', data.execution_id);
         setExecutionLogs([{
           timestamp: Date.now(),
           type: 'execution',
@@ -957,7 +962,7 @@ function CanvasPageContent() {
         const logType = error_message ? 'error' : (phase === 'running' ? 'node' : 'output');
         const logMessage = `NODE ${node_id} → ${phase.toUpperCase()}${result ? ` [${result}]` : ''}`;
 
-        // console.log('[CanvasPage] Node state:', { node_id, phase, result });
+        console.log('[CanvasPage] 📍 Node:', node_id, '→', phase, result || '');
 
         setExecutionLogs(prev => [...prev, {
           timestamp: Date.now(),
@@ -993,7 +998,7 @@ function CanvasPageContent() {
           message: `EXECUTION ${result.toUpperCase()}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
         }]);
 
-        // console.log('[CanvasPage] Execution finished:', result);
+        console.log('[CanvasPage] 🏁 Execution finished:', result);
 
         // Refresh execution status via REST (to sync DB state)
         if (currentExecutionRef.current?.execution_id) {
@@ -1024,7 +1029,7 @@ function CanvasPageContent() {
 
     const topic = `workflow_execution:${currentExecution.execution_id}`;
 
-    // console.log('[CanvasPage] Subscribing to topic:', topic);
+    console.log('[CanvasPage] 📡 Subscribing to topic:', topic);
 
     // Subscribe to topic
     sendMessage({
@@ -1034,7 +1039,7 @@ function CanvasPageContent() {
 
     // Cleanup: unsubscribe when execution changes or component unmounts
     return () => {
-      // console.log('[CanvasPage] Unsubscribing from topic:', topic);
+      console.log('[CanvasPage] 🔕 Unsubscribing from topic:', topic);
       sendMessage({
         type: 'unsubscribe',
         topics: [topic]
@@ -1501,10 +1506,11 @@ function CanvasPageContent() {
                 className={`execution-logs-draggable ${isDraggingLogsPanel ? 'dragging' : ''}`}
                 role="complementary"
                 aria-label="Execution logs"
-                style={logsPanelPosition ? {
-                  left: `${logsPanelPosition.x}px`,
-                  top: `${logsPanelPosition.y}px`,
-                } : {}}
+                style={{
+                  left: logsPanelPosition ? `${logsPanelPosition.x}px` : '50%',
+                  top: logsPanelPosition ? `${logsPanelPosition.y}px` : '20%',
+                  transform: logsPanelPosition ? 'none' : 'translateX(-50%)',
+                }}
               >
                 <div
                   className="logs-header"
