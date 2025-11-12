@@ -31,6 +31,7 @@ from zerg.schemas.workflow import WorkflowData
 from zerg.services.execution_state import ExecutionStateMachine
 from zerg.services.node_executors import create_node_executor
 from zerg.utils.time import utc_now_naive
+from zerg.websocket.langgraph_mapper import LangGraphMapper
 
 logger = logging.getLogger(__name__)
 
@@ -244,29 +245,49 @@ class WorkflowEngine:
         }
         logger.info(f"[WorkflowEngine] Starting streaming execution – workflow_id={workflow_id}")
 
-        # Stream execution for real-time updates
-        async for chunk in graph.astream(initial_state, config):
-            logger.info(f"[WorkflowEngine] Processing chunk: {list(chunk.keys()) if chunk else 'None'}")
-            if chunk:
-                for node_id, state_update in chunk.items():
-                    logger.info(f"[WorkflowEngine] Node {node_id} completed")
-                    if state_update and hasattr(state_update, "get"):
-                        await self._publish_streaming_progress(
-                            execution_id=execution.id,
-                            completed_nodes=state_update.get("completed_nodes", []),
-                            node_outputs=state_update.get("node_outputs", {}),
-                            error=state_update.get("error"),
-                        )
+        # Emit execution started event
+        started_envelope = LangGraphMapper.create_execution_started_envelope(execution.id)
+        await publish_event("execution_started", started_envelope)
 
-        # Mark as successful using state machine
-        ExecutionStateMachine.mark_success(execution)
-        execution.finished_at = utc_now_naive()
-        db.commit()
+        try:
+            # Stream execution for real-time updates with granular node state events
+            # Using stream_mode=["updates"] to get per-node state transitions
+            async for chunk in graph.astream(initial_state, config, stream_mode=["updates"]):
+                logger.info(f"[WorkflowEngine] Processing chunk: {list(chunk.keys()) if chunk else 'None'}")
+                if chunk:
+                    # Map LangGraph chunks to our event envelopes
+                    envelopes = LangGraphMapper.map_chunk_to_envelopes(chunk, execution.id)
 
-        await self._publish_execution_finished(
-            execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution)
-        )
-        logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
+                    # Broadcast each envelope
+                    for envelope in envelopes:
+                        event_type = envelope.pop("event_type")  # Extract event type
+                        await publish_event(event_type, envelope)
+                        logger.debug(f"[WorkflowEngine] Published {event_type} for execution {execution.id}")
+
+                    # Keep legacy progress tracking for database state
+                    for node_id, state_update in chunk.items():
+                        if state_update and hasattr(state_update, "get"):
+                            # Still update internal state for compatibility
+                            pass
+
+            # Mark as successful using state machine
+            ExecutionStateMachine.mark_success(execution)
+            execution.finished_at = utc_now_naive()
+            db.commit()
+
+            await self._publish_execution_finished(
+                execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution)
+            )
+            logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
+
+        except Exception as e:
+            # Emit failure event using mapper
+            failure_envelope = LangGraphMapper.create_execution_finished_envelope(
+                execution_id=execution.id, result="failure", error_message=str(e)
+            )
+            await publish_event(EventType.EXECUTION_FINISHED, failure_envelope)
+            logger.exception(f"[WorkflowEngine] Graph execution failed – execution_id={execution.id}")
+            raise  # Re-raise to trigger state machine handling
 
     # Event publishing methods
     async def _publish_node_event(self, *, execution_id: int, node_id: str, node_state, output: Any):
