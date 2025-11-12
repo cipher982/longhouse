@@ -116,10 +116,10 @@ class TopicConnectionManager:
         event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
         event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
 
-        # Workflow execution – node progress
+        # Workflow execution events
+        event_bus.subscribe(EventType.EXECUTION_STARTED, self._handle_execution_started)
         event_bus.subscribe(EventType.NODE_STATE_CHANGED, self._handle_node_state_event)
-
-        # Workflow execution – finished & logs
+        event_bus.subscribe(EventType.WORKFLOW_PROGRESS, self._handle_workflow_progress)
         event_bus.subscribe(EventType.EXECUTION_FINISHED, self._handle_execution_finished)
         event_bus.subscribe(EventType.NODE_LOG, self._handle_node_log)
 
@@ -598,8 +598,22 @@ class TopicConnectionManager:
         await self.broadcast_to_topic(topic, envelope.model_dump())
 
     # ------------------------------------------------------------------
-    # Workflow execution node updates
+    # Workflow execution events
     # ------------------------------------------------------------------
+
+    async def _handle_execution_started(self, data: Dict[str, Any]) -> None:
+        """Broadcast execution started event."""
+        execution_id = data["execution_id"]
+        topic = f"workflow_execution:{execution_id}"
+
+        # Create clean data payload without event_type
+        clean_data = {k: v for k, v in data.items() if k != "event_type"}
+        serialized_data = jsonable_encoder(clean_data)
+
+        # Use envelope format
+        envelope = Envelope.create(message_type="execution_started", topic=topic, data=serialized_data)
+        await self.broadcast_to_topic(topic, envelope.model_dump())
+        logger.debug(f"Broadcasted execution_started for execution {execution_id} to topic {topic}")
 
     async def _handle_node_state_event(self, data: Dict[str, Any]) -> None:
         """Broadcast per-node state changes during workflow execution."""
@@ -615,6 +629,20 @@ class TopicConnectionManager:
         # Use envelope format
         envelope = Envelope.create(message_type="node_state", topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
+
+    async def _handle_workflow_progress(self, data: Dict[str, Any]) -> None:
+        """Broadcast workflow progress updates."""
+        execution_id = data["execution_id"]
+        topic = f"workflow_execution:{execution_id}"
+
+        # Create clean data payload without event_type
+        clean_data = {k: v for k, v in data.items() if k != "event_type"}
+        serialized_data = jsonable_encoder(clean_data)
+
+        # Use envelope format
+        envelope = Envelope.create(message_type="workflow_progress", topic=topic, data=serialized_data)
+        await self.broadcast_to_topic(topic, envelope.model_dump())
+        logger.debug(f"Broadcasted workflow_progress for execution {execution_id} to topic {topic}")
 
     # ------------------------------------------------------------------
     # Execution finished
