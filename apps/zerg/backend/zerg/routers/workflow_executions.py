@@ -77,11 +77,26 @@ async def start_workflow_execution(
     if not workflow or workflow.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    # Execute workflow with LangGraph engine (non-blocking)
+    # Create execution record and start in background (truly non-blocking)
     try:
-        execution_id = await workflow_engine.execute_workflow(workflow_id)
+        from zerg.models.models import WorkflowExecution
+        from zerg.utils.time import utc_now_naive
+
+        # Create execution record
+        execution = WorkflowExecution(
+            workflow_id=workflow_id,
+            started_at=utc_now_naive(),
+            triggered_by="manual",
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+
+        # Start workflow in background
+        workflow_engine.start_workflow_in_background(workflow_id, execution.id)
+
         return ExecutionStatusResponse(
-            execution_id=execution_id,
+            execution_id=execution.id,
             phase="running",
             result=None
         )
