@@ -20,10 +20,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add 'chat' and 'webhook' values to run_trigger_enum."""
-    # For PostgreSQL, we need to alter the enum type
-    # For SQLite, this is a no-op since SQLite doesn't enforce enum constraints
-    op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'chat'")
-    op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'webhook'")
+    # Only run ALTER TYPE on PostgreSQL; SQLite doesn't support it and doesn't need it
+    # (SQLite doesn't enforce enum constraints at the database level)
+    bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'chat'")
+        op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'webhook'")
 
 
 def downgrade() -> None:
