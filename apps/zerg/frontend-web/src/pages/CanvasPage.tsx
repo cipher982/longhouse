@@ -936,11 +936,11 @@ function CanvasPageContent() {
   const handleStreamingMessage = useCallback((envelope: any) => {
     const { message_type, data } = envelope;
 
-    console.log('[CanvasPage] Received WebSocket message:', message_type, data);
+    // console.log('[CanvasPage] Received WebSocket message:', message_type, data);
 
     switch (message_type) {
       case 'execution_started': {
-        console.log('[CanvasPage] Execution started');
+        // console.log('[CanvasPage] Execution started');
         setExecutionLogs([{
           timestamp: Date.now(),
           type: 'execution',
@@ -957,7 +957,7 @@ function CanvasPageContent() {
         const logType = error_message ? 'error' : (phase === 'running' ? 'node' : 'output');
         const logMessage = `NODE ${node_id} → ${phase.toUpperCase()}${result ? ` [${result}]` : ''}`;
 
-        console.log('[CanvasPage] Node state:', { node_id, phase, result });
+        // console.log('[CanvasPage] Node state:', { node_id, phase, result });
 
         setExecutionLogs(prev => [...prev, {
           timestamp: Date.now(),
@@ -979,7 +979,7 @@ function CanvasPageContent() {
 
       case 'workflow_progress': {
         const { completed_nodes } = data;
-        console.log('[CanvasPage] Workflow progress:', { completed: completed_nodes.length });
+        // console.log('[CanvasPage] Workflow progress:', { completed: completed_nodes.length });
         // Optional: update progress indicator
         break;
       }
@@ -993,7 +993,7 @@ function CanvasPageContent() {
           message: `EXECUTION ${result.toUpperCase()}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
         }]);
 
-        console.log('[CanvasPage] Execution finished:', result);
+        // console.log('[CanvasPage] Execution finished:', result);
 
         // Refresh execution status via REST (to sync DB state)
         if (currentExecutionRef.current?.execution_id) {
@@ -1007,7 +1007,8 @@ function CanvasPageContent() {
       }
 
       default:
-        console.log('[CanvasPage] Unknown message type:', message_type);
+        // console.log('[CanvasPage] Unknown message type:', message_type);
+        break;
     }
   }, []);
 
@@ -1023,7 +1024,7 @@ function CanvasPageContent() {
 
     const topic = `workflow_execution:${currentExecution.execution_id}`;
 
-    console.log('[CanvasPage] Subscribing to topic:', topic);
+    // console.log('[CanvasPage] Subscribing to topic:', topic);
 
     // Subscribe to topic
     sendMessage({
@@ -1033,7 +1034,7 @@ function CanvasPageContent() {
 
     // Cleanup: unsubscribe when execution changes or component unmounts
     return () => {
-      console.log('[CanvasPage] Unsubscribing from topic:', topic);
+      // console.log('[CanvasPage] Unsubscribing from topic:', topic);
       sendMessage({
         type: 'unsubscribe',
         topics: [topic]
