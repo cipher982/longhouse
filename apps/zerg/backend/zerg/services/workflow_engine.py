@@ -247,7 +247,7 @@ class WorkflowEngine:
 
         # Emit execution started event
         started_envelope = LangGraphMapper.create_execution_started_envelope(execution.id)
-        await publish_event("execution_started", started_envelope)
+        await publish_event(EventType.EXECUTION_STARTED, started_envelope)
 
         try:
             # Stream execution for real-time updates with granular node state events
@@ -277,13 +277,9 @@ class WorkflowEngine:
             logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
 
         except Exception as e:
-            # Emit failure event using mapper
-            failure_envelope = LangGraphMapper.create_execution_finished_envelope(
-                execution_id=execution.id, result="failure", error_message=str(e)
-            )
-            await publish_event(EventType.EXECUTION_FINISHED, failure_envelope)
+            # Log error but don't publish EXECUTION_FINISHED here - let outer handler do it once
             logger.exception(f"[WorkflowEngine] Graph execution failed – execution_id={execution.id}")
-            raise  # Re-raise to trigger state machine handling
+            raise  # Re-raise to trigger state machine handling and single EXECUTION_FINISHED event
 
     # Event publishing methods
     async def _publish_node_event(self, *, execution_id: int, node_id: str, node_state, output: Any):
