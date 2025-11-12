@@ -164,9 +164,9 @@ export function useWebSocket(
     const streamingTypes = ['stream_start', 'stream_chunk', 'stream_end', 'assistant_id'];
     if (streamingTypes.includes(message.type)) {
       // Only log non-chunk messages to avoid noise (chunks logged with sampling in ChatPage)
-      if (message.type !== 'stream_chunk') {
-        console.log('[WS] 🌊', message.type.toUpperCase());
-      }
+      // if (message.type !== 'stream_chunk') {
+      //   console.log('[WS] 🌊', message.type.toUpperCase());
+      // }
       // Call streaming message handler if provided
       onStreamingMessageRef.current?.(message);
     }
@@ -183,13 +183,13 @@ export function useWebSocket(
   }, [queryClient]);
 
   const handleConnect = useCallback(() => {
-    console.log('[WS] ✅ WebSocket connected successfully');
+    // console.log('[WS] ✅ WebSocket connected successfully');
     setConnectionStatus(ConnectionStatus.CONNECTED);
     reconnectAttemptsRef.current = 0;
 
     // Send any queued messages
     if (wsRef.current && messageQueueRef.current.length > 0) {
-      console.log('[WS] 📬 Sending', messageQueueRef.current.length, 'queued messages');
+      // console.log('[WS] 📬 Sending', messageQueueRef.current.length, 'queued messages');
       messageQueueRef.current.forEach(message => {
         wsRef.current?.send(JSON.stringify(message));
       });
@@ -261,7 +261,7 @@ export function useWebSocket(
     try {
       setConnectionStatus(ConnectionStatus.CONNECTING);
       const wsUrl = buildWebSocketUrl();
-      console.log('[WS] 🔌 Attempting to connect to:', wsUrl);
+      // console.log('[WS] 🔌 Attempting to connect to:', wsUrl);
       wsRef.current = new WebSocket(wsUrl);
 
       if (typeof wsRef.current.addEventListener === 'function') {
