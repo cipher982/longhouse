@@ -90,8 +90,33 @@ generate-tools:
 # ---------------------------------------------------------------------------
 seed-jarvis-agents:
 	@echo "🌱 Seeding baseline Zerg agents for Jarvis..."
-	cd apps/zerg/backend && uv run python scripts/seed_jarvis_agents.py
-	@echo "✅ Agents seeded"
+	@echo ""
+	@# Check if the backend container is running
+	@BACKEND_CONTAINER=$$(docker ps --format "{{.Names}}" | grep "zerg-backend" | head -1); \
+	if [ -z "$$BACKEND_CONTAINER" ]; then \
+		echo "❌ Backend container is not running."; \
+		echo ""; \
+		echo "Please start the platform first:"; \
+		echo "  make zerg-up"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@# Check if postgres is healthy
+	@POSTGRES_CONTAINER=$$(docker ps --format "{{.Names}}" | grep "zerg-postgres" | head -1); \
+	if [ -z "$$POSTGRES_CONTAINER" ]; then \
+		echo "❌ Database container is not running."; \
+		echo "Please start the platform first:"; \
+		echo "  make zerg-up"; \
+		exit 1; \
+	fi
+	@echo "✅ Containers are running"
+	@echo "   Backend: zerg-backend-1"
+	@echo "   Database: zerg-postgres-1"
+	@echo ""
+	@# Run the seeding script inside the backend container
+	docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
+	@echo ""
+	@echo "✅ Agents seeded successfully"
 # ---------------------------------------------------------------------------
 # Docker Compose - Everything together
 # ---------------------------------------------------------------------------
