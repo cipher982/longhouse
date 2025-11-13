@@ -15,19 +15,30 @@ cp .env.example .env
 ```
 
 2) Run the platform
-- Docker (recommended):
+
+**Option A: Unified Docker Compose (Recommended for multi-project setups)**
+```bash
+./start-unified-dev.sh  # starts all services (Jarvis + Zerg) with Nginx proxy
+# Jarvis PWA:        http://localhost:30080
+# Zerg Dashboard:    http://localhost:30081
+```
+Benefits: Single command, only 2 host ports, no conflicts with other projects
+
+**Option B: Traditional Docker Compose**
 ```bash
 make zerg-up           # starts Postgres + backend + React UI
 # Backend:  http://localhost:${ZERG_BACKEND_PORT:-47300}
 # Frontend: http://localhost:${ZERG_FRONTEND_PORT:-47200}
 ```
-- Local dev (no containers):
+
+**Option C: Full Monorepo (Jarvis + Zerg separate)**
+```bash
+make zerg-up && npm run jarvis  # Traditional two-command approach
+```
+
+**Option D: Local dev (no containers)**
 ```bash
 make zerg-dev          # uvicorn backend + React dev server (ports from .env)
-```
-- Full monorepo (Jarvis + Zerg):
-```bash
-make swarm-dev
 ```
 
 3) Stop / logs / reset (Docker)
