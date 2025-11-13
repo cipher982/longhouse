@@ -374,23 +374,19 @@ html, body {
   51%, 100% { opacity: 0; }
 }
 
-/* Controls Row (no absolute positioning) */
+/* Controls Row (no absolute positioning) - 24px baseline grid */
 .voice-controls {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding: 24px 24px 32px;
-  position: relative;
-}
-
-.voice-button-container {
+  padding: 32px 24px 48px; /* All multiples of 24px: 32px top, 48px bottom */
   position: relative;
 }
 
 .voice-button {
-  width: 72px;
-  height: 72px;
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
   border: none;
   background: var(--primary-gradient);
@@ -432,32 +428,45 @@ html, body {
   animation: pulse 1.5s infinite;
 }
 
-/* Make disabled mic clearly look clickable for auto-connect */
-.voice-button:disabled {
-  opacity: 0.7;
-  cursor: pointer;
-  filter: none;
-  box-shadow: var(--shadow-md);
-  position: relative;
-}
-
-.voice-button:disabled::after {
-  content: "Click to connect";
-  position: absolute;
-  bottom: -25px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
-  z-index: 20;
-}
-
-.voice-button:disabled:hover::after {
+/* State-based button styling (Norman + Dreyfuss principles) */
+.voice-button.idle {
+  /* Ready to connect - vibrant and inviting */
   opacity: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(139, 92, 246, 0.3);
+}
+
+.voice-button.connecting {
+  /* Connection in progress */
+  animation: pulse-connecting 1.5s infinite;
+  cursor: wait;
+}
+
+.voice-button.ready {
+  /* Connected and ready for voice input */
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(34, 197, 94, 0.3);
+}
+
+.voice-button.speaking {
+  /* User is speaking */
+  background: var(--secondary-gradient);
+  animation: pulse 1.5s infinite;
+}
+
+.voice-button.responding {
+  /* Assistant is responding */
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+@keyframes pulse-connecting {
+  0%, 100% {
+    opacity: 0.6;
+    box-shadow: var(--shadow-xl), 0 0 0 0 rgba(139, 92, 246, 0.4);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: var(--shadow-xl), 0 0 0 12px rgba(139, 92, 246, 0);
+  }
 }
 
 @keyframes pulse {
@@ -501,84 +510,11 @@ body.audio-state-3 .voice-button:not(.listening) {
   box-shadow: var(--shadow-xl), 0 0 64px rgba(56, 189, 248, 0.4);
 }
 
-.voice-button-container {
-  position: relative;
-  isolation: isolate;
-  overflow: visible;
-  z-index: 10;
-}
 
 #radialViz {
   position: absolute;
   pointer-events: none;
   z-index: 2;
-}
-
-/* Control Buttons Row */
-.control-buttons {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: rgba(255, 255, 255, 0.02);
-  backdrop-filter: blur(20px);
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  max-width: 180px;
-  margin: 0 auto;
-}
-
-.control-button {
-  padding: 9px 18px;
-  border-radius: 10px;
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 88px;
-}
-
-.control-button:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent-purple);
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
-}
-
-.control-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.control-button.primary {
-  background: var(--primary-gradient);
-  border: none;
-}
-
-.control-button.danger {
-  background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-  border: none;
-}
-
-/* Toggle connection button states */
-#toggleConnectionBtn.connected {
-  background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-  border: none;
-}
-
-#toggleConnectionBtn.connected .connect-text {
-  display: none;
-}
-
-#toggleConnectionBtn.connected .disconnect-text {
-  display: inline !important;
-}
-
-#toggleConnectionBtn:not(.connected) .disconnect-text {
-  display: none !important;
 }
 
 /* Status Messages */
@@ -590,7 +526,32 @@ body.audio-state-3 .voice-button:not(.listening) {
   font-style: italic;
 }
 
-/* Listening Indicator */
+/* Voice Status Label - 24px grid aligned */
+.voice-status-label {
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+  transition: color 0.3s ease;
+  min-height: 24px;
+}
+
+.voice-button.idle ~ .voice-status-label::after {
+  content: "Tap to speak";
+  color: var(--text-muted);
+}
+
+.voice-button.connecting ~ .voice-status-label::after {
+  content: "Connecting...";
+  color: var(--accent-purple);
+}
+
+.voice-button.ready ~ .voice-status-label::after {
+  content: "Ready";
+  color: #22c55e;
+}
+
+/* Legacy Listening Indicator (kept for compatibility) */
 .listening-indicator {
   display: inline-flex;
   align-items: center;
@@ -628,7 +589,7 @@ body.audio-state-3 .voice-button:not(.listening) {
 /* Mobile Responsive */
 @media (max-width: 1024px) {
   .app-container { grid-template-columns: 280px 1fr; }
-  .voice-button { width: 68px; height: 68px; }
+  .voice-button { width: 76px; height: 76px; }
 
   .main-header {
     padding: 20px 24px;
@@ -696,19 +657,8 @@ body.audio-state-3 .voice-button:not(.listening) {
   }
 
   .voice-button {
-    width: 64px;
-    height: 64px;
-  }
-
-  .control-buttons {
-    padding: 8px 12px;
-    max-width: 160px;
-  }
-
-  .control-button {
-    padding: 8px 14px;
-    font-size: 13px;
-    min-width: 80px;
+    width: 72px;
+    height: 72px;
   }
 
   .user-turn, .assistant-turn {

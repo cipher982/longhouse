@@ -22,6 +22,13 @@ export default defineConfig({
     port: 8080,
     fs: {
       allow: [resolve(__dirname, '..', '..')]
+    },
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '')
+      }
     }
   }
 })

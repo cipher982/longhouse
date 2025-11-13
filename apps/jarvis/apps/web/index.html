@@ -73,20 +73,13 @@
         <div class="voice-controls">
           <!-- Main Voice Button -->
           <div class="voice-button-container" id="voiceButtonContainer">
-            <button id="pttBtn" class="voice-button" type="button" aria-label="Push to talk" aria-pressed="false" disabled>
+            <button id="pttBtn" class="voice-button" type="button" aria-label="Voice control">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
                 <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
               </svg>
             </button>
-          </div>
-
-          <!-- Control Buttons -->
-          <div class="control-buttons">
-            <button id="toggleConnectionBtn" class="control-button primary">
-              <span class="connect-text">Connect</span>
-              <span class="disconnect-text" style="display: none;">Disconnect</span>
-            </button>
+            <div class="voice-status-label" aria-live="polite"></div>
           </div>
 
           <!-- Listening Indicator -->

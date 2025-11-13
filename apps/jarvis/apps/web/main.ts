@@ -14,9 +14,8 @@ import { RadialVisualizer } from './lib/radial-visualizer';
 
 // Configuration
 const CONFIG = {
-  API_BASE: window.location.hostname === 'localhost' 
-    ? 'http://localhost:8787' 
-    : `${window.location.protocol}//${window.location.hostname}:8787`
+  // Use relative path for API - proxied through Nginx
+  API_BASE: '/api'
 };
 
 function resolveSyncBaseUrl(raw?: string): string {
@@ -114,7 +113,6 @@ const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
 
 // Initialize conversation renderer
 conversationRenderer = new ConversationRenderer(transcriptEl);
-const toggleConnectionBtn = document.getElementById("toggleConnectionBtn") as HTMLButtonElement;
 const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
 const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
 const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
@@ -152,8 +150,8 @@ const BOTH_COLOR = '#a855f7';
 const IDLE_COLOR = '#475569';
 
 // Audio visualizer (radial) around mic
-const radialViz = voiceButtonContainer
-  ? new RadialVisualizer(voiceButtonContainer, { onLevel: handleMicLevel })
+const radialViz = pttBtn
+  ? new RadialVisualizer(pttBtn, { onLevel: handleMicLevel })
   : null;
 
 syncAudioStateClasses();
@@ -469,15 +467,35 @@ async function getSessionToken(): Promise<string> {
 
   try {
     const r = await fetch(`${CONFIG.API_BASE}/session`);
-    console.log('📡 Response status:', r.status);
+    const contentType = r.headers.get('content-type') || '';
+    console.log('📡 Response:', {
+      status: r.status,
+      contentType,
+      url: r.url
+    });
 
     if (!r.ok) {
       const errorText = await r.text();
-      console.error('Session request failed:', r.status, errorText);
+      console.error('❌ Session request failed:', r.status, errorText);
       if (r.status === 0 || !r.status) {
         throw new Error('Cannot connect to voice server - is it running?');
       }
       throw new Error(`Failed to get session token: ${r.status} ${errorText}`);
+    }
+
+    // Check if response is actually JSON before parsing
+    if (!contentType.includes('application/json')) {
+      const responseText = await r.text();
+      console.error('❌ Expected JSON but got:', contentType);
+      console.error('📄 Response body (first 500 chars):', responseText.substring(0, 500));
+      throw new Error(
+        `Server returned ${contentType} instead of JSON. ` +
+        `This usually means:\n` +
+        `1. Backend server isn't running (check port 8787)\n` +
+        `2. Vite proxy misconfigured\n` +
+        `3. Wrong API endpoint\n` +
+        `Response preview: ${responseText.substring(0, 100)}...`
+      );
     }
 
     const js = await r.json();
@@ -485,7 +503,7 @@ async function getSessionToken(): Promise<string> {
 
     const token = js.value || js.client_secret?.value;
     if (!token) {
-      console.error('No token found in response:', js);
+      console.error('❌ No token found in response:', js);
       throw new Error('Invalid session response format - missing token value');
     }
 
@@ -495,6 +513,10 @@ async function getSessionToken(): Promise<string> {
     if (error instanceof TypeError && error.message.includes('fetch')) {
       console.error('❌ Network error - server unreachable');
       throw new Error('Cannot connect to voice server - check if server is running on port 8787');
+    }
+    if (error instanceof SyntaxError && error.message.includes('JSON')) {
+      console.error('❌ JSON parse error - server returned invalid JSON');
+      throw new Error('Server returned invalid JSON - check backend logs for errors');
     }
     throw error;
   }
@@ -864,7 +886,9 @@ async function connect(): Promise<void> {
   let loadingOverlay: HTMLDivElement | null = null;
   try {
     isConnecting = true;
-    toggleConnectionBtn.disabled = true;
+    // Update button to connecting state
+    pttBtn.classList.remove('idle', 'ready', 'speaking', 'responding');
+    pttBtn.classList.add('connecting');
     loadingOverlay = uiEnhancements.showLoading('Connecting to voice service...');
 
     // Use the context-aware agent created during initialization
@@ -927,9 +951,9 @@ async function connect(): Promise<void> {
     // Clear any lingering status text so UI is ready
     clearStatusIfActive();
 
-    pttBtn.disabled = false;
-    pttBtn.classList.remove('disabled');
-    toggleConnectionBtn.classList.add('connected');
+    // Update button to ready state
+    pttBtn.classList.remove('idle', 'connecting', 'speaking', 'responding');
+    pttBtn.classList.add('ready');
     isConnected = true;
 
     // Hide loading and show success
@@ -941,7 +965,9 @@ async function connect(): Promise<void> {
     // Hide loading if it was created
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    toggleConnectionBtn.disabled = false;
+    // Return button to idle state on error
+    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
+    pttBtn.classList.add('idle');
   } finally {
     isConnecting = false;
   }
@@ -1007,9 +1033,8 @@ function setupSessionEvents(): void {
   session?.on('error', (error: any) => {
     logger.error('Session error', error);
     setTranscript(`Voice error: ${error.message}`, true);
-    toggleConnectionBtn.disabled = false;
-    toggleConnectionBtn.classList.remove('connected');
-    pttBtn.disabled = true;
+    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
+    pttBtn.classList.add('idle');
     isConnected = false;
   });
 }
@@ -1090,7 +1115,6 @@ async function disconnect() {
   console.log('🔌 Disconnecting from voice service...');
 
   await setMicState(false);
-  pttBtn.disabled = true;
 
   try {
     if (session) {
@@ -1102,9 +1126,10 @@ async function disconnect() {
     logger.error('Disconnect error', error);
     console.error('❌ Disconnect error:', error);
   } finally {
-    toggleConnectionBtn.disabled = false;
-    toggleConnectionBtn.classList.remove('connected');
     isConnected = false;
+    // Return button to idle state
+    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
+    pttBtn.classList.add('idle');
     // Stop shared stream for privacy
     if (sharedMicStream) {
       sharedMicStream.getTracks().forEach(t => t.stop());
@@ -1131,13 +1156,20 @@ async function disconnect() {
 // Push-to-talk with SDK
 let pushing = false;
 
-// Voice button with modern animations
-pttBtn.onpointerdown = async () => {
-  if (!isConnected) {
-    uiEnhancements.showToast('Click Connect to enable the microphone', 'info');
+// Voice button with modern animations - single button for all actions
+pttBtn.onclick = async () => {
+  // If not connected, clicking the button initiates connection
+  if (!isConnected && !isConnecting) {
+    await connect();
     return;
   }
-  if (pttBtn.disabled) return;
+};
+
+pttBtn.onpointerdown = async (e) => {
+  // Only handle PTT if already connected
+  if (!isConnected) return;
+  if (pttBtn.classList.contains('connecting')) return;
+
   pushing = true;
   await setMicState(true);
 
@@ -1146,7 +1178,8 @@ pttBtn.onpointerdown = async () => {
 };
 
 pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-  if (!isConnected || pttBtn.disabled) return;
+  if (!isConnected) return;
+  if (pttBtn.classList.contains('connecting')) return;
   pushing = false;
   setMicState(false);
 };
@@ -1213,7 +1246,6 @@ async function initializeApp(): Promise<void> {
   try {
     console.log('🚀 Initializing Jarvis voice agent...');
     console.log('📊 DOM elements found:', {
-      toggleConnectionBtn: !!toggleConnectionBtn,
       pttBtn: !!pttBtn,
       transcript: !!transcriptEl,
       sidebar: !!sidebar,
@@ -1259,10 +1291,9 @@ async function initializeApp(): Promise<void> {
     });
     
     console.log(`🔧 Added ${contextTools.length} tools for ${currentContext.name}:`, contextTools.map(t => t.name));
-    
-    // Setup UI state
-    pttBtn.disabled = true;
-    toggleConnectionBtn.classList.remove('connected');
+
+    // Setup UI state - button starts in idle state, ready to connect
+    pttBtn.classList.add('idle');
     newConversationBtn.disabled = false;
     
     // Create context selector in UI
@@ -1419,25 +1450,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Setup all event handlers after DOM is ready
 function setupEventHandlers(): void {
-  // Main action buttons
-  toggleConnectionBtn.onclick = () => {
-    if (isConnected) {
-      disconnect();
-    } else {
-      connect();
-    }
-  };
-
-  // Clicking mic area while disconnected will auto-connect
-  const micContainer = document.getElementById('voiceButtonContainer');
-  // Capture pointer before it hits the disabled button so we can autoconnect
-  micContainer?.addEventListener('pointerdown', (e) => {
-    if (!isConnected && !isConnecting) {
-      e.preventDefault();
-      connect();
-    }
-  }, true);
-
   // Sync button
   syncNowBtn.onclick = async () => {
     if (!sessionManager) return;
@@ -1653,7 +1665,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 console.log('Jarvis PWA with Agents SDK ready', {
-  toggleConnectionBtn: !!toggleConnectionBtn,
   pttBtn: !!pttBtn,
   transcript: !!transcriptEl,
   newConversationBtn: !!newConversationBtn
