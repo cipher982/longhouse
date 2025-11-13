@@ -227,3 +227,9 @@ e2e/visual-baseline/*.png
 e2e/*-visual-test*.js
 e2e/enhanced-analysis.js
 comet_latest.dmg
+
+# Yarn
+.yarn/install-state.gz
+
+# UV cache
+.uv_cache/
