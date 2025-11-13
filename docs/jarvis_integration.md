@@ -411,7 +411,44 @@ Day 7: Token expires → Re-authenticate automatically
 
 ## Environment Configuration
 
-### Zerg Backend (.env)
+### Development Setup Options
+
+#### Option A: Unified Docker Compose (Recommended)
+All services run in a single Docker network with Nginx reverse proxy.
+
+**Zerg Backend (.env)**:
+```bash
+# Required ports (fail-fast configuration - must be set)
+JARPXY_PORT=30080         # External: Jarvis PWA entry point
+ZGPXY_PORT=30081          # External: Zerg Dashboard entry point
+JARVIS_WEB_PORT=8080      # Internal: jarvis-web container
+JARVIS_SERVER_PORT=8787   # Internal: jarvis-server container
+ZERG_BACKEND_PORT=8000    # Internal: zerg-backend container
+ZERG_FRONTEND_PORT=5173   # Internal: zerg-frontend container
+
+# Existing Zerg vars
+JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
+OPENAI_API_KEY="sk-..."
+DATABASE_URL="sqlite:///./app.db"
+JWT_SECRET="your-jwt-secret"
+```
+
+**Jarvis Client**:
+```bash
+# Uses proxy path (no hardcoded hostnames)
+VITE_ZERG_API_URL="/api/zerg"
+JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
+OPENAI_API_KEY="sk-..."
+```
+
+**Access URLs**:
+- Jarvis PWA: http://localhost:30080
+- Zerg Dashboard: http://localhost:30081
+
+#### Option B: Traditional Docker Compose
+Separate services with direct connections.
+
+**Zerg Backend (.env)**:
 ```bash
 # Jarvis Integration
 JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
@@ -423,15 +460,20 @@ DATABASE_URL="sqlite:///./app.db"
 JWT_SECRET="your-jwt-secret"
 ```
 
-### Jarvis Client (apps/jarvis/.env)
+**Jarvis Client (apps/jarvis/.env)**:
 ```bash
-# Zerg Backend
+# Direct connection to Zerg backend
 VITE_ZERG_API_URL="http://localhost:47300"
 JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
 
 # OpenAI for local voice processing
 OPENAI_API_KEY="sk-..."
 ```
+
+**Access URLs**:
+- Jarvis PWA: http://localhost:8080
+- Zerg Backend: http://localhost:47300
+- Zerg Frontend: http://localhost:47200
 
 ## Implementation Status
 
@@ -470,6 +512,27 @@ OPENAI_API_KEY="sk-..."
 
 ### Testing the Backend
 
+#### Option A: Unified Docker Compose
+```bash
+# Start all services
+cd /Users/davidrose/git/zerg
+./start-unified-dev.sh
+
+# Wait for containers to be healthy (10-15 seconds)
+docker compose -f docker-compose.unified.yml ps
+
+# Test endpoints (store cookie jar)
+COOKIE_JAR=cookies.txt
+curl -s -X POST http://localhost:30080/api/session \
+  -H "Content-Type: application/json" \
+  -d '{"device_secret":"your-secret"}' \
+  -c "$COOKIE_JAR" -b "$COOKIE_JAR"
+
+# Note: Unified mode uses /api/session (proxied to jarvis-server)
+# /api/zerg/* routes are proxied to zerg-backend
+```
+
+#### Option B: Traditional Setup
 ```bash
 # Start Zerg backend
 cd /Users/davidrose/git/zerg
@@ -497,8 +560,22 @@ curl -N http://localhost:47300/api/jarvis/events \
   -b "$COOKIE_JAR"
 ```
 
+**Note**: In unified mode, API routes are split between:
+- `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787)
+- `/api/zerg/*` → zerg-backend (Port 8000)
+
 ### Seeding Baseline Agents
 
+#### Option A: Unified Docker Compose
+```bash
+cd /Users/davidrose/git/zerg
+./start-unified-dev.sh
+
+# Wait for backend to be healthy, then seed:
+docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
+```
+
+#### Option B: Traditional Setup
 ```bash
 cd /Users/davidrose/git/zerg
 make seed-jarvis-agents
