@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset regen-ws-code ws-code-diff-check
+.PHONY: help dev stop jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset unified-dev regen-ws-code ws-code-diff-check
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help`
@@ -23,14 +23,23 @@ help:
 	@echo "\n🌐 Swarm Platform (Jarvis + Zerg)"
 	@echo "=================================="
 	@echo ""
-	@echo "Quick Start:"
-	@echo "  make zerg-up       Start EVERYTHING (Postgres + Backend + Frontend via docker-compose)"
-	@echo "  make zerg-down     Stop EVERYTHING"
-	@echo "  make zerg-logs     View all logs"
-	@echo "  make zerg-reset    Reset database (destroys all data)"
+	@echo "⭐ Quick Start (RECOMMENDED):"
+	@echo "  make dev             Start EVERYTHING (Zerg + Jarvis) with proper Ctrl+C shutdown"
+	@echo ""
+	@echo "Alternative Starts:"
+	@echo "  make unified-dev     Start with unified Docker Compose"
+	@echo "  make zerg-up         Start Zerg only (Postgres + Backend + Frontend)"
+	@echo "  make jarvis-dev      Start Jarvis only (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
+	@echo ""
+	@echo "Shutdown:"
+	@echo "  Ctrl+C               Stop everything (when using 'make dev')"
+	@echo "  make stop            Stop everything (when things are stuck)"
+	@echo ""
+	@echo "Monitoring:"
+	@echo "  make zerg-logs       View Zerg logs"
+	@echo "  make zerg-reset      Reset database (destroys all data)"
 	@echo ""
 	@echo "Development:"
-	@echo "  make jarvis-dev            Start Jarvis PWA separately (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
 	@echo "  make generate-sdk          Generate OpenAPI/AsyncAPI clients and tool manifest"
 	@echo "  make generate-tools        Generate tool manifest only"
 	@echo "  make seed-jarvis-agents    Seed baseline Zerg agents for Jarvis integration"
@@ -42,7 +51,21 @@ help:
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# Development workflow – Jarvis
+# Development workflow – Unified (Zerg + Jarvis)
+# ---------------------------------------------------------------------------
+dev:
+	@echo "🚀 Starting unified dev environment (Zerg + Jarvis)..."
+	@echo "   This will start ALL services and handle proper shutdown on Ctrl+C"
+	@./scripts/dev.sh
+
+stop:
+	@echo "🛑 Stopping..."
+	@docker compose -f docker-compose.dev.yml down 2>/dev/null || true
+	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
+	@echo "✅ Stopped"
+
+# ---------------------------------------------------------------------------
+# Development workflow – Jarvis only
 # ---------------------------------------------------------------------------
 jarvis-dev:
 	@echo "🤖 Starting Jarvis (PWA + Node server)..."
@@ -144,6 +167,34 @@ zerg-reset:
 	docker compose -f docker-compose.dev.yml down -v
 	docker compose -f docker-compose.dev.yml up -d
 	@echo "Run migrations and seed agents"
+
+# ---------------------------------------------------------------------------
+# Unified Docker Compose - All services with Nginx proxy
+# ---------------------------------------------------------------------------
+unified-dev:
+	@echo "🚀 Starting Unified Dev Environment (Jarvis + Zerg)..."
+	@echo "   Using: docker-compose.unified.yml"
+	@echo ""
+	@echo "   Required ports (from .env or defaults):"
+	@echo "     - JARPXY_PORT=$(JARPXY_PORT) (Jarvis PWA)"
+	@echo "     - ZGPXY_PORT=$(ZGPXY_PORT) (Zerg Dashboard)"
+	@echo ""
+	@if [ ! -f .env ]; then \
+		echo "⚠️  .env not found. Copying from .env.example..."; \
+		cp .env.example .env; \
+		echo "✅ Created .env from .env.example"; \
+		echo "   Please edit .env and set required ports if needed"; \
+		echo ""; \
+	fi
+	@./start-unified-dev.sh
+
+unified-down:
+	@echo "🛑 Stopping Unified Dev Environment..."
+	docker compose -f docker-compose.unified.yml down
+	@echo "✅ All stopped"
+
+unified-logs:
+	docker compose -f docker-compose.unified.yml logs -f
 
 # ---------------------------------------------------------------------------
 # WebSocket Code Generation
