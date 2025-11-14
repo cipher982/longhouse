@@ -428,6 +428,32 @@ html, body {
   animation: pulse 1.5s infinite;
 }
 
+/* Keyboard focus styles (Phase 7 - Accessibility) */
+.voice-button:focus {
+  outline: none; /* Remove default outline */
+}
+
+.voice-button:focus-visible {
+  outline: 3px solid var(--accent-purple);
+  outline-offset: 4px;
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(139, 92, 246, 0.3), 0 0 0 7px rgba(139, 92, 246, 0.15);
+}
+
+.voice-button.ready:focus-visible {
+  outline-color: #22c55e;
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(34, 197, 94, 0.3), 0 0 0 7px rgba(34, 197, 94, 0.15);
+}
+
+.voice-button.speaking:focus-visible {
+  outline-color: var(--accent-pink);
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(236, 72, 153, 0.4), 0 0 0 7px rgba(236, 72, 153, 0.15);
+}
+
+.voice-button.responding:focus-visible {
+  outline-color: var(--accent-blue);
+  box-shadow: var(--shadow-xl), 0 0 0 3px rgba(59, 130, 246, 0.4), 0 0 0 7px rgba(59, 130, 246, 0.15);
+}
+
 /* State-based button styling (Norman + Dreyfuss principles) */
 .voice-button.idle {
   /* Ready to connect - vibrant and inviting */
@@ -930,5 +956,43 @@ body.audio-state-3 .voice-button:not(.listening) {
   
   .text-input-container {
     padding: 12px 16px;
+  }
+}
+
+/* Reduced Motion Support (Phase 7 & 9 - Accessibility) */
+@media (prefers-reduced-motion: reduce) {
+  /* Disable all animations for users who prefer reduced motion */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Keep essential transitions but make them instant */
+  .voice-button {
+    transition: none !important;
+  }
+
+  /* Remove pulsing animations */
+  .voice-button.connecting,
+  .voice-button.ready,
+  .voice-button.speaking,
+  .voice-button.responding,
+  .voice-button.listening {
+    animation: none !important;
+  }
+
+  /* Remove fade pulse on status labels */
+  .voice-button.connecting ~ .voice-status-label::after,
+  .voice-button.speaking ~ .voice-status-label::after {
+    animation: none !important;
+  }
+
+  /* Keep color/state changes but remove motion */
+  .listening-mode .voice-button {
+    transform: none !important;
   }
 }

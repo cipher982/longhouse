@@ -1477,6 +1477,38 @@ pttBtn.onpointerup = pttBtn.onpointerleave = () => {
   setMicState(false);
 };
 
+// Keyboard navigation support (Phase 7 - Accessibility)
+pttBtn.onkeydown = async (e: KeyboardEvent) => {
+  // Space or Enter key activates the button
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault(); // Prevent page scroll on Space
+
+    // Resume AudioContext from keyboard gesture (Safari autoplay fix)
+    audioFeedback.resumeContext().catch(() => {});
+
+    // If IDLE, connect
+    if (voiceButtonState === VoiceButtonState.IDLE) {
+      await connect();
+      return;
+    }
+
+    // If READY, start PTT mode (hold to speak)
+    if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
+      setVoiceButtonState(VoiceButtonState.SPEAKING);
+      await setMicState(true);
+      ensurePendingUserBubble();
+    }
+  }
+};
+
+pttBtn.onkeyup = (e: KeyboardEvent) => {
+  // Release PTT on key up (Space or Enter)
+  if ((e.key === ' ' || e.key === 'Enter') && voiceButtonState === VoiceButtonState.SPEAKING) {
+    setVoiceButtonState(VoiceButtonState.READY);
+    setMicState(false);
+  }
+};
+
 // Event handlers will be set up after DOM is loaded
 
 // New conversation handler (will be assigned later)
