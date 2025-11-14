@@ -108,6 +108,7 @@ let currentContext: VoiceAgentConfig | null = null;
 // (avoid multiple writers / race conditions)
 
 // Jarvis-Zerg integration
+let conversationMode: 'voice' | 'text' = 'voice';
 let taskInbox: TaskInbox | null = null;
 let jarvisClient = getJarvisClient(import.meta.env.VITE_ZERG_API_URL || 'http://localhost:47300');
 let cachedAgents: JarvisAgentSummary[] = [];
@@ -1288,16 +1289,21 @@ function setupSessionEvents(): void {
     const t = event.type || '';
 
     // VAD speech start/stop → toggle listening visuals AND state machine
+    // Only activate VAD listening in voice mode, not text mode
     if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
-      setVoiceButtonState(VoiceButtonState.SPEAKING);
-      audioFeedback.playVoiceTick(); // Audio cue for voice detected
-      await setListeningMode(true);
-      ensurePendingUserBubble();
+      if (conversationMode === 'voice') {
+        setVoiceButtonState(VoiceButtonState.SPEAKING);
+        audioFeedback.playVoiceTick(); // Audio cue for voice detected
+        await setListeningMode(true);
+        ensurePendingUserBubble();
+      }
       return;
     }
     if (t.includes('input_audio_buffer') && (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
-      setVoiceButtonState(VoiceButtonState.READY);
-      await setListeningMode(false);
+      if (conversationMode === 'voice') {
+        setVoiceButtonState(VoiceButtonState.READY);
+        await setListeningMode(false);
+      }
       return;
     }
     // Partial transcription deltas
@@ -1746,6 +1752,7 @@ function setupEventHandlers(): void {
 
       // If not connected, clicking the button initiates connection
       if (voiceButtonState === VoiceButtonState.IDLE) {
+        conversationMode = 'voice'; // Switch to voice mode when connecting
         await connect();
         return;
       }
@@ -1758,6 +1765,7 @@ function setupEventHandlers(): void {
       // Only handle PTT if already connected and ready
       if (!canStartPTT()) return;
 
+      conversationMode = 'voice'; // Switch to voice mode when using mic
       setVoiceButtonState(VoiceButtonState.SPEAKING);
       await setMicState(true);
       ensurePendingUserBubble();
@@ -1776,11 +1784,13 @@ function setupEventHandlers(): void {
         audioFeedback.resumeContext().catch(() => {});
 
         if (voiceButtonState === VoiceButtonState.IDLE) {
+          conversationMode = 'voice'; // Switch to voice mode when connecting
           await connect();
           return;
         }
 
         if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
+          conversationMode = 'voice'; // Switch to voice mode when using mic
           setVoiceButtonState(VoiceButtonState.SPEAKING);
           await setMicState(true);
           ensurePendingUserBubble();
@@ -1832,6 +1842,8 @@ function setupEventHandlers(): void {
         }
       } else {
         // Handle as regular conversation - auto-connect if needed
+        conversationMode = 'text'; // Switch to text mode (no VAD listening)
+
         if (!isConnected()) {
           console.log('🔌 Auto-connecting for text input...');
           uiEnhancements.showToast('Connecting to assistant...', 'info');
@@ -1841,6 +1853,7 @@ function setupEventHandlers(): void {
           } catch (error: any) {
             console.error('Auto-connect failed:', error);
             uiEnhancements.showToast(`Failed to connect: ${error.message}`, 'error');
+            conversationMode = 'voice'; // Revert mode on error
             return;
           }
         }
