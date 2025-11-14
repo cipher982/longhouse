@@ -317,32 +317,37 @@ function setVoiceButtonState(newState: VoiceButtonState): void {
   // Add new state class
   pttBtn.classList.add(newState);
 
-  // Update ARIA attributes based on state
+  // Update ARIA attributes and status label for screen readers
   switch (newState) {
     case VoiceButtonState.IDLE:
       pttBtn.setAttribute('aria-label', 'Connect to voice service');
       pttBtn.setAttribute('aria-pressed', 'false');
       pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Tap to speak');
       break;
     case VoiceButtonState.CONNECTING:
       pttBtn.setAttribute('aria-label', 'Connecting...');
       pttBtn.setAttribute('aria-busy', 'true');
       pttBtn.setAttribute('aria-pressed', 'false');
+      setStatusLabel('Connecting...');
       break;
     case VoiceButtonState.READY:
       pttBtn.setAttribute('aria-label', 'Push to talk');
       pttBtn.setAttribute('aria-pressed', 'false');
       pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Ready to talk');
       break;
     case VoiceButtonState.SPEAKING:
       pttBtn.setAttribute('aria-label', 'Speaking - release to send');
       pttBtn.setAttribute('aria-pressed', 'true');
       pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Listening...');
       break;
     case VoiceButtonState.RESPONDING:
       pttBtn.setAttribute('aria-label', 'Assistant is responding');
       pttBtn.setAttribute('aria-pressed', 'false');
       pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Assistant is responding');
       break;
   }
 

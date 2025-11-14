@@ -624,11 +624,31 @@ Combining all five design philosophies:
 - Graceful degradation: Silently fails on unsupported browsers
 - All feedback respects user preferences without UI clutter
 
+**2025-11-13**: Audio Feedback Edge Cases Fixed
+- Added AudioContext support check to prevent TypeError on older browsers
+- Fixed Safari autoplay restrictions by resuming context from user gestures
+- Audio now works on iOS/macOS Safari and older Android WebView
+
 **2025-11-14**: Phase 8 Complete
 - Reworked responsive padding so voice controls maintain 24px baseline spacing on tablet and mobile
 - Locked microphone button at 84px across breakpoints and centered controls with a 320px max width
 - Updated header/chat spacing and sidebar toggle offsets to 24px increments for consistency
 - Documented need for physical thumb-reach validation under open items
+
+**2025-11-14**: Screen Reader Announcements Implemented
+- Wired `setStatusLabel()` into `setVoiceButtonState()` for all states
+- ARIA live region now receives real text nodes on every state change
+- Screen readers announce: "Tap to speak" → "Connecting..." → "Ready to talk" → "Listening..." → "Assistant is responding"
+- Resolves known limitation from Phase 5
+- Ready for VoiceOver/NVDA/TalkBack testing
+
+**2025-11-14**: Phase 10 Testing Plan Created
+- Created comprehensive testing documentation (voice-button-phase-10-testing.md)
+- Physical device checklists for iPhone, Android, tablets, desktop
+- User testing script with 5-participant study protocol
+- Screen reader testing protocol (VoiceOver, NVDA, TalkBack)
+- Metrics collection templates and Go/No-Go decision framework
+- 4-week testing timeline outlined
 
 **2025-11-13**: Phase 7 & 9 Complete (Accessibility + Animation Polish)
 - Keyboard navigation: Space/Enter activates all button functions
@@ -669,11 +689,15 @@ Combining all five design philosophies:
 - [ ] How to handle connection errors gracefully?
 
 ### Known Limitations
-- **Screen Reader Announcements**: Status label currently uses CSS `::after` pseudo-content which screen readers cannot announce. The `setStatusLabel()` helper is available but not yet wired up. Plan to integrate when adding live transcription preview (Phase 7+).
-  - Current: CSS-based static text (silent to screen readers)
-  - Future: Call `setStatusLabel(text)` for dynamic content that screen readers can announce
-  - ARIA live region is configured correctly in HTML, just needs real text nodes
-- **Physical Thumb Reach Validation**: Responsive adjustments were made using 84px targets and 24px gutters, but no in-hand verification yet. Schedule real device tests before launch to confirm ergonomics.
+- **Physical Thumb Reach Validation**: Responsive adjustments were made using 84px targets and 24px gutters, but no in-hand verification yet. Schedule real device tests before launch to confirm ergonomics. See Phase 10 testing plan for device checklist.
+
+### Resolved Limitations
+- **Screen Reader Announcements** ✅ RESOLVED (2025-11-14):
+  - Previous: CSS `::after` pseudo-content was silent to screen readers
+  - Fixed: `setStatusLabel()` now called from `setVoiceButtonState()` for every state change
+  - Result: ARIA live region receives real text nodes
+  - Screen readers now announce: "Tap to speak" → "Connecting..." → "Ready to talk" → "Listening..." → "Assistant is responding"
+  - Future enhancement: Can override with live transcription text as needed
 
 ### Blocked Items
 - None currently
