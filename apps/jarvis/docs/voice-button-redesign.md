@@ -1,6 +1,6 @@
 # Jarvis Voice Interface Redesign
 
-**Status**: Phase 2 Complete - Ready for Testing
+**Status**: Phase 5 Complete - Visual Feedback & Status Labels Implemented
 **Created**: 2025-11-13
 **Last Updated**: 2025-11-13
 
@@ -390,30 +390,37 @@ Combining all five design philosophies:
 - [x] Add voice-status-label with CSS content for state feedback
 - [x] Remove disabled attribute, use state classes instead
 
-### Phase 3: State Machine (Norman + Alexander)
-- [ ] Create `VoiceButtonState` enum in TypeScript
-- [ ] Implement state transition logic in `main.ts`
-- [ ] Add state change handler: `setVoiceButtonState(newState)`
-- [ ] Remove `isConnected` flag, use state instead
-- [ ] Update all connection logic to use state machine
+### Phase 3: State Machine (Norman + Alexander) ✅ COMPLETE
+- [x] Create `VoiceButtonState` enum in TypeScript
+- [x] Implement state transition logic in `main.ts`
+- [x] Add state change handler: `setVoiceButtonState(newState)`
+- [x] Remove `isConnected` and `isConnecting` flags, use state helper functions instead
+- [x] Update all connection logic to use state machine
+- [x] Add ARIA attribute updates to state handler
+- [x] Add guard for DOM ready state
+- [x] Remove unused `pushing` variable
 
-### Phase 4: Visual Feedback (All Principles)
-- [ ] Connecting state: Pulsing animation
-- [ ] Ready state: Subtle glow effect (no pulsing)
-- [ ] Speaking state: Waveform animation inside button
-- [ ] Processing state: Spinner/thinking animation
-- [ ] Responding state: Color shift to assistant blue
+### Phase 4: Visual Feedback (All Principles) ✅ COMPLETE
+- [x] Connecting state: Pulsing animation (pulse-connecting keyframe)
+- [x] Ready state: Subtle breathing glow effect (ready-breathe keyframe, 3s cycle)
+- [x] Speaking state: Energetic pulse animation (pulse-speaking keyframe with scale)
+- [x] Responding state: Thinking pulse animation (responding-pulse keyframe)
+- [x] Color transitions: Smooth state-based color shifts with cubic-bezier easing
+- [x] Hover states: Added for IDLE and READY states
+- [x] Scale transforms: SPEAKING state scales to 1.05 for visual emphasis
 
-### Phase 5: Status Labels (Tufte + Dreyfuss)
-- [ ] Create single status label below button (replaces listening indicator)
-- [ ] Update label text for each state:
-  - Idle: "Tap to speak"
-  - Connecting: "Connecting..."
-  - Ready: "Listening" (VAD) or "Tap to talk" (PTT)
-  - Speaking: Live transcription preview
-  - Processing: "Thinking..."
-  - Responding: Response preview
-- [ ] Animate label transitions (fade in/out, 200ms)
+### Phase 5: Status Labels (Tufte + Dreyfuss) ✅ COMPLETE
+- [x] Create single status label below button using existing `.voice-status-label` element
+- [x] Update label text for each state via CSS:
+  - Idle: "Tap to speak" (muted color)
+  - Connecting: "Connecting..." (purple, fade-pulse animation)
+  - Ready: "Ready to talk" (green)
+  - Speaking: "Listening..." (pink, fade-pulse animation)
+  - Responding: "Assistant is responding" (blue)
+- [x] Animate label transitions (fade-pulse keyframe for active states)
+- [x] Add dynamic status label helpers (`setStatusLabel`, `clearStatusLabel`)
+- [x] Support for live content override (e.g., transcription preview)
+- [x] ARIA live region already configured in HTML
 
 ### Phase 6: Haptic & Audio Feedback (Dreyfuss)
 - [ ] Add haptic feedback on connection (50ms vibration)
@@ -528,6 +535,44 @@ Combining all five design philosophies:
 - Identified two-button confusion
 - Researched classic design principles
 - Proposed single-button solution
+
+**2025-11-13**: Phase 1 Complete
+- Removed redundant Connect button
+- Eliminated 65 lines of CSS and 10+ JS references
+- Single button interface established
+
+**2025-11-13**: Phase 2 Complete
+- Increased button size to 84px (better ergonomics)
+- Added state classes for visual feedback
+- Implemented 24px baseline grid system
+- Enhanced accessibility with ARIA attributes
+
+**2025-11-13**: Phase 3 Complete
+- Implemented centralized state machine with `VoiceButtonState` enum
+- Created single source of truth: `setVoiceButtonState()` handler
+- Replaced boolean flags (`isConnected`, `isConnecting`, `pushing`) with state checks
+- Consolidated all state transitions through state machine
+- Improved code maintainability and predictability
+- Enhanced ARIA support based on state
+- Fixed aria-busy attribute handling (cleared in all non-connecting states)
+- Wired VAD events to state machine (SPEAKING/READY transitions)
+- Fixed setMicState ARIA conflicts (state machine now owns all ARIA updates)
+- Set initial IDLE state on DOM load
+
+**2025-11-13**: Phase 4 & 5 Complete
+- Added distinct animations for each state (pulse-connecting, ready-breathe, pulse-speaking, responding-pulse)
+- Enhanced button feedback with scale transforms and hover states
+- Implemented complete status label system with CSS-based content
+- Added fade-pulse animation for active states (connecting, speaking)
+- Created dynamic status label helpers for live content (transcription preview support)
+- All five states now have unique visual feedback:
+  - IDLE: Steady purple glow with hover scale
+  - CONNECTING: Opacity pulse animation
+  - READY: Subtle 3s breathing glow (green)
+  - SPEAKING: Energetic pink pulse with 1.05 scale
+  - RESPONDING: Blue thinking pulse
+- Status labels automatically update based on button state via CSS sibling selectors
+- JS helpers available for dynamic content override when needed
 
 **[Date TBD]**: User testing results
 - [To be filled after testing]

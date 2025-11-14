@@ -83,6 +83,15 @@ function createSessionManagerForContext(config: VoiceAgentConfig): SessionManage
   });
 }
 
+// Voice Button State Machine (Norman + Alexander principles)
+enum VoiceButtonState {
+  IDLE = 'idle',           // Not connected - ready to initiate connection
+  CONNECTING = 'connecting', // Connection in progress
+  READY = 'ready',         // Connected and ready for voice input
+  SPEAKING = 'speaking',   // User is speaking (PTT or VAD detected)
+  RESPONDING = 'responding' // Assistant is responding
+}
+
 // Global state
 let agent: RealtimeAgent | null = null;
 let session: RealtimeSession | null = null;
@@ -92,8 +101,7 @@ let conversationRenderer: ConversationRenderer | null = null;
 // Removed: currentStreamingTurn - now using currentStreamingMessageId with ConversationRenderer
 let currentStreamingText = '';
 let currentConversationId: string | null = null;
-let isConnected = false;
-let isConnecting = false; // guard concurrent connects
+let voiceButtonState: VoiceButtonState = VoiceButtonState.IDLE;
 let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
 // Legacy DOM element placeholders removed in favor of renderer-based state
@@ -108,6 +116,85 @@ let statusActive = false;
 // Accumulate partial transcription text when VAD is used (no PTT)
 let pendingUserText = '';
 
+// Centralized State Handler (Single Source of Truth)
+function setVoiceButtonState(newState: VoiceButtonState): void {
+  if (voiceButtonState === newState) return; // No change needed
+  if (!pttBtn) return; // Guard against early calls before DOM ready
+
+  const oldState = voiceButtonState;
+  voiceButtonState = newState;
+
+  // Remove all state classes
+  pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
+
+  // Add new state class
+  pttBtn.classList.add(newState);
+
+  // Update ARIA attributes based on state
+  switch (newState) {
+    case VoiceButtonState.IDLE:
+      pttBtn.setAttribute('aria-label', 'Connect to voice service');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      break;
+    case VoiceButtonState.CONNECTING:
+      pttBtn.setAttribute('aria-label', 'Connecting...');
+      pttBtn.setAttribute('aria-busy', 'true');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      break;
+    case VoiceButtonState.READY:
+      pttBtn.setAttribute('aria-label', 'Push to talk');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      break;
+    case VoiceButtonState.SPEAKING:
+      pttBtn.setAttribute('aria-label', 'Speaking - release to send');
+      pttBtn.setAttribute('aria-pressed', 'true');
+      pttBtn.removeAttribute('aria-busy');
+      break;
+    case VoiceButtonState.RESPONDING:
+      pttBtn.setAttribute('aria-label', 'Assistant is responding');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      break;
+  }
+
+  logger.debug(`Voice button state transition: ${oldState} → ${newState}`);
+}
+
+// Status Label Helper (Phase 5 - allows dynamic content overrides)
+function setStatusLabel(text: string | null): void {
+  if (!voiceStatusLabel) return;
+
+  if (text) {
+    // Set dynamic text (overrides CSS ::after content)
+    voiceStatusLabel.textContent = text;
+    voiceStatusLabel.classList.add('has-dynamic-content');
+  } else {
+    // Clear dynamic text (reverts to CSS ::after content)
+    voiceStatusLabel.textContent = '';
+    voiceStatusLabel.classList.remove('has-dynamic-content');
+  }
+}
+
+function clearStatusLabel(): void {
+  setStatusLabel(null);
+}
+
+// State check helpers (replace boolean flags)
+function isConnected(): boolean {
+  return voiceButtonState !== VoiceButtonState.IDLE &&
+         voiceButtonState !== VoiceButtonState.CONNECTING;
+}
+
+function isConnecting(): boolean {
+  return voiceButtonState === VoiceButtonState.CONNECTING;
+}
+
+function canStartPTT(): boolean {
+  return voiceButtonState === VoiceButtonState.READY;
+}
+
 // DOM elements
 const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
 
@@ -120,6 +207,7 @@ const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
 const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
 const sidebar = document.getElementById("sidebar") as HTMLDivElement;
 const voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
+const voiceStatusLabel = document.querySelector('.voice-status-label') as HTMLDivElement;
 
 const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
 let sharedMicStream: MediaStream | null = null;
@@ -381,14 +469,14 @@ function setInputAudio(enabled: boolean) {
 }
 
 async function setMicState(active: boolean) {
+  // Note: ARIA attributes are managed by setVoiceButtonState() state machine
+  // This function only handles visual feedback and audio input control
   if (active) {
     pttBtn.classList.add('listening');
   } else {
     pttBtn.classList.remove('listening');
   }
   setMicIcon(active);
-  pttBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  pttBtn.setAttribute('aria-label', active ? 'Stop listening' : 'Push to talk');
   await setListeningMode(active);
   setInputAudio(active);
 }
@@ -722,6 +810,9 @@ function startStreamingResponse(): void {
 
   if (!conversationRenderer) return;
 
+  // Update button state to show assistant is responding
+  setVoiceButtonState(VoiceButtonState.RESPONDING);
+
   // Clear status if currently showing (e.g., "Connecting…")
   clearStatusIfActive();
 
@@ -880,15 +971,12 @@ function addAssistantTurnToUI(response: string, timestamp?: Date): void {
 
 // Main connection function using Agents SDK
 async function connect(): Promise<void> {
-  if (isConnecting) return;
+  if (isConnecting()) return; // Prevent concurrent connections
   console.log('🔗 Connect starting...');
 
   let loadingOverlay: HTMLDivElement | null = null;
   try {
-    isConnecting = true;
-    // Update button to connecting state
-    pttBtn.classList.remove('idle', 'ready', 'speaking', 'responding');
-    pttBtn.classList.add('connecting');
+    setVoiceButtonState(VoiceButtonState.CONNECTING);
     loadingOverlay = uiEnhancements.showLoading('Connecting to voice service...');
 
     // Use the context-aware agent created during initialization
@@ -952,9 +1040,7 @@ async function connect(): Promise<void> {
     clearStatusIfActive();
 
     // Update button to ready state
-    pttBtn.classList.remove('idle', 'connecting', 'speaking', 'responding');
-    pttBtn.classList.add('ready');
-    isConnected = true;
+    setVoiceButtonState(VoiceButtonState.READY);
 
     // Hide loading and show success
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
@@ -966,10 +1052,7 @@ async function connect(): Promise<void> {
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     // Return button to idle state on error
-    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
-    pttBtn.classList.add('idle');
-  } finally {
-    isConnecting = false;
+    setVoiceButtonState(VoiceButtonState.IDLE);
   }
 }
 
@@ -979,13 +1062,15 @@ function setupSessionEvents(): void {
     logger.transport(event.type);
     const t = event.type || '';
 
-    // VAD speech start/stop → toggle listening visuals
+    // VAD speech start/stop → toggle listening visuals AND state machine
     if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
+      setVoiceButtonState(VoiceButtonState.SPEAKING);
       await setListeningMode(true);
       ensurePendingUserBubble();
       return;
     }
     if (t.includes('input_audio_buffer') && (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
+      setVoiceButtonState(VoiceButtonState.READY);
       await setListeningMode(false);
       return;
     }
@@ -1033,9 +1118,7 @@ function setupSessionEvents(): void {
   session?.on('error', (error: any) => {
     logger.error('Session error', error);
     setTranscript(`Voice error: ${error.message}`, true);
-    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
-    pttBtn.classList.add('idle');
-    isConnected = false;
+    setVoiceButtonState(VoiceButtonState.IDLE);
   });
 }
 
@@ -1055,11 +1138,16 @@ function handleStreamingDelta(delta: any): void {
 
 function handleResponseComplete(event: any): void {
   logger.debug('Response completed', event);
-  
+
   if (currentStreamingMessageId && currentStreamingText) {
     finalizeStreamingResponse();
-    
+
     // Note: recordConversationTurn is called inside finalizeStreamingResponse via addAssistantTurnToUI
+  }
+
+  // Return to ready state after assistant finishes responding
+  if (voiceButtonState === VoiceButtonState.RESPONDING) {
+    setVoiceButtonState(VoiceButtonState.READY);
   }
 }
 
@@ -1126,10 +1214,8 @@ async function disconnect() {
     logger.error('Disconnect error', error);
     console.error('❌ Disconnect error:', error);
   } finally {
-    isConnected = false;
     // Return button to idle state
-    pttBtn.classList.remove('connecting', 'ready', 'speaking', 'responding');
-    pttBtn.classList.add('idle');
+    setVoiceButtonState(VoiceButtonState.IDLE);
     // Stop shared stream for privacy
     if (sharedMicStream) {
       sharedMicStream.getTracks().forEach(t => t.stop());
@@ -1153,24 +1239,20 @@ async function disconnect() {
   }
 }
 
-// Push-to-talk with SDK
-let pushing = false;
-
 // Voice button with modern animations - single button for all actions
 pttBtn.onclick = async () => {
   // If not connected, clicking the button initiates connection
-  if (!isConnected && !isConnecting) {
+  if (voiceButtonState === VoiceButtonState.IDLE) {
     await connect();
     return;
   }
 };
 
 pttBtn.onpointerdown = async (e) => {
-  // Only handle PTT if already connected
-  if (!isConnected) return;
-  if (pttBtn.classList.contains('connecting')) return;
+  // Only handle PTT if already connected and ready
+  if (!canStartPTT()) return;
 
-  pushing = true;
+  setVoiceButtonState(VoiceButtonState.SPEAKING);
   await setMicState(true);
 
   // Use ConversationRenderer for pending user bubble
@@ -1178,9 +1260,10 @@ pttBtn.onpointerdown = async (e) => {
 };
 
 pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-  if (!isConnected) return;
-  if (pttBtn.classList.contains('connecting')) return;
-  pushing = false;
+  // Only handle PTT release if currently speaking
+  if (voiceButtonState !== VoiceButtonState.SPEAKING) return;
+
+  setVoiceButtonState(VoiceButtonState.READY);
   setMicState(false);
 };
 
@@ -1189,10 +1272,10 @@ pttBtn.onpointerup = pttBtn.onpointerleave = () => {
 // New conversation handler (will be assigned later)
 const handleNewConversation = async () => {
   if (!sessionManager || !conversationUI) return;
-  
+
   try {
     // Disconnect current session if connected
-    if (isConnected) {
+    if (isConnected()) {
       await disconnect();
     }
     
@@ -1293,7 +1376,7 @@ async function initializeApp(): Promise<void> {
     console.log(`🔧 Added ${contextTools.length} tools for ${currentContext.name}:`, contextTools.map(t => t.name));
 
     // Setup UI state - button starts in idle state, ready to connect
-    pttBtn.classList.add('idle');
+    setVoiceButtonState(VoiceButtonState.IDLE);
     newConversationBtn.disabled = false;
     
     // Create context selector in UI
@@ -1339,9 +1422,9 @@ function updateUIForContext(config: VoiceAgentConfig): void {
 window.addEventListener('conversationSwitched', async (event: any) => {
   const { conversationId } = event.detail;
   console.log(`🔄 Switching to conversation: ${conversationId}`);
-  
+
   // Disconnect current session if connected
-  if (isConnected) {
+  if (isConnected()) {
     await disconnect();
   }
   
@@ -1436,6 +1519,10 @@ window.addEventListener('resize', checkMobile);
 // Initialize page
 document.addEventListener("DOMContentLoaded", () => {
   checkMobile();
+
+  // Set initial button state (must happen after DOM elements are loaded)
+  setVoiceButtonState(VoiceButtonState.IDLE);
+
   setupEventHandlers();
   initializeApp();
   // Optional autoconnect via ?autoconnect=1 or localStorage 'jarvis.autoconnect' = 'true'
@@ -1602,7 +1689,7 @@ async function initializeJarvisIntegration() {
         }
       } else {
         // Handle as regular conversation (if connected)
-        if (isConnected && session) {
+        if (isConnected() && session) {
           textInput.value = '';
           addUserTurnToUI(text);
           session.send({ type: 'input_text', text });

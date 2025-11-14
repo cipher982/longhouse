@@ -434,6 +434,12 @@ html, body {
   opacity: 1;
   cursor: pointer;
   box-shadow: var(--shadow-xl), 0 0 0 3px rgba(139, 92, 246, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.voice-button.idle:hover {
+  box-shadow: var(--shadow-xl), 0 0 0 5px rgba(139, 92, 246, 0.4);
+  transform: scale(1.02);
 }
 
 .voice-button.connecting {
@@ -443,19 +449,28 @@ html, body {
 }
 
 .voice-button.ready {
-  /* Connected and ready for voice input */
+  /* Connected and ready for voice input - subtle breathing glow */
   box-shadow: var(--shadow-xl), 0 0 0 3px rgba(34, 197, 94, 0.3);
+  animation: ready-breathe 3s ease-in-out infinite;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.voice-button.ready:hover {
+  box-shadow: var(--shadow-xl), 0 0 0 5px rgba(34, 197, 94, 0.5);
+  transform: scale(1.02);
 }
 
 .voice-button.speaking {
-  /* User is speaking */
+  /* User is speaking - energetic pulse */
   background: var(--secondary-gradient);
-  animation: pulse 1.5s infinite;
+  animation: pulse-speaking 1.5s infinite;
+  transform: scale(1.05);
 }
 
 .voice-button.responding {
-  /* Assistant is responding */
+  /* Assistant is responding - thinking animation */
   background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  animation: responding-pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse-connecting {
@@ -478,6 +493,42 @@ html, body {
   }
   100% {
     box-shadow: var(--shadow-xl), 0 0 0 0 rgba(236, 72, 153, 0);
+  }
+}
+
+/* Enhanced animations for each state */
+@keyframes ready-breathe {
+  0%, 100% {
+    box-shadow: var(--shadow-xl), 0 0 0 3px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    box-shadow: var(--shadow-xl), 0 0 0 5px rgba(34, 197, 94, 0.5), 0 0 20px rgba(34, 197, 94, 0.2);
+  }
+}
+
+@keyframes pulse-speaking {
+  0% {
+    box-shadow: var(--shadow-xl), 0 0 0 0 rgba(236, 72, 153, 0.7);
+    transform: scale(1.05);
+  }
+  50% {
+    box-shadow: var(--shadow-xl), 0 0 0 16px rgba(236, 72, 153, 0);
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: var(--shadow-xl), 0 0 0 0 rgba(236, 72, 153, 0);
+    transform: scale(1.05);
+  }
+}
+
+@keyframes responding-pulse {
+  0%, 100% {
+    box-shadow: var(--shadow-xl), 0 0 0 3px rgba(59, 130, 246, 0.4);
+    opacity: 0.95;
+  }
+  50% {
+    box-shadow: var(--shadow-xl), 0 0 0 6px rgba(59, 130, 246, 0.6), 0 0 30px rgba(59, 130, 246, 0.3);
+    opacity: 1;
   }
 }
 
@@ -532,8 +583,13 @@ body.audio-state-3 .voice-button:not(.listening) {
   line-height: 24px;
   color: var(--text-secondary);
   text-align: center;
-  transition: color 0.3s ease;
+  transition: all 0.3s ease;
   min-height: 24px;
+}
+
+/* Hide CSS-generated content when dynamic content is present */
+.voice-status-label.has-dynamic-content::after {
+  content: none !important;
 }
 
 .voice-button.idle ~ .voice-status-label::after {
@@ -544,11 +600,32 @@ body.audio-state-3 .voice-button:not(.listening) {
 .voice-button.connecting ~ .voice-status-label::after {
   content: "Connecting...";
   color: var(--accent-purple);
+  animation: fade-pulse 1.5s ease-in-out infinite;
 }
 
 .voice-button.ready ~ .voice-status-label::after {
-  content: "Ready";
+  content: "Ready to talk";
   color: #22c55e;
+}
+
+.voice-button.speaking ~ .voice-status-label::after {
+  content: "Listening...";
+  color: var(--accent-pink);
+  animation: fade-pulse 1s ease-in-out infinite;
+}
+
+.voice-button.responding ~ .voice-status-label::after {
+  content: "Assistant is responding";
+  color: var(--accent-blue);
+}
+
+@keyframes fade-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 /* Legacy Listening Indicator (kept for compatibility) */
