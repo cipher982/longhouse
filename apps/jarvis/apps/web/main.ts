@@ -162,16 +162,44 @@ function triggerHaptic(pattern: number | number[]): void {
 class AudioFeedback {
   private audioContext: AudioContext | null = null;
   private enabled: boolean;
+  private supported: boolean;
 
   constructor(enabled: boolean) {
     this.enabled = enabled;
+    // Check if Web Audio API is supported
+    this.supported = !!(window.AudioContext || (window as any).webkitAudioContext);
   }
 
-  private getContext(): AudioContext {
+  private getContext(): AudioContext | null {
+    if (!this.supported) return null;
+
     if (!this.audioContext) {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      try {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      } catch (error) {
+        logger.warn('Web Audio API not supported', error);
+        this.supported = false;
+        return null;
+      }
     }
     return this.audioContext;
+  }
+
+  // Resume audio context (Safari autoplay fix) - must be called from user gesture
+  async resumeContext(): Promise<void> {
+    if (!this.supported) return;
+
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+        logger.debug('AudioContext resumed from user gesture');
+      } catch (error) {
+        // Silently fail - might not be a user gesture context
+      }
+    }
   }
 
   setEnabled(enabled: boolean): void {
@@ -180,10 +208,17 @@ class AudioFeedback {
 
   // Soft chime (connection success)
   playConnectChime(): void {
-    if (!this.enabled) return;
+    if (!this.enabled || !this.supported) return;
 
     try {
       const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
 
@@ -205,10 +240,17 @@ class AudioFeedback {
 
   // Brief tick (voice detected)
   playVoiceTick(): void {
-    if (!this.enabled) return;
+    if (!this.enabled || !this.supported) return;
 
     try {
       const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
 
@@ -228,10 +270,17 @@ class AudioFeedback {
 
   // Gentle error tone
   playErrorTone(): void {
-    if (!this.enabled) return;
+    if (!this.enabled || !this.supported) return;
 
     try {
       const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
 
@@ -1394,6 +1443,10 @@ async function disconnect() {
 
 // Voice button with modern animations - single button for all actions
 pttBtn.onclick = async () => {
+  // Resume AudioContext from user gesture (Safari autoplay fix)
+  // Must happen synchronously before any awaits
+  audioFeedback.resumeContext().catch(() => {});
+
   // If not connected, clicking the button initiates connection
   if (voiceButtonState === VoiceButtonState.IDLE) {
     await connect();
@@ -1402,6 +1455,10 @@ pttBtn.onclick = async () => {
 };
 
 pttBtn.onpointerdown = async (e) => {
+  // Resume AudioContext from user gesture (Safari autoplay fix)
+  // Must happen synchronously before any awaits
+  audioFeedback.resumeContext().catch(() => {});
+
   // Only handle PTT if already connected and ready
   if (!canStartPTT()) return;
 
