@@ -25,7 +25,7 @@ def test_get_agents(db_session: Session, sample_agent: Agent):
             name=f"Test Agent {i}",
             system_instructions=f"System instructions for agent {i}",
             task_instructions=f"Instructions for agent {i}",
-            model="gpt-4o",
+            model="gpt-5.1-chat-latest",
             status="idle",
         )
         db_session.add(agent)
