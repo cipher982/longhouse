@@ -116,6 +116,144 @@ let statusActive = false;
 // Accumulate partial transcription text when VAD is used (no PTT)
 let pendingUserText = '';
 
+// Haptic & Audio Feedback System (Phase 6)
+interface FeedbackPreferences {
+  haptics: boolean;
+  audio: boolean;
+}
+
+// Load preferences from localStorage
+function loadFeedbackPreferences(): FeedbackPreferences {
+  try {
+    const stored = localStorage.getItem('jarvis.feedback.preferences');
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (error) {
+    logger.warn('Failed to load feedback preferences', error);
+  }
+  // Default: enabled
+  return { haptics: true, audio: true };
+}
+
+function saveFeedbackPreferences(prefs: FeedbackPreferences): void {
+  try {
+    localStorage.setItem('jarvis.feedback.preferences', JSON.stringify(prefs));
+  } catch (error) {
+    logger.warn('Failed to save feedback preferences', error);
+  }
+}
+
+const feedbackPrefs = loadFeedbackPreferences();
+
+// Haptic feedback helper
+function triggerHaptic(pattern: number | number[]): void {
+  if (!feedbackPrefs.haptics) return;
+  if (!('vibrate' in navigator)) return;
+
+  try {
+    navigator.vibrate(pattern);
+  } catch (error) {
+    // Silently fail if vibration not supported
+  }
+}
+
+// Audio feedback system using Web Audio API
+class AudioFeedback {
+  private audioContext: AudioContext | null = null;
+  private enabled: boolean;
+
+  constructor(enabled: boolean) {
+    this.enabled = enabled;
+  }
+
+  private getContext(): AudioContext {
+    if (!this.audioContext) {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return this.audioContext;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  // Soft chime (connection success)
+  playConnectChime(): void {
+    if (!this.enabled) return;
+
+    try {
+      const ctx = this.getContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+      oscillator.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.2);
+    } catch (error) {
+      // Silently fail if audio not supported
+    }
+  }
+
+  // Brief tick (voice detected)
+  playVoiceTick(): void {
+    if (!this.enabled) return;
+
+    try {
+      const ctx = this.getContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.05, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.05);
+    } catch (error) {
+      // Silently fail
+    }
+  }
+
+  // Gentle error tone
+  playErrorTone(): void {
+    if (!this.enabled) return;
+
+    try {
+      const ctx = this.getContext();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(300, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.3);
+
+      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.3);
+    } catch (error) {
+      // Silently fail
+    }
+  }
+}
+
+const audioFeedback = new AudioFeedback(feedbackPrefs.audio);
+
 // Centralized State Handler (Single Source of Truth)
 function setVoiceButtonState(newState: VoiceButtonState): void {
   if (voiceButtonState === newState) return; // No change needed
@@ -1042,6 +1180,10 @@ async function connect(): Promise<void> {
     // Update button to ready state
     setVoiceButtonState(VoiceButtonState.READY);
 
+    // Haptic + audio feedback on successful connection
+    triggerHaptic(50);
+    audioFeedback.playConnectChime();
+
     // Hide loading and show success
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast('Connected successfully', 'success');
@@ -1051,6 +1193,11 @@ async function connect(): Promise<void> {
     // Hide loading if it was created
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+
+    // Error feedback
+    triggerHaptic([100, 50, 100]); // Double vibration for error
+    audioFeedback.playErrorTone();
+
     // Return button to idle state on error
     setVoiceButtonState(VoiceButtonState.IDLE);
   }
@@ -1065,6 +1212,7 @@ function setupSessionEvents(): void {
     // VAD speech start/stop → toggle listening visuals AND state machine
     if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
       setVoiceButtonState(VoiceButtonState.SPEAKING);
+      audioFeedback.playVoiceTick(); // Audio cue for voice detected
       await setListeningMode(true);
       ensurePendingUserBubble();
       return;
@@ -1118,6 +1266,11 @@ function setupSessionEvents(): void {
   session?.on('error', (error: any) => {
     logger.error('Session error', error);
     setTranscript(`Voice error: ${error.message}`, true);
+
+    // Error feedback
+    triggerHaptic([100, 50, 100]); // Double vibration for error
+    audioFeedback.playErrorTone();
+
     setVoiceButtonState(VoiceButtonState.IDLE);
   });
 }
@@ -1574,6 +1727,11 @@ declare global {
     syncNow: () => Promise<{ pushed: number; pulled: number }>;
     flushLocal: () => Promise<void>;
     ConversationRenderer: typeof ConversationRenderer;
+    // Feedback preferences (Phase 6)
+    getFeedbackPreferences: () => FeedbackPreferences;
+    setHapticFeedback: (enabled: boolean) => void;
+    setAudioFeedback: (enabled: boolean) => void;
+    testAudioFeedback: () => void;
   }
 }
 
@@ -1588,6 +1746,32 @@ window.syncNow = async () => {
 window.flushLocal = async () => {
   if (!sessionManager) return;
   await sessionManager.flush();
+};
+
+// Feedback preference controls (Phase 6)
+window.getFeedbackPreferences = () => {
+  return { ...feedbackPrefs };
+};
+
+window.setHapticFeedback = (enabled: boolean) => {
+  feedbackPrefs.haptics = enabled;
+  saveFeedbackPreferences(feedbackPrefs);
+  console.log(`Haptic feedback ${enabled ? 'enabled' : 'disabled'}`);
+};
+
+window.setAudioFeedback = (enabled: boolean) => {
+  feedbackPrefs.audio = enabled;
+  audioFeedback.setEnabled(enabled);
+  saveFeedbackPreferences(feedbackPrefs);
+  console.log(`Audio feedback ${enabled ? 'enabled' : 'disabled'}`);
+};
+
+window.testAudioFeedback = () => {
+  console.log('Testing audio feedback...');
+  audioFeedback.playConnectChime();
+  setTimeout(() => audioFeedback.playVoiceTick(), 500);
+  setTimeout(() => audioFeedback.playErrorTone(), 1000);
+  console.log('Played: connect chime → voice tick → error tone');
 };
 
 // Debug function to check IndexedDB contents

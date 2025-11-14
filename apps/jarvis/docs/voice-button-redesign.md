@@ -1,6 +1,6 @@
 # Jarvis Voice Interface Redesign
 
-**Status**: Phase 5 Complete - Visual Feedback & Status Labels Implemented
+**Status**: Phase 6 Complete - Haptic & Audio Feedback Implemented
 **Created**: 2025-11-13
 **Last Updated**: 2025-11-13
 
@@ -422,13 +422,22 @@ Combining all five design philosophies:
 - [x] Support for live content override (e.g., transcription preview)
 - [x] ARIA live region already configured in HTML
 
-### Phase 6: Haptic & Audio Feedback (Dreyfuss)
-- [ ] Add haptic feedback on connection (50ms vibration)
-- [ ] Create subtle audio cues:
-  - Connection established: Soft chime (200ms)
-  - Voice detected: Brief tick (50ms)
-  - Error: Gentle alert tone
-- [ ] Make all feedback optional (user preference)
+### Phase 6: Haptic & Audio Feedback (Dreyfuss) ✅ COMPLETE
+- [x] Add haptic feedback on connection (50ms vibration)
+- [x] Add haptic feedback on errors (double vibration pattern)
+- [x] Create subtle audio cues using Web Audio API:
+  - Connection established: C5→E5 chime (200ms)
+  - Voice detected: 800Hz tick (50ms)
+  - Error: 300Hz→200Hz descending tone (300ms)
+- [x] Make all feedback optional via localStorage preferences
+- [x] Create AudioFeedback class with Web Audio oscillators
+- [x] Wire feedback to state transitions (connect, VAD, errors)
+- [x] Expose preference controls via window object:
+  - `window.getFeedbackPreferences()` - View current settings
+  - `window.setHapticFeedback(boolean)` - Toggle haptics
+  - `window.setAudioFeedback(boolean)` - Toggle audio
+  - `window.testAudioFeedback()` - Test all sounds
+- [x] Default: Both haptics and audio enabled
 
 ### Phase 7: Accessibility (Norman + Dreyfuss)
 - [ ] Update ARIA labels for all states
@@ -573,6 +582,22 @@ Combining all five design philosophies:
   - RESPONDING: Blue thinking pulse
 - Status labels automatically update based on button state via CSS sibling selectors
 - JS helpers available for dynamic content override when needed
+
+**2025-11-13**: Phase 6 Complete
+- Implemented multi-sensory feedback system (Dreyfuss principle)
+- Haptic feedback on successful connection (50ms) and errors (100-50-100ms pattern)
+- Audio feedback using Web Audio API oscillators (no external files):
+  - Connect chime: Musical C5→E5 transition (pleasant confirmation)
+  - Voice tick: Brief 800Hz click (unobtrusive VAD confirmation)
+  - Error tone: Descending 300Hz→200Hz (gentle alert)
+- User preferences stored in localStorage with defaults enabled
+- Console API for testing and control:
+  - `getFeedbackPreferences()` - Check current settings
+  - `setHapticFeedback(true/false)` - Toggle vibration
+  - `setAudioFeedback(true/false)` - Toggle sounds
+  - `testAudioFeedback()` - Preview all audio cues
+- Graceful degradation: Silently fails on unsupported browsers
+- All feedback respects user preferences without UI clutter
 
 **[Date TBD]**: User testing results
 - [To be filled after testing]
