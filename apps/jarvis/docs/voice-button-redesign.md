@@ -590,6 +590,12 @@ Combining all five design philosophies:
 - [ ] Audio feedback: Always on, or opt-in?
 - [ ] How to handle connection errors gracefully?
 
+### Known Limitations
+- **Screen Reader Announcements**: Status label currently uses CSS `::after` pseudo-content which screen readers cannot announce. The `setStatusLabel()` helper is available but not yet wired up. Plan to integrate when adding live transcription preview (Phase 7+).
+  - Current: CSS-based static text (silent to screen readers)
+  - Future: Call `setStatusLabel(text)` for dynamic content that screen readers can announce
+  - ARIA live region is configured correctly in HTML, just needs real text nodes
+
 ### Blocked Items
 - None currently
 
