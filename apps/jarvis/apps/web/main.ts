@@ -965,7 +965,7 @@ const whoopTool = tool({
   name: 'get_whoop_recovery',
   description: 'Get current WHOOP recovery score and health data',
   parameters: z.object({
-    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today').optional()
+    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today').optional().nullable()
   }),
   async execute({ date }) {
     console.log('💪 Calling WHOOP tool with date:', date);
@@ -1470,76 +1470,6 @@ async function disconnect() {
   }
 }
 
-// Voice button with modern animations - single button for all actions
-pttBtn.onclick = async () => {
-  // Resume AudioContext from user gesture (Safari autoplay fix)
-  // Must happen synchronously before any awaits
-  audioFeedback.resumeContext().catch(() => {});
-
-  // If not connected, clicking the button initiates connection
-  if (voiceButtonState === VoiceButtonState.IDLE) {
-    await connect();
-    return;
-  }
-};
-
-pttBtn.onpointerdown = async (e) => {
-  // Resume AudioContext from user gesture (Safari autoplay fix)
-  // Must happen synchronously before any awaits
-  audioFeedback.resumeContext().catch(() => {});
-
-  // Only handle PTT if already connected and ready
-  if (!canStartPTT()) return;
-
-  setVoiceButtonState(VoiceButtonState.SPEAKING);
-  await setMicState(true);
-
-  // Use ConversationRenderer for pending user bubble
-  ensurePendingUserBubble();
-};
-
-pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-  // Only handle PTT release if currently speaking
-  if (voiceButtonState !== VoiceButtonState.SPEAKING) return;
-
-  setVoiceButtonState(VoiceButtonState.READY);
-  setMicState(false);
-};
-
-// Keyboard navigation support (Phase 7 - Accessibility)
-pttBtn.onkeydown = async (e: KeyboardEvent) => {
-  // Space or Enter key activates the button
-  if (e.key === ' ' || e.key === 'Enter') {
-    e.preventDefault(); // Prevent page scroll on Space
-
-    // Resume AudioContext from keyboard gesture (Safari autoplay fix)
-    audioFeedback.resumeContext().catch(() => {});
-
-    // If IDLE, connect
-    if (voiceButtonState === VoiceButtonState.IDLE) {
-      await connect();
-      return;
-    }
-
-    // If READY, start PTT mode (hold to speak)
-    if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
-      setVoiceButtonState(VoiceButtonState.SPEAKING);
-      await setMicState(true);
-      ensurePendingUserBubble();
-    }
-  }
-};
-
-pttBtn.onkeyup = (e: KeyboardEvent) => {
-  // Release PTT on key up (Space or Enter)
-  if ((e.key === ' ' || e.key === 'Enter') && voiceButtonState === VoiceButtonState.SPEAKING) {
-    setVoiceButtonState(VoiceButtonState.READY);
-    setMicState(false);
-  }
-};
-
-// Event handlers will be set up after DOM is loaded
-
 // New conversation handler (will be assigned later)
 const handleNewConversation = async () => {
   if (!sessionManager || !conversationUI) return;
@@ -1808,6 +1738,68 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Setup all event handlers after DOM is ready
 function setupEventHandlers(): void {
+  // Microphone button - modern voice interface with PTT support
+  if (pttBtn) {
+    pttBtn.onclick = async () => {
+      // Resume AudioContext from user gesture (Safari autoplay fix)
+      audioFeedback.resumeContext().catch(() => {});
+
+      // If not connected, clicking the button initiates connection
+      if (voiceButtonState === VoiceButtonState.IDLE) {
+        await connect();
+        return;
+      }
+    };
+
+    pttBtn.onpointerdown = async (e) => {
+      // Resume AudioContext from user gesture (Safari autoplay fix)
+      audioFeedback.resumeContext().catch(() => {});
+
+      // Only handle PTT if already connected and ready
+      if (!canStartPTT()) return;
+
+      setVoiceButtonState(VoiceButtonState.SPEAKING);
+      await setMicState(true);
+      ensurePendingUserBubble();
+    };
+
+    pttBtn.onpointerup = pttBtn.onpointerleave = () => {
+      if (voiceButtonState !== VoiceButtonState.SPEAKING) return;
+      setVoiceButtonState(VoiceButtonState.READY);
+      setMicState(false);
+    };
+
+    // Keyboard navigation support (Phase 7 - Accessibility)
+    pttBtn.onkeydown = async (e: KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        audioFeedback.resumeContext().catch(() => {});
+
+        if (voiceButtonState === VoiceButtonState.IDLE) {
+          await connect();
+          return;
+        }
+
+        if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
+          setVoiceButtonState(VoiceButtonState.SPEAKING);
+          await setMicState(true);
+          ensurePendingUserBubble();
+        }
+      }
+    };
+
+    pttBtn.onkeyup = (e: KeyboardEvent) => {
+      if ((e.key === ' ' || e.key === 'Enter') && voiceButtonState === VoiceButtonState.SPEAKING) {
+        setVoiceButtonState(VoiceButtonState.READY);
+        setMicState(false);
+      }
+    };
+
+    console.log('✅ Microphone button handlers attached');
+  } else {
+    console.error('❌ Microphone button (pttBtn) not found');
+  }
+
   // Sync button
   syncNowBtn.onclick = async () => {
     if (!sessionManager) return;
