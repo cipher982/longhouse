@@ -1800,6 +1800,76 @@ function setupEventHandlers(): void {
     console.error('❌ Microphone button (pttBtn) not found');
   }
 
+  // Text input handlers (work independently of Zerg integration)
+  const textInput = document.getElementById('textInput') as HTMLInputElement;
+  const sendTextBtn = document.getElementById('sendTextBtn');
+
+  if (textInput && sendTextBtn) {
+    const handleTextCommand = async () => {
+      const text = textInput.value.trim();
+      if (!text) return;
+
+      console.log('💬 Text command:', text);
+
+      // Try to map to agent dispatch (only works if Zerg is available)
+      const agent = findAgentByIntent(text);
+
+      if (agent && jarvisClient) {
+        console.log(`🎯 Dispatching agent: ${agent.name}`);
+        textInput.value = '';
+
+        try {
+          const result = await jarvisClient.dispatch({ agent_id: agent.id });
+          console.log('✅ Agent dispatched:', result);
+          uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
+
+          addUserTurnToUI(text);
+          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
+        } catch (error: any) {
+          console.error('Dispatch failed:', error);
+          uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
+          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+        }
+      } else {
+        // Handle as regular conversation - auto-connect if needed
+        if (!isConnected()) {
+          console.log('🔌 Auto-connecting for text input...');
+          uiEnhancements.showToast('Connecting to assistant...', 'info');
+
+          try {
+            await connect();
+          } catch (error: any) {
+            console.error('Auto-connect failed:', error);
+            uiEnhancements.showToast(`Failed to connect: ${error.message}`, 'error');
+            return;
+          }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        if (session) {
+          textInput.value = '';
+          addUserTurnToUI(text);
+          session.send({ type: 'input_text', text });
+          uiEnhancements.showToast('Message sent', 'success');
+        } else {
+          uiEnhancements.showToast('Failed to send message', 'error');
+        }
+      }
+    };
+
+    sendTextBtn.addEventListener('click', handleTextCommand);
+    textInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        handleTextCommand();
+      }
+    });
+
+    console.log('✅ Text input handlers attached');
+  } else {
+    console.warn('⚠️ Text input elements not found (textInput or sendTextBtn)');
+  }
+
   // Sync button
   syncNowBtn.onclick = async () => {
     if (!sessionManager) return;
@@ -1951,60 +2021,9 @@ async function initializeJarvisIntegration() {
       }
     }
 
-    // Set up text input handler
-    const textInput = document.getElementById('textInput') as HTMLInputElement;
-    const sendTextBtn = document.getElementById('sendTextBtn');
-
-    const handleTextCommand = async () => {
-      const text = textInput?.value.trim();
-      if (!text) return;
-
-      console.log('💬 Text command:', text);
-
-      // Try to map to agent dispatch
-      const agent = findAgentByIntent(text);
-
-      if (agent) {
-        console.log(`🎯 Dispatching agent: ${agent.name}`);
-        textInput.value = '';
-
-        try {
-          const result = await jarvisClient.dispatch({ agent_id: agent.id });
-          console.log('✅ Agent dispatched:', result);
-          uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
-
-          // Add message to UI
-          addUserTurnToUI(text);
-          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
-        } catch (error: any) {
-          console.error('Dispatch failed:', error);
-          uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
-          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
-        }
-      } else {
-        // Handle as regular conversation (if connected)
-        if (isConnected() && session) {
-          textInput.value = '';
-          addUserTurnToUI(text);
-          session.send({ type: 'input_text', text });
-        } else {
-          uiEnhancements.showToast('Not connected - tap the microphone first', 'error');
-        }
-      }
-    };
-
-    sendTextBtn?.addEventListener('click', handleTextCommand);
-    textInput?.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        handleTextCommand();
-      }
-    });
-
-    console.log('✅ Text input mode enabled');
-
   } catch (error) {
     console.error('❌ Jarvis-Zerg integration failed:', error);
-    // Non-fatal - voice features still work
+    // Non-fatal - text input and voice features still work
   }
 }
 
