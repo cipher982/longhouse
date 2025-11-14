@@ -192,7 +192,7 @@ html, body {
 }
 
 .main-header {
-  padding: 24px 32px;
+  padding: 24px 24px;
   background: var(--glass-bg);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--glass-border);
@@ -380,7 +380,10 @@ html, body {
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding: 32px 24px 48px; /* All multiples of 24px: 32px top, 48px bottom */
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+  padding: 24px 24px 48px; /* 24px baseline grid across breakpoints */
   position: relative;
 }
 
@@ -692,15 +695,14 @@ body.audio-state-3 .voice-button:not(.listening) {
 /* Mobile Responsive */
 @media (max-width: 1024px) {
   .app-container { grid-template-columns: 280px 1fr; }
-  .voice-button { width: 76px; height: 76px; }
 
   .main-header {
-    padding: 20px 24px;
+    padding: 24px 24px;
   }
 
   .voice-controls {
-    padding: 16px 20px 28px;
-    gap: 20px;
+    padding: 24px 24px 48px;
+    gap: 24px;
   }
 }
 
@@ -725,8 +727,8 @@ body.audio-state-3 .voice-button:not(.listening) {
   .sidebar-toggle {
     display: block;
     position: fixed;
-    top: 20px;
-    left: 20px;
+    top: 24px;
+    left: 24px;
     z-index: 1001;
     width: 40px;
     height: 40px;
@@ -740,10 +742,10 @@ body.audio-state-3 .voice-button:not(.listening) {
     cursor: pointer;
   }
 
-  .chat-container { padding: 16px; }
+  .chat-container { padding: 24px; }
 
   .main-header {
-    padding: 16px 20px;
+    padding: 24px;
   }
 
   .header-actions {
@@ -755,8 +757,8 @@ body.audio-state-3 .voice-button:not(.listening) {
   }
 
   .voice-controls {
-    padding: 12px 16px 24px;
-    gap: 18px;
+    padding: 24px 24px 48px;
+    gap: 24px;
   }
 
   .voice-button {

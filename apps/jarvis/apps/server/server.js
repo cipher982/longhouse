@@ -40,16 +40,32 @@ async function initMCPClients() {
       command: 'uvx',
       args: ['--from', '/Users/davidrose/git/traccar', 'traccar-mcp']
     });
-    
+
     const traccarClient = new Client(
       { name: 'jarvis-server', version: '1.0.0' },
       { capabilities: { tools: {} } }
     );
-    
+
     await traccarClient.connect(traccarTransport);
     mcpClients.set('traccar', traccarClient);
-    
-    console.log('✅ MCP clients initialized:', Array.from(mcpClients.keys()));
+    console.log('✅ Traccar MCP connected');
+
+    // WHOOP health MCP server
+    const whoopTransport = new StdioClientTransport({
+      command: 'uvx',
+      args: ['--from', '/Users/davidrose/git/whoop-mcp', 'whoop-mcp']
+    });
+
+    const whoopClient = new Client(
+      { name: 'jarvis-server', version: '1.0.0' },
+      { capabilities: { tools: {} } }
+    );
+
+    await whoopClient.connect(whoopTransport);
+    mcpClients.set('whoop', whoopClient);
+    console.log('✅ WHOOP MCP connected');
+
+    console.log('✅ All MCP clients initialized:', Array.from(mcpClients.keys()));
   } catch (error) {
     console.error('❌ Failed to initialize MCP clients:', error);
   }
@@ -94,64 +110,68 @@ app.post("/tool", async (req, res) => {
   try {
     // Location tools via traccar MCP
     if (name === "location.get_current") {
-      // Nashville location
-      console.log('📍 Location data (Nashville)');
-      return res.json({
-        ...NASHVILLE_LOCATION,
-        timestamp: new Date().toISOString()
+      // Real location via Traccar MCP
+      const client = mcpClients.get('traccar');
+      if (!client) {
+        return res.status(500).json({ error: 'Traccar MCP client not available' });
+      }
+      const result = await client.callTool({
+        name: 'get_current_location',
+        arguments: args || {}
       });
-      
-      // Real location (commented out for demo)
-      // const client = mcpClients.get('traccar');
-      // if (!client) {
-      //   return res.status(500).json({ error: 'Traccar MCP client not available' });
-      // }
-      // const result = await client.callTool({
-      //   name: 'get_current_location',
-      //   arguments: args || {}
-      // });
-      // console.log('📍 Location data:', result);
-      // return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
+      console.log('📍 Location data:', result);
+      return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
     
     if (name === "location.get_history") {
-      // Nashville location history
-      console.log('📍 Location history (Nashville area)');
-      const baseTime = new Date();
-      const history = [];
-      for (let i = 0; i < 5; i++) {
-        const timeOffset = i * 30 * 60 * 1000; // 30 min intervals
-        const latVariation = (Math.random() - 0.5) * 0.01; // Small variations
-        const lonVariation = (Math.random() - 0.5) * 0.01;
-        history.push({
-          ...NASHVILLE_LOCATION,
-          lat: NASHVILLE_LOCATION.lat + latVariation,
-          lon: NASHVILLE_LOCATION.lon + lonVariation,
-          timestamp: new Date(baseTime - timeOffset).toISOString()
-        });
+      // Real location history via Traccar MCP
+      const client = mcpClients.get('traccar');
+      if (!client) {
+        return res.status(500).json({ error: 'Traccar MCP client not available' });
       }
-      return res.json(history);
-      
-      // Real location history (commented out for demo)
-      // const client = mcpClients.get('traccar');
-      // if (!client) {
-      //   return res.status(500).json({ error: 'Traccar MCP client not available' });
-      // }
-      // const result = await client.callTool({
-      //   name: 'get_location_history',
-      //   arguments: args || {}
-      // });
-      // return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
+      const result = await client.callTool({
+        name: 'get_location_history',
+        arguments: args || {}
+      });
+      return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
     
-    // Keep existing WHOOP mock for now
+    // WHOOP health data via WHOOP MCP
     if (name === "whoop.get_daily") {
-      const today = new Date().toISOString().slice(0,10);
-      return res.json({
-        date: args?.date || today,
-        recovery_score: 62, // replace with real WHOOP call
-        sleep: { duration: 7.1, hrv: 75, rhr: 54 }
+      const client = mcpClients.get('whoop');
+      if (!client) {
+        return res.status(500).json({ error: 'WHOOP MCP client not available' });
+      }
+      const result = await client.callTool({
+        name: 'get_health_status',
+        arguments: args || {}
       });
+      console.log('💪 WHOOP data:', result);
+      return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
+    }
+
+    if (name === "whoop.get_recovery_trend") {
+      const client = mcpClients.get('whoop');
+      if (!client) {
+        return res.status(500).json({ error: 'WHOOP MCP client not available' });
+      }
+      const result = await client.callTool({
+        name: 'get_recovery_trend',
+        arguments: args || {}
+      });
+      return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
+    }
+
+    if (name === "whoop.get_workouts") {
+      const client = mcpClients.get('whoop');
+      if (!client) {
+        return res.status(500).json({ error: 'WHOOP MCP client not available' });
+      }
+      const result = await client.callTool({
+        name: 'get_recent_workouts',
+        arguments: args || {}
+      });
+      return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
     
     return res.json({ ok: true, echo: { name, args } });

@@ -958,30 +958,54 @@ const locationTool = tool({
 
 const whoopTool = tool({
   name: 'get_whoop_recovery',
-  description: 'Get current WHOOP recovery score and sleep data',
+  description: 'Get current WHOOP recovery score and health data',
   parameters: z.object({
-    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today')
+    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today').optional()
   }),
   async execute({ date }) {
-    console.log('🏃 Calling WHOOP tool with date:', date);
+    console.log('💪 Calling WHOOP tool with date:', date);
     try {
       const response = await fetch(`${CONFIG.API_BASE}/tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name: 'whoop.get_daily', 
-          args: { date } 
+        body: JSON.stringify({
+          name: 'whoop.get_daily',
+          args: { date }
         })
       });
-      
+
       if (!response.ok) {
         throw new Error(`WHOOP API failed: ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log('💪 WHOOP data received:', data);
-      
-      return `Your WHOOP data for ${data.date}: Recovery Score: ${data.recovery_score}%, Sleep: ${data.sleep.duration} hours, HRV: ${data.sleep.hrv}, RHR: ${data.sleep.rhr}`;
+
+      // Format the response based on the actual WHOOP MCP data structure
+      let result = 'Your WHOOP data:\n';
+      if (data.recovery_score) {
+        result += `Recovery Score: ${data.recovery_score}%\n`;
+      }
+      if (data.strain) {
+        result += `Strain: ${data.strain}\n`;
+      }
+      if (data.heart_rate) {
+        result += `Heart Rate: ${data.heart_rate} bpm\n`;
+      }
+      if (data.hrv) {
+        result += `HRV: ${data.hrv}ms\n`;
+      }
+      if (data.rhr) {
+        result += `Resting HR: ${data.rhr} bpm\n`;
+      }
+      if (data.sleep_duration) {
+        result += `Sleep: ${data.sleep_duration} hours\n`;
+      }
+      if (data.date) {
+        result += `Date: ${data.date}`;
+      }
+
+      return result;
     } catch (error) {
       console.error('WHOOP tool error:', error);
       return `Sorry, couldn't get your WHOOP data: ${error instanceof Error ? error.message : 'Unknown error'}`;
