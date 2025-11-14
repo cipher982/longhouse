@@ -93,7 +93,7 @@ describe("ChatPage", () => {
       status: "running",
       created_at: now,
       updated_at: now,
-      model: "gpt-4o",
+      model: "gpt-5.1-chat-latest",
       system_instructions: "",
       task_instructions: "",
       schedule: null,

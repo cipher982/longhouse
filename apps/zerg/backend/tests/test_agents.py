@@ -32,7 +32,7 @@ def test_create_agent(client: TestClient):
     agent_data = {
         "system_instructions": "System instructions for new test agent",
         "task_instructions": "This is a new test agent",
-        "model": "gpt-4o",
+        "model": "gpt-5.1-chat-latest",
     }
 
     response = client.post("/api/agents", json=agent_data)
@@ -60,7 +60,7 @@ def test_create_and_rename_agent(client: TestClient):
     agent_data = {
         "system_instructions": "System instructions",
         "task_instructions": "Task instructions",
-        "model": "gpt-4o",
+        "model": "gpt-5.1-chat-latest",
     }
     response = client.post("/api/agents", json=agent_data)
     assert response.status_code == 201

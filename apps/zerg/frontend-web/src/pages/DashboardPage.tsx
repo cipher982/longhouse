@@ -5,9 +5,11 @@ import {
   fetchDashboardSnapshot,
   runAgent,
   updateAgent,
+  fetchModels,
   type AgentRun,
   type AgentSummary,
   type DashboardSnapshot,
+  type ModelConfig,
 } from "../services/api";
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
@@ -354,6 +356,18 @@ export default function DashboardPage() {
   });
 
   const {
+    data: modelsData,
+  } = useQuery<ModelConfig[]>({
+    queryKey: ["models"],
+    queryFn: fetchModels,
+    staleTime: 1000 * 60 * 60, // 1 hour
+  });
+
+  const defaultModel = useMemo(() => {
+    return modelsData?.find((m) => m.is_default)?.id || "gpt-5.1-chat-latest";
+  }, [modelsData]);
+
+  const {
     data: dashboardData,
     isLoading,
     isFetching,
@@ -611,7 +625,7 @@ export default function DashboardPage() {
         body: JSON.stringify({
           system_instructions: "You are a helpful AI assistant.",
           task_instructions: "Complete the given task.",
-          model: "gpt-4o",
+          model: defaultModel,
         }),
       });
 

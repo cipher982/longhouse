@@ -513,3 +513,14 @@ export async function cancelExecution(executionId: number, reason: string): Prom
 export async function getExecutionHistory(workflowId: number): Promise<WorkflowExecution[]> {
   return request<WorkflowExecution[]>(`/workflow-executions/history/${workflowId}`);
 }
+
+export interface ModelConfig {
+  id: string;
+  display_name: string;
+  provider: string;
+  is_default: boolean;
+}
+
+export async function fetchModels(): Promise<ModelConfig[]> {
+  return request<ModelConfig[]>(`/models`);
+}

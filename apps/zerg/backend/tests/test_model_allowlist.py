@@ -32,7 +32,7 @@ async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_
                 "name": "NA agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-4o",  # not in allowlist
+                "model": "gpt-5.1-chat-latest",  # not in allowlist
                 "schedule": None,
                 "config": {},
             },
@@ -87,7 +87,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session, monkeypatch):
                 "name": "Admin agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-4o",  # disallowed for non-admins
+                "model": "gpt-5.1-chat-latest",  # disallowed for non-admins
                 "schedule": None,
                 "config": {},
             },
@@ -98,7 +98,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session, monkeypatch):
             del app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 201, resp.text
-    assert resp.json()["model"] == "gpt-4o"
+    assert resp.json()["model"] == "gpt-5.1-chat-latest"
 
 
 @pytest.mark.asyncio
@@ -164,7 +164,7 @@ async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_
         resp2 = client.put(
             f"/api/agents/{aid}",
             json={
-                "model": "gpt-4o",
+                "model": "gpt-5.1-chat-latest",
             },
         )
         assert resp2.status_code == 422, resp2.text
