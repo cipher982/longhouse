@@ -1117,7 +1117,7 @@ async function loadConversationHistoryIntoUI(): Promise<void> {
     if (conversationRenderer) {
       conversationRenderer.clear();
     }
-    if (conversationRenderer) conversationRenderer.setStatus('Click Connect to start', true);
+    if (conversationRenderer) conversationRenderer.setStatus('Tap the microphone to start', true);
     return;
   }
 
@@ -1126,7 +1126,7 @@ async function loadConversationHistoryIntoUI(): Promise<void> {
 
     if (history.length === 0) {
       conversationRenderer.clear();
-      conversationRenderer.setStatus('No messages yet - click Connect to start', true);
+      conversationRenderer.setStatus('No messages yet - tap the microphone to start', true);
       return;
     }
 
@@ -1631,7 +1631,7 @@ async function initializeApp(): Promise<void> {
       await loadConversationHistoryIntoUI();
     } else {
       console.log(`🆕 No existing conversation - ready for new one`);
-      setTranscript(`Ready to start new conversation - click Connect`, true);
+      setTranscript(`Ready to start new conversation - tap the microphone`, true);
     }
     
     console.log(`🧠 Session initialized with data loading complete`);
@@ -1654,7 +1654,7 @@ async function initializeApp(): Promise<void> {
     contextLoader.createContextSelector('context-selector-container');
     
     console.log(`✅ ${currentContext.name} voice agent ready`);
-    ensureReadyBanner(`${currentContext.name} ready - click Connect to start`);
+    ensureReadyBanner(`${currentContext.name} ready - tap the microphone to start`);
     
   } catch (error) {
     console.error('❌ Failed to initialize app:', error);
@@ -1738,7 +1738,7 @@ window.addEventListener('contextChanged', async (event: any) => {
       await loadConversationHistoryIntoUI();
       console.log(`🔄 Session reinitialized for ${config.name}, resumed conversation: ${currentConversationId}`);
     } else {
-      setTranscript(`${config.name} - click Connect to start`, true);
+      setTranscript(`${config.name} - tap the microphone to start`, true);
       console.log(`🔄 Session reinitialized for ${config.name}, ready for new conversation`);
     }
   }
@@ -1754,7 +1754,7 @@ window.addEventListener('contextChanged', async (event: any) => {
     console.log(`🔧 Updated tools for ${config.name}:`, contextTools.map(t => t.name));
   }
   
-  ensureReadyBanner(`${config.name} - click Connect to start`);
+  ensureReadyBanner(`${config.name} - tap the microphone to start`);
 });
 
 // Mobile menu toggle
@@ -1831,7 +1831,7 @@ function setupEventHandlers(): void {
   console.log('✅ Event handlers set up successfully');
 
   // Add visual feedback that event handlers are ready
-  uiEnhancements.showToast('Application ready - click Connect to start', 'info');
+  uiEnhancements.showToast('Application ready - tap the microphone to start', 'info');
 }
 
 // Expose functions for testing
@@ -1996,7 +1996,7 @@ async function initializeJarvisIntegration() {
           addUserTurnToUI(text);
           session.send({ type: 'input_text', text });
         } else {
-          uiEnhancements.showToast('Not connected - click Connect first', 'error');
+          uiEnhancements.showToast('Not connected - tap the microphone first', 'error');
         }
       }
     };
