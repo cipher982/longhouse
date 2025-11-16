@@ -9,6 +9,8 @@ Output:
 - packages/tool-manifest/tools.py - Python tool definitions
 """
 
+import argparse
+import difflib
 import json
 import sys
 from pathlib import Path
@@ -136,11 +138,70 @@ def get_tool_by_name(name: str) -> dict[str, Any] | None:
     return py_code
 
 
+def validate_manifests() -> bool:
+    """Validate that generated manifests match what's on disk."""
+    print("🔍 Validating tool manifests are up-to-date...")
+
+    tools = extract_tool_definitions()
+
+    # Check TypeScript
+    ts_output = REPO_ROOT / "packages" / "tool-manifest" / "index.ts"
+    expected_ts = generate_typescript(tools)
+    actual_ts = ts_output.read_text() if ts_output.exists() else ""
+
+    # Check Python
+    py_output = REPO_ROOT / "packages" / "tool-manifest" / "tools.py"
+    expected_py = generate_python(tools)
+    actual_py = py_output.read_text() if py_output.exists() else ""
+
+    ts_matches = expected_ts == actual_ts
+    py_matches = expected_py == actual_py
+
+    if not ts_matches:
+        print("❌ TypeScript manifest is out of sync")
+        print("\nDiff:")
+        diff = difflib.unified_diff(
+            actual_ts.splitlines(keepends=True),
+            expected_ts.splitlines(keepends=True),
+            fromfile='current',
+            tofile='expected'
+        )
+        print(''.join(diff))
+
+    if not py_matches:
+        print("❌ Python manifest is out of sync")
+        print("\nDiff:")
+        diff = difflib.unified_diff(
+            actual_py.splitlines(keepends=True),
+            expected_py.splitlines(keepends=True),
+            fromfile='current',
+            tofile='expected'
+        )
+        print(''.join(diff))
+
+    if ts_matches and py_matches:
+        print("✅ All tool manifests are up-to-date")
+        return True
+    else:
+        print("\n💡 Run 'make generate-sdk' to regenerate manifests")
+        return False
+
+
 def main():
-    """Generate tool manifests."""
+    """Generate or validate tool manifests."""
+    parser = argparse.ArgumentParser(description='Generate or validate tool manifests')
+    parser.add_argument('--validate', action='store_true',
+                       help='Validate manifests without regenerating')
+    args = parser.parse_args()
+
+    if args.validate:
+        if not validate_manifests():
+            sys.exit(1)
+        return
+
+    # Original generation logic
     print("🔧 Generating tool manifest from Zerg MCP definitions...")
 
-    # Extract tools from MCP presets
     tools = extract_tool_definitions()
     print(f"   Found {len(tools)} tools")
 
