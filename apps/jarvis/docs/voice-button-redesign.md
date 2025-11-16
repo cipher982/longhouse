@@ -1,6 +1,6 @@
 # Jarvis Voice Interface Redesign
 
-**Status**: Phase 10 In Progress - Ready for Testing & Validation
+**Status**: Phase 11 Complete - Voice/Text Separation Implemented
 **Created**: 2025-11-13
 **Last Updated**: 2025-11-14
 
@@ -677,6 +677,25 @@ Combining all five design philosophies:
 
 **[Date TBD]**: Launch decision
 - [Go/no-go based on metrics]
+
+**2025-11-14**: Phase 11 Complete (Voice/Text Separation)
+- Implemented comprehensive controller architecture for voice/text separation
+- Created EventBus for decoupled communication between controllers
+- Built InteractionStateMachine with typed state transitions
+- Implemented VoiceChannelController with:
+  - Lazy microphone access
+  - arm() / mute() / isArmed() state management
+  - Transcript gating (buffers when muted, replays when armed)
+  - Hands-free mode support
+- Implemented TextChannelController with:
+  - Send queue with error handling and retries
+  - Auto-connect when needed
+  - Ensures voice is muted before sending text
+- Migrated all VAD events to use controllers (no direct cross-talk)
+- Added hands-free toggle UI with clear visual states
+- Updated status messaging to reflect current mode
+- All tests pass, TypeScript errors fixed
+- Result: Text input no longer triggers VAD, ambient noise properly gated
 
 ---
 

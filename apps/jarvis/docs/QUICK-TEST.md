@@ -2,6 +2,12 @@
 
 **5-Minute Validation** - Run this before physical device testing
 
+**🆕 Voice/Text Separation Features (Phase 11)**:
+- Hands-free mode toggle for continuous voice listening
+- Text input now properly mutes voice channel (no VAD activation during typing)
+- Ambient noise won't trigger transcription when using text input
+- Test 6 & 7 validate these new capabilities
+
 ---
 
 ## Prerequisites
@@ -122,7 +128,58 @@ setAudioFeedback(true)
 
 ---
 
-## Test 6: Screen Reader Preview (1 minute)
+## Test 6: Hands-Free Mode (1 minute)
+
+1. ✅ **Connect to service**
+   - Click microphone button
+   - Wait for "Ready to talk" status
+   - Hands-free toggle should become enabled
+
+2. ✅ **Enable hands-free mode**
+   - Toggle "Hands-free" switch ON
+   - Status updates to "Voice listening continuously"
+   - Button shows green (READY) state
+
+3. ✅ **Speak without button press**
+   - Just start talking (no button press needed)
+   - Button turns pink when VAD detects speech
+   - Transcription appears
+   - Assistant responds
+
+4. ✅ **Disable hands-free mode**
+   - Toggle "Hands-free" switch OFF
+   - Status clears (shows default message)
+   - Button returns to normal PTT behavior
+
+---
+
+## Test 7: Ambient Noise While Typing (1 minute)
+
+**Purpose**: Verify that background audio doesn't trigger voice mode when typing text messages
+
+1. ✅ **Connect to service**
+   - Click microphone button to establish connection
+   - Wait for "Ready to talk"
+
+2. ✅ **Type message with ambient noise**
+   - Play background audio/music or have someone talking nearby
+   - Type a message in the text input field
+   - Press Send or hit Enter
+
+3. ✅ **Verify no voice activation**
+   - Message sends successfully
+   - No "Listening..." bubble appears
+   - No voice transcription triggered by ambient noise
+   - Assistant responds to text message
+
+4. ✅ **Confirm voice still works after**
+   - Press and hold microphone button
+   - Speak a message
+   - Verify voice input still works normally
+
+---
+
+## Test 8: Screen Reader Preview (1 minute)
 
 **macOS only** (for quick check):
 
