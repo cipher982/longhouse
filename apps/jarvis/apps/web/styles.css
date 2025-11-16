@@ -657,6 +657,91 @@ body.audio-state-3 .voice-button:not(.listening) {
   }
 }
 
+/* Hands-Free Toggle (Phase 11 - Voice/Text Separation) */
+.hands-free-toggle-container {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+}
+
+.hands-free-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  transition: all 0.3s ease;
+}
+
+.hands-free-toggle:hover {
+  background: var(--bg-elevated);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.hands-free-toggle input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-slider {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  transition: all 0.3s ease;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.hands-free-toggle input[type="checkbox"]:checked + .toggle-slider {
+  background: var(--accent-purple);
+}
+
+.hands-free-toggle input[type="checkbox"]:checked + .toggle-slider::after {
+  transform: translateX(16px);
+}
+
+.toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color 0.3s ease;
+}
+
+.hands-free-toggle input[type="checkbox"]:checked ~ .toggle-label {
+  color: var(--text-primary);
+}
+
+.hands-free-toggle input[type="checkbox"]:focus-visible + .toggle-slider {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 2px;
+}
+
+/* Hide hands-free toggle when not connected */
+.voice-button.idle ~ .hands-free-toggle-container,
+.voice-button.connecting ~ .hands-free-toggle-container {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* Legacy Listening Indicator (kept for compatibility) */
 .listening-indicator {
   display: inline-flex;
