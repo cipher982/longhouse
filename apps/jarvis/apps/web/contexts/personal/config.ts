@@ -66,7 +66,7 @@ Keep responses concise but informative. When using tools, explain what you're ch
   },
 
   sync: {
-    baseUrl: import.meta.env.VITE_SYNC_BASE_URL || ''
+    baseUrl: import.meta.env?.VITE_SYNC_BASE_URL || ''
   },
 
   settings: {

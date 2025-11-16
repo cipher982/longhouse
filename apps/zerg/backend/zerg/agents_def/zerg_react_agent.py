@@ -57,7 +57,6 @@ def _make_llm(agent_row, tools):
     # Create LLM with basic parameters
     kwargs: dict = {
         "model": agent_row.model,
-        "temperature": 0.6,
         "streaming": enable_token_stream,
         "api_key": get_settings().openai_api_key,
     }
