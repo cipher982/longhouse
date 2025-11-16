@@ -21,7 +21,7 @@ def test_agent_model(db_session: Session):
         name="Test Agent",
         system_instructions="This is a test system instruction",
         task_instructions="This is a test task instruction",
-        model="gpt-4o",
+        model="gpt-5.1-chat-latest",
         status="idle",
         schedule=None,
         config={"key": "value"},
@@ -35,7 +35,7 @@ def test_agent_model(db_session: Session):
     assert agent.name == "Test Agent"
     assert agent.system_instructions == "This is a test system instruction"
     assert agent.task_instructions == "This is a test task instruction"
-    assert agent.model == "gpt-4o"
+    assert agent.model == "gpt-5.1-chat-latest"
     assert agent.status == "idle"
     assert agent.schedule is None
     assert agent.config == {"key": "value"}
@@ -101,7 +101,7 @@ def test_agent_schema_validation():
         "name": "Schema Test Agent",
         "system_instructions": "Test system instructions",
         "task_instructions": "Test task instructions",
-        "model": "gpt-4o",
+        "model": "gpt-5.1-chat-latest",
         "schedule": "0 0 * * *",  # Daily at midnight
         "config": {"test_key": "test_value"},
     }

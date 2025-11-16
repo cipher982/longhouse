@@ -43,7 +43,7 @@
 }
 
 .execution-logs-drawer {
-  flex: 0 0 clamp(320px, 30vw, 400px);
+  flex: 0 0 clamp(280px, 25vw, 350px);
   height: 100%;
   background: var(--dark-card, #2a2a3a);
   border-left: 1px solid var(--border-color, #3d3d5c);
@@ -52,6 +52,27 @@
   box-shadow: -12px 0 24px rgba(13, 19, 33, 0.4);
   animation: drawerSlideIn 180ms ease;
   z-index: 150;
+}
+
+/* Draggable window variant of logs panel */
+.execution-logs-draggable {
+  position: fixed;
+  width: 400px;
+  max-height: 500px;
+  height: auto;
+  border: 1px solid var(--border-color, #3d3d5c);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: none;
+  z-index: 200;
+  flex: none;
+  overflow: hidden;
+}
+
+.execution-logs-draggable.dragging {
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.7);
+  opacity: 0.95;
+  user-select: none;
 }
 
 @keyframes drawerSlideIn {
@@ -443,6 +464,16 @@
   padding: 12px 16px;
   background: var(--dark-lighter, #33334a);
   border-bottom: 1px solid var(--border-color, #3d3d5c);
+  user-select: none;
+}
+
+.execution-logs-draggable .logs-header {
+  border-radius: 8px 8px 0 0;
+  cursor: grab;
+}
+
+.execution-logs-draggable .logs-header:active {
+  cursor: grabbing;
 }
 
 .logs-header h4 {
@@ -475,6 +506,12 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+}
+
+.execution-logs-draggable .logs-content {
+  max-height: calc(500px - 60px);
+  overflow-y: auto;
 }
 
 .execution-info {

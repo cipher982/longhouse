@@ -53,8 +53,10 @@ COPY --from=builder --chown=zerg:zerg /app /app
 
 # Create required directories with proper permissions
 RUN mkdir -p /app/static/avatars \
-    && chown -R zerg:zerg /app/static \
-    && chmod -R 755 /app/static
+    && chown zerg:zerg /app/static \
+    && chown zerg:zerg /app/static/avatars \
+    && chmod 755 /app/static \
+    && chmod 755 /app/static/avatars
 
 # Switch to non-root user
 USER zerg
@@ -100,9 +102,8 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 zerg || true
 
 # Create required directories with proper permissions
 RUN mkdir -p /app/static/avatars \
-    && chown -R zerg:zerg /app/static \
-    && chown -R zerg:zerg /app \
-    && chown -R zerg:zerg /opt/venv
+    && chown zerg:zerg /app/static \
+    && chown zerg:zerg /app/static/avatars
 
 # Switch back to non-root user
 USER zerg

@@ -518,7 +518,7 @@ def sample_agent(db_session, _dev_user):
         name="Test Agent",
         system_instructions="System instructions for test agent",
         task_instructions="This is a test agent",
-        model="gpt-4o",
+        model="gpt-5.1-chat-latest",
         status="idle",
     )
     db_session.add(agent)

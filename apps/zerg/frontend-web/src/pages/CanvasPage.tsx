@@ -25,6 +25,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "../styles/canvas-react.css";
 import toast from "react-hot-toast";
+import { ExecutionLogStream, type LogEntry } from "../components/ExecutionLogStream";
 import {
   fetchAgents,
   fetchCurrentWorkflow,
@@ -196,10 +197,16 @@ function CanvasPageContent() {
 
   // Execution state
   const [currentExecution, setCurrentExecution] = useState<ExecutionStatus | null>(null);
-  const [executionLogs, setExecutionLogs] = useState<string>("");
+  const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
+
+  // Draggable logs panel state
+  const [logsPanelPosition, setLogsPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isDraggingLogsPanel, setIsDraggingLogsPanel] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const logsPanelRef = useRef<HTMLDivElement | null>(null);
   const [dragPreviewData, setDragPreviewData] = useState<DragPreviewData | null>(null);
   const [dragPreviewPosition, setDragPreviewPosition] = useState<{ x: number; y: number } | null>(
     null
@@ -752,6 +759,85 @@ function CanvasPageContent() {
     currentExecutionRef.current = currentExecution;
   }, [currentExecution]);
 
+  // Logs panel drag handlers
+  const handleLogsPanelMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    // Only initiate drag if clicking on the header, not the close button
+    if ((event.target as HTMLElement).closest('.close-logs')) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!logsPanelRef.current) return;
+
+    const rect = logsPanelRef.current.getBoundingClientRect();
+    setDragOffset({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+    setIsDraggingLogsPanel(true);
+  }, []);
+
+  const handleLogsPanelMouseMove = useCallback((event: MouseEvent) => {
+    if (!isDraggingLogsPanel || !logsPanelRef.current || !logsPanelPosition) return;
+
+    const panel = logsPanelRef.current;
+    const panelRect = panel.getBoundingClientRect();
+
+    // Calculate new position
+    let newX = event.clientX - dragOffset.x;
+    let newY = event.clientY - dragOffset.y;
+
+    // Get viewport bounds
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const panelWidth = panelRect.width;
+    const panelHeight = panelRect.height;
+
+    // Constrain to viewport bounds (leave at least 50px visible)
+    const minVisible = 50;
+    newX = Math.max(-panelWidth + minVisible, Math.min(newX, viewportWidth - minVisible));
+    newY = Math.max(0, Math.min(newY, viewportHeight - minVisible));
+
+    setLogsPanelPosition({ x: newX, y: newY });
+  }, [isDraggingLogsPanel, dragOffset, logsPanelPosition]);
+
+  const handleLogsPanelMouseUp = useCallback(() => {
+    setIsDraggingLogsPanel(false);
+  }, []);
+
+  // Effect for logs panel dragging
+  useEffect(() => {
+    if (isDraggingLogsPanel) {
+      document.addEventListener('mousemove', handleLogsPanelMouseMove);
+      document.addEventListener('mouseup', handleLogsPanelMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleLogsPanelMouseMove);
+        document.removeEventListener('mouseup', handleLogsPanelMouseUp);
+      };
+    }
+  }, [isDraggingLogsPanel, handleLogsPanelMouseMove, handleLogsPanelMouseUp]);
+
+  // Initialize panel position when logs are opened
+  useEffect(() => {
+    if (showLogs && logsPanelPosition === null) {
+      // Center the panel
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const panelWidth = 400; // Default width
+      const panelHeight = 500; // Default max-height
+
+      const newPosition = {
+        x: (viewportWidth - panelWidth) / 2,
+        y: Math.max(80, (viewportHeight - panelHeight) / 2),
+      };
+
+      console.log('[CanvasPage] 🪟 Initializing panel position:', newPosition);
+      setLogsPanelPosition(newPosition);
+    }
+  }, [showLogs, logsPanelPosition]);
+
   // Save workflow mutation with hash-based deduplication
   const saveWorkflowMutation = useMutation({
     onMutate: async (data: WorkflowDataInput) => {
@@ -816,11 +902,16 @@ function CanvasPageContent() {
       if (!workflow?.id) {
         throw new Error("No workflow loaded");
       }
+      console.log('[CanvasPage] 🚀 Starting workflow execution, workflow_id:', workflow.id);
+      // Clear previous logs before starting
+      setExecutionLogs([]);
       return startWorkflowExecution(workflow.id);
     },
     onSuccess: (execution) => {
+      console.log('[CanvasPage] 🎯 Workflow started, execution_id:', execution.execution_id);
       setCurrentExecution(execution);
-      toast.success("Workflow execution started!");
+      toast.success("Workflow execution started! Watch the logs panel for real-time updates.");
+      // Auto-open logs panel to show real-time stream
       setShowLogs(true);
     },
     onError: (error: Error) => {
@@ -847,38 +938,120 @@ function CanvasPageContent() {
   const isSaving = saveWorkflowMutation.isPending;
 
   // WebSocket for real-time execution updates
-  const handleExecutionMessage = useCallback(async () => {
-    const execution = currentExecutionRef.current;
-    if (!execution?.execution_id) {
-      return;
+  const handleStreamingMessage = useCallback((envelope: any) => {
+    // Use 'type' field from envelope (not 'message_type')
+    const message_type = envelope.type || envelope.message_type;
+    const data = envelope.data;
+
+    // Only log non-token messages
+    if (message_type !== 'stream_chunk') {
+      console.log('[CanvasPage] 📨', message_type, 'for execution', data?.execution_id);
     }
 
-    try {
-      const updatedStatus = await getExecutionStatus(execution.execution_id);
-
-      setCurrentExecution((prevExecution) => ({
-        ...updatedStatus,
-        execution_id: prevExecution?.execution_id || execution.execution_id,
-      }));
-
-      if (updatedStatus.phase === "finished" || updatedStatus.phase === "cancelled") {
-        try {
-          const logs = await getExecutionLogs(execution.execution_id);
-          setExecutionLogs(logs.logs);
-        } catch (error) {
-          console.error("Failed to fetch execution logs:", error);
-        }
+    switch (message_type) {
+      case 'execution_started': {
+        console.log('[CanvasPage] ✅ Execution started:', data.execution_id);
+        setExecutionLogs([{
+          timestamp: Date.now(),
+          type: 'execution',
+          message: `EXECUTION STARTED [ID: ${data.execution_id}]`,
+          metadata: data
+        }]);
+        break;
       }
-    } catch (error) {
-      console.error("Failed to fetch execution status:", error);
+
+      case 'node_state': {
+        const { node_id, phase, result, output, error_message } = data;
+
+        // Append to log stream
+        const logType = error_message ? 'error' : (phase === 'running' ? 'node' : 'output');
+        const logMessage = `NODE ${node_id} → ${phase.toUpperCase()}${result ? ` [${result}]` : ''}`;
+
+        console.log('[CanvasPage] 📍 Node:', node_id, '→', phase, result || '');
+
+        setExecutionLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: logType,
+          message: logMessage,
+          metadata: data
+        }]);
+
+        // Update node visual state (future enhancement)
+        // setNodes(currentNodes =>
+        //   currentNodes.map(node =>
+        //     node.id === node_id
+        //       ? { ...node, data: { ...node.data, executionState: phase } }
+        //       : node
+        //   )
+        // );
+        break;
+      }
+
+      case 'workflow_progress': {
+        const { completed_nodes } = data;
+        // console.log('[CanvasPage] Workflow progress:', { completed: completed_nodes.length });
+        // Optional: update progress indicator
+        break;
+      }
+
+      case 'execution_finished': {
+        const { result, error_message, duration_ms } = data;
+
+        setExecutionLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          type: 'execution',
+          message: `EXECUTION ${result.toUpperCase()}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
+        }]);
+
+        console.log('[CanvasPage] 🏁 Execution finished:', result);
+
+        // Refresh execution status via REST (to sync DB state)
+        if (currentExecutionRef.current?.execution_id) {
+          getExecutionStatus(currentExecutionRef.current.execution_id).then(status => {
+            setCurrentExecution(status);
+          }).catch(err => {
+            console.error('[CanvasPage] Failed to fetch final execution status:', err);
+          });
+        }
+        break;
+      }
+
+      default:
+        // console.log('[CanvasPage] Unknown message type:', message_type);
+        break;
     }
   }, []);
 
-  useWebSocket(currentExecution?.execution_id != null, {
+  const { sendMessage } = useWebSocket(currentExecution?.execution_id != null, {
     includeAuth: true,
     invalidateQueries: [],
-    onMessage: handleExecutionMessage,
+    onStreamingMessage: handleStreamingMessage,
   });
+
+  // Subscribe to workflow execution topic when execution starts
+  useEffect(() => {
+    if (!currentExecution?.execution_id) return;
+
+    const topic = `workflow_execution:${currentExecution.execution_id}`;
+
+    console.log('[CanvasPage] 📡 Subscribing to topic:', topic);
+
+    // Subscribe to topic
+    sendMessage({
+      type: 'subscribe',
+      topics: [topic]
+    });
+
+    // Cleanup: unsubscribe when execution changes or component unmounts
+    return () => {
+      console.log('[CanvasPage] 🔕 Unsubscribing from topic:', topic);
+      sendMessage({
+        type: 'unsubscribe',
+        topics: [topic]
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentExecution?.execution_id]); // Only re-subscribe when execution ID changes
 
   // Handle connection creation
   const onConnect: OnConnect = useCallback(
@@ -1235,7 +1408,12 @@ function CanvasPageContent() {
 
             {/* Execution Status */}
             {currentExecution && (
-              <div className={`execution-status execution-status--${currentExecution.phase}`}>
+              <div
+                className={`execution-status execution-status--${currentExecution.phase}`}
+                onClick={() => setShowLogs(!showLogs)}
+                style={{ cursor: 'pointer' }}
+                title={showLogs ? "Click to hide execution details" : "Click to show execution details"}
+              >
                 <span className="execution-phase">
                   {currentExecution.phase === 'waiting' && '⏳ Waiting'}
                   {currentExecution.phase === 'running' && '🔄 Running'}
@@ -1243,6 +1421,9 @@ function CanvasPageContent() {
                   {currentExecution.phase === 'cancelled' && '❌ Cancelled'}
                 </span>
                 <span className="execution-id">ID: {currentExecution.execution_id}</span>
+                <span className="execution-toggle-hint" style={{ fontSize: '0.8em', opacity: 0.7, marginLeft: '8px' }}>
+                  {showLogs ? '▼' : '▶'}
+                </span>
               </div>
             )}
           </div>
@@ -1326,12 +1507,22 @@ function CanvasPageContent() {
             </div>
             {showLogs && currentExecution && (
               <aside
+                ref={logsPanelRef}
                 id="execution-logs-drawer"
-                className="execution-logs-drawer"
+                className={`execution-logs-draggable ${isDraggingLogsPanel ? 'dragging' : ''}`}
                 role="complementary"
                 aria-label="Execution logs"
+                style={{
+                  left: logsPanelPosition ? `${logsPanelPosition.x}px` : '50%',
+                  top: logsPanelPosition ? `${logsPanelPosition.y}px` : '20%',
+                  transform: logsPanelPosition ? 'none' : 'translateX(-50%)',
+                }}
               >
-                <div className="logs-header">
+                <div
+                  className="logs-header"
+                  onMouseDown={handleLogsPanelMouseDown}
+                  style={{ cursor: isDraggingLogsPanel ? 'grabbing' : 'grab' }}
+                >
                   <h4>Execution Logs</h4>
                   <button
                     className="close-logs"
@@ -1342,21 +1533,10 @@ function CanvasPageContent() {
                   </button>
                 </div>
                 <div className="logs-content">
-                  <div className="execution-info">
-                    <div>Execution ID: {currentExecution.execution_id}</div>
-                    <div>Status: {currentExecution.phase}</div>
-                    {currentExecution.result !== undefined && currentExecution.result !== null && (
-                      <div>
-                        Result: <pre>{String(JSON.stringify(currentExecution.result, null, 2) || 'null')}</pre>
-                      </div>
-                    )}
-                  </div>
-                  <div className="logs-output">
-                    <h5>Logs:</h5>
-                    <pre className="logs-text">
-                      {executionLogs || "No logs available yet..."}
-                    </pre>
-                  </div>
+                  <ExecutionLogStream
+                    logs={executionLogs}
+                    isRunning={currentExecution.phase === 'running'}
+                  />
                 </div>
               </aside>
             )}

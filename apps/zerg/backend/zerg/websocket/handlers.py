@@ -149,6 +149,29 @@ async def handle_ops_subscription(client_id: str, message_id: str, db: Session) 
     await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
 
 
+async def _subscribe_ops_events(client_id: str, message_id: str, db: Session) -> None:
+    """Helper function for tests to subscribe to ops events.
+
+    This is a simplified version that checks admin status and subscribes directly.
+    Used by test_ops_events.py.
+    """
+    topic = "ops:events"
+    user_id = topic_manager.client_users.get(client_id)
+
+    if not user_id:
+        # For testing: simulate error response
+        await send_error(client_id, "Unauthorized", message_id, close_code=1008)
+        return
+
+    user = crud.get_user(db, int(user_id))
+    if not user or getattr(user, "role", "USER") != "ADMIN":
+        # For testing: simulate error response and close connection
+        await send_error(client_id, "Admin privileges required", message_id, close_code=1008)
+        return
+
+    await topic_manager.subscribe_to_topic(client_id, topic)
+
+
 # ---------------------------------------------------------------------------
 # Core message sending utilities
 # ---------------------------------------------------------------------------

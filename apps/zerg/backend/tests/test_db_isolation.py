@@ -35,7 +35,7 @@ def test_api_db_isolation(client: TestClient, db_session: Session):
         name="DB Isolation Test Agent",
         system_instructions="System instructions for isolation test",
         task_instructions="Task instructions for isolation test",
-        model="gpt-4o",
+        model="gpt-5.1-chat-latest",
         status="idle",
     )
     db_session.add(direct_agent)

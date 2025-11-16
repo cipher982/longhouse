@@ -32,7 +32,7 @@ async def test_create_agent_event(client: TestClient, event_tracker):
         "name": "Event Test Agent",
         "system_instructions": "Test system instructions",
         "task_instructions": "Test task instructions",
-        "model": "gpt-4o",
+        "model": "gpt-5.1-chat-latest",
     }
 
     response = client.post("/api/agents", json=agent_data)

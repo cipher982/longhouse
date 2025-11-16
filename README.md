@@ -15,26 +15,26 @@ cp .env.example .env
 ```
 
 2) Run the platform
-- Docker (recommended):
+
+**Option A: Full Platform (Recommended)**
 ```bash
-make zerg-up           # starts Postgres + backend + React UI
-# Backend:  http://localhost:${ZERG_BACKEND_PORT:-47300}
-# Frontend: http://localhost:${ZERG_FRONTEND_PORT:-47200}
+make dev              # starts all services (Jarvis + Zerg) with Nginx proxy
+# Jarvis PWA:        http://localhost:30080
+# Zerg Dashboard:    http://localhost:30081
 ```
-- Local dev (no containers):
+Benefits: Single command, only 2 host ports, production-like, isolated
+
+**Option B: Component-Only Development**
 ```bash
-make zerg-dev          # uvicorn backend + React dev server (ports from .env)
-```
-- Full monorepo (Jarvis + Zerg):
-```bash
-make swarm-dev
+make zerg             # Zerg only (Postgres + backend + React UI)
+make jarvis           # Jarvis only (native Node processes)
 ```
 
-3) Stop / logs / reset (Docker)
+3) Stop / logs / reset
 ```bash
-make zerg-logs
-make zerg-down
-make zerg-reset        # destroys dev data
+make logs              # View logs from running services
+make stop              # Stop all services
+make reset             # Reset database (destroys data)
 ```
 
 ### Tests
@@ -70,9 +70,8 @@ make test-jarvis    # Jarvis only
 - Prefer Make targets and `uv run` over calling `python`/`pytest` directly
 - Generate SDK and tool manifest:
 ```bash
-make generate-sdk
-# or just the tool manifest
-make generate-tools
+make generate-sdk      # OpenAPI/AsyncAPI clients + tool manifest
+make seed-agents       # Seed baseline agents for Jarvis
 ```
 
 ### Docs
