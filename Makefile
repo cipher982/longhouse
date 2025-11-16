@@ -14,206 +14,164 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help dev stop jarvis-dev test generate-sdk generate-tools seed-jarvis-agents test-jarvis test-zerg zerg-up zerg-down zerg-logs zerg-reset unified-dev regen-ws-code ws-code-diff-check
+.PHONY: help dev zerg jarvis stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile
 
 # ---------------------------------------------------------------------------
-# Help – `make` or `make help`
+# Help – `make` or `make help` (auto-generated from ## comments)
 # ---------------------------------------------------------------------------
-help:
+help: ## Show this help message
 	@echo "\n🌐 Swarm Platform (Jarvis + Zerg)"
 	@echo "=================================="
 	@echo ""
-	@echo "⭐ Quick Start (RECOMMENDED):"
-	@echo "  make dev             Start EVERYTHING (Zerg + Jarvis) with proper Ctrl+C shutdown"
-	@echo ""
-	@echo "Alternative Starts:"
-	@echo "  make unified-dev     Start with unified Docker Compose"
-	@echo "  make zerg-up         Start Zerg only (Postgres + Backend + Frontend)"
-	@echo "  make jarvis-dev      Start Jarvis only (ports $(JARVIS_SERVER_PORT), $(JARVIS_WEB_PORT))"
-	@echo ""
-	@echo "Shutdown:"
-	@echo "  Ctrl+C               Stop everything (when using 'make dev')"
-	@echo "  make stop            Stop everything (when things are stuck)"
-	@echo ""
-	@echo "Monitoring:"
-	@echo "  make zerg-logs       View Zerg logs"
-	@echo "  make zerg-reset      Reset database (destroys all data)"
-	@echo ""
-	@echo "Development:"
-	@echo "  make generate-sdk          Generate OpenAPI/AsyncAPI clients and tool manifest"
-	@echo "  make generate-tools        Generate tool manifest only"
-	@echo "  make seed-jarvis-agents    Seed baseline Zerg agents for Jarvis integration"
-	@echo ""
-	@echo "Testing:"
-	@echo "  make test                  Run ALL tests (Jarvis + Zerg + integration)"
-	@echo "  make test-jarvis           Run Jarvis tests only"
-	@echo "  make test-zerg             Run Zerg tests (backend + frontend + e2e)"
+	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z_-]+:' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# Development workflow – Unified (Zerg + Jarvis)
+# Core Development Commands
 # ---------------------------------------------------------------------------
-dev:
-	@echo "🚀 Starting unified dev environment (Zerg + Jarvis)..."
-	@echo "   This will start ALL services and handle proper shutdown on Ctrl+C"
-	@./scripts/dev.sh
+dev: ## ⭐ Start full platform (Docker + Nginx, isolated ports)
+	@echo "🚀 Starting full platform (Docker)..."
+	@./scripts/dev-docker.sh
 
-stop:
-	@echo "🛑 Stopping..."
+zerg: ## Start Zerg only (Postgres + Backend + Frontend)
+	@echo "🚀 Starting Zerg platform..."
+	docker compose -f docker-compose.dev.yml up -d --build
+	@sleep 3
+	@docker compose -f docker-compose.dev.yml ps
+	@echo ""
+	@echo "✅ Backend:  http://localhost:$${ZERG_BACKEND_PORT:-47300}"
+	@echo "✅ Frontend: http://localhost:$${ZERG_FRONTEND_PORT:-47200}"
+
+jarvis: ## Start Jarvis only (native Node processes)
+	@echo "🤖 Starting Jarvis..."
+	cd apps/jarvis && $(MAKE) start
+
+stop: ## Stop all services (dev, zerg, jarvis)
+	@echo "🛑 Stopping all services..."
+	@docker compose -f docker-compose.unified.yml down 2>/dev/null || true
 	@docker compose -f docker-compose.dev.yml down 2>/dev/null || true
 	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
-	@echo "✅ Stopped"
+	@echo "✅ All services stopped"
 
-# ---------------------------------------------------------------------------
-# Development workflow – Jarvis only
-# ---------------------------------------------------------------------------
-jarvis-dev:
-	@echo "🤖 Starting Jarvis (PWA + Node server)..."
-	cd apps/jarvis && $(MAKE) start
+logs: ## View logs from running services
+	@echo "📋 Checking for running services..."
+	@if docker compose -f docker-compose.unified.yml ps -q 2>/dev/null | grep -q .; then \
+		echo "Following logs from unified dev environment..."; \
+		docker compose -f docker-compose.unified.yml logs -f; \
+	elif docker compose -f docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
+		echo "Following logs from Zerg..."; \
+		docker compose -f docker-compose.dev.yml logs -f; \
+	else \
+		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		exit 1; \
+	fi
+
+reset: ## Reset database (destroys all data)
+	@echo "⚠️  Resetting database..."
+	@docker compose -f docker-compose.dev.yml down -v
+	@docker compose -f docker-compose.dev.yml up -d
+	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------
 # Testing targets
 # ---------------------------------------------------------------------------
 
-test:
+test: ## Run ALL tests (Jarvis + Zerg + integration)
 	@echo "🧪 Running ALL tests (Jarvis + Zerg)..."
 	$(MAKE) test-jarvis
 	$(MAKE) test-zerg
 	@echo "✅ All tests complete"
 
-test-jarvis:
+test-jarvis: ## Run Jarvis tests only
 	@echo "🧪 Running Jarvis tests..."
 	cd apps/jarvis && npm test
 
-test-zerg:
+test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."
 	cd apps/zerg/backend && ./run_backend_tests.sh
 	cd apps/zerg/frontend-web && npm test
 	cd apps/zerg/e2e && npx playwright test
 
 # ---------------------------------------------------------------------------
-# SDK Generation
+# SDK & Integration
 # ---------------------------------------------------------------------------
-generate-sdk:
-	@echo "🔄 Generating OpenAPI/AsyncAPI clients and tool manifest..."
-	@echo "📡 Generating from Zerg backend..."
-	cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
-	@echo "📦 Generating TypeScript clients..."
-	cd packages/contracts && npm run generate
-	@echo "🔧 Generating tool manifest..."
-	python3 scripts/generate-tool-manifest.py
+generate-sdk: ## Generate OpenAPI/AsyncAPI clients and tool manifest
+	@echo "🔄 Generating SDK..."
+	@cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
+	@cd packages/contracts && npm run generate
+	@uv run python scripts/generate-tool-manifest.py
 	@echo "✅ SDK generation complete"
 
-generate-tools:
-	@echo "🔧 Generating tool manifest only..."
-	python3 scripts/generate-tool-manifest.py
-
-# ---------------------------------------------------------------------------
-# Jarvis Integration
-# ---------------------------------------------------------------------------
-seed-jarvis-agents:
-	@echo "🌱 Seeding baseline Zerg agents for Jarvis..."
-	@echo ""
-	@# Check if the backend container is running
-	@BACKEND_CONTAINER=$$(docker ps --format "{{.Names}}" | grep "zerg-backend" | head -1); \
-	if [ -z "$$BACKEND_CONTAINER" ]; then \
-		echo "❌ Backend container is not running."; \
-		echo ""; \
-		echo "Please start the platform first:"; \
-		echo "  make zerg-up"; \
-		echo ""; \
+seed-agents: ## Seed baseline Zerg agents for Jarvis
+	@echo "🌱 Seeding agents..."
+	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
+	if [ -z "$$BACKEND" ]; then \
+		echo "❌ Backend not running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
 	fi
-	@# Check if postgres is healthy
-	@POSTGRES_CONTAINER=$$(docker ps --format "{{.Names}}" | grep "zerg-postgres" | head -1); \
-	if [ -z "$$POSTGRES_CONTAINER" ]; then \
-		echo "❌ Database container is not running."; \
-		echo "Please start the platform first:"; \
-		echo "  make zerg-up"; \
-		exit 1; \
-	fi
-	@echo "✅ Containers are running"
-	@echo "   Backend: zerg-backend-1"
-	@echo "   Database: zerg-postgres-1"
-	@echo ""
-	@# Run the seeding script inside the backend container
-	docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
-	@echo ""
-	@echo "✅ Agents seeded successfully"
-# ---------------------------------------------------------------------------
-# Docker Compose - Everything together
-# ---------------------------------------------------------------------------
-zerg-up:
-	@echo "🚀 Starting Zerg platform (Dev environment with hot-reload)..."
-	@echo "   Using: docker-compose.dev.yml (development with volume mounts)"
-	docker compose -f docker-compose.dev.yml up -d --build
-	@sleep 3
-	@docker compose -f docker-compose.dev.yml ps
-	@echo ""
-	@echo "✅ Platform started!"
-	@echo "   Backend: http://localhost:$(ZERG_BACKEND_PORT)"
-	@echo "   Frontend: http://localhost:$(ZERG_FRONTEND_PORT)"
-
-zerg-down:
-	@echo "🛑 Stopping Zerg platform..."
-	docker compose -f docker-compose.dev.yml down
-	@echo "✅ All stopped"
-
-zerg-logs:
-	docker compose -f docker-compose.dev.yml logs -f
-
-zerg-reset:
-	@echo "⚠️  Resetting database (destroys all data)..."
-	docker compose -f docker-compose.dev.yml down -v
-	docker compose -f docker-compose.dev.yml up -d
-	@echo "Run migrations and seed agents"
+	@docker exec $$BACKEND uv run python scripts/seed_jarvis_agents.py
+	@echo "✅ Agents seeded"
 
 # ---------------------------------------------------------------------------
-# Unified Docker Compose - All services with Nginx proxy
+# Validation
 # ---------------------------------------------------------------------------
-unified-dev:
-	@echo "🚀 Starting Unified Dev Environment (Jarvis + Zerg)..."
-	@echo "   Using: docker-compose.unified.yml"
-	@echo ""
-	@echo "   Required ports (from .env or defaults):"
-	@echo "     - JARPXY_PORT=$(JARPXY_PORT) (Jarvis PWA)"
-	@echo "     - ZGPXY_PORT=$(ZGPXY_PORT) (Zerg Dashboard)"
-	@echo ""
-	@if [ ! -f .env ]; then \
-		echo "⚠️  .env not found. Copying from .env.example..."; \
-		cp .env.example .env; \
-		echo "✅ Created .env from .env.example"; \
-		echo "   Please edit .env and set required ports if needed"; \
-		echo ""; \
-	fi
-	@./start-unified-dev.sh
+validate: ## Run all validation checks
+	@printf '\n🔍 Running all validation checks...\n\n'
+	@printf '1️⃣  Validating WebSocket code...\n'
+	@$(MAKE) validate-ws
+	@printf '\n2️⃣  Validating Makefile structure...\n'
+	@$(MAKE) validate-makefile
+	@printf '\n3️⃣  Validating tool contracts...\n'
+	@$(MAKE) tool-check
+	@printf '\n✅ All validations passed\n'
 
-unified-down:
-	@echo "🛑 Stopping Unified Dev Environment..."
-	docker compose -f docker-compose.unified.yml down
-	@echo "✅ All stopped"
+tool-check: ## Validate tool contracts (for CI)
+	@uv run python scripts/generate-tool-manifest.py --validate
 
-unified-logs:
-	docker compose -f docker-compose.unified.yml logs -f
-
-# ---------------------------------------------------------------------------
-# WebSocket Code Generation
-# ---------------------------------------------------------------------------
-regen-ws-code:
-	@echo "🔄 Regenerating WebSocket contract code..."
-	@bash scripts/regen-ws-code.sh
-	@echo "✅ WebSocket code regenerated"
-
-ws-code-diff-check:
-	@echo "🔍 Checking WebSocket code is in sync with asyncapi/chat.yml..."
-	@bash scripts/regen-ws-code.sh
-	@if git diff --quiet; then \
-		echo "✅ WebSocket code is in sync"; \
-	else \
-		echo "❌ WebSocket code is out of sync with asyncapi/chat.yml"; \
-		echo "   Please run: make regen-ws-code"; \
-		echo "   Then commit the changes"; \
+validate-ws: ## Check WebSocket code is in sync (for CI)
+	@bash scripts/regen-ws-code.sh >/dev/null 2>&1
+	@if ! git diff --quiet; then \
+		echo "❌ WebSocket code out of sync"; \
+		echo "   Run 'make regen-ws' and commit changes"; \
 		git diff; \
 		exit 1; \
 	fi
+	@echo "✅ WebSocket code in sync"
+
+regen-ws: ## Regenerate WebSocket contract code
+	@echo "🔄 Regenerating WebSocket code..."
+	@bash scripts/regen-ws-code.sh
+	@echo "✅ WebSocket code regenerated"
+
+# ---------------------------------------------------------------------------
+# Makefile Validation
+# ---------------------------------------------------------------------------
+validate-makefile: ## Verify .PHONY targets match documented targets
+	@failed=0; \
+	\
+	for t in $$(grep -E '^\.PHONY:' Makefile \
+	          | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' \
+	          | tr ' ' '\n' \
+	          | sed '/^$$/d'); do \
+	    case $$t in \
+	        help|validate-makefile) continue ;; \
+	    esac; \
+	    if ! grep -Eq "^$$t:.*##" Makefile; then \
+	        echo "❌ Missing help comment (##) for .PHONY target: $$t"; \
+	        failed=1; \
+	    fi; \
+	done; \
+	\
+	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile \
+	          | sed -E 's/:.*##.*$$//'); do \
+	    if ! grep -Eq "^\.PHONY:.*\\b$$t\\b" Makefile; then \
+	        echo "❌ Target has help but is not in .PHONY: $$t"; \
+	        failed=1; \
+	    fi; \
+	done; \
+	\
+	if [ $$failed -eq 0 ]; then \
+	    echo "✅ Makefile validation passed"; \
+	fi; \
+	exit $$failed
 

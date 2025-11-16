@@ -9,9 +9,15 @@ WORKDIR /app
 
 # Copy root package files to install all workspaces
 COPY apps/jarvis/package.json apps/jarvis/yarn.lock ./
+COPY apps/jarvis/.yarnrc.yml ./
 COPY apps/jarvis/packages ./packages
+# Copy workspace package manifests before install so Yarn can resolve workspaces
+COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
+COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
 
-# Install all dependencies (including workspaces) using Yarn
+# Install all dependencies (including workspaces) using Yarn.
+# NOTE: We intentionally skip --immutable here because Docker COPY resets
+# mtimes on file: dependencies, triggering false-positive lockfile drift.
 RUN yarn install
 
 # Copy web app

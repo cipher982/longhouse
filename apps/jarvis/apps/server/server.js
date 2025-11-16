@@ -33,7 +33,13 @@ app.use(express.json());
 const mcpClients = new Map();
 
 // Initialize MCP clients on startup
+const SHOULD_INIT_MCP = process.env.SKIP_MCP !== '1';
+
 async function initMCPClients() {
+  if (!SHOULD_INIT_MCP) {
+    console.log('⚠️  SKIP_MCP=1, skipping MCP client initialization');
+    return;
+  }
   try {
     // Traccar location MCP server
     const traccarTransport = new StdioClientTransport({

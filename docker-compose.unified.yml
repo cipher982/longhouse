@@ -127,7 +127,9 @@ services:
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ./apps/jarvis/apps/web:/app:cached
+      - ./apps/jarvis/apps/web:/app/apps/web:cached
+      - ./apps/jarvis/configs:/app/configs:cached
+      - ./apps/jarvis/packages:/app/packages:cached
       - /app/node_modules
       - ./logs/jarvis-web:/app/logs
     healthcheck:
@@ -151,9 +153,13 @@ services:
       PORT: ${JARVIS_SERVER_PORT}
       # OpenAI API key is optional - server will warn if missing
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SKIP_MCP: ${SKIP_MCP:-1}
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
+      - ./apps/jarvis/apps/server:/app/apps/server:cached
+      - ./apps/jarvis/configs:/app/configs:cached
+      - ./apps/jarvis/packages:/app/packages:cached
       - ./logs/jarvis-server:/app/logs
     networks:
       - swarm-network
@@ -168,6 +174,7 @@ services:
   reverse-proxy:
     image: nginx:alpine
     restart: unless-stopped
+    stop_grace_period: 1s
     environment:
       <<: *common-variables
     ports:
