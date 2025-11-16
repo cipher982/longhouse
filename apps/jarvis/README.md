@@ -1,136 +1,126 @@
 # Jarvis Voice Agent Platform
 
-Hybrid voice AI platform supporting both **personal** (Jarvis) and **work** (Zeta Athena) contexts with complete separation and security.
+Personal voice AI assistant with real-time speech interaction and agent orchestration.
 
 ## Quick Start
 
+### Option A: Unified Docker Compose (Recommended)
 ```bash
-# Setup (one-time)
-make install
+# Start all services together (Jarvis + Zerg) from repo root
+cd ../../../
+./start-unified-dev.sh
 
-# Personal Assistant (default)
-make start        # Jarvis with health/location tools
-make personal     # Same as above
-
-# Work Assistant  
-make zeta         # Zeta Athena with company knowledge/RAG tools
+# Access Jarvis at http://localhost:30080
 ```
 
-Access at **http://localhost:8080** (desktop) or **http://REDACTED_LOCAL_IP:8080** (iPhone)
+### Option B: Standalone
+```bash
+# Install dependencies
+make install
 
-## Dual Context Architecture
+# Start Jarvis (default personal context)
+make start
 
-### **Personal Context (Jarvis) 🤖**
+# Or start directly
+cd apps/web && npm run dev
+```
+
+Access at **http://localhost:8080** (standalone) or **http://localhost:30080** (unified)
+
+## Features
+
+### Personal Context (Jarvis) 🤖
+- **Voice Interface**: Real-time speech with OpenAI Realtime API
+- **Text Input**: Type commands when voice isn't convenient
+- **Task Inbox**: See background agent runs in real-time
 - **Tools**: Location (GPS), WHOOP (health data), Obsidian (notes)
 - **Theme**: Dark blue-cyan aesthetic
-- **Database**: `JarvisVoiceAI-personal`
-- **Config**: Committed to repo (`contexts/personal/`)
-
-### **Work Context (Zeta Athena) 🏢**  
-- **Tools**: Location (travel), Company Knowledge (RAG), Financial Data, Team Info
-- **Theme**: Professional purple aesthetic
-- **Database**: `JarvisVoiceAI-zeta` 
-- **Config**: Gitignored (`contexts/zeta/`) - **never committed**
+- **PWA**: Install on iPhone/Android, works offline
 
 ## Technology Stack
 
 - **TypeScript**: Full type safety with strict checking
-- **OpenAI Agents SDK**: Simplified Realtime API integration
-- **Context System**: Runtime switching with isolated configurations
-- **IndexedDB**: Conversation persistence per context
+- **OpenAI Realtime API**: Speech-to-speech conversation
+- **IndexedDB**: Conversation persistence
 - **Vite**: Modern bundling with hot module replacement
 - **Progressive Web App**: iPhone installation and offline support
-- **Monorepo Packages**: Shared voice engine (`packages/core`) and local data services (`packages/data/local`) consumed by all clients
+- **Monorepo**: Shared voice engine and local data services
 
-## Context Management
+## Voice Commands
 
-**Work configs are never committed** to your personal repo:
+Try these voice commands:
 
-```bash
-apps/web/contexts/
-├── personal/          # ✅ Committed (your personal config)
-│   ├── config.ts      # Jarvis setup with MCP tools  
-│   ├── theme.css      # Dark blue theme
-│   └── manifest.json  # Context metadata
-├── zeta/              # 🚫 Gitignored (work stays private)
-│   ├── config.ts      # Company-specific setup
-│   ├── theme.css      # Company branding
-│   └── *.template.*   # Templates for setup
-└── context-loader.ts  # Runtime switching system
-```
-
-## Context Switching
-
-**Environment Variable:**
-```bash
-VITE_VOICE_CONTEXT=zeta npm run dev    # Work mode
-VITE_VOICE_CONTEXT=personal npm run dev # Personal mode (default)
-```
-
-**URL Parameter:**
-```
-http://localhost:8080?context=zeta     # Runtime switching
-```
-
-**UI Selector:** Dropdown in the interface for easy switching
-
-## Demo Features
-
-### Personal (Jarvis)
 1. **"What's my recovery?"** → WHOOP health data via MCP
-2. **"Where am I?"** → GPS location via MCP  
+2. **"Where am I?"** → GPS location via MCP
 3. **"Show my notes"** → Obsidian search via MCP
-
-### Work (Zeta Athena)
-1. **"What were our Q3 results?"** → Financial data via RAG
-2. **"Where am I?"** → Location for work travel
-3. **"Who's on the engineering team?"** → Team info via RAG
-4. **"What's our remote work policy?"** → Company docs via RAG
+4. **"Run my morning digest"** → Trigger Zerg agent
+5. **"Quick status"** → Get current time, weather, next event
 
 ## Configuration
 
 **Environment Variables:**
 ```bash
-# server/.env (required)
+# Required
 OPENAI_API_KEY=sk-your-key-here
 
-# Optional context selection
-VITE_VOICE_CONTEXT=personal|zeta
+# Optional (Unified Setup - uses proxy)
+VITE_ZERG_API_URL=/api/zerg
+VITE_JARVIS_DEVICE_SECRET=your-secret
+
+# Optional (Standalone Setup - direct connection)
+# VITE_ZERG_API_URL=http://localhost:47300
 ```
 
-**Work Context Setup:**
+**Task Inbox Setup:**
+
+**Unified Docker Compose:**
 ```bash
-# Copy templates to create work config
-cp apps/web/contexts/zeta/config.template.ts apps/web/contexts/zeta/config.ts
-cp apps/web/contexts/zeta/theme.template.css apps/web/contexts/zeta/theme.css
+# 1. Start all services
+cd ../../../../
+./start-unified-dev.sh
 
-# Customize for your company (these files stay gitignored)
+# 2. Seed agents (in another terminal)
+docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
 ```
 
-## Security Model
+**Traditional Setup:**
+```bash
+# 1. Start Zerg backend
+cd ../../../ && make zerg-up
 
-- **Server-side API keys**: OpenAI credentials never exposed to client
-- **Ephemeral tokens**: Short-lived client secrets for WebRTC connection  
-- **Context isolation**: Personal and work data completely separated
-- **Private configs**: Work context configurations never committed to repo
-- **MCP bridge**: Personal API access controlled through server endpoints
+# 2. Seed agents (in another terminal)
+cd apps/zerg/backend && uv run python scripts/seed_jarvis_agents.py
+
+# 3. Configure device secret in .env
+VITE_JARVIS_DEVICE_SECRET=your-secret-here
+VITE_ZERG_API_URL=http://localhost:47300
+```
+
+**Note**: In unified mode, API calls go through Nginx proxy at `/api/zerg/*` instead of direct connection.
 
 ## Development Commands
 
 ```bash
 make help       # Show all available commands
 make install    # Install dependencies across all packages
-make start      # Jarvis personal context (default)
-make zeta       # Zeta Athena work context
+make start      # Start Jarvis development server
 make stop       # Stop all running servers
-make test       # Run comprehensive test suite
+make test       # Run test suite
+make native     # Build Electron desktop app
 ```
 
-## Multi-Platform Deployment
+## Agent Integration
+
+Jarvis integrates with Zerg backend for agent orchestration:
+
+- **Voice Dispatch**: "Run my morning digest" → triggers Zerg agent
+- **Real-time Updates**: See agent progress in Task Inbox sidebar
+- **Scheduled Agents**: 7 AM daily digest, 8 PM health check, etc.
+- **SSE Streaming**: Live updates via Server-Sent Events
+
+## Multi-Platform
 
 - **Progressive Web App**: Install on iPhone, works offline
 - **Native macOS**: Electron wrapper with global hotkey (⌘+J)
 - **Cross-platform**: Same codebase, different deployment targets
 - **Production Ready**: HTTPS deployment ready, secure token management
-
-Built for production deployment with complete work/personal separation and enterprise-grade security.

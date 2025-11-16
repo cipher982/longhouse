@@ -26,10 +26,10 @@ jobs:
           sudo apt-get install -y make git
 
       - name: Run drift check
-        run: make ws-code-diff-check
+        run: make validate-ws
 
       - name: Print note if diff detected (should not reach here)
         if: failure()
         run: |
           echo '❌ WebSocket generated code is out of sync with asyncapi/chat.yml.'
-          echo '   Please run `make regen-ws-code` and commit the changes.'
+          echo '   Please run `make regen-ws` and commit the changes.'

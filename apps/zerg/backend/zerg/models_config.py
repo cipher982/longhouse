@@ -36,10 +36,12 @@ class ModelConfig:
 
 
 # Define available models
+# NOTE: gpt-5.1-chat-latest is the default for all agent creation
+# Voice/realtime interfaces use dedicated realtime models (see jarvis context)
 AVAILABLE_MODELS = [
     ModelConfig(
-        id="gpt-4.1-2025-04-14",
-        display_name="gpt-4.1",
+        id="gpt-5.1-chat-latest",
+        display_name="gpt-5.1",
         provider=ModelProvider.OPENAI,
         is_default=True,
     ),
@@ -53,20 +55,20 @@ AVAILABLE_MODELS = [
         display_name="o1",
         provider=ModelProvider.OPENAI,
     ),
-    # Additional models used in automated tests -------------------------
+    # Additional models for testing and legacy support
     ModelConfig(
         id="gpt-4o",
         display_name="gpt-4o",
         provider=ModelProvider.OPENAI,
     ),
     ModelConfig(
-        id="gpt-mock",
-        display_name="gpt-mock",
+        id="gpt-4o-mini",
+        display_name="gpt-4o-mini",
         provider=ModelProvider.OPENAI,
     ),
     ModelConfig(
-        id="gpt-4o-mini",
-        display_name="gpt-4o-mini",
+        id="gpt-mock",
+        display_name="gpt-mock",
         provider=ModelProvider.OPENAI,
     ),
 ]

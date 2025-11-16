@@ -37,13 +37,23 @@ class BaseNodeExecutor:
         self.publish_event = publish_event_callback
         self.node_type = node_type
 
-    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the node and return updated state."""
+    async def execute(self, state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Execute the node and return updated state.
+
+        Args:
+            state: Mutable workflow state (node_outputs, completed_nodes, error)
+            config: Immutable execution config containing execution_id
+        """
+        # Extract execution_id from config (immutable metadata)
+        execution_id = config.get("configurable", {}).get("execution_id") if config else None
+        if not execution_id:
+            raise ValueError(f"Node {self.node_id}: execution_id not found in config")
+
         session_factory = get_session_factory()
 
         with session_factory() as db:
             # Create execution state in WAITING phase
-            node_state = NodeExecutionState(workflow_execution_id=state["execution_id"], node_id=self.node_id)
+            node_state = NodeExecutionState(workflow_execution_id=execution_id, node_id=self.node_id)
             db.add(node_state)
             db.commit()
 
@@ -51,12 +61,10 @@ class BaseNodeExecutor:
             ExecutionStateMachine.mark_running(node_state)
             db.commit()
 
-            await self.publish_event(
-                execution_id=state["execution_id"], node_id=self.node_id, node_state=node_state, output=None
-            )
+            await self.publish_event(execution_id=execution_id, node_id=self.node_id, node_state=node_state, output=None)
 
             try:
-                output = await self._execute_node_logic(db, state)
+                output = await self._execute_node_logic(db, state, execution_id)
 
                 # Mark as successful using state machine
                 ExecutionStateMachine.mark_success(node_state)
@@ -65,17 +73,18 @@ class BaseNodeExecutor:
                 db.commit()
 
                 await self.publish_event(
-                    execution_id=state["execution_id"],
+                    execution_id=execution_id,
                     node_id=self.node_id,
                     node_state=node_state,
                     output=str(output),
                 )
 
-                # Store envelope output in state
+                # Return only mutable state fields - execution_id is in config
+                # Annotated reducers handle concurrent writes safely
                 return {
-                    **state,
-                    "node_outputs": {**state["node_outputs"], self.node_id: output.model_dump()},
-                    "completed_nodes": state["completed_nodes"] + [self.node_id],
+                    "node_outputs": {self.node_id: output.model_dump()},
+                    "completed_nodes": [self.node_id],
+                    "error": None,
                 }
 
             except Exception as e:
@@ -89,20 +98,26 @@ class BaseNodeExecutor:
                 db.commit()
 
                 await self.publish_event(
-                    execution_id=state["execution_id"],
+                    execution_id=execution_id,
                     node_id=self.node_id,
                     node_state=node_state,
                     output=None,
                 )
 
                 return {
-                    **state,
+                    "node_outputs": {},  # No output on failure
+                    "completed_nodes": [self.node_id],
                     "error": f"{self.node.type} node {self.node_id} failed: {error_msg}",
-                    "completed_nodes": state["completed_nodes"] + [self.node_id],
                 }
 
-    async def _execute_node_logic(self, db, state):
-        """Override this in subclasses."""
+    async def _execute_node_logic(self, db, state, execution_id: int):
+        """Override this in subclasses.
+
+        Args:
+            db: Database session
+            state: Mutable workflow state
+            execution_id: Immutable execution identifier (from config)
+        """
         raise NotImplementedError
 
     def _create_envelope_output(self, value, node_type, **kwargs):
@@ -128,7 +143,7 @@ class BaseNodeExecutor:
 class AgentNodeExecutor(BaseNodeExecutor):
     """Executes agent nodes. Envelope format only."""
 
-    async def _execute_node_logic(self, db, state):
+    async def _execute_node_logic(self, db, state, execution_id: int):
         # Resolve variables in node configuration
         node_outputs = state.get("node_outputs", {})
         resolved_config = resolve_variables(self.node.config, node_outputs)
@@ -152,7 +167,7 @@ class AgentNodeExecutor(BaseNodeExecutor):
         thread = crud.create_thread(
             db=db,
             agent_id=agent_id,
-            title=f"Workflow execution {state['execution_id']}",
+            title=f"Workflow execution {execution_id}",
         )
 
         crud.create_thread_message(
@@ -206,7 +221,7 @@ class AgentNodeExecutor(BaseNodeExecutor):
 class ToolNodeExecutor(BaseNodeExecutor):
     """Executes tool nodes. Envelope format only."""
 
-    async def _execute_node_logic(self, db, state):
+    async def _execute_node_logic(self, db, state, execution_id: int):
         # Resolve variables in node configuration
         node_outputs = state.get("node_outputs", {})
         resolved_config = resolve_variables(self.node.config, node_outputs)
@@ -242,7 +257,7 @@ class ToolNodeExecutor(BaseNodeExecutor):
 class TriggerNodeExecutor(BaseNodeExecutor):
     """Executes trigger nodes. Envelope format only."""
 
-    async def _execute_node_logic(self, db, state):
+    async def _execute_node_logic(self, db, state, execution_id: int):
         logger.info(f"[TriggerNode] Executing trigger node: {self.node_id}")
 
         # Resolve typed trigger meta (strict, typed-only)
@@ -266,7 +281,7 @@ class TriggerNodeExecutor(BaseNodeExecutor):
 class ConditionalNodeExecutor(BaseNodeExecutor):
     """Executes conditional nodes. Envelope format only."""
 
-    async def _execute_node_logic(self, db, state):
+    async def _execute_node_logic(self, db, state, execution_id: int):
         logger.info(f"[ConditionalNode] Executing conditional node: {self.node_id}")
 
         # Resolve variables in node configuration
@@ -339,7 +354,7 @@ def create_node_executor(node, publish_event_callback) -> BaseNodeExecutor:
     else:
         # Placeholder for unknown types
         class PlaceholderExecutor(BaseNodeExecutor):
-            async def _execute_node_logic(self, db, state):
+            async def _execute_node_logic(self, db, state, execution_id: int):
                 logger.warning(f"[PlaceholderNode] Unknown node type: {self.node_id}")
                 return self._create_envelope_output(
                     value={"skipped": True}, node_type="placeholder", phase="finished", result="success"

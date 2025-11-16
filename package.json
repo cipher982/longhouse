@@ -12,6 +12,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "make dev",
     "start": "make swarm-dev",
     "jarvis": "make jarvis-dev",
     "zerg": "make zerg-dev",

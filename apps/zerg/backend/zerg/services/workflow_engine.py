@@ -7,6 +7,8 @@ Clean, focused workflow execution using WorkflowData schema.
 
 import asyncio
 import logging
+import operator
+from typing import Annotated
 from typing import Any
 from typing import Dict
 from typing import List
@@ -29,17 +31,35 @@ from zerg.schemas.workflow import WorkflowData
 from zerg.services.execution_state import ExecutionStateMachine
 from zerg.services.node_executors import create_node_executor
 from zerg.utils.time import utc_now_naive
+from zerg.websocket.langgraph_mapper import LangGraphMapper
 
 logger = logging.getLogger(__name__)
 
 
-class WorkflowState(TypedDict):
-    """State passed between nodes in the workflow."""
+def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two dictionaries, with right taking precedence."""
+    return {**left, **right}
 
-    execution_id: int
-    node_outputs: Dict[str, Any]
-    completed_nodes: List[str]
-    error: Union[str, None]
+
+def first_error(left: Union[str, None], right: Union[str, None]) -> Union[str, None]:
+    """Return the first non-None error (fail-fast semantics)."""
+    return left if left is not None else right
+
+
+class WorkflowState(TypedDict):
+    """State passed between nodes in the workflow.
+
+    Uses Annotated types with reducers for concurrency-safe parallel execution:
+    - node_outputs: merges outputs from parallel nodes
+    - completed_nodes: concatenates completion lists from parallel branches
+    - error: takes first error (fail-fast semantics for parallel failures)
+
+    execution_id is passed via config, not state, as it's immutable metadata.
+    """
+
+    node_outputs: Annotated[Dict[str, Any], merge_dicts]
+    completed_nodes: Annotated[List[str], operator.add]
+    error: Annotated[Union[str, None], first_error]
 
 
 class WorkflowEngine:
@@ -122,7 +142,7 @@ class WorkflowEngine:
         """Build LangGraph from WorkflowData."""
         graph = StateGraph(WorkflowState)
 
-        # Add nodes
+        # Add nodes (execution_id will be passed via config, not state)
         for node in workflow_data.nodes:
             executor = create_node_executor(node, self._publish_node_event)
             graph.add_node(node.id, executor.execute)
@@ -209,39 +229,60 @@ class WorkflowEngine:
 
     async def _execute_graph(self, graph, execution: WorkflowExecution, db, workflow_id: int):
         """Execute the compiled graph."""
+        # Remove execution_id from state - it's immutable metadata, passed via config
         initial_state = {
-            "execution_id": execution.id,
             "node_outputs": {},
             "completed_nodes": [],
             "error": None,
         }
 
-        config = {"configurable": {"thread_id": f"workflow_{execution.id}"}}
+        # Pass execution_id as immutable config, not mutable state
+        config = {
+            "configurable": {
+                "thread_id": f"workflow_{execution.id}",
+                "execution_id": execution.id,  # Immutable metadata
+            }
+        }
         logger.info(f"[WorkflowEngine] Starting streaming execution – workflow_id={workflow_id}")
 
-        # Stream execution for real-time updates
-        async for chunk in graph.astream(initial_state, config):
-            logger.info(f"[WorkflowEngine] Processing chunk: {list(chunk.keys()) if chunk else 'None'}")
-            if chunk:
-                for node_id, state_update in chunk.items():
-                    logger.info(f"[WorkflowEngine] Node {node_id} completed")
-                    if state_update and hasattr(state_update, "get"):
-                        await self._publish_streaming_progress(
-                            execution_id=execution.id,
-                            completed_nodes=state_update.get("completed_nodes", []),
-                            node_outputs=state_update.get("node_outputs", {}),
-                            error=state_update.get("error"),
-                        )
+        # Emit execution started event
+        started_envelope = LangGraphMapper.create_execution_started_envelope(execution.id)
+        logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: About to publish EXECUTION_STARTED for execution_id={execution.id}")
+        await publish_event(EventType.EXECUTION_STARTED, started_envelope)
+        logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: Published EXECUTION_STARTED successfully")
 
-        # Mark as successful using state machine
-        ExecutionStateMachine.mark_success(execution)
-        execution.finished_at = utc_now_naive()
-        db.commit()
+        try:
+            # Stream execution for real-time updates with granular node state events
+            # Using stream_mode=["updates"] to get per-node state transitions
+            async for chunk in graph.astream(initial_state, config, stream_mode=["updates"]):
+                # Debug: log chunk type and structure
+                logger.info(f"[WorkflowEngine] Processing chunk type: {type(chunk)}, value: {chunk}")
 
-        await self._publish_execution_finished(
-            execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution)
-        )
-        logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
+                if chunk:
+                    # Map LangGraph chunks to our event envelopes
+                    envelopes = LangGraphMapper.map_chunk_to_envelopes(chunk, execution.id)
+
+                    # Broadcast each envelope
+                    for envelope in envelopes:
+                        event_type = envelope.pop("event_type")  # Extract event type
+                        logger.info(f"🔥🔥🔥 WORKFLOW_ENGINE: Publishing {event_type} for execution {execution.id}, envelope={envelope}")
+                        await publish_event(event_type, envelope)
+                        logger.info(f"✅✅✅ WORKFLOW_ENGINE: Published {event_type} successfully")
+
+            # Mark as successful using state machine
+            ExecutionStateMachine.mark_success(execution)
+            execution.finished_at = utc_now_naive()
+            db.commit()
+
+            await self._publish_execution_finished(
+                execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution)
+            )
+            logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
+
+        except Exception as e:
+            # Log error but don't publish EXECUTION_FINISHED here - let outer handler do it once
+            logger.exception(f"[WorkflowEngine] Graph execution failed – execution_id={execution.id}")
+            raise  # Re-raise to trigger state machine handling and single EXECUTION_FINISHED event
 
     # Event publishing methods
     async def _publish_node_event(self, *, execution_id: int, node_id: str, node_state, output: Any):

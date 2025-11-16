@@ -1,7 +1,7 @@
 # Jarvis Voice Agent — simple Makefile
-# Targets: help, install, start, zeta, personal, native, test, status, stop, clean
+# Targets: help, install, start, native, test, status, stop, clean
 
-.PHONY: help install start zeta personal native test test-e2e status stop clean
+.PHONY: help install start native test test-e2e status stop clean
 
 help: ## Show available commands
 	@echo "Jarvis Commands" && echo "" && \
@@ -24,21 +24,6 @@ start: ## Start server (8787) and web app (8080)
 	open http://localhost:8080 2>/dev/null || open http://localhost:8081 2>/dev/null || true; \
 	wait
 
-zeta: ## Start with work context (VITE_VOICE_CONTEXT=zeta)
-	@echo "🏢 Starting Zeta context... (Ctrl+C to stop)"; \
-	trap 'echo "\n🛑 Stopping..."; $(MAKE) stop; exit 0' INT; \
-	cd apps/server && npm run dev & \
-	cd apps/web && VITE_VOICE_CONTEXT=zeta npm run dev & \
-	echo "⏳ Waiting for services..."; \
-	until curl -sf http://localhost:8787/session >/dev/null; do sleep 0.4; done; \
-	until curl -sf http://localhost:8080 >/dev/null || curl -sf http://localhost:8081 >/dev/null; do sleep 0.4; done; \
-	echo "✅ Ready: http://localhost:8080"; \
-	open http://localhost:8080 2>/dev/null || open http://localhost:8081 2>/dev/null || true; \
-	wait
-
-personal: ## Alias for start (personal context)
-	@$(MAKE) start
-
 native: ## Launch Electron shell (servers must be running)
 	@cd apps/native && npm start
 
@@ -55,8 +40,8 @@ status: ## Check if services are up
 
 stop: ## Stop running dev processes (best-effort)
 	@echo "🛑 Stopping Jarvis services..."
-	@pkill -f "/Users/davidrose/git/jarvis/apps/server" 2>/dev/null || true
-	@pkill -f "/Users/davidrose/git/jarvis.*vite" 2>/dev/null || true
+	@pkill -f "/Users/davidrose/git/zerg/apps/server" 2>/dev/null || true
+	@pkill -f "/Users/davidrose/git/zerg.*vite" 2>/dev/null || true
 	@pkill -f "jarvis.*electron" 2>/dev/null || true
 	@pkill -f "uvx.*traccar.*jarvis" 2>/dev/null || true
 	@sleep 1

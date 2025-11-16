@@ -154,10 +154,9 @@ export class RadialVisualizer {
     const sizeCss = Math.max(160, base + this.outerInset * 2);
     this.canvas.style.width = `${sizeCss}px`;
     this.canvas.style.height = `${sizeCss}px`;
-    const offsetX = (rectWidth - sizeCss) / 2;
-    const offsetY = (rectHeight - sizeCss) / 2;
-    this.canvas.style.left = `${offsetX}px`;
-    this.canvas.style.top = `${offsetY}px`;
+    this.canvas.style.left = `50%`;
+    this.canvas.style.top = `50%`;
+    this.canvas.style.transform = `translate(-50%, -50%)`;
     this.canvas.width = Math.floor(sizeCss * dpr);
     this.canvas.height = Math.floor(sizeCss * dpr);
     if (this.ctx) {

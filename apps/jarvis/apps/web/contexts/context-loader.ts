@@ -19,8 +19,8 @@ export class ContextLoader {
    * Discover available contexts by checking manifest files
    */
   private async discoverContexts(): Promise<void> {
-    const knownContexts = ['personal', 'zeta'];
-    
+    const knownContexts = ['personal'];
+
     for (const contextName of knownContexts) {
       try {
         const manifestResponse = await fetch(`./contexts/${contextName}/manifest.json`);
@@ -58,12 +58,10 @@ export class ContextLoader {
       let configModule: any;
       if (contextName === 'personal') {
         configModule = await import('./personal/config');
-      } else if (contextName === 'zeta') {
-        configModule = await import('./zeta/config');
       } else {
         throw new Error(`Unknown context: ${contextName}`);
       }
-      
+
       const configKey = `${contextName}Config`;
       
       if (!configModule[configKey]) {

@@ -77,14 +77,59 @@ async def start_workflow_execution(
     if not workflow or workflow.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    # Execute workflow with LangGraph engine (non-blocking)
-    execution_id = await workflow_engine.execute_workflow(workflow_id)
+    # Create execution record and start in background (truly non-blocking)
+    try:
+        from zerg.models.models import WorkflowExecution
+        from zerg.utils.time import utc_now_naive
+        from zerg.services.execution_state import ExecutionStateMachine
 
-    return ExecutionStatusResponse(
-        execution_id=execution_id,
-        phase="running",
-        result=None
-    )
+        # Create execution record in WAITING state
+        execution = WorkflowExecution(
+            workflow_id=workflow_id,
+            started_at=utc_now_naive(),
+            triggered_by="manual",
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+
+        # Mark as RUNNING before starting background task
+        ExecutionStateMachine.mark_running(execution)
+        db.commit()
+
+        # Return immediately so frontend can subscribe BEFORE workflow starts
+        execution_id = execution.id
+
+        # Start workflow in background with small delay to allow subscription
+        import asyncio
+        async def delayed_start():
+            await asyncio.sleep(0.1)  # 100ms delay for subscription to register
+            workflow_engine.start_workflow_in_background(workflow_id, execution_id)
+
+        asyncio.create_task(delayed_start())
+
+        return ExecutionStatusResponse(
+            execution_id=execution_id,
+            phase="running",
+            result=None
+        )
+    except Exception as e:
+        # Log the full error for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Failed to start workflow {workflow_id}")
+
+        # Return user-friendly error message
+        error_msg = str(e)
+        if "InvalidUpdateError" in error_msg:
+            error_msg = "Workflow execution failed: concurrent state update error. Check backend logs for details."
+        elif "execution_id not found" in error_msg:
+            error_msg = "Workflow execution failed: missing execution context. This is a configuration error."
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start workflow: {error_msg}"
+        )
 
 
 @router.post("/executions/{execution_id}/start", response_model=ExecutionStatusResponse)

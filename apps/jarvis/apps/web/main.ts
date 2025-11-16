@@ -11,12 +11,14 @@ import { contextLoader } from './contexts/context-loader';
 import type { VoiceAgentConfig } from './contexts/types';
 import { uiEnhancements } from './lib/ui-enhancements';
 import { RadialVisualizer } from './lib/radial-visualizer';
+import { InteractionStateMachine } from './lib/interaction-state-machine';
+import { VoiceChannelController } from './lib/voice-channel-controller';
+import { TextChannelController } from './lib/text-channel-controller';
 
 // Configuration
 const CONFIG = {
-  API_BASE: window.location.hostname === 'localhost' 
-    ? 'http://localhost:8787' 
-    : `${window.location.protocol}//${window.location.hostname}:8787`
+  // Use relative path for API - proxied through Nginx
+  API_BASE: '/api'
 };
 
 function resolveSyncBaseUrl(raw?: string): string {
@@ -84,6 +86,15 @@ function createSessionManagerForContext(config: VoiceAgentConfig): SessionManage
   });
 }
 
+// Voice Button State Machine (Norman + Alexander principles)
+enum VoiceButtonState {
+  IDLE = 'idle',           // Not connected - ready to initiate connection
+  CONNECTING = 'connecting', // Connection in progress
+  READY = 'ready',         // Connected and ready for voice input
+  SPEAKING = 'speaking',   // User is speaking (PTT or VAD detected)
+  RESPONDING = 'responding' // Assistant is responding
+}
+
 // Global state
 let agent: RealtimeAgent | null = null;
 let session: RealtimeSession | null = null;
@@ -93,28 +104,303 @@ let conversationRenderer: ConversationRenderer | null = null;
 // Removed: currentStreamingTurn - now using currentStreamingMessageId with ConversationRenderer
 let currentStreamingText = '';
 let currentConversationId: string | null = null;
-let isConnected = false;
-let isConnecting = false; // guard concurrent connects
+let voiceButtonState: VoiceButtonState = VoiceButtonState.IDLE;
 let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
 // Legacy DOM element placeholders removed in favor of renderer-based state
 // (avoid multiple writers / race conditions)
 
 // Jarvis-Zerg integration
+let conversationMode: 'voice' | 'text' = 'voice';
 let taskInbox: TaskInbox | null = null;
-let jarvisClient = getJarvisClient(import.meta.env.VITE_ZERG_API_URL || 'http://localhost:47300');
+let jarvisClient = getJarvisClient(import.meta.env?.VITE_ZERG_API_URL || 'http://localhost:47300');
 let cachedAgents: JarvisAgentSummary[] = [];
 // Track if transcript is showing status text (e.g., "Connecting…")
 let statusActive = false;
 // Accumulate partial transcription text when VAD is used (no PTT)
 let pendingUserText = '';
 
+// Voice/Text Separation Controllers (Phase 11 - Jarvis Voice/Text Separation)
+let interactionStateMachine: InteractionStateMachine;
+let voiceChannelController: VoiceChannelController;
+let textChannelController: TextChannelController;
+
+// Haptic & Audio Feedback System (Phase 6)
+interface FeedbackPreferences {
+  haptics: boolean;
+  audio: boolean;
+}
+
+// Load preferences from localStorage
+function loadFeedbackPreferences(): FeedbackPreferences {
+  try {
+    const stored = localStorage.getItem('jarvis.feedback.preferences');
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (error) {
+    logger.warn('Failed to load feedback preferences', error);
+  }
+  // Default: enabled
+  return { haptics: true, audio: true };
+}
+
+function saveFeedbackPreferences(prefs: FeedbackPreferences): void {
+  try {
+    localStorage.setItem('jarvis.feedback.preferences', JSON.stringify(prefs));
+  } catch (error) {
+    logger.warn('Failed to save feedback preferences', error);
+  }
+}
+
+const feedbackPrefs = loadFeedbackPreferences();
+
+// Haptic feedback helper
+function triggerHaptic(pattern: number | number[]): void {
+  if (!feedbackPrefs.haptics) return;
+  if (!('vibrate' in navigator)) return;
+
+  try {
+    navigator.vibrate(pattern);
+  } catch (error) {
+    // Silently fail if vibration not supported
+  }
+}
+
+// Audio feedback system using Web Audio API
+class AudioFeedback {
+  private audioContext: AudioContext | null = null;
+  private enabled: boolean;
+  private supported: boolean;
+
+  constructor(enabled: boolean) {
+    this.enabled = enabled;
+    // Check if Web Audio API is supported
+    this.supported = !!(window.AudioContext || (window as any).webkitAudioContext);
+  }
+
+  private getContext(): AudioContext | null {
+    if (!this.supported) return null;
+
+    if (!this.audioContext) {
+      try {
+        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      } catch (error) {
+        logger.warn('Web Audio API not supported', error);
+        this.supported = false;
+        return null;
+      }
+    }
+    return this.audioContext;
+  }
+
+  // Resume audio context (Safari autoplay fix) - must be called from user gesture
+  async resumeContext(): Promise<void> {
+    if (!this.supported) return;
+
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+        logger.debug('AudioContext resumed from user gesture');
+      } catch (error) {
+        // Silently fail - might not be a user gesture context
+      }
+    }
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  // Soft chime (connection success)
+  playConnectChime(): void {
+    if (!this.enabled || !this.supported) return;
+
+    try {
+      const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+      oscillator.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.2);
+    } catch (error) {
+      // Silently fail if audio not supported
+    }
+  }
+
+  // Brief tick (voice detected)
+  playVoiceTick(): void {
+    if (!this.enabled || !this.supported) return;
+
+    try {
+      const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.05, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.05);
+    } catch (error) {
+      // Silently fail
+    }
+  }
+
+  // Gentle error tone
+  playErrorTone(): void {
+    if (!this.enabled || !this.supported) return;
+
+    try {
+      const ctx = this.getContext();
+      if (!ctx) return;
+
+      // Resume context if suspended (Safari autoplay fix)
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {}); // Best effort
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(300, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.3);
+
+      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.3);
+    } catch (error) {
+      // Silently fail
+    }
+  }
+}
+
+const audioFeedback = new AudioFeedback(feedbackPrefs.audio);
+
+// Centralized State Handler (Single Source of Truth)
+function setVoiceButtonState(newState: VoiceButtonState): void {
+  if (voiceButtonState === newState) return; // No change needed
+  if (!pttBtn) return; // Guard against early calls before DOM ready
+
+  const oldState = voiceButtonState;
+  voiceButtonState = newState;
+
+  // Remove all state classes
+  pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
+
+  // Add new state class
+  pttBtn.classList.add(newState);
+
+  // Update ARIA attributes and status label for screen readers
+  switch (newState) {
+    case VoiceButtonState.IDLE:
+      pttBtn.setAttribute('aria-label', 'Connect to voice service');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Tap to speak');
+      break;
+    case VoiceButtonState.CONNECTING:
+      pttBtn.setAttribute('aria-label', 'Connecting...');
+      pttBtn.setAttribute('aria-busy', 'true');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      setStatusLabel('Connecting...');
+      break;
+    case VoiceButtonState.READY:
+      pttBtn.setAttribute('aria-label', 'Push to talk');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Ready to talk');
+      break;
+    case VoiceButtonState.SPEAKING:
+      pttBtn.setAttribute('aria-label', 'Speaking - release to send');
+      pttBtn.setAttribute('aria-pressed', 'true');
+      pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Listening...');
+      break;
+    case VoiceButtonState.RESPONDING:
+      pttBtn.setAttribute('aria-label', 'Assistant is responding');
+      pttBtn.setAttribute('aria-pressed', 'false');
+      pttBtn.removeAttribute('aria-busy');
+      setStatusLabel('Assistant is responding');
+      break;
+  }
+
+  logger.debug(`Voice button state transition: ${oldState} → ${newState}`);
+}
+
+// Status Label Helper (Phase 5 - allows dynamic content overrides)
+function setStatusLabel(text: string | null): void {
+  if (!voiceStatusLabel) return;
+
+  if (text) {
+    // Set dynamic text (overrides CSS ::after content)
+    voiceStatusLabel.textContent = text;
+    voiceStatusLabel.classList.add('has-dynamic-content');
+  } else {
+    // Clear dynamic text (reverts to CSS ::after content)
+    voiceStatusLabel.textContent = '';
+    voiceStatusLabel.classList.remove('has-dynamic-content');
+  }
+}
+
+function clearStatusLabel(): void {
+  setStatusLabel(null);
+}
+
+// State check helpers (replace boolean flags)
+function isConnected(): boolean {
+  return voiceButtonState !== VoiceButtonState.IDLE &&
+         voiceButtonState !== VoiceButtonState.CONNECTING;
+}
+
+function isConnecting(): boolean {
+  return voiceButtonState === VoiceButtonState.CONNECTING;
+}
+
+function canStartPTT(): boolean {
+  return voiceButtonState === VoiceButtonState.READY;
+}
+
 // DOM elements
 const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
 
 // Initialize conversation renderer
 conversationRenderer = new ConversationRenderer(transcriptEl);
-const toggleConnectionBtn = document.getElementById("toggleConnectionBtn") as HTMLButtonElement;
 const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
 const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
 const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
@@ -122,6 +408,8 @@ const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
 const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
 const sidebar = document.getElementById("sidebar") as HTMLDivElement;
 const voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
+const voiceStatusLabel = document.querySelector('.voice-status-label') as HTMLDivElement;
+const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLInputElement;
 
 const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
 let sharedMicStream: MediaStream | null = null;
@@ -152,8 +440,8 @@ const BOTH_COLOR = '#a855f7';
 const IDLE_COLOR = '#475569';
 
 // Audio visualizer (radial) around mic
-const radialViz = voiceButtonContainer
-  ? new RadialVisualizer(voiceButtonContainer, { onLevel: handleMicLevel })
+const radialViz = pttBtn
+  ? new RadialVisualizer(pttBtn, { onLevel: handleMicLevel })
   : null;
 
 syncAudioStateClasses();
@@ -383,14 +671,14 @@ function setInputAudio(enabled: boolean) {
 }
 
 async function setMicState(active: boolean) {
+  // Note: ARIA attributes are managed by setVoiceButtonState() state machine
+  // This function only handles visual feedback and audio input control
   if (active) {
     pttBtn.classList.add('listening');
   } else {
     pttBtn.classList.remove('listening');
   }
   setMicIcon(active);
-  pttBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  pttBtn.setAttribute('aria-label', active ? 'Stop listening' : 'Push to talk');
   await setListeningMode(active);
   setInputAudio(active);
 }
@@ -469,15 +757,35 @@ async function getSessionToken(): Promise<string> {
 
   try {
     const r = await fetch(`${CONFIG.API_BASE}/session`);
-    console.log('📡 Response status:', r.status);
+    const contentType = r.headers.get('content-type') || '';
+    console.log('📡 Response:', {
+      status: r.status,
+      contentType,
+      url: r.url
+    });
 
     if (!r.ok) {
       const errorText = await r.text();
-      console.error('Session request failed:', r.status, errorText);
+      console.error('❌ Session request failed:', r.status, errorText);
       if (r.status === 0 || !r.status) {
         throw new Error('Cannot connect to voice server - is it running?');
       }
       throw new Error(`Failed to get session token: ${r.status} ${errorText}`);
+    }
+
+    // Check if response is actually JSON before parsing
+    if (!contentType.includes('application/json')) {
+      const responseText = await r.text();
+      console.error('❌ Expected JSON but got:', contentType);
+      console.error('📄 Response body (first 500 chars):', responseText.substring(0, 500));
+      throw new Error(
+        `Server returned ${contentType} instead of JSON. ` +
+        `This usually means:\n` +
+        `1. Backend server isn't running (check port 8787)\n` +
+        `2. Vite proxy misconfigured\n` +
+        `3. Wrong API endpoint\n` +
+        `Response preview: ${responseText.substring(0, 100)}...`
+      );
     }
 
     const js = await r.json();
@@ -485,7 +793,7 @@ async function getSessionToken(): Promise<string> {
 
     const token = js.value || js.client_secret?.value;
     if (!token) {
-      console.error('No token found in response:', js);
+      console.error('❌ No token found in response:', js);
       throw new Error('Invalid session response format - missing token value');
     }
 
@@ -495,6 +803,10 @@ async function getSessionToken(): Promise<string> {
     if (error instanceof TypeError && error.message.includes('fetch')) {
       console.error('❌ Network error - server unreachable');
       throw new Error('Cannot connect to voice server - check if server is running on port 8787');
+    }
+    if (error instanceof SyntaxError && error.message.includes('JSON')) {
+      console.error('❌ JSON parse error - server returned invalid JSON');
+      throw new Error('Server returned invalid JSON - check backend logs for errors');
     }
     throw error;
   }
@@ -661,30 +973,54 @@ const locationTool = tool({
 
 const whoopTool = tool({
   name: 'get_whoop_recovery',
-  description: 'Get current WHOOP recovery score and sleep data',
+  description: 'Get current WHOOP recovery score and health data',
   parameters: z.object({
-    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today')
+    date: z.string().describe('Date in YYYY-MM-DD format, defaults to today').optional().nullable()
   }),
   async execute({ date }) {
-    console.log('🏃 Calling WHOOP tool with date:', date);
+    console.log('💪 Calling WHOOP tool with date:', date);
     try {
       const response = await fetch(`${CONFIG.API_BASE}/tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name: 'whoop.get_daily', 
-          args: { date } 
+        body: JSON.stringify({
+          name: 'whoop.get_daily',
+          args: { date }
         })
       });
-      
+
       if (!response.ok) {
         throw new Error(`WHOOP API failed: ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log('💪 WHOOP data received:', data);
-      
-      return `Your WHOOP data for ${data.date}: Recovery Score: ${data.recovery_score}%, Sleep: ${data.sleep.duration} hours, HRV: ${data.sleep.hrv}, RHR: ${data.sleep.rhr}`;
+
+      // Format the response based on the actual WHOOP MCP data structure
+      let result = 'Your WHOOP data:\n';
+      if (data.recovery_score) {
+        result += `Recovery Score: ${data.recovery_score}%\n`;
+      }
+      if (data.strain) {
+        result += `Strain: ${data.strain}\n`;
+      }
+      if (data.heart_rate) {
+        result += `Heart Rate: ${data.heart_rate} bpm\n`;
+      }
+      if (data.hrv) {
+        result += `HRV: ${data.hrv}ms\n`;
+      }
+      if (data.rhr) {
+        result += `Resting HR: ${data.rhr} bpm\n`;
+      }
+      if (data.sleep_duration) {
+        result += `Sleep: ${data.sleep_duration} hours\n`;
+      }
+      if (data.date) {
+        result += `Date: ${data.date}`;
+      }
+
+      return result;
     } catch (error) {
       console.error('WHOOP tool error:', error);
       return `Sorry, couldn't get your WHOOP data: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -699,6 +1035,9 @@ function startStreamingResponse(): void {
   logger.debug('Starting streaming response');
 
   if (!conversationRenderer) return;
+
+  // Update button state to show assistant is responding
+  setVoiceButtonState(VoiceButtonState.RESPONDING);
 
   // Clear status if currently showing (e.g., "Connecting…")
   clearStatusIfActive();
@@ -788,7 +1127,7 @@ async function loadConversationHistoryIntoUI(): Promise<void> {
     if (conversationRenderer) {
       conversationRenderer.clear();
     }
-    if (conversationRenderer) conversationRenderer.setStatus('Click Connect to start', true);
+    if (conversationRenderer) conversationRenderer.setStatus('Tap the microphone to start', true);
     return;
   }
 
@@ -797,7 +1136,7 @@ async function loadConversationHistoryIntoUI(): Promise<void> {
 
     if (history.length === 0) {
       conversationRenderer.clear();
-      conversationRenderer.setStatus('No messages yet - click Connect to start', true);
+      conversationRenderer.setStatus('No messages yet - tap the microphone to start', true);
       return;
     }
 
@@ -858,13 +1197,12 @@ function addAssistantTurnToUI(response: string, timestamp?: Date): void {
 
 // Main connection function using Agents SDK
 async function connect(): Promise<void> {
-  if (isConnecting) return;
+  if (isConnecting()) return; // Prevent concurrent connections
   console.log('🔗 Connect starting...');
 
   let loadingOverlay: HTMLDivElement | null = null;
   try {
-    isConnecting = true;
-    toggleConnectionBtn.disabled = true;
+    setVoiceButtonState(VoiceButtonState.CONNECTING);
     loadingOverlay = uiEnhancements.showLoading('Connecting to voice service...');
 
     // Use the context-aware agent created during initialization
@@ -875,15 +1213,9 @@ async function connect(): Promise<void> {
 
     console.log('✅ Agent found:', agent.name || 'unnamed agent');
 
-    // Request mic once and share it between transport and visualizer
+    // Request mic once through VoiceChannelController and share it
     if (!sharedMicStream) {
-      sharedMicStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          channelCount: 1
-        }
-      });
+      sharedMicStream = await voiceChannelController.requestMicrophone();
     }
     radialViz?.provideStream(sharedMicStream);
 
@@ -916,21 +1248,35 @@ async function connect(): Promise<void> {
     // Setup event listeners
     setupSessionEvents();
 
+    // Wire session to controllers
+    voiceChannelController.setSession(session);
+    textChannelController.setSession(session);
+
     // Get ephemeral token and connect
     console.log('🎫 Getting session token...');
     const token = await getSessionToken();
     console.log('🎫 Token received, connecting to OpenAI...');
     await session?.connect({ apiKey: token });
     console.log('🎉 Connection established!');
-    
+
     logger.success('Connected successfully with Agents SDK');
     // Clear any lingering status text so UI is ready
     clearStatusIfActive();
 
-    pttBtn.disabled = false;
-    pttBtn.classList.remove('disabled');
-    toggleConnectionBtn.classList.add('connected');
-    isConnected = true;
+    // Update button to ready state
+    setVoiceButtonState(VoiceButtonState.READY);
+
+    // Ensure we're in voice mode after connection (if conversationMode is voice)
+    if (conversationMode === 'voice' && interactionStateMachine.isTextMode()) {
+      interactionStateMachine.transitionToVoice({
+        armed: false,
+        handsFree: false
+      });
+    }
+
+    // Haptic + audio feedback on successful connection
+    triggerHaptic(50);
+    audioFeedback.playConnectChime();
 
     // Hide loading and show success
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
@@ -941,9 +1287,13 @@ async function connect(): Promise<void> {
     // Hide loading if it was created
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    toggleConnectionBtn.disabled = false;
-  } finally {
-    isConnecting = false;
+
+    // Error feedback
+    triggerHaptic([100, 50, 100]); // Double vibration for error
+    audioFeedback.playErrorTone();
+
+    // Return button to idle state on error
+    setVoiceButtonState(VoiceButtonState.IDLE);
   }
 }
 
@@ -953,19 +1303,35 @@ function setupSessionEvents(): void {
     logger.transport(event.type);
     const t = event.type || '';
 
-    // VAD speech start/stop → toggle listening visuals
+    // VAD speech start/stop → delegate to VoiceChannelController
+    // Controller will gate based on armed state and hands-free mode
     if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
-      await setListeningMode(true);
-      ensurePendingUserBubble();
+      voiceChannelController.handleSpeechStart();
+      // Only update UI if voice is actually armed
+      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+        setVoiceButtonState(VoiceButtonState.SPEAKING);
+        audioFeedback.playVoiceTick(); // Audio cue for voice detected
+        await setListeningMode(true);
+        ensurePendingUserBubble();
+      }
       return;
     }
     if (t.includes('input_audio_buffer') && (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
-      await setListeningMode(false);
+      voiceChannelController.handleSpeechStop();
+      // Only update UI if voice was armed
+      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+        setVoiceButtonState(VoiceButtonState.READY);
+        await setListeningMode(false);
+      }
       return;
     }
-    // Partial transcription deltas
+    // Partial transcription deltas → delegate to VoiceChannelController (with gating)
     if (t === 'conversation.item.input_audio_transcription.delta') {
-      updatePendingUserPlaceholder(event.delta || '');
+      voiceChannelController.handleTranscript(event.delta || '', false);
+      // Only update UI if transcript was not gated
+      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+        updatePendingUserPlaceholder(event.delta || '');
+      }
       return;
     }
 
@@ -992,7 +1358,11 @@ function setupSessionEvents(): void {
         break;
         
       case 'conversation.item.input_audio_transcription.completed':
-        handleUserTranscript(event.transcript || '');
+        voiceChannelController.handleTranscript(event.transcript || '', true);
+        // Only process if not gated
+        if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+          handleUserTranscript(event.transcript || '');
+        }
         break;
     }
   });
@@ -1007,10 +1377,12 @@ function setupSessionEvents(): void {
   session?.on('error', (error: any) => {
     logger.error('Session error', error);
     setTranscript(`Voice error: ${error.message}`, true);
-    toggleConnectionBtn.disabled = false;
-    toggleConnectionBtn.classList.remove('connected');
-    pttBtn.disabled = true;
-    isConnected = false;
+
+    // Error feedback
+    triggerHaptic([100, 50, 100]); // Double vibration for error
+    audioFeedback.playErrorTone();
+
+    setVoiceButtonState(VoiceButtonState.IDLE);
   });
 }
 
@@ -1030,11 +1402,16 @@ function handleStreamingDelta(delta: any): void {
 
 function handleResponseComplete(event: any): void {
   logger.debug('Response completed', event);
-  
+
   if (currentStreamingMessageId && currentStreamingText) {
     finalizeStreamingResponse();
-    
+
     // Note: recordConversationTurn is called inside finalizeStreamingResponse via addAssistantTurnToUI
+  }
+
+  // Return to ready state after assistant finishes responding
+  if (voiceButtonState === VoiceButtonState.RESPONDING) {
+    setVoiceButtonState(VoiceButtonState.READY);
   }
 }
 
@@ -1090,7 +1467,6 @@ async function disconnect() {
   console.log('🔌 Disconnecting from voice service...');
 
   await setMicState(false);
-  pttBtn.disabled = true;
 
   try {
     if (session) {
@@ -1102,9 +1478,8 @@ async function disconnect() {
     logger.error('Disconnect error', error);
     console.error('❌ Disconnect error:', error);
   } finally {
-    toggleConnectionBtn.disabled = false;
-    toggleConnectionBtn.classList.remove('connected');
-    isConnected = false;
+    // Return button to idle state
+    setVoiceButtonState(VoiceButtonState.IDLE);
     // Stop shared stream for privacy
     if (sharedMicStream) {
       sharedMicStream.getTracks().forEach(t => t.stop());
@@ -1128,38 +1503,13 @@ async function disconnect() {
   }
 }
 
-// Push-to-talk with SDK
-let pushing = false;
-
-// Voice button with modern animations
-pttBtn.onpointerdown = async () => {
-  if (!isConnected) {
-    uiEnhancements.showToast('Click Connect to enable the microphone', 'info');
-    return;
-  }
-  if (pttBtn.disabled) return;
-  pushing = true;
-  await setMicState(true);
-
-  // Use ConversationRenderer for pending user bubble
-  ensurePendingUserBubble();
-};
-
-pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-  if (!isConnected || pttBtn.disabled) return;
-  pushing = false;
-  setMicState(false);
-};
-
-// Event handlers will be set up after DOM is loaded
-
 // New conversation handler (will be assigned later)
 const handleNewConversation = async () => {
   if (!sessionManager || !conversationUI) return;
-  
+
   try {
     // Disconnect current session if connected
-    if (isConnected) {
+    if (isConnected()) {
       await disconnect();
     }
     
@@ -1213,7 +1563,6 @@ async function initializeApp(): Promise<void> {
   try {
     console.log('🚀 Initializing Jarvis voice agent...');
     console.log('📊 DOM elements found:', {
-      toggleConnectionBtn: !!toggleConnectionBtn,
       pttBtn: !!pttBtn,
       transcript: !!transcriptEl,
       sidebar: !!sidebar,
@@ -1245,7 +1594,7 @@ async function initializeApp(): Promise<void> {
       await loadConversationHistoryIntoUI();
     } else {
       console.log(`🆕 No existing conversation - ready for new one`);
-      setTranscript(`Ready to start new conversation - click Connect`, true);
+      setTranscript(`Ready to start new conversation - tap the microphone`, true);
     }
     
     console.log(`🧠 Session initialized with data loading complete`);
@@ -1259,17 +1608,22 @@ async function initializeApp(): Promise<void> {
     });
     
     console.log(`🔧 Added ${contextTools.length} tools for ${currentContext.name}:`, contextTools.map(t => t.name));
-    
-    // Setup UI state
-    pttBtn.disabled = true;
-    toggleConnectionBtn.classList.remove('connected');
+
+    // Run async initialization for controllers (already created synchronously in DOMContentLoaded)
+    console.log('🎛️ Running async controller initialization...');
+    await voiceChannelController.initialize();
+    await textChannelController.initialize();
+    console.log('✅ Controller async initialization complete');
+
+    // Setup UI state - button starts in idle state, ready to connect
+    setVoiceButtonState(VoiceButtonState.IDLE);
     newConversationBtn.disabled = false;
     
     // Create context selector in UI
     contextLoader.createContextSelector('context-selector-container');
     
     console.log(`✅ ${currentContext.name} voice agent ready`);
-    ensureReadyBanner(`${currentContext.name} ready - click Connect to start`);
+    ensureReadyBanner(`${currentContext.name} ready - tap the microphone to start`);
     
   } catch (error) {
     console.error('❌ Failed to initialize app:', error);
@@ -1308,9 +1662,9 @@ function updateUIForContext(config: VoiceAgentConfig): void {
 window.addEventListener('conversationSwitched', async (event: any) => {
   const { conversationId } = event.detail;
   console.log(`🔄 Switching to conversation: ${conversationId}`);
-  
+
   // Disconnect current session if connected
-  if (isConnected) {
+  if (isConnected()) {
     await disconnect();
   }
   
@@ -1353,7 +1707,7 @@ window.addEventListener('contextChanged', async (event: any) => {
       await loadConversationHistoryIntoUI();
       console.log(`🔄 Session reinitialized for ${config.name}, resumed conversation: ${currentConversationId}`);
     } else {
-      setTranscript(`${config.name} - click Connect to start`, true);
+      setTranscript(`${config.name} - tap the microphone to start`, true);
       console.log(`🔄 Session reinitialized for ${config.name}, ready for new conversation`);
     }
   }
@@ -1369,7 +1723,7 @@ window.addEventListener('contextChanged', async (event: any) => {
     console.log(`🔧 Updated tools for ${config.name}:`, contextTools.map(t => t.name));
   }
   
-  ensureReadyBanner(`${config.name} - click Connect to start`);
+  ensureReadyBanner(`${config.name} - tap the microphone to start`);
 });
 
 // Mobile menu toggle
@@ -1405,6 +1759,32 @@ window.addEventListener('resize', checkMobile);
 // Initialize page
 document.addEventListener("DOMContentLoaded", () => {
   checkMobile();
+
+  // Set initial button state (must happen after DOM elements are loaded)
+  setVoiceButtonState(VoiceButtonState.IDLE);
+
+  // Initialize controllers BEFORE setting up event handlers
+  // This prevents "undefined" errors when users interact before initializeApp completes
+  console.log('🎛️ Initializing interaction controllers (sync)...');
+  interactionStateMachine = new InteractionStateMachine({
+    mode: 'voice',
+    armed: false,
+    handsFree: false
+  });
+
+  voiceChannelController = new VoiceChannelController();
+  textChannelController = new TextChannelController({
+    autoConnect: true,
+    maxRetries: 3
+  });
+
+  // Wire controllers together (sync)
+  textChannelController.setVoiceController(voiceChannelController);
+  textChannelController.setStateMachine(interactionStateMachine);
+  textChannelController.setConnectCallback(connect);
+
+  console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
+
   setupEventHandlers();
   initializeApp();
   // Optional autoconnect via ?autoconnect=1 or localStorage 'jarvis.autoconnect' = 'true'
@@ -1419,24 +1799,211 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Setup all event handlers after DOM is ready
 function setupEventHandlers(): void {
-  // Main action buttons
-  toggleConnectionBtn.onclick = () => {
-    if (isConnected) {
-      disconnect();
-    } else {
-      connect();
-    }
-  };
+  // Microphone button - modern voice interface with PTT support
+  if (pttBtn) {
+    pttBtn.onclick = async () => {
+      // Resume AudioContext from user gesture (Safari autoplay fix)
+      audioFeedback.resumeContext().catch(() => {});
 
-  // Clicking mic area while disconnected will auto-connect
-  const micContainer = document.getElementById('voiceButtonContainer');
-  // Capture pointer before it hits the disabled button so we can autoconnect
-  micContainer?.addEventListener('pointerdown', (e) => {
-    if (!isConnected && !isConnecting) {
-      e.preventDefault();
-      connect();
-    }
-  }, true);
+      // If not connected, clicking the button initiates connection
+      if (voiceButtonState === VoiceButtonState.IDLE) {
+        conversationMode = 'voice'; // Switch to voice mode when connecting
+        await connect();
+        return;
+      }
+    };
+
+    pttBtn.onpointerdown = async (e) => {
+      // Resume AudioContext from user gesture (Safari autoplay fix)
+      audioFeedback.resumeContext().catch(() => {});
+
+      // Only handle PTT if already connected and ready
+      if (!canStartPTT()) return;
+
+      conversationMode = 'voice'; // Switch to voice mode when using mic
+
+      // Transition to voice mode through state machine (ensures proper event emission)
+      if (interactionStateMachine.isTextMode()) {
+        interactionStateMachine.transitionToVoice({
+          armed: true,
+          handsFree: false
+        });
+      } else {
+        // Already in voice mode, just arm
+        interactionStateMachine.armVoice();
+      }
+
+      setVoiceButtonState(VoiceButtonState.SPEAKING);
+      await setMicState(true);
+      ensurePendingUserBubble();
+    };
+
+    pttBtn.onpointerup = pttBtn.onpointerleave = () => {
+      if (voiceButtonState !== VoiceButtonState.SPEAKING) return;
+
+      // MUTE through state machine (ensures proper event emission)
+      interactionStateMachine.muteVoice();
+
+      setVoiceButtonState(VoiceButtonState.READY);
+      setMicState(false);
+    };
+
+    // Keyboard navigation support (Phase 7 - Accessibility)
+    pttBtn.onkeydown = async (e: KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        audioFeedback.resumeContext().catch(() => {});
+
+        if (voiceButtonState === VoiceButtonState.IDLE) {
+          conversationMode = 'voice'; // Switch to voice mode when connecting
+          await connect();
+          return;
+        }
+
+        if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
+          conversationMode = 'voice'; // Switch to voice mode when using mic
+
+          // Transition to voice mode through state machine (ensures proper event emission)
+          if (interactionStateMachine.isTextMode()) {
+            interactionStateMachine.transitionToVoice({
+              armed: true,
+              handsFree: false
+            });
+          } else {
+            // Already in voice mode, just arm
+            interactionStateMachine.armVoice();
+          }
+
+          setVoiceButtonState(VoiceButtonState.SPEAKING);
+          await setMicState(true);
+          ensurePendingUserBubble();
+        }
+      }
+    };
+
+    pttBtn.onkeyup = (e: KeyboardEvent) => {
+      if ((e.key === ' ' || e.key === 'Enter') && voiceButtonState === VoiceButtonState.SPEAKING) {
+        // MUTE through state machine (ensures proper event emission)
+        interactionStateMachine.muteVoice();
+
+        setVoiceButtonState(VoiceButtonState.READY);
+        setMicState(false);
+      }
+    };
+
+    console.log('✅ Microphone button handlers attached');
+  } else {
+    console.error('❌ Microphone button (pttBtn) not found');
+  }
+
+  // Hands-Free Toggle Handler (Phase 11 - Voice/Text Separation)
+  if (handsFreeToggle) {
+    handsFreeToggle.addEventListener('change', () => {
+      const enabled = handsFreeToggle.checked;
+      console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
+
+      // CRITICAL: If enabling hands-free while in text mode, transition to voice mode first
+      // Otherwise voiceChannelController.setHandsFree() will arm the mic while state machine
+      // thinks we're still in text mode, breaking voice/text separation
+      if (enabled && interactionStateMachine.isTextMode()) {
+        console.log('[HandsFree] Transitioning from text to voice mode');
+        conversationMode = 'voice';
+        interactionStateMachine.transitionToVoice({
+          armed: false,
+          handsFree: true  // Will be set by setHandsFree below
+        });
+      }
+
+      // Update state machine
+      interactionStateMachine.setHandsFree(enabled);
+
+      // Update voice controller (now safe because we're in voice mode)
+      voiceChannelController.setHandsFree(enabled);
+
+      // Show toast
+      uiEnhancements.showToast(
+        enabled ? 'Hands-free mode enabled' : 'Hands-free mode disabled',
+        'info'
+      );
+
+      // Update status message when enabled
+      if (enabled && isConnected()) {
+        setStatusLabel('Voice listening continuously');
+      } else if (!enabled && isConnected()) {
+        clearStatusLabel();
+      }
+    });
+
+    console.log('✅ Hands-free toggle handler attached');
+  } else {
+    console.warn('⚠️ Hands-free toggle not found');
+  }
+
+  // Text input handlers (work independently of Zerg integration)
+  const textInput = document.getElementById('textInput') as HTMLInputElement;
+  const sendTextBtn = document.getElementById('sendTextBtn');
+
+  if (textInput && sendTextBtn) {
+    const handleTextCommand = async () => {
+      const text = textInput.value.trim();
+      if (!text) return;
+
+      console.log('💬 Text command:', text);
+
+      // Try to map to agent dispatch (only works if Zerg is available)
+      const agent = findAgentByIntent(text);
+
+      if (agent && jarvisClient) {
+        console.log(`🎯 Dispatching agent: ${agent.name}`);
+        textInput.value = '';
+
+        try {
+          const result = await jarvisClient.dispatch({ agent_id: agent.id });
+          console.log('✅ Agent dispatched:', result);
+          uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
+
+          addUserTurnToUI(text);
+          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
+        } catch (error: any) {
+          console.error('Dispatch failed:', error);
+          uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
+          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+        }
+      } else {
+        // Handle as regular conversation - use TextChannelController
+        textInput.value = '';
+        addUserTurnToUI(text);
+
+        // CRITICAL: Set conversation mode to text BEFORE sending
+        // This ensures auto-connect won't transition back to voice mode
+        conversationMode = 'text';
+
+        try {
+          // TextChannelController will handle:
+          // - Switching to text mode
+          // - Muting voice channel
+          // - Auto-connecting if needed
+          // - Error handling and retries
+          await textChannelController.sendText(text);
+          uiEnhancements.showToast('Message sent', 'success');
+        } catch (error: any) {
+          console.error('Failed to send text:', error);
+          uiEnhancements.showToast(`Failed to send message: ${error.message}`, 'error');
+        }
+      }
+    };
+
+    sendTextBtn.addEventListener('click', handleTextCommand);
+    textInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        handleTextCommand();
+      }
+    });
+
+    console.log('✅ Text input handlers attached');
+  } else {
+    console.warn('⚠️ Text input elements not found (textInput or sendTextBtn)');
+  }
 
   // Sync button
   syncNowBtn.onclick = async () => {
@@ -1461,7 +2028,7 @@ function setupEventHandlers(): void {
   console.log('✅ Event handlers set up successfully');
 
   // Add visual feedback that event handlers are ready
-  uiEnhancements.showToast('Application ready - click Connect to start', 'info');
+  uiEnhancements.showToast('Application ready - tap the microphone to start', 'info');
 }
 
 // Expose functions for testing
@@ -1475,6 +2042,11 @@ declare global {
     syncNow: () => Promise<{ pushed: number; pulled: number }>;
     flushLocal: () => Promise<void>;
     ConversationRenderer: typeof ConversationRenderer;
+    // Feedback preferences (Phase 6)
+    getFeedbackPreferences: () => FeedbackPreferences;
+    setHapticFeedback: (enabled: boolean) => void;
+    setAudioFeedback: (enabled: boolean) => void;
+    testAudioFeedback: () => void;
   }
 }
 
@@ -1489,6 +2061,32 @@ window.syncNow = async () => {
 window.flushLocal = async () => {
   if (!sessionManager) return;
   await sessionManager.flush();
+};
+
+// Feedback preference controls (Phase 6)
+window.getFeedbackPreferences = () => {
+  return { ...feedbackPrefs };
+};
+
+window.setHapticFeedback = (enabled: boolean) => {
+  feedbackPrefs.haptics = enabled;
+  saveFeedbackPreferences(feedbackPrefs);
+  console.log(`Haptic feedback ${enabled ? 'enabled' : 'disabled'}`);
+};
+
+window.setAudioFeedback = (enabled: boolean) => {
+  feedbackPrefs.audio = enabled;
+  audioFeedback.setEnabled(enabled);
+  saveFeedbackPreferences(feedbackPrefs);
+  console.log(`Audio feedback ${enabled ? 'enabled' : 'disabled'}`);
+};
+
+window.testAudioFeedback = () => {
+  console.log('Testing audio feedback...');
+  audioFeedback.playConnectChime();
+  setTimeout(() => audioFeedback.playVoiceTick(), 500);
+  setTimeout(() => audioFeedback.playErrorTone(), 1000);
+  console.log('Played: connect chime → voice tick → error tone');
 };
 
 // Debug function to check IndexedDB contents
@@ -1510,8 +2108,8 @@ window.debugConversations = async () => {
 // Initialize Jarvis-Zerg integration
 async function initializeJarvisIntegration() {
   try {
-    const zergApiURL = import.meta.env.VITE_ZERG_API_URL || 'http://localhost:47300';
-    const deviceSecret = import.meta.env.VITE_JARVIS_DEVICE_SECRET;
+    const zergApiURL = import.meta.env?.VITE_ZERG_API_URL || 'http://localhost:47300';
+    const deviceSecret = import.meta.env?.VITE_JARVIS_DEVICE_SECRET;
 
     if (!deviceSecret) {
       console.warn('⚠️ VITE_JARVIS_DEVICE_SECRET not configured - Zerg integration disabled');
@@ -1558,60 +2156,9 @@ async function initializeJarvisIntegration() {
       }
     }
 
-    // Set up text input handler
-    const textInput = document.getElementById('textInput') as HTMLInputElement;
-    const sendTextBtn = document.getElementById('sendTextBtn');
-
-    const handleTextCommand = async () => {
-      const text = textInput?.value.trim();
-      if (!text) return;
-
-      console.log('💬 Text command:', text);
-
-      // Try to map to agent dispatch
-      const agent = findAgentByIntent(text);
-
-      if (agent) {
-        console.log(`🎯 Dispatching agent: ${agent.name}`);
-        textInput.value = '';
-
-        try {
-          const result = await jarvisClient.dispatch({ agent_id: agent.id });
-          console.log('✅ Agent dispatched:', result);
-          uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
-
-          // Add message to UI
-          addUserTurnToUI(text);
-          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
-        } catch (error: any) {
-          console.error('Dispatch failed:', error);
-          uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
-          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
-        }
-      } else {
-        // Handle as regular conversation (if connected)
-        if (isConnected && session) {
-          textInput.value = '';
-          addUserTurnToUI(text);
-          session.send({ type: 'input_text', text });
-        } else {
-          uiEnhancements.showToast('Not connected - click Connect first', 'error');
-        }
-      }
-    };
-
-    sendTextBtn?.addEventListener('click', handleTextCommand);
-    textInput?.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        handleTextCommand();
-      }
-    });
-
-    console.log('✅ Text input mode enabled');
-
   } catch (error) {
     console.error('❌ Jarvis-Zerg integration failed:', error);
-    // Non-fatal - voice features still work
+    // Non-fatal - text input and voice features still work
   }
 }
 
@@ -1653,7 +2200,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 console.log('Jarvis PWA with Agents SDK ready', {
-  toggleConnectionBtn: !!toggleConnectionBtn,
   pttBtn: !!pttBtn,
   transcript: !!transcriptEl,
   newConversationBtn: !!newConversationBtn
