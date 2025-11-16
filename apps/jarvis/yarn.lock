@@ -421,10 +421,10 @@ __metadata:
 
 "@jarvis/core@file:../../packages/core::locator=%40jarvis%2Fweb%40workspace%3Aapps%2Fweb":
   version: 0.1.0
-  resolution: "@jarvis/core@file:../../packages/core#../../packages/core::hash=a405f5&locator=%40jarvis%2Fweb%40workspace%3Aapps%2Fweb"
+  resolution: "@jarvis/core@file:../../packages/core#../../packages/core::hash=7b0779&locator=%40jarvis%2Fweb%40workspace%3Aapps%2Fweb"
   dependencies:
     "@jarvis/data-local": "file:../data/local"
-  checksum: 10c0/bf67742f997ebc071ec745935f8cf80229d3ed8ae1aacdcb17033e4c7d14d104c5641bf5a2145b86a1c14da6789deeff8bc3c76b6499bfcf06a33eaedf5dd497
+  checksum: 10c0/f3e966297935dbee47b2b45556cc17e9be11888eb26263c27bb94434b9e75aeae31f7638fc4394c0752c712fca12ee0b905ece42c70749dbe33d46511f13e6ff
   languageName: node
   linkType: hard
 
@@ -445,9 +445,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@jarvis/data-local@file:../data/local::locator=%40jarvis%2Fcore%40file%3A..%2F..%2Fpackages%2Fcore%23..%2F..%2Fpackages%2Fcore%3A%3Ahash%3Da405f5%26locator%3D%2540jarvis%252Fweb%2540workspace%253Aapps%252Fweb":
+"@jarvis/data-local@file:../data/local::locator=%40jarvis%2Fcore%40file%3A..%2F..%2Fpackages%2Fcore%23..%2F..%2Fpackages%2Fcore%3A%3Ahash%3D7b0779%26locator%3D%2540jarvis%252Fweb%2540workspace%253Aapps%252Fweb":
   version: 0.1.0
-  resolution: "@jarvis/data-local@file:../data/local#../data/local::hash=83475e&locator=%40jarvis%2Fcore%40file%3A..%2F..%2Fpackages%2Fcore%23..%2F..%2Fpackages%2Fcore%3A%3Ahash%3Da405f5%26locator%3D%2540jarvis%252Fweb%2540workspace%253Aapps%252Fweb"
+  resolution: "@jarvis/data-local@file:../data/local#../data/local::hash=83475e&locator=%40jarvis%2Fcore%40file%3A..%2F..%2Fpackages%2Fcore%23..%2F..%2Fpackages%2Fcore%3A%3Ahash%3D7b0779%26locator%3D%2540jarvis%252Fweb%2540workspace%253Aapps%252Fweb"
   dependencies:
     idb: "npm:^8.0.0"
   checksum: 10c0/26ab22d05ba6c74e1fe6de8a32972bbc2e362468f4dec0a0406aa8fe32364ba6492ab07783ece26c9b7ae136dfca9036160b584112e34ffa0ef90d795bc0781e
