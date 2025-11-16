@@ -1,0 +1,189 @@
+/* Voice Button Styles (Simplified from 11 phases to 3 states) */
+
+/* Voice Button Base */
+.voice-button {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 3px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 10;
+}
+
+.voice-button svg {
+  width: 32px;
+  height: 32px;
+  color: var(--text-secondary);
+  transition: all 0.3s ease;
+}
+
+/* State 1: READY - Ready for interaction */
+.state-ready .voice-button {
+  border-color: var(--accent-purple);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%);
+  box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4);
+}
+
+.state-ready .voice-button:hover {
+  transform: scale(1.05);
+  box-shadow: var(--shadow-glow);
+}
+
+.state-ready .voice-button svg {
+  color: var(--accent-purple);
+}
+
+/* State 2: ACTIVE - Currently active (listening/speaking) */
+.state-active .voice-button {
+  border-color: var(--accent-pink);
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.state-active .voice-button svg {
+  color: var(--accent-pink);
+  animation: glow 1.5s ease-in-out infinite;
+}
+
+/* State 3: PROCESSING - Busy processing */
+.state-processing .voice-button {
+  border-color: var(--glass-border);
+  background: var(--glass-bg);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.state-processing .voice-button svg {
+  color: var(--text-muted);
+  animation: rotate 1s linear infinite;
+}
+
+/* Voice Status Label */
+.voice-status-label {
+  position: absolute;
+  bottom: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 20;
+}
+
+.voice-status-label[aria-live="polite"] {
+  opacity: 1;
+}
+
+/* Connect Button */
+#connectButton {
+  padding: 10px 20px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#connectButton:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--accent-purple);
+  color: var(--text-primary);
+  transform: translateY(-2px);
+}
+
+#connectButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#connectButton[aria-pressed="true"] {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+}
+
+/* Hands-Free Toggle */
+.hands-free-toggle {
+  position: absolute;
+  top: -40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.hands-free-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.hands-free-toggle label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hands-free-toggle input[type="checkbox"] {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  appearance: none;
+  background: var(--glass-border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.hands-free-toggle input[type="checkbox"]::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.hands-free-toggle input[type="checkbox"]:checked {
+  background: var(--accent-purple);
+}
+
+.hands-free-toggle input[type="checkbox"]:checked::before {
+  transform: translateX(14px);
+  background: white;
+}
+
+.hands-free-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

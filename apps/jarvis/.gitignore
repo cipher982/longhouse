@@ -91,3 +91,8 @@ apps/web/contexts/zeta/assets/
 company-logo.*
 company-favicon.*
 *-company.*
+
+# Package lock files (too large, generate locally)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

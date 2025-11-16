@@ -1,0 +1,130 @@
+/* Layout and grid styles */
+
+/* Main App Container */
+.app-container {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+  background: linear-gradient(180deg, #0a0e27 0%, #151935 100%);
+}
+
+/* Main Content Area */
+.main-content {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg-primary);
+}
+
+/* Main Header */
+.main-header {
+  padding: 24px 32px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.main-header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Header Actions */
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+/* Controls Row */
+.controls-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 24px 32px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid var(--glass-border);
+  min-height: 144px;
+}
+
+/* Text Input Group */
+.text-input-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 0 24px;
+  max-width: 600px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Voice Button Container (center column) */
+#voiceButtonContainer {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Connect Button (right column) */
+.connect-button-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 24px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .app-container {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    transform: translateX(-100%);
+    z-index: 1000;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .main-header {
+    padding: 16px 20px;
+  }
+
+  .controls-row {
+    padding: 16px 20px;
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .text-input-group {
+    padding: 0;
+  }
+
+  #voiceButtonContainer {
+    margin: 0 auto;
+  }
+
+  .connect-button-wrapper {
+    justify-content: center;
+    padding-right: 0;
+  }
+}

@@ -1,0 +1,110 @@
+/**
+ * Jarvis Voice Agent - Modular CSS Structure
+ *
+ * This file imports all CSS modules in the correct order.
+ * Total: ~1,085 lines split into 6 focused modules
+ *
+ * Refactored from monolithic styles.css to improve:
+ * - Maintainability
+ * - Code organization
+ * - Build performance
+ * - Developer experience
+ */
+
+/* Base styles and variables (70 lines) */
+@import './base.css';
+
+/* Layout and grid system (130 lines) */
+@import './layout.css';
+
+/* Sidebar component (170 lines) */
+@import './sidebar.css';
+
+/* Chat and conversation UI (200 lines) */
+@import './chat.css';
+
+/* Voice button and controls (180 lines) */
+@import './voice-button.css';
+
+/* Animations and transitions (200 lines) */
+@import './animations.css';
+
+/* Additional component styles can be added here as needed */
+
+/* Utility classes */
+.hidden {
+  display: none !important;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-left {
+  text-align: left;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.font-bold {
+  font-weight: 700;
+}
+
+.font-medium {
+  font-weight: 500;
+}
+
+.opacity-50 {
+  opacity: 0.5;
+}
+
+.opacity-70 {
+  opacity: 0.7;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.cursor-not-allowed {
+  cursor: not-allowed;
+}
+
+.select-none {
+  user-select: none;
+}
+
+/* Spacing utilities */
+.mt-1 { margin-top: 4px; }
+.mt-2 { margin-top: 8px; }
+.mt-3 { margin-top: 12px; }
+.mt-4 { margin-top: 16px; }
+
+.mb-1 { margin-bottom: 4px; }
+.mb-2 { margin-bottom: 8px; }
+.mb-3 { margin-bottom: 12px; }
+.mb-4 { margin-bottom: 16px; }
+
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+.p-4 { padding: 16px; }
+
+.gap-1 { gap: 4px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.gap-4 { gap: 16px; }
