@@ -17,6 +17,7 @@ export interface SessionConnectionOptions {
   audioElement?: HTMLAudioElement;
   tools?: any[];
   onTokenRequest?: () => Promise<string>;
+  existingAgent?: RealtimeAgent; // Optional: use existing agent instead of creating new one
 }
 
 /**
@@ -53,14 +54,18 @@ export class SessionHandler {
     try {
       this.isDestroying = false;
 
-      // Create the RealtimeAgent with context configuration
-      const agent = new RealtimeAgent({
+      // Use existing agent if provided, otherwise create new one
+      const agent = options.existingAgent || new RealtimeAgent({
         name: options.context.name,
         instructions: options.context.instructions,
         tools: options.tools || []
       });
 
-      logger.info(`🤖 Created agent: ${options.context.name} with ${options.tools?.length || 0} tools`);
+      if (options.existingAgent) {
+        logger.info(`🤖 Using existing agent: ${agent.name} with ${options.tools?.length || 0} tools`);
+      } else {
+        logger.info(`🤖 Created new agent: ${options.context.name} with ${options.tools?.length || 0} tools`);
+      }
 
       // Create WebRTC transport
       const transport = new OpenAIRealtimeWebRTC({
