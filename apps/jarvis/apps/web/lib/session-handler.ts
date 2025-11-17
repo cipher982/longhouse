@@ -126,10 +126,13 @@ export class SessionHandler {
     this.clearReconnectTimeout();
 
     try {
-      // Disconnect the actual session
+      // Disconnect the actual session (using any cast as disconnect might not be typed)
       if (this.currentSession) {
         logger.info('🔌 Disconnecting session...');
-        await this.currentSession.disconnect();
+        const sessionAny = this.currentSession as any;
+        if (sessionAny.disconnect) {
+          await sessionAny.disconnect();
+        }
         this.currentSession = undefined;
       }
 

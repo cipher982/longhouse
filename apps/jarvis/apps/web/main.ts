@@ -23,6 +23,7 @@ import {
 } from './lib/config';
 
 import { stateManager } from './lib/state-manager';
+import { sessionHandler } from './lib/session-handler';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -1159,31 +1160,19 @@ async function connect(): Promise<void> {
     }
     radialViz?.provideStream(sharedMicStream);
 
-    // Create session
-    const transport = new OpenAIRealtimeWebRTC({
+    // Use sessionHandler to create and connect session
+    const tools = currentContext ? createContextTools(currentContext) : [];
+    const { session: newSession, agent: sessionAgent } = await sessionHandler.connect({
+      context: currentContext!,
       mediaStream: sharedMicStream || undefined,
       audioElement: remoteAudio || undefined,
+      tools,
+      onTokenRequest: getSessionToken
     });
 
-    session = new RealtimeSession(agent, {
-      transport,
-      model: 'gpt-realtime',
-      config: {
-        inputAudioTranscription: { model: 'whisper-1' },
-        audio: {
-          output: {
-            voice: 'verse',
-            speed: 1.3  // 30% faster speech
-          }
-        },
-        turnDetection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500
-        }
-      }
-    });
+    // Update global references
+    session = newSession;
+    // Note: agent is already set during initialization, sessionAgent should match
 
     // Setup event listeners
     setupSessionEvents();
@@ -1191,12 +1180,6 @@ async function connect(): Promise<void> {
     // Wire session to controllers
     voiceChannelController.setSession(session);
     textChannelController.setSession(session);
-
-    // Get ephemeral token and connect
-    console.log('🎫 Getting session token...');
-    const token = await getSessionToken();
-    console.log('🎫 Token received, connecting to OpenAI...');
-    await session?.connect({ apiKey: token });
     console.log('🎉 Connection established!');
 
     logger.success('Connected successfully with Agents SDK');
@@ -1409,11 +1392,11 @@ async function disconnect() {
   await setMicState(false);
 
   try {
-    if (session) {
-      await (session as any).disconnect?.();
-      console.log('✅ Disconnected successfully');
-      uiEnhancements.showToast('Disconnected', 'info');
-    }
+    // Use sessionHandler to disconnect
+    await sessionHandler.disconnect();
+    session = null; // Clear global reference
+    console.log('✅ Disconnected successfully');
+    uiEnhancements.showToast('Disconnected', 'info');
   } catch (error) {
     logger.error('Disconnect error', error);
     console.error('❌ Disconnect error:', error);
@@ -1508,14 +1491,31 @@ async function initializeApp(): Promise<void> {
       sidebar: !!sidebar,
       voiceButtonContainer: !!voiceButtonContainer
     });
-    
+
+    // Configure session handler callbacks
+    sessionHandler.setConfig({
+      onSessionReady: (readySession, readyAgent) => {
+        console.log('📱 Session handler: Session ready', {
+          agent: readyAgent.name,
+          session: !!readySession
+        });
+      },
+      onSessionError: (error) => {
+        console.error('❌ Session handler: Session error', error);
+        uiEnhancements.showToast('Session error - check console', 'error');
+      },
+      onSessionEnded: () => {
+        console.log('👋 Session handler: Session ended');
+      }
+    });
+
     // Load the appropriate context
     const contextName = await contextLoader.autoDetectContext();
     currentContext = await contextLoader.loadContext(contextName);
-    
+
     console.log(`✅ Loaded context: ${currentContext.name}`);
     console.log(`📋 Instructions: ${currentContext.instructions.substring(0, 100)}...`);
-    
+
     // Update UI with context branding
     updateUIForContext(currentContext);
     
