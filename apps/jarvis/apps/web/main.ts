@@ -26,6 +26,7 @@ import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
 import { voiceManager } from './lib/voice-manager';
 import { websocketHandler } from './lib/websocket-handler';
+import { feedbackSystem } from './lib/feedback-system';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -110,150 +111,8 @@ function triggerHaptic(pattern: number | number[]): void {
   }
 }
 
-// Audio feedback system using Web Audio API
-class AudioFeedback {
-  private audioContext: AudioContext | null = null;
-  private enabled: boolean;
-  private supported: boolean;
-
-  constructor(enabled: boolean) {
-    this.enabled = enabled;
-    // Check if Web Audio API is supported
-    this.supported = !!(window.AudioContext || (window as any).webkitAudioContext);
-  }
-
-  private getContext(): AudioContext | null {
-    if (!this.supported) return null;
-
-    if (!this.audioContext) {
-      try {
-        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      } catch (error) {
-        logger.warn('Web Audio API not supported', error);
-        this.supported = false;
-        return null;
-      }
-    }
-    return this.audioContext;
-  }
-
-  // Resume audio context (Safari autoplay fix) - must be called from user gesture
-  async resumeContext(): Promise<void> {
-    if (!this.supported) return;
-
-    const ctx = this.getContext();
-    if (!ctx) return;
-
-    if (ctx.state === 'suspended') {
-      try {
-        await ctx.resume();
-        logger.debug('AudioContext resumed from user gesture');
-      } catch (error) {
-        // Silently fail - might not be a user gesture context
-      }
-    }
-  }
-
-  setEnabled(enabled: boolean): void {
-    this.enabled = enabled;
-  }
-
-  // Soft chime (connection success)
-  playConnectChime(): void {
-    if (!this.enabled || !this.supported) return;
-
-    try {
-      const ctx = this.getContext();
-      if (!ctx) return;
-
-      // Resume context if suspended (Safari autoplay fix)
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {}); // Best effort
-      }
-
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      oscillator.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
-      oscillator.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1); // E5
-
-      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
-
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.2);
-    } catch (error) {
-      // Silently fail if audio not supported
-    }
-  }
-
-  // Brief tick (voice detected)
-  playVoiceTick(): void {
-    if (!this.enabled || !this.supported) return;
-
-    try {
-      const ctx = this.getContext();
-      if (!ctx) return;
-
-      // Resume context if suspended (Safari autoplay fix)
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {}); // Best effort
-      }
-
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
-      gainNode.gain.setValueAtTime(0.05, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
-
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.05);
-    } catch (error) {
-      // Silently fail
-    }
-  }
-
-  // Gentle error tone
-  playErrorTone(): void {
-    if (!this.enabled || !this.supported) return;
-
-    try {
-      const ctx = this.getContext();
-      if (!ctx) return;
-
-      // Resume context if suspended (Safari autoplay fix)
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(() => {}); // Best effort
-      }
-
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      oscillator.frequency.setValueAtTime(300, ctx.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.3);
-
-      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.3);
-    } catch (error) {
-      // Silently fail
-    }
-  }
-}
-
-const audioFeedback = new AudioFeedback(feedbackPrefs.audio);
+// Use feedbackSystem singleton from module
+const audioFeedback = feedbackSystem;
 
 // Centralized State Handler (Single Source of Truth)
 function setVoiceButtonState(newState: VoiceButtonState): void {
