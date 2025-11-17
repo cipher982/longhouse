@@ -1193,15 +1193,14 @@ async function connect(): Promise<void> {
       mediaStream: sharedMicStream || undefined,
       audioElement: remoteAudio || undefined,
       tools,
-      onTokenRequest: getSessionToken,
-      existingAgent: agent // Pass the existing agent to reuse it
+      onTokenRequest: getSessionToken
     });
 
-    // Update global references via stateManager
+    // Update global references with the new agent (ensures fresh tools)
     session = newSession;
-    // agent remains the same since we're reusing it
+    agent = sessionAgent; // Update to the new agent with fresh tools
     stateManager.setSession(newSession);
-    // No need to update agent in stateManager since we're using the same one
+    stateManager.setAgent(sessionAgent); // Update stateManager with new agent
 
     // Setup event listeners
     setupSessionEvents();
