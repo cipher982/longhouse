@@ -1687,14 +1687,14 @@ function setupEventHandlers(): void {
       }
     };
 
-    // Set up mouse/touch PTT handlers via voiceManager (keeps keyboard separate for accessibility)
+    // Set up mouse/touch PTT handlers via voiceManager
     voiceManager.setupVoiceButton(pttBtn);
 
     // Set up keyboard shortcuts for PTT (Space bar) - Phase 7 accessibility
     voiceManager.setupKeyboardShortcuts();
 
     // Button-level keyboard handlers for Space/Enter (critical for accessibility)
-    // These handle keyboard activation on the focused button
+    // CRITICAL: Must delegate to voiceManager to properly update state!
     pttBtn.onkeydown = async (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
@@ -1707,33 +1707,27 @@ function setupEventHandlers(): void {
         }
 
         if (canStartPTT() && stateManager.isReady()) {
-          conversationMode = 'voice'; // Switch to voice mode when using mic
+          // CRITICAL: Delegate to voiceManager to update state properly!
+          voiceManager.handlePTTPress();
 
-          // Transition to voice mode through state machine
-          if (interactionStateMachine.isTextMode()) {
-            interactionStateMachine.transitionToVoice({
-              armed: true,
-              handsFree: false
-            });
-          } else {
-            // Already in voice mode, just arm
-            interactionStateMachine.armVoice();
-          }
-
-          // Note: voiceManager already updated stateManager.setVoiceButtonState(SPEAKING)
-          await setMicState(true);
-          ensurePendingUserBubble();
+          // voiceManager's callback already handles:
+          // - stateManager.setVoiceButtonState(SPEAKING)
+          // - interactionStateMachine.armVoice()
+          // - setMicState(true)
+          // - ensurePendingUserBubble()
         }
       }
     };
 
     pttBtn.onkeyup = (e: KeyboardEvent) => {
-      if ((e.key === ' ' || e.key === 'Enter') && stateManager.isSpeaking()) {
-        // MUTE through state machine
-        interactionStateMachine.muteVoice();
+      if (e.key === ' ' || e.key === 'Enter') {
+        // CRITICAL: Delegate to voiceManager to update state properly!
+        voiceManager.handlePTTRelease();
 
-        // voiceManager handles the button state, we just need to handle mic/audio
-        setMicState(false).catch(() => {});
+        // voiceManager's callback already handles:
+        // - interactionStateMachine.muteVoice()
+        // - stateManager.setVoiceButtonState(READY) (for PTT)
+        // - setMicState(false)
       }
     };
 
