@@ -12,7 +12,7 @@ import type { VoiceAgentConfig } from './contexts/types';
 import { uiEnhancements } from './lib/ui-enhancements';
 import { RadialVisualizer } from './lib/radial-visualizer';
 import { InteractionStateMachine } from './lib/interaction-state-machine';
-import { VoiceChannelController } from './lib/voice-channel-controller';
+import { VoiceControllerCompat, type VoiceState } from './lib/voice-controller';
 import { TextChannelController } from './lib/text-channel-controller';
 import {
   VoiceButtonState,
@@ -24,7 +24,6 @@ import {
 
 import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
-import { voiceManager } from './lib/voice-manager';
 import { websocketHandler } from './lib/websocket-handler';
 import { feedbackSystem } from './lib/feedback-system';
 import { eventBus } from './lib/event-bus';
@@ -67,7 +66,7 @@ let pendingUserText = '';
 
 // Voice/Text Separation Controllers (Phase 11 - Jarvis Voice/Text Separation)
 let interactionStateMachine: InteractionStateMachine;
-let voiceChannelController: VoiceChannelController;
+let voiceController: VoiceControllerCompat;
 let textChannelController: TextChannelController;
 
 // Haptic & Audio Feedback System (Phase 6)
@@ -1044,7 +1043,7 @@ async function connect(): Promise<void> {
 
     // Request mic once through VoiceChannelController and share it
     if (!sharedMicStream) {
-      sharedMicStream = await voiceChannelController.requestMicrophone();
+      sharedMicStream = await voiceController.requestMicrophone();
     }
     radialViz?.provideStream(sharedMicStream);
 
@@ -1068,21 +1067,17 @@ async function connect(): Promise<void> {
     websocketHandler.setupSessionHandlers(session);
 
     // Additional session event handlers (beyond websocketHandler's basic routing)
-    // VAD speech detection - delegate to voiceChannelController with UI updates
+    // VAD speech detection - delegate to voiceController
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
       if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
-        voiceChannelController.handleSpeechStart();
-        // Route VAD state change to voiceManager for UI updates
-        voiceManager.handleVADStateChange(true);
+        voiceController.handleSpeechStart();
       }
 
       if (t.includes('input_audio_buffer') &&
           (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
-        voiceChannelController.handleSpeechStop();
-        // Route VAD state change to voiceManager for UI updates
-        voiceManager.handleVADStateChange(false);
+        voiceController.handleSpeechStop();
       }
 
       if (t.startsWith('response.output_audio')) {
@@ -1109,7 +1104,7 @@ async function connect(): Promise<void> {
     });
 
     // Wire session to controllers
-    voiceChannelController.setSession(session);
+    voiceController.setSession(session);
     textChannelController.setSession(session);
     console.log('🎉 Connection established!');
 
@@ -1398,7 +1393,7 @@ async function initializeApp(): Promise<void> {
 
     // Run async initialization for controllers (already created synchronously in DOMContentLoaded)
     console.log('🎛️ Running async controller initialization...');
-    await voiceChannelController.initialize();
+    await voiceController.initialize();
     await textChannelController.initialize();
     console.log('✅ Controller async initialization complete');
 
@@ -1564,70 +1559,74 @@ document.addEventListener("DOMContentLoaded", () => {
     handsFree: false
   });
 
-  voiceChannelController = new VoiceChannelController();
+  // voiceController is already a singleton, just configure it
   textChannelController = new TextChannelController({
     autoConnect: true,
     maxRetries: 3
   });
 
   // Wire controllers together (sync)
-  textChannelController.setVoiceController(voiceChannelController);
+  textChannelController.setVoiceController(voiceController as any);  // VoiceControllerCompat is compatible
   textChannelController.setStateMachine(interactionStateMachine);
   textChannelController.setConnectCallback(connect);
 
   console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
 
-  // Configure voiceManager with callbacks for PTT handling
-  voiceManager.setConfig({
-    onPTTPress: async () => {
-      // Resume AudioContext from user gesture (Safari autoplay fix)
-      audioFeedback.resumeContext().catch(() => {});
-
-      conversationMode = 'voice'; // Switch to voice mode when using mic
-
-      // Transition to voice mode through state machine (ensures proper event emission)
-      if (interactionStateMachine.isTextMode()) {
-        interactionStateMachine.transitionToVoice({
-          armed: true,
-          handsFree: false
-        });
+  // Configure voiceController with state change callbacks
+  voiceController = new VoiceControllerCompat({
+    onStateChange: (state: VoiceState) => {
+      // Update UI based on voice state
+      if (state.pttActive) {
+        stateManager.setVoiceButtonState(VoiceButtonState.SPEAKING);
+      } else if (state.armed) {
+        stateManager.setVoiceButtonState(VoiceButtonState.READY);
       } else {
-        // Already in voice mode, just arm
-        interactionStateMachine.armVoice();
+        stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
       }
 
-      // Note: voiceManager already updated stateManager.setVoiceButtonState(SPEAKING)
-      await setMicState(true);
-      ensurePendingUserBubble();
-    },
-    onPTTRelease: () => {
-      // MUTE through state machine (ensures proper event emission)
-      interactionStateMachine.muteVoice();
+      // Handle mode transitions
+      if (state.active && conversationMode !== 'voice') {
+        conversationMode = 'voice';
+        if (interactionStateMachine.isTextMode()) {
+          interactionStateMachine.transitionToVoice({
+            armed: state.armed,
+            handsFree: state.handsFree
+          });
+        }
+      }
 
-      // voiceManager handles the button state, we just need to handle mic/audio
-      // (setMicState handles the audio stream and UI beyond button state)
-      setMicState(false).catch(() => {});
-    },
-    onVADStateChange: (active) => {
-      // Handle VAD state changes - voiceManager handles button state
-      // We just need to handle audio, UI extras, and pending bubble
-      if (active) {
+      // Handle audio feedback
+      if (state.vadActive) {
         audioFeedback.playVoiceTick();
         setListeningMode(true).catch(() => {});
         ensurePendingUserBubble();
       } else {
         setListeningMode(false).catch(() => {});
       }
+
+      // Handle microphone state
+      if (state.active) {
+        setMicState(true).catch(() => {});
+        ensurePendingUserBubble();
+      } else {
+        setMicState(false).catch(() => {});
+      }
+    },
+    onFinalTranscript: (text: string) => {
+      handleUserTranscript(text);
+    },
+    onError: (error: Error) => {
+      logger.error('Voice controller error:', error);
+      setTranscript(`Voice error: ${error.message}`, true);
     }
-    // onTranscript removed - now handled via eventBus listener for voice_channel:transcript
   });
 
   // Configure websocketHandler with callbacks for event processing
   websocketHandler.setConfig({
     onTranscript: (text, isFinal) => {
-      // Route ALL transcripts through voiceChannelController first for gating
+      // Route ALL transcripts through voiceController for gating
       // This handles the critical "final transcript after PTT release" case
-      voiceChannelController.handleTranscript(text, isFinal);
+      voiceController.handleTranscript(text, isFinal);
     },
     onAssistantMessage: (text) => {
       // Route assistant messages to streaming handler
@@ -1660,19 +1659,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Setup all event handlers after DOM is ready
 function setupEventHandlers(): void {
-  // Listen for gated transcript events from voiceChannelController
-  eventBus.on('voice_channel:transcript', (data: { transcript: string; isFinal: boolean }) => {
-    const { transcript, isFinal } = data;
-
-    // Update UI and delegate to voiceManager for state management
-    if (!isFinal) {
-      updatePendingUserPlaceholder(transcript);
-      voiceManager.handleTranscript(transcript, isFinal);
-    } else {
-      handleUserTranscript(transcript);
-      voiceManager.handleTranscript(transcript, isFinal);
-    }
-  });
+  // Transcript events now handled internally by voiceController
+  // (no longer need eventBus for voice_channel:transcript)
 
   // Microphone button - modern voice interface with PTT support
   if (pttBtn) {
@@ -1688,14 +1676,14 @@ function setupEventHandlers(): void {
       }
     };
 
-    // Set up mouse/touch PTT handlers via voiceManager
-    voiceManager.setupVoiceButton(pttBtn);
+    // Set up mouse/touch PTT handlers via voiceController
+    voiceController.setupButtonHandlers(pttBtn);
 
     // Set up keyboard shortcuts for PTT (Space bar) - Phase 7 accessibility
-    voiceManager.setupKeyboardShortcuts();
+    voiceController.setupKeyboardHandlers(pttBtn);
 
     // Button-level keyboard handlers for Space/Enter (critical for accessibility)
-    // CRITICAL: Must delegate to voiceManager to properly update state!
+    // CRITICAL: Must delegate to voiceController to properly update state!
     pttBtn.onkeydown = async (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
@@ -1708,10 +1696,10 @@ function setupEventHandlers(): void {
         }
 
         if (canStartPTT() && stateManager.isReady()) {
-          // CRITICAL: Delegate to voiceManager to update state properly!
-          voiceManager.handlePTTPress();
+          // CRITICAL: Delegate to voiceController to update state properly!
+          voiceController.startPTT();
 
-          // voiceManager's callback already handles:
+          // voiceController's state change callback already handles:
           // - stateManager.setVoiceButtonState(SPEAKING)
           // - interactionStateMachine.armVoice()
           // - setMicState(true)
@@ -1722,10 +1710,10 @@ function setupEventHandlers(): void {
 
     pttBtn.onkeyup = (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
-        // CRITICAL: Delegate to voiceManager to update state properly!
-        voiceManager.handlePTTRelease();
+        // CRITICAL: Delegate to voiceController to update state properly!
+        voiceController.stopPTT();
 
-        // voiceManager's callback already handles:
+        // voiceController's state change callback already handles:
         // - interactionStateMachine.muteVoice()
         // - stateManager.setVoiceButtonState(READY) (for PTT)
         // - setMicState(false)
@@ -1744,7 +1732,7 @@ function setupEventHandlers(): void {
       console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
       // CRITICAL: If enabling hands-free while in text mode, transition to voice mode first
-      // Otherwise voiceChannelController.setHandsFree() will arm the mic while state machine
+      // Otherwise voiceController.setHandsFree() will arm the mic while state machine
       // thinks we're still in text mode, breaking voice/text separation
       if (enabled && interactionStateMachine.isTextMode()) {
         console.log('[HandsFree] Transitioning from text to voice mode');
@@ -1759,10 +1747,7 @@ function setupEventHandlers(): void {
       interactionStateMachine.setHandsFree(enabled);
 
       // Update voice controller (now safe because we're in voice mode)
-      voiceChannelController.setHandsFree(enabled);
-
-      // Update voiceManager to track hands-free state
-      voiceManager.handleHandsFreeToggle(enabled);
+      voiceController.setHandsFree(enabled);
 
       // Show toast
       uiEnhancements.showToast(
