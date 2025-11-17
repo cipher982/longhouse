@@ -3,9 +3,21 @@
  * Manages OpenAI Realtime session lifecycle
  */
 
-import { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
+import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 import { logger } from '@jarvis/core';
-import { VoiceButtonState } from './config';
+import { VoiceButtonState, CONFIG } from './config';
+import type { VoiceAgentConfig } from '../contexts/types';
+
+/**
+ * Session connection options
+ */
+export interface SessionConnectionOptions {
+  context: VoiceAgentConfig;
+  mediaStream?: MediaStream;
+  audioElement?: HTMLAudioElement;
+  tools?: any[];
+  onTokenRequest?: () => Promise<string>;
+}
 
 /**
  * Session handler configuration
@@ -14,6 +26,7 @@ export interface SessionHandlerConfig {
   onSessionReady?: (session: RealtimeSession, agent: RealtimeAgent) => void;
   onSessionError?: (error: Error) => void;
   onSessionEnded?: () => void;
+  onSessionEvent?: (event: string, data: any) => void;
 }
 
 /**
@@ -23,6 +36,8 @@ export class SessionHandler {
   private config: SessionHandlerConfig = {};
   private reconnectTimeout?: NodeJS.Timeout;
   private isDestroying = false;
+  private currentSession?: RealtimeSession;
+  private currentAgent?: RealtimeAgent;
 
   /**
    * Set configuration
@@ -32,26 +47,74 @@ export class SessionHandler {
   }
 
   /**
-   * Create and connect a session (placeholder implementation)
+   * Create and connect a session with real OpenAI implementation
    */
-  async connect(context: any): Promise<void> {
+  async connect(options: SessionConnectionOptions): Promise<{ session: RealtimeSession; agent: RealtimeAgent }> {
     try {
       this.isDestroying = false;
 
-      // Placeholder - actual implementation would create real session
-      // This is a thin wrapper to demonstrate the modular architecture
-      const mockAgent = {} as any;
-      const mockSession = {} as any;
+      // Create the RealtimeAgent with context configuration
+      const agent = new RealtimeAgent({
+        name: options.context.name,
+        instructions: options.context.instructions,
+        tools: options.tools || []
+      });
+
+      logger.info(`🤖 Created agent: ${options.context.name} with ${options.tools?.length || 0} tools`);
+
+      // Create WebRTC transport
+      const transport = new OpenAIRealtimeWebRTC({
+        mediaStream: options.mediaStream,
+        audioElement: options.audioElement,
+      });
+
+      // Create the RealtimeSession
+      const session = new RealtimeSession(agent, {
+        transport,
+        model: 'gpt-realtime',
+        config: {
+          inputAudioTranscription: { model: 'whisper-1' },
+          audio: {
+            output: {
+              voice: 'verse',
+              speed: 1.3  // 30% faster speech
+            }
+          },
+          turnDetection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500
+          }
+        }
+      });
+
+      // Store references
+      this.currentSession = session;
+      this.currentAgent = agent;
+
+      // Get token and connect
+      if (options.onTokenRequest) {
+        logger.info('🎫 Requesting session token...');
+        const token = await options.onTokenRequest();
+        logger.info('🔌 Connecting to OpenAI Realtime...');
+        await session.connect({ apiKey: token });
+      } else {
+        throw new Error('No token request handler provided');
+      }
 
       // Success feedback
-      logger.info('Session handler initialized (placeholder)');
+      logger.info('✅ Session connected successfully');
 
       // Notify callback
-      this.config.onSessionReady?.(mockSession, mockAgent);
+      this.config.onSessionReady?.(session, agent);
+
+      return { session, agent };
 
     } catch (error) {
-      logger.error('Failed to connect:', error);
+      logger.error('❌ Failed to connect session:', error);
       this.config.onSessionError?.(error as Error);
+      throw error;
     }
   }
 
@@ -63,11 +126,33 @@ export class SessionHandler {
     this.clearReconnectTimeout();
 
     try {
-      // Reset state
+      // Disconnect the actual session
+      if (this.currentSession) {
+        logger.info('🔌 Disconnecting session...');
+        await this.currentSession.disconnect();
+        this.currentSession = undefined;
+      }
+
+      // Clear agent reference
+      this.currentAgent = undefined;
+
+      // Notify callback
       this.config.onSessionEnded?.();
+
+      logger.info('✅ Session disconnected');
     } catch (error) {
-      logger.error('Error during disconnect:', error);
+      logger.error('❌ Error during disconnect:', error);
     }
+  }
+
+  /**
+   * Get current session and agent
+   */
+  getCurrent(): { session?: RealtimeSession; agent?: RealtimeAgent } {
+    return {
+      session: this.currentSession,
+      agent: this.currentAgent
+    };
   }
 
   /**
