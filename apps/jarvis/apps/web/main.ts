@@ -45,7 +45,7 @@ let conversationRenderer: ConversationRenderer | null = null;
 // Removed: currentStreamingTurn - now using currentStreamingMessageId with ConversationRenderer
 let currentStreamingText = '';
 let currentConversationId: string | null = null;
-let voiceButtonState: VoiceButtonState = VoiceButtonState.IDLE;
+// voiceButtonState now managed by stateManager
 let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
 // Legacy DOM element placeholders removed in favor of renderer-based state
@@ -255,11 +255,12 @@ const audioFeedback = new AudioFeedback(feedbackPrefs.audio);
 
 // Centralized State Handler (Single Source of Truth)
 function setVoiceButtonState(newState: VoiceButtonState): void {
-  if (voiceButtonState === newState) return; // No change needed
+  const currentState = stateManager.getState().voiceButtonState;
+  if (currentState === newState) return; // No change needed
   if (!pttBtn) return; // Guard against early calls before DOM ready
 
-  const oldState = voiceButtonState;
-  voiceButtonState = newState;
+  const oldState = currentState;
+  stateManager.setVoiceButtonState(newState);
 
   // Remove all state classes
   pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
@@ -323,18 +324,19 @@ function clearStatusLabel(): void {
   setStatusLabel(null);
 }
 
-// State check helpers (replace boolean flags)
+// State check helpers (replace boolean flags) - delegating to stateManager
 function isConnected(): boolean {
-  return voiceButtonState !== VoiceButtonState.IDLE &&
-         voiceButtonState !== VoiceButtonState.CONNECTING;
+  const state = stateManager.getState().voiceButtonState;
+  return state !== VoiceButtonState.IDLE &&
+         state !== VoiceButtonState.CONNECTING;
 }
 
 function isConnecting(): boolean {
-  return voiceButtonState === VoiceButtonState.CONNECTING;
+  return stateManager.isConnecting();
 }
 
 function canStartPTT(): boolean {
-  return voiceButtonState === VoiceButtonState.READY;
+  return stateManager.isReady();
 }
 
 // DOM elements
@@ -1170,8 +1172,9 @@ async function connect(): Promise<void> {
       onTokenRequest: getSessionToken
     });
 
-    // Update global references
+    // Update global references via stateManager
     session = newSession;
+    stateManager.setSession(newSession);
     // Note: agent is already set during initialization, sessionAgent should match
 
     // Setup event listeners
@@ -1333,7 +1336,7 @@ function handleResponseComplete(event: any): void {
   }
 
   // Return to ready state after assistant finishes responding
-  if (voiceButtonState === VoiceButtonState.RESPONDING) {
+  if (stateManager.isResponding()) {
     setVoiceButtonState(VoiceButtonState.READY);
   }
 }
@@ -1395,6 +1398,7 @@ async function disconnect() {
     // Use sessionHandler to disconnect
     await sessionHandler.disconnect();
     session = null; // Clear global reference
+    stateManager.setSession(null);
     console.log('✅ Disconnected successfully');
     uiEnhancements.showToast('Disconnected', 'info');
   } catch (error) {
@@ -1512,6 +1516,7 @@ async function initializeApp(): Promise<void> {
     // Load the appropriate context
     const contextName = await contextLoader.autoDetectContext();
     currentContext = await contextLoader.loadContext(contextName);
+    stateManager.setContext(currentContext);
 
     console.log(`✅ Loaded context: ${currentContext.name}`);
     console.log(`📋 Instructions: ${currentContext.instructions.substring(0, 100)}...`);
@@ -1521,7 +1526,9 @@ async function initializeApp(): Promise<void> {
     
     // Initialize session manager with context-specific data loading
     sessionManager = createSessionManagerForContext(currentContext);
+    stateManager.setSessionManager(sessionManager);
     currentConversationId = await sessionManager.initializeSession(currentContext, contextName);
+    stateManager.setConversationId(currentConversationId);
     
     // Initialize conversation UI
     conversationUI = new ConversationUI();
@@ -1546,6 +1553,7 @@ async function initializeApp(): Promise<void> {
       instructions: currentContext.instructions,
       tools: contextTools
     });
+    stateManager.setAgent(agent);
     
     console.log(`🔧 Added ${contextTools.length} tools for ${currentContext.name}:`, contextTools.map(t => t.name));
 
@@ -1574,6 +1582,7 @@ async function initializeApp(): Promise<void> {
       name: 'Voice Agent',
       instructions: 'You are a helpful AI assistant.'
     });
+    stateManager.setAgent(agent);
   }
 }
 
@@ -1628,6 +1637,7 @@ window.addEventListener('contextChanged', async (event: any) => {
   console.log(`🔄 Context changed to: ${contextName}`);
   
   currentContext = config;
+  stateManager.setContext(config);
   updateUIForContext(config);
   
   // End current session and reinitialize with new context
@@ -1636,7 +1646,9 @@ window.addEventListener('contextChanged', async (event: any) => {
   }
 
   sessionManager = createSessionManagerForContext(config);
+  stateManager.setSessionManager(sessionManager);
   currentConversationId = await sessionManager.initializeSession(config, contextName);
+  stateManager.setConversationId(currentConversationId);
 
   if (conversationUI) {
     conversationUI.setSessionManager(sessionManager);
@@ -1660,6 +1672,7 @@ window.addEventListener('contextChanged', async (event: any) => {
       instructions: config.instructions,
       tools: contextTools
     });
+    stateManager.setAgent(agent);
     console.log(`🔧 Updated tools for ${config.name}:`, contextTools.map(t => t.name));
   }
   
@@ -1746,7 +1759,7 @@ function setupEventHandlers(): void {
       audioFeedback.resumeContext().catch(() => {});
 
       // If not connected, clicking the button initiates connection
-      if (voiceButtonState === VoiceButtonState.IDLE) {
+      if (stateManager.isIdle()) {
         conversationMode = 'voice'; // Switch to voice mode when connecting
         await connect();
         return;
@@ -1779,7 +1792,7 @@ function setupEventHandlers(): void {
     };
 
     pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-      if (voiceButtonState !== VoiceButtonState.SPEAKING) return;
+      if (!stateManager.isSpeaking()) return;
 
       // MUTE through state machine (ensures proper event emission)
       interactionStateMachine.muteVoice();
@@ -1794,13 +1807,13 @@ function setupEventHandlers(): void {
         e.preventDefault();
         audioFeedback.resumeContext().catch(() => {});
 
-        if (voiceButtonState === VoiceButtonState.IDLE) {
+        if (stateManager.isIdle()) {
           conversationMode = 'voice'; // Switch to voice mode when connecting
           await connect();
           return;
         }
 
-        if (canStartPTT() && voiceButtonState === VoiceButtonState.READY) {
+        if (canStartPTT() && stateManager.isReady()) {
           conversationMode = 'voice'; // Switch to voice mode when using mic
 
           // Transition to voice mode through state machine (ensures proper event emission)
@@ -1822,7 +1835,7 @@ function setupEventHandlers(): void {
     };
 
     pttBtn.onkeyup = (e: KeyboardEvent) => {
-      if ((e.key === ' ' || e.key === 'Enter') && voiceButtonState === VoiceButtonState.SPEAKING) {
+      if ((e.key === ' ' || e.key === 'Enter') && stateManager.isSpeaking()) {
         // MUTE through state machine (ensures proper event emission)
         interactionStateMachine.muteVoice();
 
