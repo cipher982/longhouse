@@ -147,7 +147,7 @@
 }
 
 /* Send Button */
-#sendButton {
+#sendTextBtn {
   padding: 12px 20px;
   background: var(--primary-gradient);
   border: none;
@@ -159,12 +159,12 @@
   transition: all 0.2s ease;
 }
 
-#sendButton:hover:not(:disabled) {
+#sendTextBtn:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
 }
 
-#sendButton:disabled {
+#sendTextBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
