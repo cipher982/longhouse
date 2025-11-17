@@ -32,7 +32,7 @@ describe('TextChannelController', () => {
     // Mock session
     mockSession = {
       sendMessage: vi.fn()
-    };
+    } as any;
 
     textController.setSession(mockSession);
     textController.setVoiceController(voiceController);
@@ -104,7 +104,7 @@ describe('TextChannelController', () => {
         // Simulate successful connection by setting the session
         const mockConnectedSession = {
           sendMessage: vi.fn().mockResolvedValue(undefined)
-        };
+        } as any;
         autoConnectController.setSession(mockConnectedSession);
       });
 
