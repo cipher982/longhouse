@@ -25,6 +25,7 @@ import {
 import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
 import { voiceManager } from './lib/voice-manager';
+import { websocketHandler } from './lib/websocket-handler';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -1203,8 +1204,45 @@ async function connect(): Promise<void> {
     stateManager.setSession(newSession);
     stateManager.setAgent(sessionAgent); // Update stateManager with new agent
 
-    // Setup event listeners
-    setupSessionEvents();
+    // Setup event listeners via websocketHandler
+    websocketHandler.setupSessionHandlers(session);
+
+    // Additional session event handlers (beyond websocketHandler's basic routing)
+    // VAD speech detection - delegate to voiceChannelController with UI updates
+    session.on('transport_event', async (event: any) => {
+      const t = event.type || '';
+
+      if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
+        voiceChannelController.handleSpeechStart();
+      }
+
+      if (t.includes('input_audio_buffer') &&
+          (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
+        voiceChannelController.handleSpeechStop();
+      }
+
+      if (t.startsWith('response.output_audio')) {
+        void startSpeakerMonitor();
+      }
+
+      if (t === 'response.done') {
+        handleResponseComplete(event);
+      }
+
+      if (t === 'conversation.item.added') {
+        handleConversationItemAdded(event);
+      }
+
+      if (t === 'conversation.item.done') {
+        handleConversationItemDone(event);
+      }
+    });
+
+    // History updates for conversation persistence
+    session.on('history_updated', async (history: any) => {
+      logger.conversation('History updated', history.length);
+      // Could sync with our conversation manager here
+    });
 
     // Wire session to controllers
     voiceChannelController.setSession(session);
@@ -1247,95 +1285,6 @@ async function connect(): Promise<void> {
     // Return button to idle state on error
     setVoiceButtonState(VoiceButtonState.IDLE);
   }
-}
-
-function setupSessionEvents(): void {
-  // Transport events (raw Realtime API events)
-  session?.on('transport_event', async (event: any) => {
-    logger.transport(event.type);
-    const t = event.type || '';
-
-    // VAD speech start/stop → delegate to VoiceChannelController
-    // Controller will gate based on armed state and hands-free mode
-    if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
-      voiceChannelController.handleSpeechStart();
-      // Only update UI if voice is actually armed
-      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-        setVoiceButtonState(VoiceButtonState.SPEAKING);
-        audioFeedback.playVoiceTick(); // Audio cue for voice detected
-        await setListeningMode(true);
-        ensurePendingUserBubble();
-      }
-      return;
-    }
-    if (t.includes('input_audio_buffer') && (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
-      voiceChannelController.handleSpeechStop();
-      // Only update UI if voice was armed
-      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-        setVoiceButtonState(VoiceButtonState.READY);
-        await setListeningMode(false);
-      }
-      return;
-    }
-    // Partial transcription deltas → delegate to VoiceChannelController (with gating)
-    if (t === 'conversation.item.input_audio_transcription.delta') {
-      voiceChannelController.handleTranscript(event.delta || '', false);
-      // Only update UI if transcript was not gated
-      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-        updatePendingUserPlaceholder(event.delta || '');
-      }
-      return;
-    }
-
-    if (t.startsWith('response.output_audio')) {
-      void startSpeakerMonitor();
-    }
-
-    switch (t) {
-      case 'response.output_audio_transcript.delta':
-      case 'response.output_text.delta':
-        handleStreamingDelta(event.delta || '');
-        break;
-        
-      case 'response.done':
-        handleResponseComplete(event);
-        break;
-        
-      case 'conversation.item.added':
-        handleConversationItemAdded(event);
-        break;
-        
-      case 'conversation.item.done':
-        handleConversationItemDone(event);
-        break;
-        
-      case 'conversation.item.input_audio_transcription.completed':
-        voiceChannelController.handleTranscript(event.transcript || '', true);
-        // Only process if not gated
-        if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-          handleUserTranscript(event.transcript || '');
-        }
-        break;
-    }
-  });
-
-  // History updates for conversation persistence
-  session?.on('history_updated', async (history: any) => {
-    logger.conversation('History updated', history.length);
-    // Could sync with our conversation manager here
-  });
-
-  // Error handling
-  session?.on('error', (error: any) => {
-    logger.error('Session error', error);
-    setTranscript(`Voice error: ${error.message}`, true);
-
-    // Error feedback
-    triggerHaptic([100, 50, 100]); // Double vibration for error
-    audioFeedback.playErrorTone();
-
-    setVoiceButtonState(VoiceButtonState.IDLE);
-  });
 }
 
 // Enhanced event handlers (preserve our streaming UI)
@@ -1815,6 +1764,35 @@ document.addEventListener("DOMContentLoaded", () => {
           handleUserTranscript(text);
         }
       }
+    }
+  });
+
+  // Configure websocketHandler with callbacks for event processing
+  websocketHandler.setConfig({
+    onTranscript: (text, isFinal) => {
+      // Handle transcript through voiceManager if voice is armed
+      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+        if (!isFinal) {
+          updatePendingUserPlaceholder(text);
+        } else {
+          handleUserTranscript(text);
+        }
+      }
+    },
+    onAssistantMessage: (text) => {
+      // Route assistant messages to streaming handler
+      handleStreamingDelta(text);
+    },
+    onError: (error) => {
+      // Handle errors from WebSocket/realtime events
+      logger.error('WebSocket event error', error);
+      setTranscript(`Voice error: ${error.message}`, true);
+
+      // Error feedback
+      triggerHaptic([100, 50, 100]);
+      audioFeedback.playErrorTone();
+
+      setVoiceButtonState(VoiceButtonState.IDLE);
     }
   });
 
