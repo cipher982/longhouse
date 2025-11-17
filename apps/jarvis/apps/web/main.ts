@@ -27,6 +27,7 @@ import { sessionHandler } from './lib/session-handler';
 import { voiceManager } from './lib/voice-manager';
 import { websocketHandler } from './lib/websocket-handler';
 import { feedbackSystem } from './lib/feedback-system';
+import { eventBus } from './lib/event-bus';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -1617,30 +1618,16 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         setListeningMode(false).catch(() => {});
       }
-    },
-    onTranscript: (text, isFinal) => {
-      // Only update UI if transcript was not gated
-      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-        if (!isFinal) {
-          updatePendingUserPlaceholder(text);
-        } else {
-          handleUserTranscript(text);
-        }
-      }
     }
+    // onTranscript removed - now handled via eventBus listener for voice_channel:transcript
   });
 
   // Configure websocketHandler with callbacks for event processing
   websocketHandler.setConfig({
     onTranscript: (text, isFinal) => {
-      // Handle transcript through voiceManager if voice is armed
-      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
-        if (!isFinal) {
-          updatePendingUserPlaceholder(text);
-        } else {
-          handleUserTranscript(text);
-        }
-      }
+      // Route ALL transcripts through voiceChannelController first for gating
+      // This handles the critical "final transcript after PTT release" case
+      voiceChannelController.handleTranscript(text, isFinal);
     },
     onAssistantMessage: (text) => {
       // Route assistant messages to streaming handler
@@ -1673,6 +1660,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Setup all event handlers after DOM is ready
 function setupEventHandlers(): void {
+  // Listen for gated transcript events from voiceChannelController
+  eventBus.on('voice_channel:transcript', (data: { transcript: string; isFinal: boolean }) => {
+    const { transcript, isFinal } = data;
+
+    // Update UI and delegate to voiceManager for state management
+    if (!isFinal) {
+      updatePendingUserPlaceholder(transcript);
+      voiceManager.handleTranscript(transcript, isFinal);
+    } else {
+      handleUserTranscript(transcript);
+      voiceManager.handleTranscript(transcript, isFinal);
+    }
+  });
+
   // Microphone button - modern voice interface with PTT support
   if (pttBtn) {
     pttBtn.onclick = async () => {
