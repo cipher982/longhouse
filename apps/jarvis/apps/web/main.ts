@@ -1559,19 +1559,6 @@ document.addEventListener("DOMContentLoaded", () => {
     handsFree: false
   });
 
-  // voiceController is already a singleton, just configure it
-  textChannelController = new TextChannelController({
-    autoConnect: true,
-    maxRetries: 3
-  });
-
-  // Wire controllers together (sync)
-  textChannelController.setVoiceController(voiceController as any);  // VoiceControllerCompat is compatible
-  textChannelController.setStateMachine(interactionStateMachine);
-  textChannelController.setConnectCallback(connect);
-
-  console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
-
   // Configure voiceController with state change callbacks
   voiceController = new VoiceControllerCompat({
     onStateChange: (state: VoiceState) => {
@@ -1620,6 +1607,19 @@ document.addEventListener("DOMContentLoaded", () => {
       setTranscript(`Voice error: ${error.message}`, true);
     }
   });
+
+  // Create textChannelController after voiceController exists
+  textChannelController = new TextChannelController({
+    autoConnect: true,
+    maxRetries: 3
+  });
+
+  // Wire controllers together (sync)
+  textChannelController.setVoiceController(voiceController);
+  textChannelController.setStateMachine(interactionStateMachine);
+  textChannelController.setConnectCallback(connect);
+
+  console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
 
   // Configure websocketHandler with callbacks for event processing
   websocketHandler.setConfig({

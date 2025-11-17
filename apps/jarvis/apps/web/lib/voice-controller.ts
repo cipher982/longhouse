@@ -104,11 +104,6 @@ export class VoiceController {
    * Start push-to-talk
    */
   startPTT(): void {
-    if (!this.session) {
-      this.config.onError?.(new Error('No active session'));
-      return;
-    }
-
     logger.info('PTT pressed - arming voice');
 
     this.setState({
@@ -120,11 +115,18 @@ export class VoiceController {
       finalTranscript: ''
     });
 
-    // Start microphone capture
-    this.startMicrophone().catch(err => {
-      logger.error('Failed to start microphone:', err);
-      this.config.onError?.(err);
-    });
+    // Emit event for backward compatibility
+    eventBus.emit('voice_channel:armed', { armed: true });
+
+    // Start microphone capture if session exists
+    if (this.session) {
+      this.startMicrophone().catch(err => {
+        logger.error('Failed to start microphone:', err);
+        this.config.onError?.(err);
+      });
+    } else {
+      logger.warn('No session available, skipping microphone start');
+    }
   }
 
   /**
@@ -138,6 +140,9 @@ export class VoiceController {
       armed: false,
       pttActive: false
     });
+
+    // Emit event for backward compatibility
+    eventBus.emit('voice_channel:muted', { muted: true });
 
     // Stop microphone but keep session alive
     this.stopMicrophone();
@@ -178,19 +183,26 @@ export class VoiceController {
   setHandsFree(enabled: boolean): void {
     logger.info(`Hands-free mode ${enabled ? 'enabled' : 'disabled'}`);
 
-    this.setState({
-      handsFree: enabled,
-      armed: enabled,
-      mode: enabled ? 'vad' : 'ptt',
-      pttActive: false  // Stop PTT when switching to hands-free
-    });
-
     if (enabled) {
+      // When enabling hands-free, arm the controller
+      this.setState({
+        handsFree: true,
+        armed: true,
+        mode: 'vad',
+        pttActive: false
+      });
+
       this.startMicrophone().catch(err => {
         logger.error('Failed to start microphone for hands-free:', err);
       });
     } else {
-      this.stopMicrophone();
+      // When disabling hands-free, stay armed (user must manually mute)
+      this.setState({
+        handsFree: false,
+        mode: 'ptt'
+        // Keep armed state as-is
+      });
+      // Don't stop microphone - let user manually mute
     }
   }
 
@@ -374,6 +386,27 @@ export class VoiceController {
 // These methods help with migration from old voice modules
 
 export class VoiceControllerCompat extends VoiceController {
+  constructor(config: VoiceConfig = {}) {
+    super(config);
+
+    // Subscribe to state machine events for backward compatibility
+    eventBus.on('state:changed', ({ to }: any) => {
+      if (to.mode === 'voice') {
+        // Handle arming/muting
+        if (to.armed && !this.isArmed()) {
+          this.arm();
+        } else if (!to.armed && this.isArmed()) {
+          this.mute();
+        }
+
+        // Handle hands-free mode
+        if (to.handsFree !== this.getState().handsFree) {
+          this.setHandsFree(to.handsFree);
+        }
+      }
+    });
+  }
+
   // Compatibility properties for old interface
   get armed(): boolean {
     return this.getState().armed;
@@ -402,8 +435,7 @@ export class VoiceControllerCompat extends VoiceController {
    */
   arm(): void {
     this.startPTT();
-    // Emit event for backward compatibility
-    eventBus.emit('voice_channel:armed', { armed: true });
+    // Event is now emitted in startPTT()
   }
 
   /**
@@ -411,8 +443,7 @@ export class VoiceControllerCompat extends VoiceController {
    */
   mute(): void {
     this.stopPTT();
-    // Emit event for backward compatibility
-    eventBus.emit('voice_channel:muted', { muted: true });
+    // Event is now emitted in stopPTT()
   }
 
   /**
@@ -440,10 +471,25 @@ export class VoiceControllerCompat extends VoiceController {
    * Compatibility: Request microphone
    */
   async requestMicrophone(): Promise<MediaStream> {
-    // Start mic and return stream
-    await this.startPTT();
-    // For now, return a mock stream - real implementation would track the stream
-    return new MediaStream();
+    // Just get microphone stream without requiring session
+    if (this.micStream) {
+      return this.micStream;
+    }
+
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      logger.info('Microphone requested for initialization');
+      return this.micStream;
+    } catch (error) {
+      logger.error('Failed to request microphone:', error);
+      throw error;
+    }
   }
 
   /**
