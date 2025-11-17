@@ -4,7 +4,6 @@
  */
 
 import { logger } from '@jarvis/core';
-import type { VoiceAgentConfig } from '../contexts/types';
 import type { ConversationManagerOptions, SyncTransport } from '@jarvis/data-local';
 
 // Main configuration object
@@ -53,11 +52,15 @@ export const CONFIG = {
   }
 };
 
-// Voice Button State Machine states (Simplified from 11 phases to 3)
+// Voice Button State Machine states
 export enum VoiceButtonState {
-  READY = 'ready',           // Disconnected or connected, ready for interaction
-  ACTIVE = 'active',         // Currently active (speaking/listening/responding)
-  PROCESSING = 'processing'  // Busy processing (connecting/disconnecting/thinking)
+  IDLE = 'idle',             // Disconnected/not ready
+  CONNECTING = 'connecting', // In the process of connecting
+  READY = 'ready',           // Connected and ready for interaction
+  SPEAKING = 'speaking',     // User is speaking (PTT or VAD active)
+  RESPONDING = 'responding', // AI is responding
+  ACTIVE = 'active',         // General active state (listening/processing)
+  PROCESSING = 'processing'  // Busy processing (disconnecting/thinking)
 }
 
 // Feedback preferences interface
@@ -121,11 +124,11 @@ export function createSyncTransport(headers?: Record<string, string>): SyncTrans
 }
 
 /**
- * Build conversation manager options from voice agent config
+ * Build conversation manager options from context
  */
-export function buildConversationManagerOptions(config: VoiceAgentConfig): ConversationManagerOptions {
-  const syncBaseUrl = resolveSyncBaseUrl(config.sync?.baseUrl);
-  const syncTransport = createSyncTransport(config.sync?.headers);
+export function buildConversationManagerOptions(config: any): ConversationManagerOptions {
+  const syncBaseUrl = resolveSyncBaseUrl(config?.sync?.baseUrl);
+  const syncTransport = createSyncTransport(config?.sync?.headers);
 
   return {
     syncBaseUrl,
