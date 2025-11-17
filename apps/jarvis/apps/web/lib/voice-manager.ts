@@ -6,8 +6,6 @@
 import { logger } from '@jarvis/core';
 import { VoiceButtonState } from './config';
 import { stateManager } from './state-manager';
-import { feedbackSystem } from './feedback-system';
-import type { RadialVisualizer } from './radial-visualizer';
 
 /**
  * Voice manager configuration
@@ -23,21 +21,17 @@ export interface VoiceManagerConfig {
  * Voice Manager class
  */
 export class VoiceManager {
-  private config: VoiceManagerConfig;
-  private visualizer: RadialVisualizer | null = null;
+  private config: VoiceManagerConfig = {};
+  private visualizer: any = null;
   private pttActive = false;
   private vadActive = false;
   private pendingTranscript = '';
 
-  constructor(config: VoiceManagerConfig = {}) {
-    this.config = config;
-  }
-
   /**
-   * Initialize voice manager with visualizer
+   * Set configuration
    */
-  initialize(visualizer: RadialVisualizer): void {
-    this.visualizer = visualizer;
+  setConfig(config: VoiceManagerConfig): void {
+    this.config = { ...this.config, ...config };
   }
 
   /**
@@ -52,29 +46,15 @@ export class VoiceManager {
       return;
     }
 
-    // Check if we have the controllers
-    const { voiceChannelController, interactionStateMachine } = state;
-    if (!voiceChannelController || !interactionStateMachine) {
-      logger.warn('Voice controllers not initialized');
-      return;
-    }
-
     this.pttActive = true;
-
-    // Transition to voice mode and arm the channel
-    interactionStateMachine.transitionToVoice();
-    voiceChannelController.arm();
 
     // Update state
     stateManager.setVoiceButtonState(VoiceButtonState.SPEAKING);
 
     // Start visualizer
-    this.visualizer?.setSpeaking(true);
+    this.visualizer?.setSpeaking?.(true);
 
     // Feedback
-    feedbackSystem.onStartSpeaking();
-
-    // Notify callback
     this.config.onPTTPress?.();
 
     logger.info('PTT pressed - voice armed');
@@ -88,29 +68,15 @@ export class VoiceManager {
 
     this.pttActive = false;
 
-    const state = stateManager.getState();
-    const { voiceChannelController } = state;
-
-    if (voiceChannelController) {
-      // Check if hands-free is enabled
-      const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLInputElement;
-      if (!handsFreeToggle?.checked) {
-        voiceChannelController.mute();
-      }
-    }
-
     // Update state if not in hands-free
     if (stateManager.isSpeaking()) {
       stateManager.setVoiceButtonState(VoiceButtonState.READY);
     }
 
     // Stop visualizer
-    this.visualizer?.setSpeaking(false);
+    this.visualizer?.setSpeaking?.(false);
 
     // Feedback
-    feedbackSystem.onStopSpeaking();
-
-    // Notify callback
     this.config.onPTTRelease?.();
 
     logger.info('PTT released - voice muted');
@@ -127,23 +93,16 @@ export class VoiceManager {
       return;
     }
 
-    // Don't process VAD during text mode
-    if (state.conversationMode === 'text') {
-      return;
-    }
-
     this.vadActive = active;
 
     // Update visualizer
-    this.visualizer?.setSpeaking(active);
+    this.visualizer?.setSpeaking?.(active);
 
     // Update state
     if (active && stateManager.isReady()) {
       stateManager.setVoiceButtonState(VoiceButtonState.SPEAKING);
-      feedbackSystem.onStartSpeaking();
     } else if (!active && stateManager.isSpeaking() && !this.pttActive) {
       stateManager.setVoiceButtonState(VoiceButtonState.READY);
-      feedbackSystem.onStopSpeaking();
     }
 
     // Notify callback
@@ -156,20 +115,6 @@ export class VoiceManager {
    * Handle incoming transcript
    */
   handleTranscript(text: string, isFinal: boolean): void {
-    const state = stateManager.getState();
-
-    // Check if voice channel should process this
-    const { voiceChannelController } = state;
-    if (!voiceChannelController) {
-      return;
-    }
-
-    // Let the voice channel controller handle gating
-    if (!voiceChannelController.isArmed() && !isFinal) {
-      logger.debug('Dropping partial transcript - voice not armed');
-      return;
-    }
-
     // Update pending text
     if (!isFinal) {
       this.pendingTranscript = text;
@@ -187,24 +132,56 @@ export class VoiceManager {
    * Handle hands-free mode toggle
    */
   handleHandsFreeToggle(enabled: boolean): void {
-    const state = stateManager.getState();
-    const { voiceChannelController, interactionStateMachine } = state;
-
-    if (!voiceChannelController || !interactionStateMachine) {
-      logger.warn('Controllers not initialized for hands-free toggle');
-      return;
-    }
-
     if (enabled) {
-      // Transition to voice mode and arm
-      interactionStateMachine.transitionToVoice();
-      voiceChannelController.arm();
+      stateManager.setVoiceButtonState(VoiceButtonState.SPEAKING);
       logger.info('Hands-free mode enabled - voice armed');
     } else {
-      // Mute voice
-      voiceChannelController.mute();
+      stateManager.setVoiceButtonState(VoiceButtonState.READY);
       logger.info('Hands-free mode disabled - voice muted');
     }
+  }
+
+  /**
+   * Setup keyboard shortcuts for PTT
+   */
+  setupKeyboardShortcuts(): void {
+    // Space bar for PTT
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !e.repeat && e.target === document.body) {
+        e.preventDefault();
+        this.handlePTTPress();
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault();
+        this.handlePTTRelease();
+      }
+    });
+  }
+
+  /**
+   * Setup voice button event handlers
+   */
+  setupVoiceButton(button: HTMLElement): void {
+    // Mouse events
+    button.addEventListener('mousedown', () => this.handlePTTPress());
+    button.addEventListener('mouseup', () => this.handlePTTRelease());
+    button.addEventListener('mouseleave', () => this.handlePTTRelease());
+
+    // Touch events
+    button.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.handlePTTPress();
+    });
+
+    button.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this.handlePTTRelease();
+    });
+
+    button.addEventListener('touchcancel', () => this.handlePTTRelease());
   }
 
   /**
@@ -241,64 +218,6 @@ export class VoiceManager {
   clearPendingTranscript(): void {
     this.pendingTranscript = '';
     stateManager.setPendingUserText('');
-  }
-
-  /**
-   * Setup keyboard shortcuts for PTT
-   */
-  setupKeyboardShortcuts(): void {
-    // Space bar for PTT
-    document.addEventListener('keydown', (e) => {
-      if (e.code === 'Space' && !e.repeat && e.target === document.body) {
-        e.preventDefault();
-        this.handlePTTPress();
-      }
-    });
-
-    document.addEventListener('keyup', (e) => {
-      if (e.code === 'Space' && e.target === document.body) {
-        e.preventDefault();
-        this.handlePTTRelease();
-      }
-    });
-
-    // Enter key as alternative
-    document.addEventListener('keydown', (e) => {
-      if (e.code === 'Enter' && !e.repeat && e.target === document.body && e.ctrlKey) {
-        e.preventDefault();
-        this.handlePTTPress();
-      }
-    });
-
-    document.addEventListener('keyup', (e) => {
-      if (e.code === 'Enter' && e.target === document.body && e.ctrlKey) {
-        e.preventDefault();
-        this.handlePTTRelease();
-      }
-    });
-  }
-
-  /**
-   * Setup voice button event handlers
-   */
-  setupVoiceButton(button: HTMLElement): void {
-    // Mouse events
-    button.addEventListener('mousedown', () => this.handlePTTPress());
-    button.addEventListener('mouseup', () => this.handlePTTRelease());
-    button.addEventListener('mouseleave', () => this.handlePTTRelease());
-
-    // Touch events
-    button.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      this.handlePTTPress();
-    });
-
-    button.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      this.handlePTTRelease();
-    });
-
-    button.addEventListener('touchcancel', () => this.handlePTTRelease());
   }
 
   /**

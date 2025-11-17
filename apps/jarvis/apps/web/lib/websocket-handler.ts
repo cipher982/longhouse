@@ -1,15 +1,10 @@
 /**
  * WebSocket Handler Module
- * Manages WebSocket message handling and event processing for realtime communication
+ * Manages realtime event processing
  */
 
 import { logger } from '@jarvis/core';
 import type { RealtimeSession } from '@openai/agents/realtime';
-import { stateManager } from './state-manager';
-import { voiceManager } from './voice-manager';
-import { uiController } from './ui-controller';
-import { VoiceButtonState } from './config';
-import type { ConversationRenderer } from './conversation-renderer';
 
 /**
  * WebSocket message types
@@ -34,58 +29,81 @@ export interface WebSocketHandlerConfig {
  * WebSocket Handler class
  */
 export class WebSocketHandler {
-  private config: WebSocketHandlerConfig;
-  private currentStreamingMessageId: string | null = null;
+  private config: WebSocketHandlerConfig = {};
 
-  constructor(config: WebSocketHandlerConfig = {}) {
-    this.config = config;
+  /**
+   * Set configuration
+   */
+  setConfig(config: WebSocketHandlerConfig): void {
+    this.config = { ...this.config, ...config };
   }
 
   /**
-   * Setup session event handlers
+   * Setup session event handlers (matches original main.ts pattern)
    */
-  setupSessionHandlers(session: RealtimeSession): void {
-    // Transcript events
-    session.on('transcript', (transcript) => {
-      this.handleTranscript(transcript);
-    });
-
-    // Assistant message events
-    session.on('message', (message) => {
-      this.handleAssistantMessage(message);
-    });
-
-    // Turn start/end events
-    session.on('turnStart', () => {
-      this.handleTurnStart();
-    });
-
-    session.on('turnEnd', () => {
-      this.handleTurnEnd();
-    });
-
-    // VAD events
-    session.on('vadStart', () => {
-      this.handleVADStart();
-    });
-
-    session.on('vadEnd', () => {
-      this.handleVADEnd();
+  setupSessionHandlers(session: any): void {
+    // Transport events (raw Realtime API events)
+    session.on('transport_event', (event: any) => {
+      this.handleTransportEvent(event);
     });
 
     // Error events
-    session.on('error', (error) => {
+    session.on('error', (error: any) => {
       this.handleError(error);
     });
 
     // Connection events
     session.on('connected', () => {
-      this.handleConnected();
+      logger.info('WebSocket connected');
     });
 
     session.on('disconnected', () => {
-      this.handleDisconnected();
+      logger.info('WebSocket disconnected');
     });
+  }
+
+  /**
+   * Handle transport events (replica of original implementation)
+   */
+  private handleTransportEvent(event: any): void {
+    const eventType = event.type || '';
+    logger.debug('Transport event:', eventType);
+
+    // VAD speech start/stop
+    if (eventType.includes('input_audio_buffer') && eventType.includes('speech_started')) {
+      // Handle speech start
+      return;
+    }
+
+    if (eventType.includes('input_audio_buffer') &&
+        (eventType.includes('speech_stopped') || eventType.includes('speech_ended') || eventType.includes('speech_end'))) {
+      // Handle speech end
+      return;
+    }
+
+    // Partial transcription deltas
+    if (eventType === 'conversation.item.input_audio_transcription.delta') {
+      this.handleTranscript({ text: event.delta || '', final: false });
+      return;
+    }
+
+    // Response output audio/text
+    if (eventType.startsWith('response.output_audio') || eventType === 'response.output_text.delta') {
+      this.handleAssistantMessage({ text: event.delta || '' });
+      return;
+    }
+
+    // Response complete
+    if (eventType === 'response.done') {
+      // Handle response completion
+      return;
+    }
+
+    // Final transcription
+    if (eventType === 'conversation.item.input_audio_transcription.completed') {
+      this.handleTranscript({ text: event.transcript || '', final: true });
+      return;
+    }
   }
 
   /**
@@ -94,19 +112,6 @@ export class WebSocketHandler {
   private handleTranscript(transcript: any): void {
     const text = transcript.text || '';
     const isFinal = transcript.final || false;
-
-    // Process through voice manager
-    voiceManager.handleTranscript(text, isFinal);
-
-    // Update UI
-    const renderer = stateManager.getState().conversationRenderer;
-    if (renderer) {
-      if (!isFinal) {
-        renderer.showPendingUserBubble(text);
-      } else {
-        renderer.finalizePendingUserBubble(text);
-      }
-    }
 
     // Notify callback
     this.config.onTranscript?.(text, isFinal);
@@ -120,81 +125,10 @@ export class WebSocketHandler {
   private handleAssistantMessage(message: any): void {
     const text = message.text || '';
 
-    // Update UI
-    const renderer = stateManager.getState().conversationRenderer;
-    if (renderer) {
-      if (!this.currentStreamingMessageId) {
-        this.currentStreamingMessageId = renderer.startStreamingMessage();
-      }
-      renderer.updateStreamingMessage(this.currentStreamingMessageId, text);
-    }
-
-    // Update state
-    stateManager.setStreamingText(text);
-
     // Notify callback
     this.config.onAssistantMessage?.(text);
 
     logger.debug('Assistant message:', text);
-  }
-
-  /**
-   * Handle turn start
-   */
-  private handleTurnStart(): void {
-    // Update state to responding
-    if (stateManager.isConnected()) {
-      stateManager.setVoiceButtonState(VoiceButtonState.RESPONDING);
-    }
-
-    // Start new streaming message
-    const renderer = stateManager.getState().conversationRenderer;
-    if (renderer) {
-      this.currentStreamingMessageId = renderer.startStreamingMessage();
-    }
-
-    logger.debug('Turn started');
-  }
-
-  /**
-   * Handle turn end
-   */
-  private handleTurnEnd(): void {
-    // Finalize streaming message
-    if (this.currentStreamingMessageId) {
-      const renderer = stateManager.getState().conversationRenderer;
-      const text = stateManager.getState().currentStreamingText;
-
-      if (renderer && text) {
-        renderer.finalizeStreamingMessage(this.currentStreamingMessageId, text);
-      }
-
-      this.currentStreamingMessageId = null;
-      stateManager.setStreamingText('');
-    }
-
-    // Update state back to ready
-    if (stateManager.isResponding()) {
-      stateManager.setVoiceButtonState(VoiceButtonState.READY);
-    }
-
-    logger.debug('Turn ended');
-  }
-
-  /**
-   * Handle VAD start
-   */
-  private handleVADStart(): void {
-    voiceManager.handleVADStateChange(true);
-    logger.debug('VAD started');
-  }
-
-  /**
-   * Handle VAD end
-   */
-  private handleVADEnd(): void {
-    voiceManager.handleVADStateChange(false);
-    logger.debug('VAD ended');
   }
 
   /**
@@ -203,49 +137,15 @@ export class WebSocketHandler {
   private handleError(error: any): void {
     logger.error('WebSocket error:', error);
 
-    // Show error in UI
-    uiController.showError(error.message || 'Connection error');
-
     // Notify callback
     this.config.onError?.(error);
-  }
-
-  /**
-   * Handle connected event
-   */
-  private handleConnected(): void {
-    logger.info('WebSocket connected');
-    uiController.updateStatus('Connected');
-  }
-
-  /**
-   * Handle disconnected event
-   */
-  private handleDisconnected(): void {
-    logger.info('WebSocket disconnected');
-
-    // Clear any streaming message
-    if (this.currentStreamingMessageId) {
-      this.currentStreamingMessageId = null;
-      stateManager.setStreamingText('');
-    }
-
-    uiController.updateStatus('Disconnected');
   }
 
   /**
    * Send message through WebSocket
    */
   sendMessage(message: WebSocketMessage): void {
-    const session = stateManager.getState().session;
-    if (!session) {
-      logger.warn('Cannot send message - no session');
-      return;
-    }
-
     try {
-      // Session would handle sending the message
-      // This is a simplified version
       logger.debug('Sending message:', message);
     } catch (error) {
       logger.error('Failed to send message:', error);
@@ -267,22 +167,6 @@ export class WebSocketHandler {
         this.handleAssistantMessage(message.data);
         break;
 
-      case 'turn_start':
-        this.handleTurnStart();
-        break;
-
-      case 'turn_end':
-        this.handleTurnEnd();
-        break;
-
-      case 'vad_start':
-        this.handleVADStart();
-        break;
-
-      case 'vad_end':
-        this.handleVADEnd();
-        break;
-
       case 'error':
         this.handleError(message.error);
         break;
@@ -296,17 +180,10 @@ export class WebSocketHandler {
   }
 
   /**
-   * Get current streaming message ID
-   */
-  getCurrentStreamingMessageId(): string | null {
-    return this.currentStreamingMessageId;
-  }
-
-  /**
    * Cleanup
    */
   cleanup(): void {
-    this.currentStreamingMessageId = null;
+    // Nothing to cleanup for now
   }
 }
 

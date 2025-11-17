@@ -3,213 +3,152 @@
  * Handles haptic and audio feedback for user interactions
  */
 
-import { logger } from '@jarvis/core';
-import { CONFIG, loadFeedbackPreferences, saveFeedbackPreferences, type FeedbackPreferences } from './config';
+import { CONFIG } from './config';
 
-/**
- * Audio feedback system using Web Audio API
- */
-export class AudioFeedback {
-  private audioContext: AudioContext | null = null;
+class AudioFeedback {
   private enabled: boolean;
-  private supported: boolean;
+  private audioContext: AudioContext | null = null;
 
-  constructor(enabled: boolean) {
+  constructor(enabled: boolean = true) {
     this.enabled = enabled;
-    // Check if Web Audio API is supported
-    this.supported = !!(window.AudioContext || (window as any).webkitAudioContext);
+    this.init();
   }
 
-  private getContext(): AudioContext | null {
-    if (!this.supported) return null;
+  private init(): void {
+    if (!this.enabled) return;
 
-    if (!this.audioContext) {
-      try {
-        this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      } catch (error) {
-        logger.warn('Web Audio API not supported', error);
-        this.supported = false;
-        return null;
-      }
-    }
-    return this.audioContext;
-  }
-
-  /**
-   * Resume audio context (Safari autoplay fix) - must be called from user gesture
-   */
-  async resumeContext(): Promise<void> {
-    if (!this.supported) return;
-
-    const ctx = this.getContext();
-    if (ctx?.state === 'suspended') {
-      try {
-        await ctx.resume();
-      } catch (error) {
-        logger.warn('Failed to resume audio context', error);
-      }
+    try {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    } catch (error) {
+      console.warn('Audio not supported:', error);
     }
   }
 
-  /**
-   * Set enabled state
-   */
+  playTone(frequency: number, duration: number): void {
+    if (!this.enabled || !this.audioContext) return;
+
+    const oscillator = this.audioContext.createOscillator();
+    const gainNode = this.audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
+
+    oscillator.frequency.value = frequency;
+    oscillator.type = 'sine';
+
+    gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration / 1000);
+
+    oscillator.start(this.audioContext.currentTime);
+    oscillator.stop(this.audioContext.currentTime + duration / 1000);
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
   }
+}
 
-  /**
-   * Play a tone
-   */
-  playTone(frequency: number, duration: number, volume: number = 0.1): void {
-    if (!this.enabled || !this.supported) return;
+class HapticFeedback {
+  private enabled: boolean;
 
-    const ctx = this.getContext();
-    if (!ctx) return;
+  constructor(enabled: boolean = true) {
+    this.enabled = enabled;
+  }
 
-    try {
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
+  vibrate(pattern: number | number[]): void {
+    if (!this.enabled) return;
 
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      oscillator.frequency.value = frequency;
-      oscillator.type = 'sine';
-
-      // Envelope to prevent clicks
-      const now = ctx.currentTime;
-      gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(volume, now + 0.01);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration / 1000);
-
-      oscillator.start(now);
-      oscillator.stop(now + duration / 1000);
-    } catch (error) {
-      // Silently fail if audio playback fails
+    const navigator = window.navigator as any;
+    if (navigator.vibrate) {
+      navigator.vibrate(pattern);
     }
   }
 
-  /**
-   * Cleanup resources
-   */
-  cleanup(): void {
-    if (this.audioContext) {
-      try {
-        this.audioContext.close();
-      } catch (error) {
-        // Ignore cleanup errors
-      }
-      this.audioContext = null;
-    }
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
   }
 }
 
 /**
- * Feedback system that manages both haptic and audio feedback
+ * Feedback System class
  */
 export class FeedbackSystem {
-  private preferences: FeedbackPreferences;
-  private audioFeedback: AudioFeedback;
+  private haptic: HapticFeedback;
+  private audio: AudioFeedback;
+  private initialized = false;
 
   constructor() {
-    this.preferences = loadFeedbackPreferences();
-    this.audioFeedback = new AudioFeedback(this.preferences.audio);
+    const prefs = {
+      haptics: true,
+      audio: true
+    };
+
+    this.haptic = new HapticFeedback(prefs.haptics);
+    this.audio = new AudioFeedback(prefs.audio);
   }
 
-  /**
-   * Initialize the feedback system (call from user gesture for audio)
-   */
   async initialize(): Promise<void> {
-    await this.audioFeedback.resumeContext();
+    // Initialize audio context on user interaction
+    const initAudio = () => {
+      if (this.audio && (this.audio as any).audioContext?.state === 'suspended') {
+        (this.audio as any).audioContext.resume();
+      }
+      document.removeEventListener('click', initAudio);
+      document.removeEventListener('touchstart', initAudio);
+    };
+
+    document.addEventListener('click', initAudio);
+    document.addEventListener('touchstart', initAudio);
+
+    this.initialized = true;
   }
 
-  /**
-   * Trigger haptic feedback
-   */
-  triggerHaptic(pattern: number | number[]): void {
-    if (!this.preferences.haptics) return;
-    if (!('vibrate' in navigator)) return;
-
-    try {
-      navigator.vibrate(pattern);
-    } catch (error) {
-      // Silently fail if vibration not supported
-    }
-  }
-
-  /**
-   * Play audio tone
-   */
-  playTone(frequency: number, duration: number, volume: number = 0.1): void {
-    this.audioFeedback.playTone(frequency, duration, volume);
-  }
-
-  /**
-   * Trigger feedback for connection event
-   */
   onConnect(): void {
-    this.triggerHaptic(CONFIG.FEEDBACK.HAPTIC_PATTERNS.CONNECT);
-    const tone = CONFIG.FEEDBACK.AUDIO_TONES.CONNECT;
-    this.playTone(tone.frequency, tone.duration);
+    this.haptic.vibrate(CONFIG.FEEDBACK.HAPTIC_PATTERNS.CONNECT);
+    this.audio.playTone(
+      CONFIG.FEEDBACK.AUDIO_TONES.CONNECT.frequency,
+      CONFIG.FEEDBACK.AUDIO_TONES.CONNECT.duration
+    );
   }
 
-  /**
-   * Trigger feedback for disconnection event
-   */
   onDisconnect(): void {
-    this.triggerHaptic(CONFIG.FEEDBACK.HAPTIC_PATTERNS.DISCONNECT);
-    const tone = CONFIG.FEEDBACK.AUDIO_TONES.DISCONNECT;
-    this.playTone(tone.frequency, tone.duration);
+    this.haptic.vibrate(CONFIG.FEEDBACK.HAPTIC_PATTERNS.DISCONNECT);
+    this.audio.playTone(
+      CONFIG.FEEDBACK.AUDIO_TONES.DISCONNECT.frequency,
+      CONFIG.FEEDBACK.AUDIO_TONES.DISCONNECT.duration
+    );
   }
 
-  /**
-   * Trigger feedback for start speaking event
-   */
   onStartSpeaking(): void {
-    this.triggerHaptic(CONFIG.FEEDBACK.HAPTIC_PATTERNS.START_SPEAKING);
-    const tone = CONFIG.FEEDBACK.AUDIO_TONES.START_SPEAKING;
-    this.playTone(tone.frequency, tone.duration);
+    this.haptic.vibrate(CONFIG.FEEDBACK.HAPTIC_PATTERNS.START_SPEAKING);
+    this.audio.playTone(
+      CONFIG.FEEDBACK.AUDIO_TONES.START_SPEAKING.frequency,
+      CONFIG.FEEDBACK.AUDIO_TONES.START_SPEAKING.duration
+    );
   }
 
-  /**
-   * Trigger feedback for stop speaking event
-   */
   onStopSpeaking(): void {
-    this.triggerHaptic(CONFIG.FEEDBACK.HAPTIC_PATTERNS.STOP_SPEAKING);
-    const tone = CONFIG.FEEDBACK.AUDIO_TONES.STOP_SPEAKING;
-    this.playTone(tone.frequency, tone.duration);
+    this.haptic.vibrate(CONFIG.FEEDBACK.HAPTIC_PATTERNS.STOP_SPEAKING);
+    this.audio.playTone(
+      CONFIG.FEEDBACK.AUDIO_TONES.STOP_SPEAKING.frequency,
+      CONFIG.FEEDBACK.AUDIO_TONES.STOP_SPEAKING.duration
+    );
   }
 
-  /**
-   * Trigger feedback for error event
-   */
   onError(): void {
-    this.triggerHaptic(CONFIG.FEEDBACK.HAPTIC_PATTERNS.ERROR);
-    // No audio tone for errors to avoid being annoying
+    this.haptic.vibrate(CONFIG.FEEDBACK.HAPTIC_PATTERNS.ERROR);
   }
 
-  /**
-   * Update preferences
-   */
-  updatePreferences(prefs: FeedbackPreferences): void {
-    this.preferences = prefs;
-    this.audioFeedback.setEnabled(prefs.audio);
-    saveFeedbackPreferences(prefs);
+  setHapticEnabled(enabled: boolean): void {
+    this.haptic.setEnabled(enabled);
   }
 
-  /**
-   * Get current preferences
-   */
-  getPreferences(): FeedbackPreferences {
-    return { ...this.preferences };
+  setAudioEnabled(enabled: boolean): void {
+    this.audio.setEnabled(enabled);
   }
 
-  /**
-   * Cleanup resources
-   */
   cleanup(): void {
-    this.audioFeedback.cleanup();
+    // Nothing to cleanup for now
   }
 }
 

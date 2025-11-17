@@ -3,46 +3,30 @@
  * Centralizes global state management for Jarvis PWA
  */
 
-import type { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
-import type { SessionManager, JarvisAgentSummary } from '@jarvis/core';
-import type { ConversationUI } from './conversation-ui';
-import type { ConversationRenderer } from './conversation-renderer';
-import type { TaskInbox } from './task-inbox';
+import type { RealtimeSession } from '@openai/agents/realtime';
+import type { SessionManager } from '@jarvis/core';
 import type { VoiceAgentConfig } from '../contexts/types';
 import { VoiceButtonState } from './config';
-import type { InteractionStateMachine } from './interaction-state-machine';
-import type { VoiceChannelController } from './voice-channel-controller';
-import type { TextChannelController } from './text-channel-controller';
 
 /**
  * Global application state
  */
 export interface AppState {
   // Core OpenAI SDK objects
-  agent: RealtimeAgent | null;
+  agent: any | null;
   session: RealtimeSession | null;
   sessionManager: SessionManager | null;
-
-  // UI components
-  conversationUI: ConversationUI | null;
-  conversationRenderer: ConversationRenderer | null;
-
-  // Voice/Text separation controllers
-  interactionStateMachine: InteractionStateMachine | null;
-  voiceChannelController: VoiceChannelController | null;
-  textChannelController: TextChannelController | null;
 
   // Conversation state
   currentStreamingText: string;
   currentConversationId: string | null;
   voiceButtonState: VoiceButtonState;
-  currentContext: VoiceAgentConfig | null;
+  currentContext: any | null;
 
   // Jarvis-Zerg integration
   conversationMode: 'voice' | 'text';
-  taskInbox: TaskInbox | null;
   jarvisClient: any; // Type from @jarvis/core
-  cachedAgents: JarvisAgentSummary[];
+  cachedAgents: any[];
 
   // UI state
   statusActive: boolean;
@@ -59,8 +43,8 @@ export type StateChangeEvent =
   | { type: 'VOICE_BUTTON_STATE_CHANGED'; state: VoiceButtonState }
   | { type: 'CONVERSATION_MODE_CHANGED'; mode: 'voice' | 'text' }
   | { type: 'SESSION_CHANGED'; session: RealtimeSession | null }
-  | { type: 'AGENT_CHANGED'; agent: RealtimeAgent | null }
-  | { type: 'CONTEXT_CHANGED'; context: VoiceAgentConfig | null }
+  | { type: 'AGENT_CHANGED'; agent: any }
+  | { type: 'CONTEXT_CHANGED'; context: any }
   | { type: 'STATUS_CHANGED'; active: boolean }
   | { type: 'STREAMING_TEXT_CHANGED'; text: string }
   | { type: 'CONVERSATION_ID_CHANGED'; id: string | null };
@@ -88,24 +72,14 @@ export class StateManager {
       session: null,
       sessionManager: null,
 
-      // UI components
-      conversationUI: null,
-      conversationRenderer: null,
-
-      // Controllers
-      interactionStateMachine: null,
-      voiceChannelController: null,
-      textChannelController: null,
-
       // Conversation state
       currentStreamingText: '',
       currentConversationId: null,
-      voiceButtonState: VoiceButtonState.READY,
+      voiceButtonState: VoiceButtonState.IDLE,
       currentContext: null,
 
       // Jarvis-Zerg integration
       conversationMode: 'voice',
-      taskInbox: null,
       jarvisClient: null,
       cachedAgents: [],
 
@@ -156,7 +130,7 @@ export class StateManager {
   /**
    * Update agent
    */
-  setAgent(agent: RealtimeAgent | null): void {
+  setAgent(agent: any | null): void {
     this.state.agent = agent;
     this.notifyListeners({ type: 'AGENT_CHANGED', agent });
   }
@@ -164,7 +138,7 @@ export class StateManager {
   /**
    * Update context
    */
-  setContext(context: VoiceAgentConfig | null): void {
+  setContext(context: any | null): void {
     this.state.currentContext = context;
     this.notifyListeners({ type: 'CONTEXT_CHANGED', context });
   }
@@ -203,40 +177,6 @@ export class StateManager {
   }
 
   /**
-   * Update conversation UI
-   */
-  setConversationUI(ui: ConversationUI | null): void {
-    this.state.conversationUI = ui;
-  }
-
-  /**
-   * Update conversation renderer
-   */
-  setConversationRenderer(renderer: ConversationRenderer | null): void {
-    this.state.conversationRenderer = renderer;
-  }
-
-  /**
-   * Update controllers
-   */
-  setControllers(controllers: {
-    interactionStateMachine: InteractionStateMachine;
-    voiceChannelController: VoiceChannelController;
-    textChannelController: TextChannelController;
-  }): void {
-    this.state.interactionStateMachine = controllers.interactionStateMachine;
-    this.state.voiceChannelController = controllers.voiceChannelController;
-    this.state.textChannelController = controllers.textChannelController;
-  }
-
-  /**
-   * Update task inbox
-   */
-  setTaskInbox(inbox: TaskInbox | null): void {
-    this.state.taskInbox = inbox;
-  }
-
-  /**
    * Update Jarvis client
    */
   setJarvisClient(client: any): void {
@@ -246,7 +186,7 @@ export class StateManager {
   /**
    * Update cached agents
    */
-  setCachedAgents(agents: JarvisAgentSummary[]): void {
+  setCachedAgents(agents: any[]): void {
     this.state.cachedAgents = agents;
   }
 
@@ -265,10 +205,33 @@ export class StateManager {
   }
 
   /**
-   * State check helpers (Simplified)
+   * Get Jarvis client
    */
+  getJarvisClient(): any {
+    return this.state.jarvisClient;
+  }
+
+  /**
+   * State check helpers
+   */
+  isIdle(): boolean {
+    return this.state.voiceButtonState === VoiceButtonState.IDLE;
+  }
+
+  isConnecting(): boolean {
+    return this.state.voiceButtonState === VoiceButtonState.CONNECTING;
+  }
+
   isReady(): boolean {
     return this.state.voiceButtonState === VoiceButtonState.READY;
+  }
+
+  isSpeaking(): boolean {
+    return this.state.voiceButtonState === VoiceButtonState.SPEAKING;
+  }
+
+  isResponding(): boolean {
+    return this.state.voiceButtonState === VoiceButtonState.RESPONDING;
   }
 
   isActive(): boolean {

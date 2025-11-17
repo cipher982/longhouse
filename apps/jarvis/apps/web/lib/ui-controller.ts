@@ -5,7 +5,6 @@
 
 import { VoiceButtonState, CONFIG } from './config';
 import { stateManager } from './state-manager';
-import { logger } from '@jarvis/core';
 
 /**
  * UI Controller class
@@ -35,15 +34,15 @@ export class UIController {
   }
 
   /**
-   * Cache DOM element references
+   * Cache DOM element references (using actual HTML IDs)
    */
   private cacheElements(): void {
-    this.voiceButton = document.getElementById('voiceButton') as HTMLButtonElement;
-    this.connectButton = document.getElementById('connectButton') as HTMLButtonElement;
+    this.voiceButton = document.getElementById('pttBtn') as HTMLButtonElement;
+    this.connectButton = null; // No connect button in current HTML
     this.statusLabel = document.querySelector('.voice-status-label') as HTMLDivElement;
     this.voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
     this.textInput = document.getElementById('textInput') as HTMLInputElement;
-    this.sendButton = document.getElementById('sendButton') as HTMLButtonElement;
+    this.sendButton = document.getElementById('sendTextBtn') as HTMLButtonElement;
     this.handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLInputElement;
     this.sidebar = document.getElementById('sidebar') as HTMLDivElement;
     this.sidebarToggle = document.getElementById('sidebarToggle') as HTMLButtonElement;
@@ -65,79 +64,68 @@ export class UIController {
   }
 
   /**
-   * Update voice button state (Simplified to 3 states)
+   * Update voice button state (adds classes to container for CSS compatibility)
    */
   updateButtonState(state: VoiceButtonState): void {
     if (!this.voiceButton || !this.voiceButtonContainer) return;
 
-    // Remove all state classes
+    // Remove all state classes from container
     this.voiceButtonContainer.classList.remove(
+      'state-idle',
+      'state-connecting',
       'state-ready',
+      'state-speaking',
+      'state-responding',
       'state-active',
       'state-processing'
     );
 
-    // Add current state class
-    this.voiceButtonContainer.classList.add(`state-${state}`);
+    // Map state to CSS class format
+    const stateClassMap = {
+      [VoiceButtonState.IDLE]: 'state-ready',        // Ready to connect
+      [VoiceButtonState.CONNECTING]: 'state-processing', // Connecting/Processing
+      [VoiceButtonState.READY]: 'state-ready',      // Ready to interact
+      [VoiceButtonState.SPEAKING]: 'state-active',  // User is speaking
+      [VoiceButtonState.RESPONDING]: 'state-active', // Assistant is responding
+      [VoiceButtonState.ACTIVE]: 'state-active',
+      [VoiceButtonState.PROCESSING]: 'state-processing'
+    } as Record<VoiceButtonState, string>;
 
-    // Update button attributes
+    // Add new state class to container
+    const cssStateClass = stateClassMap[state] || 'state-ready';
+    this.voiceButtonContainer.classList.add(cssStateClass);
+
+    // Update ARIA attributes
     switch (state) {
+      case VoiceButtonState.IDLE:
+        this.voiceButton.disabled = false;
+        this.voiceButton.setAttribute('aria-label', 'Disconnected - Click to connect');
+        this.voiceButton.setAttribute('data-state', 'idle');
+        break;
+
+      case VoiceButtonState.CONNECTING:
+        this.voiceButton.disabled = true;
+        this.voiceButton.setAttribute('aria-label', 'Connecting...');
+        this.voiceButton.setAttribute('data-state', 'connecting');
+        break;
+
       case VoiceButtonState.READY:
         this.voiceButton.disabled = false;
         this.voiceButton.setAttribute('aria-label', 'Ready - Click or hold to interact');
         this.voiceButton.setAttribute('data-state', 'ready');
         break;
 
-      case VoiceButtonState.ACTIVE:
+      case VoiceButtonState.SPEAKING:
         this.voiceButton.disabled = false;
-        this.voiceButton.setAttribute('aria-label', 'Active - Listening or speaking');
-        this.voiceButton.setAttribute('data-state', 'active');
+        this.voiceButton.setAttribute('aria-label', 'Speaking - Release to send');
+        this.voiceButton.setAttribute('data-state', 'speaking');
         break;
 
-      case VoiceButtonState.PROCESSING:
+      case VoiceButtonState.RESPONDING:
         this.voiceButton.disabled = true;
-        this.voiceButton.setAttribute('aria-label', 'Processing...');
-        this.voiceButton.setAttribute('data-state', 'processing');
+        this.voiceButton.setAttribute('aria-label', 'Assistant is responding...');
+        this.voiceButton.setAttribute('data-state', 'responding');
         break;
-    }
-
-    // Update connect button
-    this.updateConnectButton(state);
-
-    // Update hands-free toggle
-    this.updateHandsFreeToggle(state);
-  }
-
-  /**
-   * Update connect button state
-   */
-  private updateConnectButton(state: VoiceButtonState): void {
-    if (!this.connectButton) return;
-
-    const isConnected = stateManager.isConnected();
-
-    this.connectButton.textContent = isConnected ? 'Disconnect' : 'Connect';
-    this.connectButton.disabled = state === VoiceButtonState.PROCESSING;
-    this.connectButton.setAttribute('aria-pressed', isConnected.toString());
-  }
-
-  /**
-   * Update hands-free toggle state
-   */
-  private updateHandsFreeToggle(state: VoiceButtonState): void {
-    if (!this.handsFreeToggle) return;
-
-    const isConnected = stateManager.isConnected();
-    this.handsFreeToggle.disabled = !isConnected;
-
-    // Update parent label style
-    const label = this.handsFreeToggle.closest('label');
-    if (label) {
-      if (isConnected) {
-        label.classList.remove('disabled');
-      } else {
-        label.classList.add('disabled');
-      }
     }
   }
 
@@ -202,19 +190,15 @@ export class UIController {
   }
 
   /**
-   * Update text input state
+   * Show error message
    */
-  updateTextInputState(enabled: boolean): void {
-    if (!this.textInput || !this.sendButton) return;
+  showError(message: string): void {
+    this.updateStatus(`Error: ${message}`, false);
+    this.voiceButtonContainer?.classList.add('error');
 
-    this.textInput.disabled = !enabled;
-    this.sendButton.disabled = !enabled;
-
-    if (enabled) {
-      this.textInput.placeholder = 'Type a message...';
-    } else {
-      this.textInput.placeholder = 'Connect to start chatting';
-    }
+    setTimeout(() => {
+      this.voiceButtonContainer?.classList.remove('error');
+    }, CONFIG.UI.ANIMATION_DURATION_MS * 2);
   }
 
   /**
@@ -223,46 +207,6 @@ export class UIController {
   clearTextInput(): void {
     if (this.textInput) {
       this.textInput.value = '';
-    }
-  }
-
-  /**
-   * Get text input value
-   */
-  getTextInputValue(): string {
-    return this.textInput?.value || '';
-  }
-
-  /**
-   * Focus text input
-   */
-  focusTextInput(): void {
-    this.textInput?.focus();
-  }
-
-  /**
-   * Show connection error
-   */
-  showError(message: string): void {
-    this.updateStatus(`Error: ${message}`, false);
-    this.voiceButtonContainer?.classList.add('error');
-
-    // Remove error class after animation
-    setTimeout(() => {
-      this.voiceButtonContainer?.classList.remove('error');
-    }, CONFIG.UI.ANIMATION_DURATION_MS * 2);
-  }
-
-  /**
-   * Update conversation mode indicator
-   */
-  updateConversationMode(mode: 'voice' | 'text'): void {
-    // Update any UI elements that indicate current mode
-    document.body.setAttribute('data-conversation-mode', mode);
-
-    // Update status if needed
-    if (mode === 'text') {
-      this.updateStatus('Text mode', true);
     }
   }
 
