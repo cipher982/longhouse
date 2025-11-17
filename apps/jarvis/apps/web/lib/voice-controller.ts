@@ -6,6 +6,7 @@
 
 import { logger } from '@jarvis/core';
 import type { RealtimeSession } from '@openai/agents/realtime';
+import { eventBus } from './event-bus';
 
 // Voice state - single source of truth
 export interface VoiceState {
@@ -223,6 +224,9 @@ export class VoiceController {
       this.config.onFinalTranscript?.(text);
     }
 
+    // Emit event for backward compatibility with tests
+    eventBus.emit('voice_channel:transcript', { transcript: text, isFinal });
+
     logger.debug(`Transcript (final=${isFinal}):`, text.substring(0, 50));
   }
 
@@ -398,6 +402,8 @@ export class VoiceControllerCompat extends VoiceController {
    */
   arm(): void {
     this.startPTT();
+    // Emit event for backward compatibility
+    eventBus.emit('voice_channel:armed', { armed: true });
   }
 
   /**
@@ -405,6 +411,8 @@ export class VoiceControllerCompat extends VoiceController {
    */
   mute(): void {
     this.stopPTT();
+    // Emit event for backward compatibility
+    eventBus.emit('voice_channel:muted', { muted: true });
   }
 
   /**

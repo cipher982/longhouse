@@ -5,13 +5,13 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TextChannelController } from '../lib/text-channel-controller';
-import { VoiceChannelController } from '../lib/voice-channel-controller';
+import { VoiceControllerCompat } from '../lib/voice-controller';
 import { InteractionStateMachine } from '../lib/interaction-state-machine';
 import { eventBus } from '../lib/event-bus';
 
 describe('TextChannelController', () => {
   let textController: TextChannelController;
-  let voiceController: VoiceChannelController;
+  let voiceController: VoiceControllerCompat;
   let stateMachine: InteractionStateMachine;
   let mockSession: any;
 
@@ -22,7 +22,7 @@ describe('TextChannelController', () => {
       retryDelay: 10 // Short delay for tests
     });
 
-    voiceController = new VoiceChannelController();
+    voiceController = new VoiceControllerCompat();
     stateMachine = new InteractionStateMachine({
       mode: 'voice',
       armed: false,
