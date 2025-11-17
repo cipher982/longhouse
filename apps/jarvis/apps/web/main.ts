@@ -257,16 +257,39 @@ const audioFeedback = new AudioFeedback(feedbackPrefs.audio);
 function setVoiceButtonState(newState: VoiceButtonState): void {
   const currentState = stateManager.getState().voiceButtonState;
   if (currentState === newState) return; // No change needed
-  if (!pttBtn) return; // Guard against early calls before DOM ready
+  if (!pttBtn || !voiceButtonContainer) return; // Guard against early calls before DOM ready
 
   const oldState = currentState;
   stateManager.setVoiceButtonState(newState);
 
-  // Remove all state classes
+  // Remove all state classes from container
+  voiceButtonContainer.classList.remove('state-idle', 'state-ready', 'state-active', 'state-processing');
+
+  // Remove direct state classes from button (legacy cleanup)
   pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
 
-  // Add new state class
-  pttBtn.classList.add(newState);
+  // Map detailed states to CSS state classes on container
+  switch (newState) {
+    case VoiceButtonState.IDLE:
+      voiceButtonContainer.classList.add('state-idle');
+      break;
+    case VoiceButtonState.CONNECTING:
+      voiceButtonContainer.classList.add('state-processing');
+      break;
+    case VoiceButtonState.READY:
+      voiceButtonContainer.classList.add('state-ready');
+      break;
+    case VoiceButtonState.SPEAKING:
+    case VoiceButtonState.ACTIVE:
+      voiceButtonContainer.classList.add('state-active');
+      break;
+    case VoiceButtonState.RESPONDING:
+      voiceButtonContainer.classList.add('state-active');
+      break;
+    case VoiceButtonState.PROCESSING:
+      voiceButtonContainer.classList.add('state-processing');
+      break;
+  }
 
   // Update ARIA attributes and status label for screen readers
   switch (newState) {
