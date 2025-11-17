@@ -15,7 +15,6 @@
 import { eventBus } from './event-bus';
 import type { RealtimeSession } from '@openai/agents/realtime';
 import type { VoiceControllerCompat } from './voice-controller';
-import type { InteractionStateMachine } from './interaction-state-machine';
 
 export interface TextMessage {
   id: string;
@@ -35,7 +34,6 @@ export interface TextChannelConfig {
 export class TextChannelController {
   private session: RealtimeSession | null = null;
   private voiceController: VoiceControllerCompat | null = null;
-  private stateMachine: InteractionStateMachine | null = null;
   private connectCallback: (() => Promise<void>) | null = null;
 
   private config: TextChannelConfig;
@@ -69,13 +67,6 @@ export class TextChannelController {
    */
   setVoiceController(voiceController: VoiceControllerCompat): void {
     this.voiceController = voiceController;
-  }
-
-  /**
-   * Set the state machine (to switch to text mode)
-   */
-  setStateMachine(stateMachine: InteractionStateMachine): void {
-    this.stateMachine = stateMachine;
   }
 
   /**
@@ -182,9 +173,9 @@ export class TextChannelController {
     console.log('[TextController] Sending message:', message.text);
 
     // 1. Ensure we're in text mode
-    if (this.stateMachine && this.stateMachine.isVoiceMode()) {
+    if (this.voiceController && this.voiceController.isVoiceMode()) {
       console.log('[TextController] Switching to text mode');
-      this.stateMachine.transitionToText();
+      this.voiceController.transitionToText();
     }
 
     // 2. Ensure voice is muted
@@ -266,7 +257,6 @@ export class TextChannelController {
     this.clearQueue();
     this.session = null;
     this.voiceController = null;
-    this.stateMachine = null;
     this.connectCallback = null;
     console.log('[TextController] Disposed');
   }

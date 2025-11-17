@@ -11,7 +11,6 @@ import { contextLoader } from './contexts/context-loader';
 import type { VoiceAgentConfig } from './contexts/types';
 import { uiEnhancements } from './lib/ui-enhancements';
 import { RadialVisualizer } from './lib/radial-visualizer';
-import { InteractionStateMachine } from './lib/interaction-state-machine';
 import { VoiceControllerCompat, type VoiceState } from './lib/voice-controller';
 import { TextChannelController } from './lib/text-channel-controller';
 import {
@@ -65,7 +64,6 @@ let statusActive = false;
 let pendingUserText = '';
 
 // Voice/Text Separation Controllers (Phase 11 - Jarvis Voice/Text Separation)
-let interactionStateMachine: InteractionStateMachine;
 let voiceController: VoiceControllerCompat;
 let textChannelController: TextChannelController;
 
@@ -1116,8 +1114,8 @@ async function connect(): Promise<void> {
     setVoiceButtonState(VoiceButtonState.READY);
 
     // Ensure we're in voice mode after connection (if conversationMode is voice)
-    if (conversationMode === 'voice' && interactionStateMachine.isTextMode()) {
-      interactionStateMachine.transitionToVoice({
+    if (conversationMode === 'voice' && voiceController.isTextMode()) {
+      voiceController.transitionToVoice({
         armed: false,
         handsFree: false
       });
@@ -1553,11 +1551,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // Initialize controllers BEFORE setting up event handlers
   // This prevents "undefined" errors when users interact before initializeApp completes
   console.log('🎛️ Initializing interaction controllers (sync)...');
-  interactionStateMachine = new InteractionStateMachine({
-    mode: 'voice',
-    armed: false,
-    handsFree: false
-  });
 
   // Configure voiceController with state change callbacks
   voiceController = new VoiceControllerCompat({
@@ -1574,12 +1567,7 @@ document.addEventListener("DOMContentLoaded", () => {
       // Handle mode transitions
       if (state.active && conversationMode !== 'voice') {
         conversationMode = 'voice';
-        if (interactionStateMachine.isTextMode()) {
-          interactionStateMachine.transitionToVoice({
-            armed: state.armed,
-            handsFree: state.handsFree
-          });
-        }
+        // VoiceController now handles interaction mode internally
       }
 
       // Handle audio feedback
@@ -1616,7 +1604,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Wire controllers together (sync)
   textChannelController.setVoiceController(voiceController);
-  textChannelController.setStateMachine(interactionStateMachine);
   textChannelController.setConnectCallback(connect);
 
   console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
@@ -1701,7 +1688,6 @@ function setupEventHandlers(): void {
 
           // voiceController's state change callback already handles:
           // - stateManager.setVoiceButtonState(SPEAKING)
-          // - interactionStateMachine.armVoice()
           // - setMicState(true)
           // - ensurePendingUserBubble()
         }
@@ -1714,7 +1700,6 @@ function setupEventHandlers(): void {
         voiceController.stopPTT();
 
         // voiceController's state change callback already handles:
-        // - interactionStateMachine.muteVoice()
         // - stateManager.setVoiceButtonState(READY) (for PTT)
         // - setMicState(false)
       }
@@ -1732,21 +1717,18 @@ function setupEventHandlers(): void {
       console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
       // CRITICAL: If enabling hands-free while in text mode, transition to voice mode first
-      // Otherwise voiceController.setHandsFree() will arm the mic while state machine
-      // thinks we're still in text mode, breaking voice/text separation
-      if (enabled && interactionStateMachine.isTextMode()) {
+      // Otherwise voiceController.setHandsFree() will arm the mic while we're
+      // still in text mode, breaking voice/text separation
+      if (enabled && voiceController.isTextMode()) {
         console.log('[HandsFree] Transitioning from text to voice mode');
         conversationMode = 'voice';
-        interactionStateMachine.transitionToVoice({
+        voiceController.transitionToVoice({
           armed: false,
-          handsFree: true  // Will be set by setHandsFree below
+          handsFree: false  // Will be set by setHandsFree below
         });
       }
 
-      // Update state machine
-      interactionStateMachine.setHandsFree(enabled);
-
-      // Update voice controller (now safe because we're in voice mode)
+      // Update voice controller hands-free mode
       voiceController.setHandsFree(enabled);
 
       // Show toast

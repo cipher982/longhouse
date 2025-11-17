@@ -6,13 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VoiceControllerCompat } from '../lib/voice-controller';
 import { TextChannelController } from '../lib/text-channel-controller';
-import { InteractionStateMachine } from '../lib/interaction-state-machine';
 import { eventBus } from '../lib/event-bus';
 
 describe('Voice/Text Separation Integration', () => {
   let voiceController: VoiceControllerCompat;
   let textController: TextChannelController;
-  let stateMachine: InteractionStateMachine;
   let mockSession: any;
 
   beforeEach(async () => {
@@ -29,12 +27,6 @@ describe('Voice/Text Separation Integration', () => {
     });
     await textController.initialize();
 
-    stateMachine = new InteractionStateMachine({
-      mode: 'voice',
-      armed: false,
-      handsFree: false
-    });
-
     // Mock session
     mockSession = {
       sendMessage: vi.fn().mockResolvedValue(undefined)
@@ -43,7 +35,6 @@ describe('Voice/Text Separation Integration', () => {
     // Wire controllers together
     textController.setSession(mockSession);
     textController.setVoiceController(voiceController);
-    textController.setStateMachine(stateMachine);
     voiceController.setSession(mockSession);
   });
 
@@ -53,7 +44,7 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', handler);
 
       // Simulate PTT press
-      stateMachine.armVoice();
+      voiceController.armVoice();
 
       // Simulate partial transcript (like user is speaking)
       voiceController.handleTranscript('Hello', false);
@@ -69,9 +60,9 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', handler);
 
       // Simulate PTT press and release
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Hello wor', false); // Partial
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       // OpenAI sends final transcript AFTER release
       voiceController.handleTranscript('Hello world', true); // Final
@@ -87,9 +78,9 @@ describe('Voice/Text Separation Integration', () => {
       const handler = vi.fn();
       eventBus.on('voice_channel:transcript', handler);
 
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Hello', false);
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       // Ambient noise after release (partial)
       voiceController.handleTranscript('TV noise', false);
@@ -102,7 +93,7 @@ describe('Voice/Text Separation Integration', () => {
   describe('Text mode isolation', () => {
     it('should mute voice when sending text', async () => {
       // Start in voice mode, armed
-      stateMachine.armVoice();
+      voiceController.armVoice();
       expect(voiceController.isArmed()).toBe(true);
 
       // Send text message
@@ -110,7 +101,7 @@ describe('Voice/Text Separation Integration', () => {
 
       // Voice should be muted
       expect(voiceController.isArmed()).toBe(false);
-      expect(stateMachine.isTextMode()).toBe(true);
+      expect(voiceController.isTextMode()).toBe(true);
     });
 
     it('should drop ambient transcripts in text mode', async () => {
@@ -141,7 +132,7 @@ describe('Voice/Text Separation Integration', () => {
       }
 
       // Switch back to voice
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
 
       // Next transcript should be fresh (no replay of previous 10)
       voiceController.handleTranscript('Fresh speech', false);
@@ -156,7 +147,7 @@ describe('Voice/Text Separation Integration', () => {
 
   describe('Hands-free mode', () => {
     it('should auto-arm when enabling hands-free', () => {
-      stateMachine.setHandsFree(true);
+      voiceController.setHandsFree(true);
 
       expect(voiceController.isHandsFreeEnabled()).toBe(true);
       // Note: Controller arming happens via event listener, not directly from state machine
@@ -199,7 +190,7 @@ describe('Voice/Text Separation Integration', () => {
 
   describe('State machine synchronization', () => {
     it('should keep voice controller in sync via events', async () => {
-      // Subscribe to state changes (simulating what VoiceChannelController does)
+      // Subscribe to state changes (simulating integration)
       eventBus.on('state:changed', ({ to }) => {
         if (to.mode === 'voice') {
           if (to.armed && !voiceController.isArmed()) {
@@ -215,11 +206,11 @@ describe('Voice/Text Separation Integration', () => {
       });
 
       // Transition to voice and arm
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
       expect(voiceController.isArmed()).toBe(true);
 
       // Transition to text
-      stateMachine.transitionToText();
+      voiceController.transitionToText();
       expect(voiceController.isArmed()).toBe(false);
     });
 
@@ -228,15 +219,15 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', handler);
 
       // Voice → arm → transcript
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Voice 1', false);
 
       // Text → should drop
-      stateMachine.transitionToText();
+      voiceController.transitionToText();
       voiceController.handleTranscript('Should drop', false);
 
       // Back to voice → arm → transcript
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
       voiceController.handleTranscript('Voice 2', false);
 
       expect(handler).toHaveBeenCalledTimes(2);
@@ -251,11 +242,11 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', handler);
 
       // User presses PTT
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Hello wor', false); // Partial
 
       // User releases PTT
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
       expect(voiceController.isArmed()).toBe(false);
 
       // OpenAI sends final transcript after 50ms delay (typical)
@@ -271,9 +262,9 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', handler);
 
       // First PTT interaction
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('First speech', false);
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       // Ambient noise while muted (TV playing)
       for (let i = 0; i < 5; i++) {
@@ -281,7 +272,7 @@ describe('Voice/Text Separation Integration', () => {
       }
 
       // Second PTT interaction
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Second speech', false);
 
       // Should only have the 2 real speeches, not the 5 TV noises
@@ -308,26 +299,26 @@ describe('Voice/Text Separation Integration', () => {
 
     it('should handle hands-free toggle from text mode', () => {
       // Switch to text mode
-      stateMachine.transitionToText();
-      expect(stateMachine.isTextMode()).toBe(true);
+      voiceController.transitionToText();
+      expect(voiceController.isTextMode()).toBe(true);
 
       // Try to enable hands-free (should warn but not crash)
       const consoleSpy = vi.spyOn(console, 'warn');
-      stateMachine.setHandsFree(true);
+      voiceController.setHandsFree(true);
 
       expect(consoleSpy).toHaveBeenCalled();
-      expect(stateMachine.isTextMode()).toBe(true);
-      expect(stateMachine.isHandsFreeEnabled()).toBe(false);
+      expect(voiceController.isTextMode()).toBe(true);
+      expect(voiceController.isHandsFreeEnabled()).toBe(false);
     });
 
     it('should transition to voice before enabling hands-free from text', () => {
-      stateMachine.transitionToText();
+      voiceController.transitionToText();
 
       // Proper way: transition to voice first
-      stateMachine.transitionToVoice({ armed: false, handsFree: true });
+      voiceController.transitionToVoice({ armed: false, handsFree: true });
       voiceController.setHandsFree(true);
 
-      expect(stateMachine.isVoiceMode()).toBe(true);
+      expect(voiceController.isVoiceMode()).toBe(true);
       expect(voiceController.isHandsFreeEnabled()).toBe(true);
     });
   });
@@ -359,9 +350,9 @@ describe('Voice/Text Separation Integration', () => {
 
       // Rapid arm/mute cycles
       for (let i = 0; i < 10; i++) {
-        stateMachine.armVoice();
+        voiceController.armVoice();
         voiceController.handleTranscript(`Message ${i}`, false);
-        stateMachine.muteVoice();
+        voiceController.muteVoice();
       }
 
       // Should have exactly 10 transcripts (all during armed windows)
@@ -370,25 +361,23 @@ describe('Voice/Text Separation Integration', () => {
 
     it('should maintain state consistency across multiple transitions', () => {
       // Complex sequence
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
-      expect(stateMachine.isVoiceMode()).toBe(true);
-      expect(stateMachine.isVoiceArmed()).toBe(true);
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
+      expect(voiceController.isVoiceMode()).toBe(true);
+      expect(voiceController.isVoiceArmed()).toBe(true);
 
-      stateMachine.muteVoice();
-      expect(stateMachine.isVoiceArmed()).toBe(false);
+      voiceController.muteVoice();
+      expect(voiceController.isVoiceArmed()).toBe(false);
 
-      stateMachine.transitionToText();
-      expect(stateMachine.isTextMode()).toBe(true);
+      voiceController.transitionToText();
+      expect(voiceController.isTextMode()).toBe(true);
 
-      stateMachine.transitionToVoice({ armed: false, handsFree: true });
-      expect(stateMachine.isHandsFreeEnabled()).toBe(true);
+      voiceController.transitionToVoice({ armed: false, handsFree: true });
+      expect(voiceController.isHandsFreeEnabled()).toBe(true);
 
       // State should be consistent throughout
-      const state = stateMachine.getState();
-      expect(state.mode).toBe('voice');
-      if (state.mode === 'voice') {
-        expect(state.handsFree).toBe(true);
-      }
+      const state = voiceController.getState();
+      expect(state.interactionMode).toBe('voice');
+      expect(state.handsFree).toBe(true);
     });
   });
 
@@ -418,10 +407,10 @@ describe('Voice/Text Separation Integration', () => {
 
       // Send text message
       await textController.sendText('First message');
-      expect(stateMachine.isTextMode()).toBe(true);
+      expect(voiceController.isTextMode()).toBe(true);
 
       // User presses PTT (transitions back to voice)
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
       voiceController.handleTranscript('Voice message', false);
 
       // Should process voice transcript
@@ -434,10 +423,10 @@ describe('Voice/Text Separation Integration', () => {
 
       // Send text message
       await textController.sendText('Text message');
-      expect(stateMachine.isTextMode()).toBe(true);
+      expect(voiceController.isTextMode()).toBe(true);
 
       // Transition to voice mode first (UI handler does this)
-      stateMachine.transitionToVoice({ armed: false, handsFree: true });
+      voiceController.transitionToVoice({ armed: false, handsFree: true });
       voiceController.setHandsFree(true);
 
       // Should now process continuous transcripts
@@ -452,10 +441,10 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', transcriptHandler);
 
       // First PTT: User speaks
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('Check my calendar', false);
       voiceController.handleTranscript('Check my calendar', true); // Final
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       // TV noise between interactions
       for (let i = 0; i < 5; i++) {
@@ -463,10 +452,10 @@ describe('Voice/Text Separation Integration', () => {
       }
 
       // Second PTT: User speaks again
-      stateMachine.armVoice();
+      voiceController.armVoice();
       voiceController.handleTranscript('What time is it', false);
       voiceController.handleTranscript('What time is it', true); // Final
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       // Should have exactly 4 transcripts (2 partial + 2 final), no TV noise
       expect(transcriptHandler).toHaveBeenCalledTimes(4);
@@ -479,23 +468,23 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('voice_channel:transcript', transcriptHandler);
 
       // Voice - use state machine which triggers controller via events
-      stateMachine.armVoice();
+      voiceController.armVoice();
       // Verify controller is armed via event listener
       expect(voiceController.isArmed()).toBe(true);
       voiceController.handleTranscript('Voice 1', false);
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
       expect(voiceController.isArmed()).toBe(false);
 
       // Text
       await textController.sendText('Text 1');
-      expect(stateMachine.isTextMode()).toBe(true);
+      expect(voiceController.isTextMode()).toBe(true);
 
       // Voice - transition back to voice
-      stateMachine.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
       // Verify controller is armed via event listener
       expect(voiceController.isArmed()).toBe(true);
       voiceController.handleTranscript('Voice 2', false);
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
       expect(voiceController.isArmed()).toBe(false);
 
       // Text
@@ -518,12 +507,12 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('state:changed', () => events.push('state_changed'));
 
       // Arm through state machine, which triggers controller via event
-      stateMachine.armVoice();
+      voiceController.armVoice();
       // Verify controller is armed
       expect(voiceController.isArmed()).toBe(true);
       // Now transcript should be processed
       voiceController.handleTranscript('Test', false);
-      stateMachine.muteVoice();
+      voiceController.muteVoice();
 
       expect(events).toContain('armed');
       expect(events).toContain('muted');

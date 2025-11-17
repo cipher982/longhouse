@@ -6,13 +6,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TextChannelController } from '../lib/text-channel-controller';
 import { VoiceControllerCompat } from '../lib/voice-controller';
-import { InteractionStateMachine } from '../lib/interaction-state-machine';
 import { eventBus } from '../lib/event-bus';
 
 describe('TextChannelController', () => {
   let textController: TextChannelController;
   let voiceController: VoiceControllerCompat;
-  let stateMachine: InteractionStateMachine;
   let mockSession: any;
 
   beforeEach(() => {
@@ -23,11 +21,6 @@ describe('TextChannelController', () => {
     });
 
     voiceController = new VoiceControllerCompat();
-    stateMachine = new InteractionStateMachine({
-      mode: 'voice',
-      armed: false,
-      handsFree: false
-    });
 
     // Mock session
     mockSession = {
@@ -36,7 +29,6 @@ describe('TextChannelController', () => {
 
     textController.setSession(mockSession);
     textController.setVoiceController(voiceController);
-    textController.setStateMachine(stateMachine);
 
     eventBus.clear();
   });
@@ -72,11 +64,11 @@ describe('TextChannelController', () => {
     });
 
     it('should switch to text mode', async () => {
-      expect(stateMachine.getState().mode).toBe('voice');
+      expect(voiceController.getState().interactionMode).toBe('voice');
 
       await textController.sendText('Hello');
 
-      expect(stateMachine.getState().mode).toBe('text');
+      expect(voiceController.getState().interactionMode).toBe('text');
     });
 
     it('should mute voice controller', async () => {
@@ -110,7 +102,6 @@ describe('TextChannelController', () => {
 
       autoConnectController.setConnectCallback(mockConnect);
       autoConnectController.setVoiceController(voiceController);
-      autoConnectController.setStateMachine(stateMachine);
 
       // No session initially
       autoConnectController.setSession(null);

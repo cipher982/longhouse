@@ -6,11 +6,12 @@
 
 import { logger } from '@jarvis/core';
 import type { RealtimeSession } from '@openai/agents/realtime';
-import { eventBus } from './event-bus';
+import { eventBus, type InteractionState } from './event-bus';
 
 // Voice state - single source of truth
 export interface VoiceState {
   mode: 'ptt' | 'vad' | 'off';
+  interactionMode: 'voice' | 'text';  // Overall interaction mode
   active: boolean;  // Is mic currently hot?
   armed: boolean;   // Ready to receive input?
   handsFree: boolean;
@@ -33,6 +34,7 @@ export interface VoiceConfig {
 export class VoiceController {
   private state: VoiceState = {
     mode: 'ptt',
+    interactionMode: 'voice',
     active: false,
     armed: false,
     handsFree: false,
@@ -63,6 +65,24 @@ export class VoiceController {
    */
   getState(): Readonly<VoiceState> {
     return { ...this.state };
+  }
+
+  /**
+   * Convert VoiceState to InteractionState for event bus
+   */
+  private toInteractionState(state?: VoiceState): InteractionState {
+    const s = state || this.state;
+    if (s.interactionMode === 'voice') {
+      return {
+        mode: 'voice',
+        armed: s.armed,
+        handsFree: s.handsFree
+      };
+    } else {
+      return {
+        mode: 'text'
+      };
+    }
   }
 
   /**
@@ -106,6 +126,8 @@ export class VoiceController {
   startPTT(): void {
     logger.info('PTT pressed - arming voice');
 
+    const from = { ...this.state };
+
     this.setState({
       mode: 'ptt',
       active: true,
@@ -115,8 +137,13 @@ export class VoiceController {
       finalTranscript: ''
     });
 
-    // Emit event for backward compatibility
+    // Emit events for backward compatibility
     eventBus.emit('voice_channel:armed', { armed: true });
+    eventBus.emit('state:changed', {
+      from: this.toInteractionState(from),
+      to: this.toInteractionState(),
+      timestamp: Date.now()
+    });
 
     // Start microphone capture if session exists
     if (this.session) {
@@ -135,14 +162,21 @@ export class VoiceController {
   stopPTT(): void {
     logger.info('PTT released - muting voice');
 
+    const from = { ...this.state };
+
     this.setState({
       active: false,
       armed: false,
       pttActive: false
     });
 
-    // Emit event for backward compatibility
+    // Emit events for backward compatibility
     eventBus.emit('voice_channel:muted', { muted: true });
+    eventBus.emit('state:changed', {
+      from: this.toInteractionState(from),
+      to: this.toInteractionState(),
+      timestamp: Date.now()
+    });
 
     // Stop microphone but keep session alive
     this.stopMicrophone();
@@ -181,6 +215,12 @@ export class VoiceController {
    * Enable/disable hands-free mode
    */
   setHandsFree(enabled: boolean): void {
+    // Guard: Can't enable hands-free in text mode
+    if (enabled && this.isTextMode()) {
+      console.warn('[VoiceController] Cannot enable hands-free in text mode. Transition to voice mode first.');
+      return;
+    }
+
     logger.info(`Hands-free mode ${enabled ? 'enabled' : 'disabled'}`);
 
     if (enabled) {
@@ -349,6 +389,74 @@ export class VoiceController {
     });
   }
 
+  // ============= Interaction Mode Management =============
+
+  /**
+   * Check if in voice interaction mode
+   */
+  isVoiceMode(): boolean {
+    return this.state.interactionMode === 'voice';
+  }
+
+  /**
+   * Check if in text interaction mode
+   */
+  isTextMode(): boolean {
+    return this.state.interactionMode === 'text';
+  }
+
+  /**
+   * Transition to voice interaction mode
+   */
+  transitionToVoice(options?: { armed?: boolean; handsFree?: boolean }): void {
+    const from = { ...this.state };
+
+    this.setState({
+      interactionMode: 'voice',
+      armed: options?.armed ?? false,
+      handsFree: options?.handsFree ?? false
+    });
+
+    // If arming, emit the armed event
+    if (options?.armed) {
+      eventBus.emit('voice_channel:armed', { armed: true });
+    }
+
+    // Emit state:changed event for backward compatibility
+    eventBus.emit('state:changed', {
+      from: this.toInteractionState(from),
+      to: this.toInteractionState(),
+      timestamp: Date.now()
+    });
+
+    logger.info('Transitioned to voice mode', options);
+  }
+
+  /**
+   * Transition to text interaction mode
+   */
+  transitionToText(): void {
+    const from = { ...this.state };
+
+    // Mute voice when switching to text
+    if (this.state.armed) {
+      this.stopPTT();
+    }
+
+    this.setState({
+      interactionMode: 'text'
+    });
+
+    // Emit state:changed event for backward compatibility
+    eventBus.emit('state:changed', {
+      from: this.toInteractionState(from),
+      to: this.toInteractionState(),
+      timestamp: Date.now()
+    });
+
+    logger.info('Transitioned to text mode');
+  }
+
   // ============= VAD Configuration =============
 
   /**
@@ -372,6 +480,7 @@ export class VoiceController {
     this.stopMicrophone();
     this.session = null;
     this.setState({
+      interactionMode: 'voice',
       active: false,
       armed: false,
       pttActive: false,
@@ -387,33 +496,8 @@ export class VoiceController {
 // These methods help with migration from old voice modules
 
 export class VoiceControllerCompat extends VoiceController {
-  constructor(config: VoiceConfig = {}) {
-    super(config);
-
-    // Subscribe to state machine events for backward compatibility
-    eventBus.on('state:changed', ({ to }: any) => {
-      // If transitioning to text mode, mute the voice controller
-      if (to.mode === 'text' && this.isArmed()) {
-        this.mute();
-        return;
-      }
-
-      // Handle voice mode transitions
-      if (to.mode === 'voice') {
-        // Handle arming/muting
-        if (to.armed && !this.isArmed()) {
-          this.arm();
-        } else if (!to.armed && this.isArmed()) {
-          this.mute();
-        }
-
-        // Handle hands-free mode
-        if (to.handsFree !== this.getState().handsFree) {
-          this.setHandsFree(to.handsFree);
-        }
-      }
-    });
-  }
+  // Note: No longer subscribes to state:changed events
+  // VoiceController is now the source of truth for interaction state
 
   // Compatibility properties for old interface
   get armed(): boolean {
@@ -452,6 +536,39 @@ export class VoiceControllerCompat extends VoiceController {
   mute(): void {
     this.stopPTT();
     // Event is now emitted in stopPTT()
+  }
+
+  /**
+   * Compatibility: Arm voice (alias for arm)
+   */
+  armVoice(): void {
+    this.arm();
+  }
+
+  /**
+   * Compatibility: Mute voice (alias for mute)
+   */
+  muteVoice(): void {
+    this.mute();
+  }
+
+  /**
+   * Compatibility: Check if voice is armed
+   */
+  isVoiceArmed(): boolean {
+    return this.isVoiceMode() && this.isArmed();
+  }
+
+  /**
+   * Compatibility: Get state (for backward compatibility with stateMachine.getState())
+   */
+  getInteractionState() {
+    const state = this.getState();
+    return {
+      mode: state.interactionMode,
+      armed: state.armed,
+      handsFree: state.handsFree
+    };
   }
 
   /**

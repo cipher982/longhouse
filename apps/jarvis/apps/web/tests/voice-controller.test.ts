@@ -43,6 +43,7 @@ describe('VoiceController', () => {
       const state = controller.getState();
       expect(state).toEqual({
         mode: 'ptt',
+        interactionMode: 'voice',
         active: false,
         armed: false,
         handsFree: false,
@@ -310,6 +311,7 @@ describe('VoiceController', () => {
       const state = controller.getState();
       expect(state).toEqual({
         mode: 'ptt',
+        interactionMode: 'voice',
         active: false,
         armed: false,
         handsFree: false,
