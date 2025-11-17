@@ -196,13 +196,14 @@ export class VoiceController {
         logger.error('Failed to start microphone for hands-free:', err);
       });
     } else {
-      // When disabling hands-free, stay armed (user must manually mute)
+      // When disabling hands-free, unarm back to PTT-ready state
       this.setState({
         handsFree: false,
+        armed: false,
+        active: false,
         mode: 'ptt'
-        // Keep armed state as-is
       });
-      // Don't stop microphone - let user manually mute
+      this.stopMicrophone();
     }
   }
 
@@ -391,6 +392,13 @@ export class VoiceControllerCompat extends VoiceController {
 
     // Subscribe to state machine events for backward compatibility
     eventBus.on('state:changed', ({ to }: any) => {
+      // If transitioning to text mode, mute the voice controller
+      if (to.mode === 'text' && this.isArmed()) {
+        this.mute();
+        return;
+      }
+
+      // Handle voice mode transitions
       if (to.mode === 'voice') {
         // Handle arming/muting
         if (to.armed && !this.isArmed()) {

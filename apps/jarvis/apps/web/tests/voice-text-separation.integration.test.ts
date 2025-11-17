@@ -176,7 +176,7 @@ describe('Voice/Text Separation Integration', () => {
       expect(handler).toHaveBeenCalledTimes(2);
     });
 
-    it('should require manual mute after disabling hands-free', () => {
+    it('should unarm when disabling hands-free', () => {
       const handler = vi.fn();
       eventBus.on('voice_channel:transcript', handler);
 
@@ -184,18 +184,16 @@ describe('Voice/Text Separation Integration', () => {
       voiceController.handleTranscript('First', false);
 
       voiceController.setHandsFree(false);
-      // Controller stays armed after disabling hands-free
-      voiceController.handleTranscript('Second', false);
-
-      // Both transcripts work because controller is still armed
-      expect(handler).toHaveBeenCalledTimes(2);
-
-      // Must explicitly mute to stop processing
-      voiceController.mute();
+      // Controller is now unarmed after disabling hands-free
       voiceController.handleTranscript('Should drop', false);
 
-      // Still only 2 transcripts (third was dropped)
-      expect(handler).toHaveBeenCalledTimes(2);
+      // Only first transcript works (second is dropped because unarmed)
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].transcript).toBe('First');
+
+      // Controller is ready for PTT again
+      expect(voiceController.isArmed()).toBe(false);
+      expect(voiceController.getState().mode).toBe('ptt');
     });
   });
 
