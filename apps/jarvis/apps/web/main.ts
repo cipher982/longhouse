@@ -269,9 +269,10 @@ function setVoiceButtonState(newState: VoiceButtonState): void {
   pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
 
   // Map detailed states to CSS state classes on container
+  // Note: IDLE maps to 'state-ready' to maintain purple affordance when disconnected
   switch (newState) {
     case VoiceButtonState.IDLE:
-      voiceButtonContainer.classList.add('state-idle');
+      voiceButtonContainer.classList.add('state-ready'); // Ready to connect
       break;
     case VoiceButtonState.CONNECTING:
       voiceButtonContainer.classList.add('state-processing');
