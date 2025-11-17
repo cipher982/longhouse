@@ -8,6 +8,7 @@ import { CONFIG } from './config';
 class AudioFeedback {
   private enabled: boolean;
   private audioContext: AudioContext | null = null;
+  private supported: boolean;
 
   constructor(enabled: boolean = true) {
     this.enabled = enabled;
@@ -19,9 +20,40 @@ class AudioFeedback {
 
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.supported = true;
     } catch (error) {
       console.warn('Audio not supported:', error);
+      this.supported = false;
     }
+  }
+
+  // Resume audio context (Safari autoplay fix) - must be called from user gesture
+  async resumeContext(): Promise<void> {
+    if (!this.supported || !this.audioContext) return;
+
+    if (this.audioContext.state === 'suspended') {
+      try {
+        await this.audioContext.resume();
+        console.debug('AudioContext resumed from user gesture');
+      } catch (error) {
+        // Silently fail - might not be a user gesture context
+      }
+    }
+  }
+
+  // Soft chime (connection success) - compatibility method
+  playConnectChime(): void {
+    this.onConnect();
+  }
+
+  // Brief tick (voice detected) - compatibility method
+  playVoiceTick(): void {
+    this.onStartSpeaking();
+  }
+
+  // Gentle error tone - compatibility method
+  playErrorTone(): void {
+    this.onError();
   }
 
   playTone(frequency: number, duration: number): void {
@@ -145,6 +177,25 @@ export class FeedbackSystem {
 
   setAudioEnabled(enabled: boolean): void {
     this.audio.setEnabled(enabled);
+  }
+
+  // Compatibility methods for legacy AudioFeedback API
+  async resumeContext(): Promise<void> {
+    if (this.audio && (this.audio as any).resumeContext) {
+      await (this.audio as any).resumeContext();
+    }
+  }
+
+  playConnectChime(): void {
+    this.onConnect();
+  }
+
+  playVoiceTick(): void {
+    this.onStartSpeaking();
+  }
+
+  playErrorTone(): void {
+    this.onError();
   }
 
   cleanup(): void {

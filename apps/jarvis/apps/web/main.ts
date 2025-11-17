@@ -1073,11 +1073,15 @@ async function connect(): Promise<void> {
 
       if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
         voiceChannelController.handleSpeechStart();
+        // Route VAD state change to voiceManager for UI updates
+        voiceManager.handleVADStateChange(true);
       }
 
       if (t.includes('input_audio_buffer') &&
           (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
         voiceChannelController.handleSpeechStop();
+        // Route VAD state change to voiceManager for UI updates
+        voiceManager.handleVADStateChange(false);
       }
 
       if (t.startsWith('response.output_audio')) {
@@ -1685,6 +1689,9 @@ function setupEventHandlers(): void {
 
     // Set up mouse/touch PTT handlers via voiceManager (keeps keyboard separate for accessibility)
     voiceManager.setupVoiceButton(pttBtn);
+
+    // Set up keyboard shortcuts for PTT (Space bar) - Phase 7 accessibility
+    voiceManager.setupKeyboardShortcuts();
 
     console.log('✅ Microphone button handlers attached');
   } else {
