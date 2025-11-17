@@ -1693,6 +1693,50 @@ function setupEventHandlers(): void {
     // Set up keyboard shortcuts for PTT (Space bar) - Phase 7 accessibility
     voiceManager.setupKeyboardShortcuts();
 
+    // Button-level keyboard handlers for Space/Enter (critical for accessibility)
+    // These handle keyboard activation on the focused button
+    pttBtn.onkeydown = async (e: KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        audioFeedback.resumeContext().catch(() => {});
+
+        if (stateManager.isIdle()) {
+          conversationMode = 'voice'; // Switch to voice mode when connecting
+          await connect();
+          return;
+        }
+
+        if (canStartPTT() && stateManager.isReady()) {
+          conversationMode = 'voice'; // Switch to voice mode when using mic
+
+          // Transition to voice mode through state machine
+          if (interactionStateMachine.isTextMode()) {
+            interactionStateMachine.transitionToVoice({
+              armed: true,
+              handsFree: false
+            });
+          } else {
+            // Already in voice mode, just arm
+            interactionStateMachine.armVoice();
+          }
+
+          // Note: voiceManager already updated stateManager.setVoiceButtonState(SPEAKING)
+          await setMicState(true);
+          ensurePendingUserBubble();
+        }
+      }
+    };
+
+    pttBtn.onkeyup = (e: KeyboardEvent) => {
+      if ((e.key === ' ' || e.key === 'Enter') && stateManager.isSpeaking()) {
+        // MUTE through state machine
+        interactionStateMachine.muteVoice();
+
+        // voiceManager handles the button state, we just need to handle mic/audio
+        setMicState(false).catch(() => {});
+      }
+    };
+
     console.log('✅ Microphone button handlers attached');
   } else {
     console.error('❌ Microphone button (pttBtn) not found');
@@ -1881,7 +1925,7 @@ window.setHapticFeedback = (enabled: boolean) => {
 
 window.setAudioFeedback = (enabled: boolean) => {
   feedbackPrefs.audio = enabled;
-  audioFeedback.setEnabled(enabled);
+  audioFeedback.setAudioEnabled(enabled);
   saveFeedbackPreferences(feedbackPrefs);
   console.log(`Audio feedback ${enabled ? 'enabled' : 'disabled'}`);
 };

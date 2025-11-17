@@ -8,7 +8,7 @@ import { CONFIG } from './config';
 class AudioFeedback {
   private enabled: boolean;
   private audioContext: AudioContext | null = null;
-  private supported: boolean;
+  private supported: boolean = false;
 
   constructor(enabled: boolean = true) {
     this.enabled = enabled;
@@ -43,17 +43,90 @@ class AudioFeedback {
 
   // Soft chime (connection success) - compatibility method
   playConnectChime(): void {
-    this.onConnect();
+    if (!this.enabled || !this.supported) return;
+    try {
+      const ctx = this.audioContext;
+      if (!ctx) return;
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(523.25, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(659.25, ctx.currentTime + 0.1);
+
+      gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.2);
+    } catch (error) {
+      // Silently fail
+    }
   }
 
   // Brief tick (voice detected) - compatibility method
   playVoiceTick(): void {
-    this.onStartSpeaking();
+    if (!this.enabled || !this.supported) return;
+    try {
+      const ctx = this.audioContext;
+      if (!ctx) return;
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.05, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.05);
+    } catch (error) {
+      // Silently fail
+    }
   }
 
   // Gentle error tone - compatibility method
   playErrorTone(): void {
-    this.onError();
+    if (!this.enabled || !this.supported) return;
+    try {
+      const ctx = this.audioContext;
+      if (!ctx) return;
+
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.frequency.setValueAtTime(300, ctx.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.3);
+
+      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.3);
+    } catch (error) {
+      // Silently fail
+    }
   }
 
   playTone(frequency: number, duration: number): void {
@@ -187,15 +260,18 @@ export class FeedbackSystem {
   }
 
   playConnectChime(): void {
-    this.onConnect();
+    // Call the internal AudioFeedback's playConnectChime
+    (this.audio as any).playConnectChime();
   }
 
   playVoiceTick(): void {
-    this.onStartSpeaking();
+    // Call the internal AudioFeedback's playVoiceTick
+    (this.audio as any).playVoiceTick();
   }
 
   playErrorTone(): void {
-    this.onError();
+    // Call the internal AudioFeedback's playErrorTone
+    (this.audio as any).playErrorTone();
   }
 
   cleanup(): void {
