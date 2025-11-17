@@ -23,7 +23,6 @@ import {
 
 import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
-import { websocketHandler } from './lib/websocket-handler';
 import { feedbackSystem } from './lib/feedback-system';
 import { eventBus } from './lib/event-bus';
 
@@ -1061,14 +1060,25 @@ async function connect(): Promise<void> {
     stateManager.setSession(newSession);
     stateManager.setAgent(sessionAgent); // Update stateManager with new agent
 
-    // Setup event listeners via websocketHandler
-    websocketHandler.setupSessionHandlers(session);
-
-    // Additional session event handlers (beyond websocketHandler's basic routing)
-    // VAD speech detection - delegate to voiceController
+    // Setup session event handlers directly (no more websocketHandler wrapper)
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
+      // Transcript handling
+      if (t === 'conversation.item.input_audio_transcription.delta') {
+        voiceController.handleTranscript(event.delta || '', false);
+      }
+
+      if (t === 'conversation.item.input_audio_transcription.completed') {
+        voiceController.handleTranscript(event.transcript || '', true);
+      }
+
+      // Assistant message handling
+      if (t.startsWith('response.output_audio') || t === 'response.output_text.delta') {
+        handleStreamingDelta(event.delta || '');
+      }
+
+      // VAD speech detection
       if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
         voiceController.handleSpeechStart();
       }
@@ -1078,14 +1088,17 @@ async function connect(): Promise<void> {
         voiceController.handleSpeechStop();
       }
 
+      // Speaker monitoring
       if (t.startsWith('response.output_audio')) {
         void startSpeakerMonitor();
       }
 
+      // Response handling
       if (t === 'response.done') {
         handleResponseComplete(event);
       }
 
+      // Conversation item handling
       if (t === 'conversation.item.added') {
         handleConversationItemAdded(event);
       }
@@ -1093,6 +1106,15 @@ async function connect(): Promise<void> {
       if (t === 'conversation.item.done') {
         handleConversationItemDone(event);
       }
+    });
+
+    // Error events
+    session.on('error', (error: any) => {
+      logger.error('WebSocket event error', error);
+      setTranscript(`Voice error: ${error.message}`, true);
+      triggerHaptic([100, 50, 100]);
+      audioFeedback.playErrorTone();
+      setVoiceButtonState(VoiceButtonState.IDLE);
     });
 
     // History updates for conversation persistence
@@ -1608,29 +1630,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
 
-  // Configure websocketHandler with callbacks for event processing
-  websocketHandler.setConfig({
-    onTranscript: (text, isFinal) => {
-      // Route ALL transcripts through voiceController for gating
-      // This handles the critical "final transcript after PTT release" case
-      voiceController.handleTranscript(text, isFinal);
-    },
-    onAssistantMessage: (text) => {
-      // Route assistant messages to streaming handler
-      handleStreamingDelta(text);
-    },
-    onError: (error) => {
-      // Handle errors from WebSocket/realtime events
-      logger.error('WebSocket event error', error);
-      setTranscript(`Voice error: ${error.message}`, true);
-
-      // Error feedback
-      triggerHaptic([100, 50, 100]);
-      audioFeedback.playErrorTone();
-
-      setVoiceButtonState(VoiceButtonState.IDLE);
-    }
-  });
+  // WebSocket event handling now wired directly in connect() function
+  // (no more websocketHandler wrapper)
 
   setupEventHandlers();
   initializeApp();
