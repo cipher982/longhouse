@@ -24,6 +24,7 @@ import {
 
 import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
+import { voiceManager } from './lib/voice-manager';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -1763,6 +1764,60 @@ document.addEventListener("DOMContentLoaded", () => {
 
   console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
 
+  // Configure voiceManager with callbacks for PTT handling
+  voiceManager.setConfig({
+    onPTTPress: async () => {
+      // Resume AudioContext from user gesture (Safari autoplay fix)
+      audioFeedback.resumeContext().catch(() => {});
+
+      conversationMode = 'voice'; // Switch to voice mode when using mic
+
+      // Transition to voice mode through state machine (ensures proper event emission)
+      if (interactionStateMachine.isTextMode()) {
+        interactionStateMachine.transitionToVoice({
+          armed: true,
+          handsFree: false
+        });
+      } else {
+        // Already in voice mode, just arm
+        interactionStateMachine.armVoice();
+      }
+
+      // Note: voiceManager already updated stateManager.setVoiceButtonState(SPEAKING)
+      await setMicState(true);
+      ensurePendingUserBubble();
+    },
+    onPTTRelease: () => {
+      // MUTE through state machine (ensures proper event emission)
+      interactionStateMachine.muteVoice();
+
+      // voiceManager handles the button state, we just need to handle mic/audio
+      // (setMicState handles the audio stream and UI beyond button state)
+      setMicState(false).catch(() => {});
+    },
+    onVADStateChange: (active) => {
+      // Handle VAD state changes - voiceManager handles button state
+      // We just need to handle audio, UI extras, and pending bubble
+      if (active) {
+        audioFeedback.playVoiceTick();
+        setListeningMode(true).catch(() => {});
+        ensurePendingUserBubble();
+      } else {
+        setListeningMode(false).catch(() => {});
+      }
+    },
+    onTranscript: (text, isFinal) => {
+      // Only update UI if transcript was not gated
+      if (voiceChannelController.isArmed() || voiceChannelController.isHandsFreeEnabled()) {
+        if (!isFinal) {
+          updatePendingUserPlaceholder(text);
+        } else {
+          handleUserTranscript(text);
+        }
+      }
+    }
+  });
+
   setupEventHandlers();
   initializeApp();
   // Optional autoconnect via ?autoconnect=1 or localStorage 'jarvis.autoconnect' = 'true'
@@ -1791,83 +1846,8 @@ function setupEventHandlers(): void {
       }
     };
 
-    pttBtn.onpointerdown = async (e) => {
-      // Resume AudioContext from user gesture (Safari autoplay fix)
-      audioFeedback.resumeContext().catch(() => {});
-
-      // Only handle PTT if already connected and ready
-      if (!canStartPTT()) return;
-
-      conversationMode = 'voice'; // Switch to voice mode when using mic
-
-      // Transition to voice mode through state machine (ensures proper event emission)
-      if (interactionStateMachine.isTextMode()) {
-        interactionStateMachine.transitionToVoice({
-          armed: true,
-          handsFree: false
-        });
-      } else {
-        // Already in voice mode, just arm
-        interactionStateMachine.armVoice();
-      }
-
-      setVoiceButtonState(VoiceButtonState.SPEAKING);
-      await setMicState(true);
-      ensurePendingUserBubble();
-    };
-
-    pttBtn.onpointerup = pttBtn.onpointerleave = () => {
-      if (!stateManager.isSpeaking()) return;
-
-      // MUTE through state machine (ensures proper event emission)
-      interactionStateMachine.muteVoice();
-
-      setVoiceButtonState(VoiceButtonState.READY);
-      setMicState(false);
-    };
-
-    // Keyboard navigation support (Phase 7 - Accessibility)
-    pttBtn.onkeydown = async (e: KeyboardEvent) => {
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        audioFeedback.resumeContext().catch(() => {});
-
-        if (stateManager.isIdle()) {
-          conversationMode = 'voice'; // Switch to voice mode when connecting
-          await connect();
-          return;
-        }
-
-        if (canStartPTT() && stateManager.isReady()) {
-          conversationMode = 'voice'; // Switch to voice mode when using mic
-
-          // Transition to voice mode through state machine (ensures proper event emission)
-          if (interactionStateMachine.isTextMode()) {
-            interactionStateMachine.transitionToVoice({
-              armed: true,
-              handsFree: false
-            });
-          } else {
-            // Already in voice mode, just arm
-            interactionStateMachine.armVoice();
-          }
-
-          setVoiceButtonState(VoiceButtonState.SPEAKING);
-          await setMicState(true);
-          ensurePendingUserBubble();
-        }
-      }
-    };
-
-    pttBtn.onkeyup = (e: KeyboardEvent) => {
-      if ((e.key === ' ' || e.key === 'Enter') && stateManager.isSpeaking()) {
-        // MUTE through state machine (ensures proper event emission)
-        interactionStateMachine.muteVoice();
-
-        setVoiceButtonState(VoiceButtonState.READY);
-        setMicState(false);
-      }
-    };
+    // Set up mouse/touch PTT handlers via voiceManager (keeps keyboard separate for accessibility)
+    voiceManager.setupVoiceButton(pttBtn);
 
     console.log('✅ Microphone button handlers attached');
   } else {
@@ -1897,6 +1877,9 @@ function setupEventHandlers(): void {
 
       // Update voice controller (now safe because we're in voice mode)
       voiceChannelController.setHandsFree(enabled);
+
+      // Update voiceManager to track hands-free state
+      voiceManager.handleHandsFreeToggle(enabled);
 
       // Show toast
       uiEnhancements.showToast(
