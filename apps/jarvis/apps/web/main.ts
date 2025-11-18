@@ -53,7 +53,7 @@ let currentContext: VoiceAgentConfig | null = null;
 // (avoid multiple writers / race conditions)
 
 // Jarvis-Zerg integration
-let conversationMode: 'voice' | 'text' = 'voice';
+// Removed: conversationMode - now use voiceController.getState().interactionMode as source of truth
 let taskInbox: TaskInbox | null = null;
 let jarvisClient = getJarvisClient(import.meta.env?.VITE_ZERG_API_URL || 'http://localhost:47300');
 let cachedAgents: JarvisAgentSummary[] = [];
@@ -1135,8 +1135,8 @@ async function connect(): Promise<void> {
     // Update button to ready state
     setVoiceButtonState(VoiceButtonState.READY);
 
-    // Ensure we're in voice mode after connection (if conversationMode is voice)
-    if (conversationMode === 'voice' && voiceController.isTextMode()) {
+    // Ensure we're in voice mode after connection (default behavior)
+    if (voiceController.isTextMode()) {
       voiceController.transitionToVoice({
         armed: false,
         handsFree: false
@@ -1586,11 +1586,7 @@ document.addEventListener("DOMContentLoaded", () => {
         stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
       }
 
-      // Handle mode transitions
-      if (state.active && conversationMode !== 'voice') {
-        conversationMode = 'voice';
-        // VoiceController now handles interaction mode internally
-      }
+      // Mode transitions handled by voiceController internally
 
       // Handle audio feedback
       if (state.vadActive) {
@@ -1658,7 +1654,6 @@ function setupEventHandlers(): void {
 
       // If not connected, clicking the button initiates connection
       if (stateManager.isIdle()) {
-        conversationMode = 'voice'; // Switch to voice mode when connecting
         await connect();
         return;
       }
@@ -1678,7 +1673,6 @@ function setupEventHandlers(): void {
         audioFeedback.resumeContext().catch(() => {});
 
         if (stateManager.isIdle()) {
-          conversationMode = 'voice'; // Switch to voice mode when connecting
           await connect();
           return;
         }
@@ -1722,7 +1716,6 @@ function setupEventHandlers(): void {
       // still in text mode, breaking voice/text separation
       if (enabled && voiceController.isTextMode()) {
         console.log('[HandsFree] Transitioning from text to voice mode');
-        conversationMode = 'voice';
         voiceController.transitionToVoice({
           armed: false,
           handsFree: false  // Will be set by setHandsFree below
@@ -1788,11 +1781,9 @@ function setupEventHandlers(): void {
 
         // CRITICAL: Set conversation mode to text BEFORE sending
         // This ensures auto-connect won't transition back to voice mode
-        conversationMode = 'text';
-
         try {
           // TextChannelController will handle:
-          // - Switching to text mode
+          // - Switching to text mode (via voiceController.transitionToText())
           // - Muting voice channel
           // - Auto-connecting if needed
           // - Error handling and retries

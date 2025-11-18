@@ -2,19 +2,19 @@
 # Development and Production targets
 
 # Builder stage - shared dependencies
-FROM node:20-alpine AS builder
+FROM oven/bun:alpine AS builder
 
 WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package*.json ./
-RUN npm install
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build React app for production
-RUN npm run build
+RUN bun run build
 
 # Production target - nginx serving static files
 FROM nginx:alpine AS production
@@ -35,13 +35,13 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 
 # Development target - Vite dev server with hot reload
-FROM node:20-alpine AS development
+FROM oven/bun:alpine AS development
 
 WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm install
+RUN bun install --frozen-lockfile
 
 # Copy source code (will be overridden by volume mount in docker-compose)
 COPY . .
@@ -49,7 +49,7 @@ COPY . .
 # Expose Vite dev server port
 EXPOSE 5173
 
-# Run Vite dev server with hot reload
+# Run Vite dev server with hot reload using Bun
 # --host 0.0.0.0 allows access from outside the container
 # --port 5173 explicitly sets the port to match EXPOSE directive
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+CMD ["bun", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

@@ -158,8 +158,9 @@ export class VoiceController {
 
   /**
    * Stop push-to-talk
+   * @param skipEvents - Skip event emissions (used internally for mode transitions)
    */
-  stopPTT(): void {
+  stopPTT(skipEvents: boolean = false): void {
     logger.info('PTT released - muting voice');
 
     const from = { ...this.state };
@@ -170,13 +171,15 @@ export class VoiceController {
       pttActive: false
     });
 
-    // Emit events for backward compatibility
-    eventBus.emit('voice_channel:muted', { muted: true });
-    eventBus.emit('state:changed', {
-      from: this.toInteractionState(from),
-      to: this.toInteractionState(),
-      timestamp: Date.now()
-    });
+    // Emit events for backward compatibility (unless called from mode transition)
+    if (!skipEvents) {
+      eventBus.emit('voice_channel:muted', { muted: true });
+      eventBus.emit('state:changed', {
+        from: this.toInteractionState(from),
+        to: this.toInteractionState(),
+        timestamp: Date.now()
+      });
+    }
 
     // Stop microphone but keep session alive
     this.stopMicrophone();
@@ -438,16 +441,16 @@ export class VoiceController {
   transitionToText(): void {
     const from = { ...this.state };
 
-    // Mute voice when switching to text
+    // Mute voice when switching to text (skip events to avoid double emission)
     if (this.state.armed) {
-      this.stopPTT();
+      this.stopPTT(true);  // Skip events - we'll emit one transition event below
     }
 
     this.setState({
       interactionMode: 'text'
     });
 
-    // Emit state:changed event for backward compatibility
+    // Emit single state:changed event for the mode transition
     eventBus.emit('state:changed', {
       from: this.toInteractionState(from),
       to: this.toInteractionState(),
