@@ -21,13 +21,21 @@ export interface VoiceState {
   pttActive: boolean;
 }
 
-// Configuration
+// Configuration with comprehensive callback API
 export interface VoiceConfig {
+  // VAD Configuration
   vadThreshold?: number;
   silenceDuration?: number;
   prefixPadding?: number;
+
+  // Lifecycle Callbacks (replace event-bus)
   onStateChange?: (state: VoiceState) => void;
+  onArmed?: () => void;
+  onMuted?: () => void;
+  onTranscript?: (text: string, isFinal: boolean) => void;
   onFinalTranscript?: (text: string) => void;
+  onVADStateChange?: (active: boolean) => void;
+  onModeTransition?: (from: 'voice' | 'text', to: 'voice' | 'text') => void;
   onError?: (error: Error) => void;
 }
 
@@ -137,7 +145,10 @@ export class VoiceController {
       finalTranscript: ''
     });
 
-    // Emit events for backward compatibility
+    // Call callbacks (new pattern)
+    this.config.onArmed?.();
+
+    // Emit events for backward compatibility (temporary)
     eventBus.emit('voice_channel:armed', { armed: true });
     eventBus.emit('state:changed', {
       from: this.toInteractionState(from),
@@ -171,6 +182,11 @@ export class VoiceController {
       pttActive: false
     });
 
+    // Call callbacks (new pattern)
+    if (!skipEvents) {
+      this.config.onMuted?.();
+    }
+
     // Emit events for backward compatibility (unless called from mode transition)
     if (!skipEvents) {
       eventBus.emit('voice_channel:muted', { muted: true });
@@ -201,6 +217,9 @@ export class VoiceController {
       vadActive: active,
       active: active
     });
+
+    // Call callback (new pattern)
+    this.config.onVADStateChange?.(active);
 
     if (active) {
       this.startMicrophone().catch(err => {
@@ -279,6 +298,9 @@ export class VoiceController {
       // Notify listener of final transcript
       this.config.onFinalTranscript?.(text);
     }
+
+    // Call transcript callback (new pattern)
+    this.config.onTranscript?.(text, isFinal);
 
     // Emit event for backward compatibility with tests
     eventBus.emit('voice_channel:transcript', { transcript: text, isFinal });
@@ -413,6 +435,7 @@ export class VoiceController {
    */
   transitionToVoice(options?: { armed?: boolean; handsFree?: boolean }): void {
     const from = { ...this.state };
+    const fromMode = from.interactionMode;
 
     this.setState({
       interactionMode: 'voice',
@@ -420,7 +443,15 @@ export class VoiceController {
       handsFree: options?.handsFree ?? false
     });
 
-    // If arming, emit the armed event
+    // Call callbacks (new pattern)
+    if (fromMode !== 'voice') {
+      this.config.onModeTransition?.(fromMode, 'voice');
+    }
+    if (options?.armed) {
+      this.config.onArmed?.();
+    }
+
+    // If arming, emit the armed event (backward compatibility)
     if (options?.armed) {
       eventBus.emit('voice_channel:armed', { armed: true });
     }
@@ -440,17 +471,23 @@ export class VoiceController {
    */
   transitionToText(): void {
     const from = { ...this.state };
+    const fromMode = from.interactionMode;
 
     // Mute voice when switching to text (skip events to avoid double emission)
     if (this.state.armed) {
-      this.stopPTT(true);  // Skip events - we'll emit one transition event below
+      this.stopPTT(true);  // Skip events - we'll call callbacks below
     }
 
     this.setState({
       interactionMode: 'text'
     });
 
-    // Emit single state:changed event for the mode transition
+    // Call callback (new pattern)
+    if (fromMode !== 'text') {
+      this.config.onModeTransition?.(fromMode, 'text');
+    }
+
+    // Emit single state:changed event for the mode transition (backward compatibility)
     eventBus.emit('state:changed', {
       from: this.toInteractionState(from),
       to: this.toInteractionState(),
