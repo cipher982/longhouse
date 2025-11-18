@@ -44,7 +44,6 @@ let session: RealtimeSession | null = null;
 let sessionManager: SessionManager | null = null;
 let conversationUI: ConversationUI | null = null;
 let conversationRenderer: ConversationRenderer | null = null;
-let currentConversationId: string | null = null; // Will be moved to conversationController
 // voiceButtonState now managed by stateManager
 let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
@@ -520,7 +519,7 @@ if ('serviceWorker' in navigator) {
 
 // Utility functions: delegate status messages to ConversationRenderer
 function setTranscript(msg: string, muted = false): void {
-  if (currentStreamingMessageId) return; // Don't override streaming content
+  if (conversationController.isStreaming()) return; // Don't override streaming content
   if (conversationRenderer) conversationRenderer.setStatus(msg, muted);
   statusActive = true;
 }
@@ -856,14 +855,10 @@ const whoopTool = tool({
   }
 });
 
-// Enhanced streaming UI functions - now using ConversationController
-let currentStreamingMessageId: string | null = null;
-let currentStreamingText = '';
+// Enhanced streaming UI functions - now delegate to ConversationController
 
 function startStreamingResponse(): void {
   logger.debug('Starting streaming response');
-
-  if (!conversationRenderer) return;
 
   // Update button state to show assistant is responding
   setVoiceButtonState(VoiceButtonState.RESPONDING);
@@ -871,48 +866,19 @@ function startStreamingResponse(): void {
   // Clear status if currently showing (e.g., "Connecting…")
   clearStatusIfActive();
 
-  // Create streaming message through renderer instead of direct DOM manipulation
-  currentStreamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  currentStreamingText = '';
-
-  conversationRenderer.addMessage({
-    id: currentStreamingMessageId,
-    role: 'assistant',
-    content: '',
-    timestamp: new Date(),
-    isStreaming: true
-  });
+  // Start streaming via controller
+  conversationController.startStreaming();
 }
 
 function updateStreamingText(): void {
-  if (!conversationRenderer || !currentStreamingMessageId) return;
-
-  // Update streaming message content through renderer
-  conversationRenderer.updateMessage(currentStreamingMessageId, {
-    content: currentStreamingText,
-    isStreaming: true
-  });
+  // No-op: streaming updates happen via appendStreaming in handleStreamingDelta
 }
 
 function finalizeStreamingResponse(): void {
-  if (!conversationRenderer || !currentStreamingMessageId) return;
+  conversationController.finalizeStreaming();
 
-  logger.streamingResponse(currentStreamingText, true);
-
-  // Finalize streaming message through renderer
-  conversationRenderer.updateMessage(currentStreamingMessageId, {
-    content: currentStreamingText,
-    isStreaming: false
-  });
-
-  // Record the finalized streaming response to IndexedDB
-  if (currentStreamingText) {
-    recordConversationTurn('assistant', currentStreamingText);
-  }
-
-  // Clean up
-  currentStreamingMessageId = null;
-  currentStreamingText = '';
+  // Reset button state after response complete
+  setVoiceButtonState(VoiceButtonState.READY);
 }
 
 
@@ -929,58 +895,6 @@ function addToolCallToUI(toolName: string, result: any): void {
   });
 }
 
-async function recordConversationTurn(type: string, content: string): Promise<void> {
-  if (!sessionManager) return;
-  
-  try {
-    const turn: ConversationTurn = {
-      id: crypto.randomUUID(),
-      timestamp: new Date(),
-      conversationId: currentConversationId || undefined,
-      ...(type === 'user' 
-        ? { userTranscript: content } 
-        : { assistantResponse: content }
-      )
-    };
-    
-    await sessionManager.addConversationTurn(turn);
-    logger.debug('Recorded conversation turn', `${type}: ${content.substring(0, 50)}...`);
-  } catch (error) {
-    console.error('Failed to record conversation turn:', error);
-  }
-}
-
-// Load and display conversation history in UI using ConversationRenderer
-async function loadConversationHistoryIntoUI(): Promise<void> {
-  if (!sessionManager || !currentConversationId || !conversationRenderer) {
-    if (conversationRenderer) {
-      conversationRenderer.clear();
-    }
-    if (conversationRenderer) conversationRenderer.setStatus('Tap the microphone to start', true);
-    return;
-  }
-
-  try {
-    const history = await sessionManager.getConversationHistory();
-
-    if (history.length === 0) {
-      conversationRenderer.clear();
-      conversationRenderer.setStatus('No messages yet - tap the microphone to start', true);
-      return;
-    }
-
-    // Use renderer's loadFromHistory method - this ensures proper ordering
-    conversationRenderer.loadFromHistory(history);
-
-    logger.conversation('Loaded conversation turns into UI', history.length);
-  } catch (error) {
-    console.error('Failed to load conversation history:', error);
-    if (conversationRenderer) {
-      conversationRenderer.clear();
-      conversationRenderer.setStatus('Failed to load conversation history', true);
-    }
-  }
-}
 
 // Enhanced UI functions - now delegate to ConversationController
 function addUserTurnToUI(transcript: string, timestamp?: Date): void {
@@ -1047,7 +961,11 @@ async function connect(): Promise<void> {
 
       // Assistant message handling
       if (t.startsWith('response.output_audio') || t === 'response.output_text.delta') {
-        handleStreamingDelta(event.delta || '');
+        const delta = event.delta || '';
+        if (delta) {
+          logger.delta(delta);
+          conversationController.appendStreaming(delta);
+        }
       }
 
       // VAD speech detection
@@ -1072,11 +990,11 @@ async function connect(): Promise<void> {
 
       // Conversation item handling
       if (t === 'conversation.item.added') {
-        handleConversationItemAdded(event);
+        conversationController.handleItemAdded(event);
       }
 
       if (t === 'conversation.item.done') {
-        handleConversationItemDone(event);
+        conversationController.handleItemDone(event);
       }
     });
 
@@ -1139,40 +1057,17 @@ async function connect(): Promise<void> {
 }
 
 // Enhanced event handlers (preserve our streaming UI)
-function handleStreamingDelta(delta: any): void {
-  if (!delta) return;
-
-  logger.delta(delta);
-  
-  if (!currentStreamingMessageId) {
-    startStreamingResponse();
-  }
-  
-  currentStreamingText += delta;
-  updateStreamingText();
-}
-
 function handleResponseComplete(event: any): void {
   logger.debug('Response completed', event);
 
-  if (currentStreamingMessageId && currentStreamingText) {
+  if (conversationController.isStreaming()) {
     finalizeStreamingResponse();
-
-    // Note: recordConversationTurn is called inside finalizeStreamingResponse via addAssistantTurnToUI
   }
 
   // Return to ready state after assistant finishes responding
   if (stateManager.isResponding()) {
     setVoiceButtonState(VoiceButtonState.READY);
   }
-}
-
-function handleConversationItemAdded(event: any): void {
-  logger.debug('Conversation item added', event.item);
-}
-
-function handleConversationItemDone(event: any): void {
-  logger.debug('Conversation item completed', event.item);
 }
 
 async function handleUserTranscript(transcript: any): Promise<void> {
@@ -1185,8 +1080,17 @@ async function handleUserTranscript(transcript: any): Promise<void> {
     conversationRenderer.updateMessage(pendingUserMessageId, {
       content: finalText || '—',
     });
-    // Persist finalized user turn
-    recordConversationTurn('user', finalText);
+    // Persist finalized user turn (recordTurn is now handled internally by conversationController)
+    // But since we're using the pending message approach, we need to persist manually
+    if (sessionManager) {
+      const turn: ConversationTurn = {
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+        conversationId: conversationController.getConversationId() || undefined,
+        userTranscript: finalText
+      };
+      await sessionManager.addConversationTurn(turn);
+    }
     // Clear pending state
     pendingUserMessageId = null;
     pendingUserText = '';
@@ -1265,23 +1169,24 @@ const handleNewConversation = async () => {
     if (isConnected()) {
       await disconnect();
     }
-    
+
     if (conversationRenderer) {
       conversationRenderer.clear();
       conversationRenderer.setStatus('Starting new conversation...', true);
     }
-    currentConversationId = await sessionManager.createNewConversation();
-    console.log('📝 Started new conversation:', currentConversationId);
-    
+    const newConversationId = await sessionManager.createNewConversation();
+    conversationController.setConversationId(newConversationId);
+    stateManager.setConversationId(newConversationId);
+    console.log('📝 Started new conversation:', newConversationId);
+
     // Update conversation UI
-    await conversationUI.addNewConversation(currentConversationId);
-    
+    await conversationUI.addNewConversation(newConversationId);
+
     // Clear UI state for fresh start
-    currentStreamingMessageId = null;
-    currentStreamingText = '';
-    
+    conversationController.clear();
+
     // Load empty conversation history (will show "No messages yet")
-    await loadConversationHistoryIntoUI();
+    await conversationController.loadHistory();
   } catch (error) {
     console.error('Failed to create new conversation:', error);
     setTranscript("Failed to create new conversation.", true);
@@ -1298,10 +1203,9 @@ const handleClearConversations = async () => {
     await sessionManager.clearAllConversations();
     await conversationUI.loadConversations();
     conversationUI.clearConversations();
-    currentConversationId = null;
-    currentStreamingMessageId = null;
-    currentStreamingText = '';
-    conversationRenderer.clear();
+    conversationController.setConversationId(null);
+    stateManager.setConversationId(null);
+    conversationController.clear();
     conversationRenderer.setStatus('No conversations yet - start a new one', true);
     logger.success('All conversations cleared');
     uiEnhancements.showToast('All conversations cleared', 'success');
@@ -1354,19 +1258,19 @@ async function initializeApp(): Promise<void> {
     sessionManager = createSessionManagerForContext(currentContext);
     stateManager.setSessionManager(sessionManager);
     conversationController.setSessionManager(sessionManager);
-    currentConversationId = await sessionManager.initializeSession(currentContext, contextName);
-    stateManager.setConversationId(currentConversationId);
-    conversationController.setConversationId(currentConversationId);
-    
+    const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
+    stateManager.setConversationId(initialConversationId);
+    conversationController.setConversationId(initialConversationId);
+
     // Initialize conversation UI
     conversationUI = new ConversationUI();
     conversationUI.setSessionManager(sessionManager);
     await conversationUI.loadConversations();
-    
-    if (currentConversationId) {
-      console.log(`🔄 Resumed conversation: ${currentConversationId}`);
-      conversationUI.setActiveConversation(currentConversationId);
-      await loadConversationHistoryIntoUI();
+
+    if (initialConversationId) {
+      console.log(`🔄 Resumed conversation: ${initialConversationId}`);
+      conversationUI.setActiveConversation(initialConversationId);
+      await conversationController.loadHistory();
     } else {
       console.log(`🆕 No existing conversation - ready for new one`);
       setTranscript(`Ready to start new conversation - tap the microphone`, true);
@@ -1444,18 +1348,19 @@ window.addEventListener('conversationSwitched', async (event: any) => {
   if (isConnected()) {
     await disconnect();
   }
-  
-  currentConversationId = conversationId;
-  
+
+  conversationController.setConversationId(conversationId);
+  stateManager.setConversationId(conversationId);
+
   // Clear transcript and show loading via renderer
   if (conversationRenderer) {
     conversationRenderer.clear();
     conversationRenderer.setStatus('Loading conversation...', true);
   }
-  
+
   // Load conversation history into UI
-  await loadConversationHistoryIntoUI();
-  
+  await conversationController.loadHistory();
+
   console.log(`✅ Conversation ${conversationId} loaded and ready`);
 });
 
@@ -1475,17 +1380,19 @@ window.addEventListener('contextChanged', async (event: any) => {
 
   sessionManager = createSessionManagerForContext(config);
   stateManager.setSessionManager(sessionManager);
-  currentConversationId = await sessionManager.initializeSession(config, contextName);
-  stateManager.setConversationId(currentConversationId);
+  conversationController.setSessionManager(sessionManager);
+  const contextConversationId = await sessionManager.initializeSession(config, contextName);
+  stateManager.setConversationId(contextConversationId);
+  conversationController.setConversationId(contextConversationId);
 
   if (conversationUI) {
     conversationUI.setSessionManager(sessionManager);
     await conversationUI.loadConversations();
 
-    if (currentConversationId) {
-      conversationUI.setActiveConversation(currentConversationId);
-      await loadConversationHistoryIntoUI();
-      console.log(`🔄 Session reinitialized for ${config.name}, resumed conversation: ${currentConversationId}`);
+    if (contextConversationId) {
+      conversationUI.setActiveConversation(contextConversationId);
+      await conversationController.loadHistory();
+      console.log(`🔄 Session reinitialized for ${config.name}, resumed conversation: ${contextConversationId}`);
     } else {
       setTranscript(`${config.name} - tap the microphone to start`, true);
       console.log(`🔄 Session reinitialized for ${config.name}, ready for new conversation`);
@@ -1813,12 +1720,11 @@ declare global {
   interface Window {
     addUserTurnToUI: typeof addUserTurnToUI;
     addAssistantTurnToUI: typeof addAssistantTurnToUI;
-    loadConversationHistoryIntoUI: typeof loadConversationHistoryIntoUI;
-    currentStreamingMessageId: string | null;
     debugConversations: () => Promise<void>;
     syncNow: () => Promise<{ pushed: number; pulled: number }>;
     flushLocal: () => Promise<void>;
     ConversationRenderer: typeof ConversationRenderer;
+    conversationController: typeof conversationController;
     // Feedback preferences (Phase 6)
     getFeedbackPreferences: () => FeedbackPreferences;
     setHapticFeedback: (enabled: boolean) => void;
@@ -1829,8 +1735,8 @@ declare global {
 
 window.addUserTurnToUI = addUserTurnToUI;
 window.addAssistantTurnToUI = addAssistantTurnToUI;
-window.loadConversationHistoryIntoUI = loadConversationHistoryIntoUI;
 window.ConversationRenderer = ConversationRenderer;
+window.conversationController = conversationController;
 window.syncNow = async () => {
   if (!sessionManager) return { pushed: 0, pulled: 0 };
   return await sessionManager.syncNow();
@@ -1872,13 +1778,14 @@ window.debugConversations = async () => {
     console.log('❌ No session manager');
     return;
   }
-  
+
   const conversations = await sessionManager.getAllConversations();
   console.log('📋 All conversations:', conversations);
-  
-  if (currentConversationId) {
+
+  const currentId = conversationController.getConversationId();
+  if (currentId) {
     const history = await sessionManager.getConversationHistory();
-    console.log(`💬 Current conversation (${currentConversationId}) history:`, history);
+    console.log(`💬 Current conversation (${currentId}) history:`, history);
   }
 };
 
