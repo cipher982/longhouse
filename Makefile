@@ -89,7 +89,7 @@ test-jarvis: ## Run Jarvis tests only
 test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."
 	cd apps/zerg/backend && ./run_backend_tests.sh
-	cd apps/zerg/frontend-web && npm test
+	cd apps/zerg/frontend-web && bun run test
 	cd apps/zerg/e2e && npx playwright test
 
 # ---------------------------------------------------------------------------

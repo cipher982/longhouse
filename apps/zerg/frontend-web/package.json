@@ -6,16 +6,16 @@
   "scripts": {
     "build:tokens": "node ./scripts/build-design-tokens.mjs",
     "dev": "vite",
-    "predev": "npm run build:tokens",
-    "prebuild": "npm run build:tokens",
+    "predev": "bun run build:tokens",
+    "prebuild": "bun run build:tokens",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "node ./scripts/run-vitest.mjs",
     "generate:api": "openapi-typescript ../openapi.json --output src/generated/openapi-types.ts",
-    "validate:contracts": "node --loader ts-node/esm ./scripts/contract-validator.ts",
+    "validate:contracts": "bun ./scripts/contract-validator.ts",
     "validate:types": "tsc --noEmit --skipLibCheck",
-    "precommit": "npm run validate:types && npm run validate:contracts && npm test -- --run"
+    "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",
@@ -38,7 +38,6 @@
     "@typescript-eslint/parser": "^8.44.1",
     "@vitejs/plugin-react": "^4.3.1",
     "eslint": "^9.9.1",
-    "ts-node": "^10.9.2",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.8",
