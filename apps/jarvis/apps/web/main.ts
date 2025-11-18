@@ -11,7 +11,7 @@ import { contextLoader } from './contexts/context-loader';
 import type { VoiceAgentConfig } from './contexts/types';
 import { uiEnhancements } from './lib/ui-enhancements';
 import { RadialVisualizer } from './lib/radial-visualizer';
-import { VoiceControllerCompat, type VoiceState } from './lib/voice-controller';
+import { VoiceController, type VoiceState } from './lib/voice-controller';
 import { TextChannelController } from './lib/text-channel-controller';
 import {
   VoiceButtonState,
@@ -61,7 +61,7 @@ let statusActive = false;
 let pendingUserText = '';
 
 // Voice/Text Separation Controllers (Phase 11 - Jarvis Voice/Text Separation)
-let voiceController: VoiceControllerCompat;
+let voiceController: VoiceController;
 let textChannelController: TextChannelController;
 
 // Haptic & Audio Feedback System (Phase 6)
@@ -1456,7 +1456,7 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log('🎛️ Initializing interaction controllers (sync)...');
 
   // Configure voiceController with state change callbacks
-  voiceController = new VoiceControllerCompat({
+  voiceController = new VoiceController({
     onStateChange: (state: VoiceState) => {
       // Update UI based on voice state
       if (state.pttActive) {
@@ -1484,6 +1484,42 @@ document.addEventListener("DOMContentLoaded", () => {
         ensurePendingUserBubble();
       } else {
         setMicState(false).catch(() => {});
+      }
+    },
+    onArmed: () => {
+      // Voice armed - update UI state
+      setVoiceButtonState(VoiceButtonState.READY);
+      logger.debug('Voice armed via callback');
+    },
+    onMuted: () => {
+      // Voice muted - update UI state
+      setVoiceButtonState(VoiceButtonState.READY);
+      logger.debug('Voice muted via callback');
+    },
+    onTranscript: (text: string, isFinal: boolean) => {
+      // Handle transcript updates
+      if (!isFinal) {
+        updatePendingUserPlaceholder(text);
+      }
+      logger.debug(`Transcript callback (final=${isFinal}):`, text.substring(0, 50));
+    },
+    onVADStateChange: (active: boolean) => {
+      // Handle VAD state changes
+      if (active) {
+        audioFeedback.playVoiceTick();
+        setListeningMode(true).catch(() => {});
+        ensurePendingUserBubble();
+      } else {
+        setListeningMode(false).catch(() => {});
+      }
+      logger.debug('VAD state change via callback:', active);
+    },
+    onModeTransition: (from: 'voice' | 'text', to: 'voice' | 'text') => {
+      // Handle mode transitions
+      logger.info(`Mode transition via callback: ${from} → ${to}`);
+      if (to === 'text') {
+        // When switching to text, ensure voice is muted
+        setVoiceButtonState(VoiceButtonState.READY);
       }
     },
     onFinalTranscript: (text: string) => {

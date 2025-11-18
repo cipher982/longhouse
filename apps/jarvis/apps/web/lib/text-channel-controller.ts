@@ -14,7 +14,7 @@
 
 import { eventBus } from './event-bus';
 import type { RealtimeSession } from '@openai/agents/realtime';
-import type { VoiceControllerCompat } from './voice-controller';
+import type { VoiceController } from './voice-controller';
 
 export interface TextMessage {
   id: string;
@@ -33,7 +33,7 @@ export interface TextChannelConfig {
 
 export class TextChannelController {
   private session: RealtimeSession | null = null;
-  private voiceController: VoiceControllerCompat | null = null;
+  private voiceController: VoiceController | null = null;
   private connectCallback: (() => Promise<void>) | null = null;
 
   private config: TextChannelConfig;
@@ -65,7 +65,7 @@ export class TextChannelController {
   /**
    * Set the voice controller (to ensure muting before sending)
    */
-  setVoiceController(voiceController: VoiceControllerCompat): void {
+  setVoiceController(voiceController: VoiceController): void {
     this.voiceController = voiceController;
   }
 

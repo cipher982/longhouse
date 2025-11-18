@@ -4,12 +4,12 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { VoiceControllerCompat } from '../lib/voice-controller';
+import { VoiceController } from '../lib/voice-controller';
 import { TextChannelController } from '../lib/text-channel-controller';
 import { eventBus } from '../lib/event-bus';
 
 describe('Voice/Text Separation Integration', () => {
-  let voiceController: VoiceControllerCompat;
+  let voiceController: VoiceController;
   let textController: TextChannelController;
   let mockSession: any;
 
@@ -18,7 +18,7 @@ describe('Voice/Text Separation Integration', () => {
     // Otherwise we remove the listeners they set up in initialize()
     eventBus.clear();
 
-    voiceController = new VoiceControllerCompat();
+    voiceController = new VoiceController();
     await voiceController.initialize();
 
     textController = new TextChannelController({

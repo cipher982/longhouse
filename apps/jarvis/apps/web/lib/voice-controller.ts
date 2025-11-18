@@ -6,7 +6,7 @@
 
 import { logger } from '@jarvis/core';
 import type { RealtimeSession } from '@openai/agents/realtime';
-import { eventBus, type InteractionState } from './event-bus';
+import { eventBus } from './event-bus';
 
 // Voice state - single source of truth
 export interface VoiceState {
@@ -76,24 +76,6 @@ export class VoiceController {
   }
 
   /**
-   * Convert VoiceState to InteractionState for event bus
-   */
-  private toInteractionState(state?: VoiceState): InteractionState {
-    const s = state || this.state;
-    if (s.interactionMode === 'voice') {
-      return {
-        mode: 'voice',
-        armed: s.armed,
-        handsFree: s.handsFree
-      };
-    } else {
-      return {
-        mode: 'text'
-      };
-    }
-  }
-
-  /**
    * Update state and notify listeners
    */
   private setState(updates: Partial<VoiceState>): void {
@@ -148,14 +130,6 @@ export class VoiceController {
     // Call callbacks (new pattern)
     this.config.onArmed?.();
 
-    // Emit events for backward compatibility (temporary)
-    eventBus.emit('voice_channel:armed', { armed: true });
-    eventBus.emit('state:changed', {
-      from: this.toInteractionState(from),
-      to: this.toInteractionState(),
-      timestamp: Date.now()
-    });
-
     // Start microphone capture if session exists
     if (this.session) {
       this.startMicrophone().catch(err => {
@@ -185,16 +159,6 @@ export class VoiceController {
     // Call callbacks (new pattern)
     if (!skipEvents) {
       this.config.onMuted?.();
-    }
-
-    // Emit events for backward compatibility (unless called from mode transition)
-    if (!skipEvents) {
-      eventBus.emit('voice_channel:muted', { muted: true });
-      eventBus.emit('state:changed', {
-        from: this.toInteractionState(from),
-        to: this.toInteractionState(),
-        timestamp: Date.now()
-      });
     }
 
     // Stop microphone but keep session alive
@@ -431,6 +395,23 @@ export class VoiceController {
   }
 
   /**
+   * Convert state to InteractionState for event bus (compatibility)
+   */
+  private toInteractionState(state: VoiceState) {
+    if (state.interactionMode === 'voice') {
+      return {
+        mode: 'voice' as const,
+        armed: state.armed,
+        handsFree: state.handsFree
+      };
+    } else {
+      return {
+        mode: 'text' as const
+      };
+    }
+  }
+
+  /**
    * Transition to voice interaction mode
    */
   transitionToVoice(options?: { armed?: boolean; handsFree?: boolean }): void {
@@ -451,15 +432,10 @@ export class VoiceController {
       this.config.onArmed?.();
     }
 
-    // If arming, emit the armed event (backward compatibility)
-    if (options?.armed) {
-      eventBus.emit('voice_channel:armed', { armed: true });
-    }
-
-    // Emit state:changed event for backward compatibility
+    // Emit state:changed event for backward compatibility with tests
     eventBus.emit('state:changed', {
       from: this.toInteractionState(from),
-      to: this.toInteractionState(),
+      to: this.toInteractionState(this.state),
       timestamp: Date.now()
     });
 
@@ -487,10 +463,10 @@ export class VoiceController {
       this.config.onModeTransition?.(fromMode, 'text');
     }
 
-    // Emit single state:changed event for the mode transition (backward compatibility)
+    // Emit state:changed event for backward compatibility with tests
     eventBus.emit('state:changed', {
       from: this.toInteractionState(from),
-      to: this.toInteractionState(),
+      to: this.toInteractionState(this.state),
       timestamp: Date.now()
     });
 
@@ -532,116 +508,149 @@ export class VoiceController {
   }
 }
 
-// ============= Compatibility Methods =============
-// These methods help with migration from old voice modules
+// ============= Compatibility Methods (kept in base class) =============
 
-export class VoiceControllerCompat extends VoiceController {
-  // Note: No longer subscribes to state:changed events
-  // VoiceController is now the source of truth for interaction state
+// Compatibility interface extension
+declare module './voice-controller' {
+  interface VoiceController {
+    // Properties
+    armed: boolean;
+    handsFreeEnabled: boolean;
 
-  // Compatibility properties for old interface
-  get armed(): boolean {
+    // Methods
+    isArmed(): boolean;
+    isHandsFreeEnabled(): boolean;
+    arm(): void;
+    mute(): void;
+    armVoice(): void;
+    muteVoice(): void;
+    isVoiceArmed(): boolean;
+    getInteractionState(): { mode: string; armed: boolean; handsFree: boolean };
+    handleSpeechStart(): void;
+    handleSpeechStop(): void;
+    initialize(): Promise<void>;
+    requestMicrophone(): Promise<MediaStream>;
+    getMicrophoneStream(): MediaStream | null;
+    release(): void;
+  }
+}
+
+// Compatibility methods for old interface - kept in VoiceController for now
+// These will be removed in Phase 6
+
+// Compatibility properties
+Object.defineProperty(VoiceController.prototype, 'armed', {
+  get(this: VoiceController) {
     return this.getState().armed;
   }
+});
 
-  get handsFreeEnabled(): boolean {
+Object.defineProperty(VoiceController.prototype, 'handsFreeEnabled', {
+  get(this: VoiceController) {
     return this.getState().handsFree;
   }
+});
 
-  /**
-   * Compatibility: Check if armed (for gating logic)
-   */
-  isArmed(): boolean {
+// Add compatibility methods to VoiceController prototype
+Object.assign(VoiceController.prototype, {
+  isArmed(this: VoiceController): boolean {
     return this.getState().armed;
-  }
+  },
 
-  /**
-   * Compatibility: Check if hands-free is enabled
-   */
-  isHandsFreeEnabled(): boolean {
+  isHandsFreeEnabled(this: VoiceController): boolean {
     return this.getState().handsFree;
-  }
+  },
 
-  /**
-   * Compatibility: Arm the voice channel (start PTT)
-   */
-  arm(): void {
+  arm(this: VoiceController): void {
+    const from = this.getState();
     this.startPTT();
-    // Event is now emitted in startPTT()
-  }
+    // Emit events for backward compatibility with tests
+    eventBus.emit('voice_channel:armed', { armed: true });
+    eventBus.emit('state:changed', {
+      // @ts-ignore - accessing private method
+      from: this.toInteractionState(from),
+      // @ts-ignore - accessing private method
+      to: this.toInteractionState(this.getState()),
+      timestamp: Date.now()
+    });
+  },
 
-  /**
-   * Compatibility: Mute the voice channel (stop PTT)
-   */
-  mute(): void {
+  mute(this: VoiceController): void {
+    const from = this.getState();
     this.stopPTT();
-    // Event is now emitted in stopPTT()
-  }
+    // Emit events for backward compatibility with tests
+    eventBus.emit('voice_channel:muted', { muted: true });
+    eventBus.emit('state:changed', {
+      // @ts-ignore - accessing private method
+      from: this.toInteractionState(from),
+      // @ts-ignore - accessing private method
+      to: this.toInteractionState(this.getState()),
+      timestamp: Date.now()
+    });
+  },
 
-  /**
-   * Compatibility: Arm voice (alias for arm)
-   */
-  armVoice(): void {
-    this.arm();
-  }
+  armVoice(this: VoiceController): void {
+    const from = this.getState();
+    this.startPTT();
+    // Emit events for backward compatibility with tests
+    eventBus.emit('voice_channel:armed', { armed: true });
+    eventBus.emit('state:changed', {
+      // @ts-ignore - accessing private method
+      from: this.toInteractionState(from),
+      // @ts-ignore - accessing private method
+      to: this.toInteractionState(this.getState()),
+      timestamp: Date.now()
+    });
+  },
 
-  /**
-   * Compatibility: Mute voice (alias for mute)
-   */
-  muteVoice(): void {
-    this.mute();
-  }
+  muteVoice(this: VoiceController): void {
+    const from = this.getState();
+    this.stopPTT();
+    // Emit events for backward compatibility with tests
+    eventBus.emit('voice_channel:muted', { muted: true });
+    eventBus.emit('state:changed', {
+      // @ts-ignore - accessing private method
+      from: this.toInteractionState(from),
+      // @ts-ignore - accessing private method
+      to: this.toInteractionState(this.getState()),
+      timestamp: Date.now()
+    });
+  },
 
-  /**
-   * Compatibility: Check if voice is armed
-   */
-  isVoiceArmed(): boolean {
-    return this.isVoiceMode() && this.isArmed();
-  }
+  isVoiceArmed(this: VoiceController): boolean {
+    return this.isVoiceMode() && this.getState().armed;
+  },
 
-  /**
-   * Compatibility: Get state (for backward compatibility with stateMachine.getState())
-   */
-  getInteractionState() {
+  getInteractionState(this: VoiceController) {
     const state = this.getState();
     return {
       mode: state.interactionMode,
       armed: state.armed,
       handsFree: state.handsFree
     };
-  }
+  },
 
-  /**
-   * Compatibility: Handle speech start (VAD)
-   */
-  handleSpeechStart(): void {
+  handleSpeechStart(this: VoiceController): void {
     this.handleVADStateChange(true);
-  }
+  },
 
-  /**
-   * Compatibility: Handle speech stop (VAD)
-   */
-  handleSpeechStop(): void {
+  handleSpeechStop(this: VoiceController): void {
     this.handleVADStateChange(false);
-  }
+  },
 
-  /**
-   * Compatibility: Initialize (no-op for now)
-   */
-  async initialize(): Promise<void> {
+  async initialize(this: VoiceController): Promise<void> {
     // No-op - initialization happens in constructor
-  }
+  },
 
-  /**
-   * Compatibility: Request microphone
-   */
-  async requestMicrophone(): Promise<MediaStream> {
-    // Just get microphone stream without requiring session
+  async requestMicrophone(this: VoiceController): Promise<MediaStream> {
+    // @ts-ignore - accessing protected property
     if (this.micStream) {
+      // @ts-ignore
       return this.micStream;
     }
 
     try {
+      // @ts-ignore
       this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -650,27 +659,23 @@ export class VoiceControllerCompat extends VoiceController {
         }
       });
       logger.info('Microphone requested for initialization');
+      // @ts-ignore
       return this.micStream;
     } catch (error) {
       logger.error('Failed to request microphone:', error);
       throw error;
     }
-  }
+  },
 
-  /**
-   * Compatibility: Get microphone stream
-   */
-  getMicrophoneStream(): MediaStream | null {
+  getMicrophoneStream(this: VoiceController): MediaStream | null {
+    // @ts-ignore - accessing protected property
     return this.micStream;
-  }
+  },
 
-  /**
-   * Compatibility: Release resources
-   */
-  release(): void {
+  release(this: VoiceController): void {
     this.dispose();
   }
-}
+});
 
 // Export singleton instance (will be configured in main.ts)
-export let voiceController: VoiceControllerCompat;
+export let voiceController: VoiceController;
