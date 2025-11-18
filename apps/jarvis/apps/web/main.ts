@@ -25,6 +25,7 @@ import { stateManager } from './lib/state-manager';
 import { sessionHandler } from './lib/session-handler';
 import { feedbackSystem } from './lib/feedback-system';
 import { eventBus } from './lib/event-bus';
+import { conversationController } from './lib/conversation-controller';
 
 // Use the imported config (no duplication!)
 const CONFIG = MODULE_CONFIG;
@@ -43,9 +44,7 @@ let session: RealtimeSession | null = null;
 let sessionManager: SessionManager | null = null;
 let conversationUI: ConversationUI | null = null;
 let conversationRenderer: ConversationRenderer | null = null;
-// Removed: currentStreamingTurn - now using currentStreamingMessageId with ConversationRenderer
-let currentStreamingText = '';
-let currentConversationId: string | null = null;
+let currentConversationId: string | null = null; // Will be moved to conversationController
 // voiceButtonState now managed by stateManager
 let currentContext: VoiceAgentConfig | null = null;
 // Track a pending user bubble while transcription completes
@@ -226,6 +225,10 @@ const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
 
 // Initialize conversation renderer
 conversationRenderer = new ConversationRenderer(transcriptEl);
+
+// Initialize and wire conversation controller
+conversationController.setRenderer(conversationRenderer);
+
 const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
 const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
 const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
@@ -853,8 +856,9 @@ const whoopTool = tool({
   }
 });
 
-// Enhanced streaming UI functions - now using ConversationRenderer
+// Enhanced streaming UI functions - now using ConversationController
 let currentStreamingMessageId: string | null = null;
+let currentStreamingText = '';
 
 function startStreamingResponse(): void {
   logger.debug('Starting streaming response');
@@ -978,46 +982,14 @@ async function loadConversationHistoryIntoUI(): Promise<void> {
   }
 }
 
-// Enhanced UI functions - now using ConversationRenderer (single DOM mutation point)
+// Enhanced UI functions - now delegate to ConversationController
 function addUserTurnToUI(transcript: string, timestamp?: Date): void {
-  if (!conversationRenderer) return;
-
-  // Remove status placeholder if present
   clearStatusIfActive();
-
-  const messageTimestamp = timestamp || new Date();
-  const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  conversationRenderer.addMessage({
-    id: messageId,
-    role: 'user',
-    content: transcript,
-    timestamp: messageTimestamp
-  });
-
-  // Record to IndexedDB if not from history loading (no timestamp provided)
-  if (!timestamp) {
-    recordConversationTurn('user', transcript);
-  }
+  conversationController.addUserTurn(transcript, timestamp);
 }
 
 function addAssistantTurnToUI(response: string, timestamp?: Date): void {
-  if (!conversationRenderer) return;
-
-  const messageTimestamp = timestamp || new Date();
-  const messageId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-  conversationRenderer.addMessage({
-    id: messageId,
-    role: 'assistant',
-    content: response,
-    timestamp: messageTimestamp
-  });
-
-  // Record to IndexedDB if not from history loading (no timestamp provided)
-  if (!timestamp) {
-    recordConversationTurn('assistant', response);
-  }
+  conversationController.addAssistantTurn(response, timestamp);
 }
 
 // Main connection function using Agents SDK
@@ -1219,7 +1191,7 @@ async function handleUserTranscript(transcript: any): Promise<void> {
     pendingUserMessageId = null;
     pendingUserText = '';
   } else {
-    addUserTurnToUI(finalText);
+    conversationController.addUserTurn(finalText);
   }
 
   // Check if this is an agent dispatch command
@@ -1232,11 +1204,11 @@ async function handleUserTranscript(transcript: any): Promise<void> {
       console.log('✅ Agent dispatched from voice command:', result);
 
       // Add confirmation to UI
-      addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for results.`);
+      conversationController.addAssistantTurn(`Started ${agent.name}. Check Task Inbox for results.`);
       uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
     } catch (error: any) {
       console.error('Voice dispatch failed:', error);
-      addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+      conversationController.addAssistantTurn(`Failed to start ${agent.name}: ${error.message}`);
       uiEnhancements.showToast('Agent dispatch failed', 'error');
     }
   }
@@ -1381,8 +1353,10 @@ async function initializeApp(): Promise<void> {
     // Initialize session manager with context-specific data loading
     sessionManager = createSessionManagerForContext(currentContext);
     stateManager.setSessionManager(sessionManager);
+    conversationController.setSessionManager(sessionManager);
     currentConversationId = await sessionManager.initializeSession(currentContext, contextName);
     stateManager.setConversationId(currentConversationId);
+    conversationController.setConversationId(currentConversationId);
     
     // Initialize conversation UI
     conversationUI = new ConversationUI();
@@ -1767,17 +1741,17 @@ function setupEventHandlers(): void {
           console.log('✅ Agent dispatched:', result);
           uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
 
-          addUserTurnToUI(text);
-          addAssistantTurnToUI(`Started ${agent.name}. Check Task Inbox for updates.`);
+          conversationController.addUserTurn(text);
+          conversationController.addAssistantTurn(`Started ${agent.name}. Check Task Inbox for updates.`);
         } catch (error: any) {
           console.error('Dispatch failed:', error);
           uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
-          addAssistantTurnToUI(`Failed to start ${agent.name}: ${error.message}`);
+          conversationController.addAssistantTurn(`Failed to start ${agent.name}: ${error.message}`);
         }
       } else {
         // Handle as regular conversation - use TextChannelController
         textInput.value = '';
-        addUserTurnToUI(text);
+        conversationController.addUserTurn(text);
 
         // CRITICAL: Set conversation mode to text BEFORE sending
         // This ensures auto-connect won't transition back to voice mode
