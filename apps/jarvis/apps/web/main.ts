@@ -118,33 +118,30 @@ function setVoiceButtonState(newState: VoiceButtonState): void {
   const oldState = currentState;
   stateManager.setVoiceButtonState(newState);
 
-  // Remove all state classes from container
-  voiceButtonContainer.classList.remove('state-idle', 'state-ready', 'state-active', 'state-processing');
+  // Remove all CSS state classes from button (CSS targets .voice-button.ready etc)
+  pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'listening', 'responding');
 
-  // Remove direct state classes from button (legacy cleanup)
-  pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'responding');
-
-  // Map detailed states to CSS state classes on container
-  // Note: IDLE maps to 'state-ready' to maintain purple affordance when disconnected
+  // Map VoiceButtonState enum to CSS classes that stylesheet expects
+  // CSS expects: .voice-button.idle, .voice-button.ready, .voice-button.speaking, etc
   switch (newState) {
     case VoiceButtonState.IDLE:
-      voiceButtonContainer.classList.add('state-ready'); // Ready to connect
+      pttBtn.classList.add('idle');
       break;
     case VoiceButtonState.CONNECTING:
-      voiceButtonContainer.classList.add('state-processing');
+      pttBtn.classList.add('connecting');
       break;
     case VoiceButtonState.READY:
-      voiceButtonContainer.classList.add('state-ready');
+      pttBtn.classList.add('ready');
       break;
     case VoiceButtonState.SPEAKING:
     case VoiceButtonState.ACTIVE:
-      voiceButtonContainer.classList.add('state-active');
+      pttBtn.classList.add('speaking'); // CSS uses 'speaking' for active mic
       break;
     case VoiceButtonState.RESPONDING:
-      voiceButtonContainer.classList.add('state-active');
+      pttBtn.classList.add('responding');
       break;
     case VoiceButtonState.PROCESSING:
-      voiceButtonContainer.classList.add('state-processing');
+      pttBtn.classList.add('connecting'); // Use connecting style for processing
       break;
   }
 
