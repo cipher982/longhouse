@@ -218,8 +218,8 @@ let sidebarToggle: HTMLButtonElement;
 let sidebar: HTMLDivElement;
 let voiceStatusText: HTMLSpanElement;
 let handsFreeToggle: HTMLButtonElement;
+let remoteAudio: HTMLAudioElement | null;
 
-const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
 let sharedMicStream: MediaStream | null = null;
 
 enum AudioState {
@@ -1430,7 +1430,7 @@ document.addEventListener("DOMContentLoaded", () => {
   sidebar = document.getElementById("sidebar") as HTMLDivElement;
   voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
   handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
-  const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
+  remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
   const textInput = document.getElementById('textInput') as HTMLInputElement;
   const sendTextBtn = document.getElementById('sendTextBtn');
   const taskInboxContainer = document.getElementById('task-inbox-container');
