@@ -305,9 +305,11 @@ export class VoiceController {
     this.muteAudio();
     this.session = null;
     this.setState({
+      mode: 'ptt',
       interactionMode: 'voice',
       active: false,
       armed: false,
+      handsFree: false,
       pttActive: false,
       vadActive: false,
       transcript: '',
