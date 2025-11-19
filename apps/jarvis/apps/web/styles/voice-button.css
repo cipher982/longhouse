@@ -1,189 +1,227 @@
-/* Voice Button Styles (Simplified from 11 phases to 3 states) */
+/* Voice Button - Clean Design with Clear Mode Toggle */
 
-/* Voice Button Base */
-.voice-button {
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  border: 3px solid var(--glass-border);
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+/* Mode Toggle Container */
+.mode-toggle-container {
   display: flex;
   align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 10;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
-.voice-button svg {
-  width: 32px;
-  height: 32px;
-  color: var(--text-secondary);
-  transition: all 0.3s ease;
-}
-
-/* State 1: READY - Ready for interaction */
-.state-ready .voice-button {
-  border-color: var(--accent-purple);
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%);
-  box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4);
-}
-
-.state-ready .voice-button:hover {
-  transform: scale(1.05);
-  box-shadow: var(--shadow-glow);
-}
-
-.state-ready .voice-button svg {
-  color: var(--accent-purple);
-}
-
-/* State 2: ACTIVE - Currently active (listening/speaking) */
-.state-active .voice-button {
-  border-color: var(--accent-pink);
-  background: linear-gradient(135deg, rgba(236, 72, 153, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.state-active .voice-button svg {
-  color: var(--accent-pink);
-  animation: glow 1.5s ease-in-out infinite;
-}
-
-/* State 3: PROCESSING - Busy processing */
-.state-processing .voice-button {
-  border-color: var(--glass-border);
-  background: var(--glass-bg);
-  cursor: not-allowed;
-  opacity: 0.7;
-}
-
-.state-processing .voice-button svg {
-  color: var(--text-muted);
-  animation: rotate 1s linear infinite;
-}
-
-/* Voice Status Label */
-.voice-status-label {
-  position: absolute;
-  bottom: -32px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 4px 12px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
-  border-radius: 16px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  z-index: 20;
-}
-
-.voice-status-label[aria-live="polite"] {
-  opacity: 1;
-}
-
-/* Connect Button */
-#connectButton {
-  padding: 10px 20px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
-  border-radius: 12px;
-  color: var(--text-secondary);
-  font-size: 14px;
+.mode-label {
+  font-size: var(--text-sm);
   font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-#connectButton:hover:not(:disabled) {
-  background: var(--bg-elevated);
-  border-color: var(--accent-purple);
-  color: var(--text-primary);
-  transform: translateY(-2px);
-}
-
-#connectButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-#connectButton[aria-pressed="true"] {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
-  border-color: rgba(239, 68, 68, 0.3);
-  color: #ef4444;
-}
-
-/* Hands-Free Toggle */
-.hands-free-toggle {
-  position: absolute;
-  top: -40px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
-  border-radius: 20px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  transition: all 0.2s ease;
-}
-
-.hands-free-toggle label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.hands-free-toggle label.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.hands-free-toggle input[type="checkbox"] {
-  position: relative;
-  width: 32px;
-  height: 18px;
-  appearance: none;
-  background: var(--glass-border);
-  border-radius: 9px;
-  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
   transition: all 0.3s ease;
 }
 
-.hands-free-toggle input[type="checkbox"]::before {
-  content: '';
+/* Toggle Switch */
+.mode-toggle {
+  position: relative;
+  width: 52px;
+  height: 28px;
+  background: var(--glass-bg);
+  border: 2px solid var(--glass-border);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 0;
+}
+
+.mode-toggle:hover {
+  border-color: var(--accent-purple);
+}
+
+.mode-toggle-slider {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   background: var(--text-muted);
   border-radius: 50%;
-  transition: all 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.hands-free-toggle input[type="checkbox"]:checked {
+/* Active state (Hands-free enabled) */
+.mode-toggle[aria-checked="true"] {
   background: var(--accent-purple);
+  border-color: var(--accent-purple);
 }
 
-.hands-free-toggle input[type="checkbox"]:checked::before {
-  transform: translateX(14px);
+.mode-toggle[aria-checked="true"] .mode-toggle-slider {
+  left: 26px;
   background: white;
 }
 
-.hands-free-toggle input[type="checkbox"]:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+/* Subtle glow for active mode label */
+/* PTT mode active (toggle is unchecked) */
+.mode-toggle-container:has(.mode-toggle[aria-checked="false"]) .mode-label:nth-child(1) {
+  color: var(--text-secondary);
+  text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
+}
+
+/* Hands-free mode active (toggle is checked) */
+.mode-toggle-container:has(.mode-toggle[aria-checked="true"]) .mode-label:nth-child(3) {
+  color: var(--text-secondary);
+  text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
+}
+
+/* Main Voice Button - Hero Element with integrated state */
+.voice-button {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(139, 92, 246, 0.1) 100%);
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.2);
+}
+
+.voice-button:hover {
+  transform: translateY(-2px);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(139, 92, 246, 0.15) 100%);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.3);
+}
+
+.voice-button:active {
+  transform: scale(0.98);
+}
+
+/* Animated ring for active state */
+.voice-button-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 3px solid var(--accent-purple);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+/* Icon inside button */
+.voice-icon {
+  color: var(--accent-purple);
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+}
+
+/* Status text integrated into button */
+.voice-status-text {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: center;
+  transition: all 0.3s ease;
+  line-height: 1.2;
+  user-select: none;
+}
+
+/* Button States */
+
+/* Idle state (default) */
+.voice-button.idle {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 100%);
+}
+
+/* Ready state - subtle glow */
+.voice-button.ready {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(139, 92, 246, 0.12) 100%);
+  box-shadow: 0 4px 25px rgba(139, 92, 246, 0.3);
+}
+
+.voice-button.ready .voice-icon {
+  color: var(--accent-purple);
+  filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6));
+}
+
+/* Speaking/Listening state - active ring + pulse */
+.voice-button.speaking,
+.voice-button.listening {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(139, 92, 246, 0.2) 100%);
+  box-shadow: 0 8px 40px rgba(139, 92, 246, 0.5);
+}
+
+.voice-button.speaking .voice-button-ring,
+.voice-button.listening .voice-button-ring {
+  opacity: 1;
+  animation: pulse-ring 2s ease-in-out infinite;
+}
+
+.voice-button.speaking .voice-icon,
+.voice-button.listening .voice-icon {
+  color: var(--accent-purple);
+  filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.8));
+}
+
+.voice-button.speaking .voice-status-text,
+.voice-button.listening .voice-status-text {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Responding state - different color */
+.voice-button.responding {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(59, 130, 246, 0.15) 100%);
+  box-shadow: 0 6px 30px rgba(59, 130, 246, 0.4);
+}
+
+.voice-button.responding .voice-icon {
+  color: var(--accent-blue);
+  filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.7));
+}
+
+.voice-button.responding .voice-status-text {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Pulse animation for active ring */
+@keyframes pulse-ring {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.7;
+  }
+}
+
+
+/* Responsive - smaller on mobile */
+@media (max-width: 768px) {
+  .voice-button {
+    width: 96px;
+    height: 96px;
+  }
+
+  .voice-icon {
+    width: 24px;
+    height: 24px;
+  }
+
+  .voice-status-text {
+    font-size: 10px;
+  }
+
+  .hands-free-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .hands-free-button svg {
+    width: 14px;
+    height: 14px;
+  }
 }

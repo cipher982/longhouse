@@ -69,32 +69,26 @@
           </div>
         </div>
 
-        <!-- Voice Controls (now in their own layout row, not absolute) -->
+        <!-- Voice Controls - Clean design with mode toggle -->
         <div class="voice-controls">
-          <!-- Main Voice Button -->
-          <div class="voice-button-container" id="voiceButtonContainer">
-            <button id="pttBtn" class="voice-button" type="button" aria-label="Voice control">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
-                <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
-              </svg>
+          <!-- Mode Toggle Switch -->
+          <div class="mode-toggle-container">
+            <span class="mode-label">Push-to-Talk</span>
+            <button id="handsFreeToggle" class="mode-toggle" type="button" role="switch" aria-checked="false" aria-label="Toggle hands-free mode">
+              <span class="mode-toggle-slider"></span>
             </button>
-            <div class="voice-status-label" aria-live="polite"></div>
-            <div class="hands-free-toggle-container">
-              <label class="hands-free-toggle" for="handsFreeToggle">
-                <input type="checkbox" id="handsFreeToggle" aria-label="Enable hands-free mode">
-                <span class="toggle-slider"></span>
-                <span class="toggle-label">Hands-free</span>
-              </label>
-            </div>
+            <span class="mode-label">Hands-free</span>
           </div>
 
-          <!-- Listening Indicator -->
-          <div class="listening-indicator" aria-live="polite">
-            <span class="dot"></span>
-            Listening…
-          </div>
-
+          <!-- Main Voice Button -->
+          <button id="pttBtn" class="voice-button" type="button" aria-label="Press to talk">
+            <div class="voice-button-ring"></div>
+            <svg class="voice-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+              <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
+            </svg>
+            <span class="voice-status-text" aria-live="polite">Tap to talk</span>
+          </button>
         </div>
 
         <!-- Text Input Mode -->

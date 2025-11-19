@@ -1,6 +1,25 @@
 /* Base styles and CSS variables */
 
 :root {
+  /* Spacing System - 8px base grid (Müller-Brockmann) */
+  --space-1: 4px;   /* 0.5 unit - tight spacing */
+  --space-2: 8px;   /* 1 unit - base grid */
+  --space-3: 16px;  /* 2 units - comfortable spacing */
+  --space-4: 24px;  /* 3 units - section spacing */
+  --space-5: 32px;  /* 4 units - major sections */
+  --space-6: 48px;  /* 6 units - large gaps */
+  --space-7: 64px;  /* 8 units - hero spacing */
+  --space-8: 96px;  /* 12 units - dramatic spacing */
+
+  /* Typography Scale (Tschichold-inspired) */
+  --text-xs: 11px;   /* timestamps, meta */
+  --text-sm: 13px;   /* secondary text */
+  --text-base: 15px; /* body text */
+  --text-md: 17px;   /* emphasized body */
+  --text-lg: 20px;   /* section headers */
+  --text-xl: 28px;   /* page titles */
+  --text-2xl: 40px;  /* hero text */
+
   /* Modern color palette */
   --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -35,6 +54,9 @@ html, body {
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
+  font-feature-settings: 'kern' 1, 'liga' 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Scrollbar Styling */

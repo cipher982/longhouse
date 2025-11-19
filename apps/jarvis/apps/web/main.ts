@@ -185,19 +185,10 @@ function setVoiceButtonState(newState: VoiceButtonState): void {
   logger.debug(`Voice button state transition: ${oldState} → ${newState}`);
 }
 
-// Status Label Helper (Phase 5 - allows dynamic content overrides)
+// Status Text Helper - updates integrated button status
 function setStatusLabel(text: string | null): void {
-  if (!voiceStatusLabel) return;
-
-  if (text) {
-    // Set dynamic text (overrides CSS ::after content)
-    voiceStatusLabel.textContent = text;
-    voiceStatusLabel.classList.add('has-dynamic-content');
-  } else {
-    // Clear dynamic text (reverts to CSS ::after content)
-    voiceStatusLabel.textContent = '';
-    voiceStatusLabel.classList.remove('has-dynamic-content');
-  }
+  if (!voiceStatusText) return;
+  voiceStatusText.textContent = text || 'Tap to talk';
 }
 
 function clearStatusLabel(): void {
@@ -234,9 +225,8 @@ const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonEl
 const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
 const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
 const sidebar = document.getElementById("sidebar") as HTMLDivElement;
-const voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
-const voiceStatusLabel = document.querySelector('.voice-status-label') as HTMLDivElement;
-const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLInputElement;
+const voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
+const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
 
 const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
 let sharedMicStream: MediaStream | null = null;
@@ -1624,8 +1614,12 @@ function setupEventHandlers(): void {
 
   // Hands-Free Toggle Handler (Phase 11 - Voice/Text Separation)
   if (handsFreeToggle) {
-    handsFreeToggle.addEventListener('change', () => {
-      const enabled = handsFreeToggle.checked;
+    handsFreeToggle.addEventListener('click', () => {
+      const wasEnabled = handsFreeToggle.getAttribute('aria-checked') === 'true';
+      const enabled = !wasEnabled;
+
+      // Update aria-checked for accessibility and visual state
+      handsFreeToggle.setAttribute('aria-checked', enabled.toString());
       console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
       // CRITICAL: If enabling hands-free while in text mode, transition to voice mode first

@@ -340,40 +340,21 @@ export class VoiceController {
   }
 
   /**
-   * Set up mouse/touch handlers for PTT button
+   * Set up mouse/touch handlers for voice button (toggle mode)
    */
   setupButtonHandlers(button: HTMLElement): void {
-    // Mouse events
-    button.addEventListener('mousedown', () => {
-      if (!this.state.handsFree) {
+    // Click-to-toggle behavior (not PTT hold-down)
+    button.addEventListener('click', () => {
+      // Don't interfere if hands-free mode is enabled
+      if (this.state.handsFree) {
+        return;
+      }
+
+      // Toggle: if active, stop; if inactive, start
+      if (this.state.pttActive || this.state.armed) {
+        this.stopPTT();
+      } else {
         this.startPTT();
-      }
-    });
-
-    button.addEventListener('mouseup', () => {
-      if (this.state.pttActive) {
-        this.stopPTT();
-      }
-    });
-
-    button.addEventListener('mouseleave', () => {
-      if (this.state.pttActive) {
-        this.stopPTT();
-      }
-    });
-
-    // Touch events
-    button.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      if (!this.state.handsFree) {
-        this.startPTT();
-      }
-    });
-
-    button.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      if (this.state.pttActive) {
-        this.stopPTT();
       }
     });
   }
