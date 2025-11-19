@@ -6,7 +6,6 @@
 
 import { logger } from '@jarvis/core';
 import type { RealtimeSession } from '@openai/agents/realtime';
-import { eventBus } from './event-bus';
 
 // Voice state - single source of truth
 export interface VoiceState {
@@ -299,7 +298,10 @@ export class VoiceController {
 
   // ============= Cleanup =============
 
-  dispose(): void {
+  /**
+   * Reset state and session (keeps listeners attached)
+   */
+  reset(): void {
     this.muteAudio();
     this.session = null;
     this.setState({
@@ -311,6 +313,11 @@ export class VoiceController {
       transcript: '',
       finalTranscript: ''
     });
+    logger.info('Voice controller reset');
+  }
+
+  dispose(): void {
+    this.reset();
     this.listeners.clear();
     logger.info('Voice controller disposed');
   }

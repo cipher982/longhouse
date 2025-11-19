@@ -7,7 +7,6 @@ import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { CONFIG } from './config';
 import type { SessionManager } from '@jarvis/core';
-import { stateManager } from './state-manager';
 
 /**
  * Create all tools for a given context configuration

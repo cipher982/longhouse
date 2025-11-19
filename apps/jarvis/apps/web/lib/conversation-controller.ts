@@ -313,6 +313,7 @@ export class ConversationController {
     this.renderer?.clear();
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
+    this.state.pendingUserMessageId = null;
   }
 
   /**

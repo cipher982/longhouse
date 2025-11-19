@@ -157,6 +157,9 @@ export class AppController {
       
       // 2. Cleanup State
       stateManager.setSession(null);
+      voiceController.setSession(null);
+      voiceController.reset(); // Clears mic, flags, but keeps listeners
+      this.textChannelController?.setSession(null);
       
       // 3. Cleanup Audio
       audioController.dispose(); // Releases mic and stops monitor
