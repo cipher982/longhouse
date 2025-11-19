@@ -208,17 +208,17 @@ function canStartPTT(): boolean {
 }
 
 // DOM elements - will be initialized in DOMContentLoaded
-let transcriptEl: HTMLDivElement;
-let pttBtn: HTMLButtonElement;
-let voiceButtonContainer: HTMLButtonElement; // Same as pttBtn
-let newConversationBtn: HTMLButtonElement;
-let clearConvosBtn: HTMLButtonElement;
-let syncNowBtn: HTMLButtonElement;
-let sidebarToggle: HTMLButtonElement;
-let sidebar: HTMLDivElement;
-let voiceStatusText: HTMLSpanElement;
-let handsFreeToggle: HTMLButtonElement;
-let remoteAudio: HTMLAudioElement | null;
+let transcriptEl: HTMLDivElement | undefined;
+let pttBtn: HTMLButtonElement | undefined;
+let voiceButtonContainer: HTMLButtonElement | undefined; // Same as pttBtn
+let newConversationBtn: HTMLButtonElement | undefined;
+let clearConvosBtn: HTMLButtonElement | undefined;
+let syncNowBtn: HTMLButtonElement | undefined;
+let sidebarToggle: HTMLButtonElement | undefined;
+let sidebar: HTMLDivElement | undefined;
+let voiceStatusText: HTMLSpanElement | undefined;
+let handsFreeToggle: HTMLButtonElement | undefined;
+let remoteAudio: HTMLAudioElement | null | undefined;
 
 let sharedMicStream: MediaStream | null = null;
 
@@ -444,19 +444,7 @@ function monitorSpeakerLevel(): void {
   speakerRafId = requestAnimationFrame(monitorSpeakerLevel);
 }
 
-if (remoteAudio) {
-  const handleSpeakerStart = () => { void startSpeakerMonitor(); };
-  const handleSpeakerStop = () => { stopSpeakerMonitor(); };
-
-  remoteAudio.addEventListener('play', handleSpeakerStart);
-  remoteAudio.addEventListener('playing', handleSpeakerStart);
-  remoteAudio.addEventListener('loadeddata', handleSpeakerStart);
-  remoteAudio.addEventListener('pause', handleSpeakerStop);
-  remoteAudio.addEventListener('ended', handleSpeakerStop);
-  remoteAudio.addEventListener('emptied', handleSpeakerStop);
-  remoteAudio.addEventListener('suspend', handleSpeakerStop);
-  remoteAudio.addEventListener('stalled', handleSpeakerStop);
-}
+// Note: remoteAudio event listeners setup moved to DOMContentLoaded
 
 async function setListeningMode(active: boolean) {
   if (!active) {
@@ -489,9 +477,9 @@ async function setMicState(active: boolean) {
   // Note: ARIA attributes are managed by setVoiceButtonState() state machine
   // This function only handles visual feedback and audio input control
   if (active) {
-    pttBtn.classList.add('listening');
+    pttBtn!.classList.add('listening');
   } else {
-    pttBtn.classList.remove('listening');
+    pttBtn!.classList.remove('listening');
   }
   setMicIcon(active);
   await setListeningMode(active);
@@ -519,8 +507,8 @@ function clearStatusIfActive(): void {
 }
 
 function updateSidebarToggleState(isOpen: boolean): void {
-  sidebarToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-  sidebarToggle.setAttribute('aria-label', isOpen ? 'Close conversation sidebar' : 'Open conversation sidebar');
+  sidebarToggle!.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  sidebarToggle!.setAttribute('aria-label', isOpen ? 'Close conversation sidebar' : 'Open conversation sidebar');
 }
 
 // Show a banner only when there are no turns rendered
@@ -1294,7 +1282,7 @@ async function initializeApp(): Promise<void> {
 
     // Setup UI state - button starts in idle state, ready to connect
     setVoiceButtonState(VoiceButtonState.IDLE);
-    newConversationBtn.disabled = false;
+    newConversationBtn!.disabled = false;
 
     // Discover and auto-detect available contexts before creating selector
     await contextLoader.autoDetectContext();
@@ -1441,11 +1429,11 @@ document.addEventListener("DOMContentLoaded", () => {
   function checkMobile() {
     if (window.innerWidth <= 768) {
       if (sidebarToggle) sidebarToggle.style.display = 'flex';
-      if (sidebar) updateSidebarToggleState(sidebar.classList.contains('open'));
+      if (sidebar) updateSidebarToggleState(sidebar!.classList.contains('open'));
     } else {
       if (sidebarToggle) sidebarToggle.style.display = 'none';
       if (sidebar) {
-        sidebar.classList.remove('open');
+        sidebar!.classList.remove('open');
         updateSidebarToggleState(false);
       }
     }
@@ -1470,6 +1458,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Set initial button state
   setVoiceButtonState(VoiceButtonState.IDLE);
+
+  // Setup remoteAudio event listeners
+  if (remoteAudio) {
+    const handleSpeakerStart = () => { void startSpeakerMonitor(); };
+    const handleSpeakerStop = () => { stopSpeakerMonitor(); };
+
+    remoteAudio.addEventListener('play', handleSpeakerStart);
+    remoteAudio.addEventListener('playing', handleSpeakerStart);
+    remoteAudio.addEventListener('loadeddata', handleSpeakerStart);
+    remoteAudio.addEventListener('pause', handleSpeakerStop);
+    remoteAudio.addEventListener('ended', handleSpeakerStop);
+    remoteAudio.addEventListener('emptied', handleSpeakerStop);
+    remoteAudio.addEventListener('suspend', handleSpeakerStop);
+    remoteAudio.addEventListener('stalled', handleSpeakerStop);
+  }
 
   // Initialize controllers BEFORE setting up event handlers
   console.log('🎛️ Initializing interaction controllers (sync)...');
@@ -1625,10 +1628,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Hands-Free Toggle
   if (handsFreeToggle) {
     handsFreeToggle.addEventListener('click', () => {
-      const wasEnabled = handsFreeToggle.getAttribute('aria-checked') === 'true';
+      const wasEnabled = handsFreeToggle!.getAttribute('aria-checked') === 'true';
       const enabled = !wasEnabled;
 
-      handsFreeToggle.setAttribute('aria-checked', enabled.toString());
+      handsFreeToggle!.setAttribute('aria-checked', enabled.toString());
       console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
       if (enabled && voiceController.isTextMode()) {
@@ -1695,7 +1698,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Sidebar & Other UI
   if (sidebarToggle) {
     sidebarToggle.onclick = () => {
-      const isOpen = sidebar.classList.toggle('open');
+      const isOpen = sidebar!.classList.toggle('open');
       updateSidebarToggleState(isOpen);
     };
   }
@@ -1714,14 +1717,14 @@ document.addEventListener("DOMContentLoaded", () => {
   if (syncNowBtn) {
     syncNowBtn.onclick = async () => {
       if (!sessionManager) return;
-      syncNowBtn.disabled = true;
+      syncNowBtn!.disabled = true;
       try {
         const { pushed, pulled } = await sessionManager.syncNow();
         uiEnhancements.showToast(`Synced ${pushed + pulled} items`, 'success');
       } catch (e) {
         uiEnhancements.showToast('Sync failed', 'error');
       } finally {
-        syncNowBtn.disabled = false;
+        syncNowBtn!.disabled = false;
       }
     };
   }
