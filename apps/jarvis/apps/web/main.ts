@@ -251,9 +251,6 @@ const IDLE_COLOR = '#475569';
 // Initialized in DOMContentLoaded
 let radialViz: RadialVisualizer | null = null;
 
-syncAudioStateClasses();
-updateAudioVisualization();
-
 // Small UI helpers (dedup repeated blocks)
 const MIC_ICON = `
   <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
@@ -1466,7 +1463,11 @@ document.addEventListener("DOMContentLoaded", () => {
   radialViz = pttBtn
     ? new RadialVisualizer(pttBtn, { onLevel: handleMicLevel })
     : null;
-  
+
+  // Set initial audio state and visualization after radialViz is ready
+  syncAudioStateClasses();
+  updateAudioVisualization();
+
   // Set initial button state
   setVoiceButtonState(VoiceButtonState.IDLE);
 
