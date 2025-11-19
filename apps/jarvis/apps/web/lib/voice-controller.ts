@@ -101,7 +101,18 @@ export class VoiceController {
 
     if (session) {
       logger.info('Voice session connected');
-      // Session will send transcript events to our handleTranscript method
+      
+      // If we have an active microphone stream AND we are armed/hands-free,
+      // attach it to the new session immediately.
+      if (this.micStream && (this.state.armed || this.state.handsFree)) {
+        logger.info('Attaching existing microphone stream to new session');
+        try {
+          // @ts-ignore - OpenAI types
+          this.session.sendAudio(this.micStream);
+        } catch (err) {
+          logger.error('Failed to attach existing mic stream to new session:', err);
+        }
+      }
     } else {
       logger.info('Voice session disconnected');
       this.setState({ active: false, armed: false });
@@ -288,24 +299,25 @@ export class VoiceController {
    * Start microphone capture
    */
   private async startMicrophone(): Promise<void> {
-    if (this.micStream) return; // Already started
-
     try {
-      this.micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
+      // 1. Create stream if needed
+      if (!this.micStream) {
+        this.micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        logger.info('Microphone started');
+      }
 
-      // Send to OpenAI session if connected
+      // 2. Send to OpenAI session if connected
+      // (Always try to send/attach when starting microphone)
       if (this.session && this.micStream) {
         // @ts-ignore - OpenAI types may vary
         await this.session.sendAudio(this.micStream);
       }
-
-      logger.info('Microphone started');
     } catch (error) {
       logger.error('Failed to access microphone:', error);
       throw error;

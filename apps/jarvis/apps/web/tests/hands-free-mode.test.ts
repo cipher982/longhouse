@@ -43,7 +43,7 @@ describe('Hands-Free Mode', () => {
       onVADStateChange,
     });
 
-    controller.setSession(mockSession);
+    controller.setSession(mockSession as any);
   });
 
   describe('setHandsFree', () => {
@@ -84,7 +84,7 @@ describe('Hands-Free Mode', () => {
 
     it('should start microphone when enabling hands-free', async () => {
       // Mock navigator.mediaDevices.getUserMedia
-      global.navigator.mediaDevices = {
+      (global.navigator as any).mediaDevices = {
         getUserMedia: vi.fn().mockResolvedValue({
           getTracks: () => [{ stop: vi.fn() }],
         } as any),
@@ -249,7 +249,7 @@ describe('Hands-Free Mode', () => {
 
   describe('Integration Scenarios', () => {
     it('should handle complete hands-free flow', async () => {
-      global.navigator.mediaDevices = {
+      (global.navigator as any).mediaDevices = {
         getUserMedia: vi.fn().mockResolvedValue({
           getTracks: () => [{ stop: vi.fn() }],
         } as any),
@@ -314,7 +314,7 @@ describe('Hands-Free Mode', () => {
 
   describe('Error Handling', () => {
     it('should handle microphone access failure gracefully', async () => {
-      global.navigator.mediaDevices = {
+      (global.navigator as any).mediaDevices = {
         getUserMedia: vi.fn().mockRejectedValue(new Error('Permission denied')),
       } as any;
 

@@ -23,7 +23,7 @@ describe('VoiceController', () => {
 
     // Create mock session
     mockSession = {
-      sendAudio: vi.fn()
+      sendAudio: vi.fn() // Returns undefined by default
     };
 
     // Mock getUserMedia

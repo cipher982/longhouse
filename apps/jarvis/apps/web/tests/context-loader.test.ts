@@ -16,7 +16,7 @@ describe('ContextLoader', () => {
     contextLoader = new ContextLoader();
 
     // Mock successful manifest fetch
-    (fetch as vi.MockedFunction<typeof fetch>).mockImplementation(async (url: string) => {
+    (fetch as any).mockImplementation(async (url: string) => {
       if (url.includes('manifest.json')) {
         return {
           ok: true,

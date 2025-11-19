@@ -258,28 +258,38 @@ const BOTH_COLOR = '#a855f7';
 const IDLE_COLOR = '#475569';
 
 // Audio visualizer (radial) around mic
-const radialViz = pttBtn
-  ? new RadialVisualizer(pttBtn, { onLevel: handleMicLevel })
-  : null;
+// Initialized in DOMContentLoaded
+let radialViz: RadialVisualizer | null = null;
 
 syncAudioStateClasses();
 updateAudioVisualization();
 
 // Small UI helpers (dedup repeated blocks)
 const MIC_ICON = `
-  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
-    <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
-  </svg>
+  <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+  <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
 `;
 const STOP_ICON = `
-  <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-    <rect x="6" y="6" width="12" height="12" rx="2"/>
-  </svg>
+  <rect x="6" y="6" width="12" height="12" rx="2"/>
 `;
 
 function setMicIcon(listening: boolean) {
-  pttBtn.innerHTML = listening ? STOP_ICON : MIC_ICON;
+  // CRITICAL: Do NOT use innerHTML on button - it destroys child elements!
+  // Update only the .voice-icon SVG content to preserve other elements
+  const iconEl = pttBtn?.querySelector('.voice-icon');
+  if (!iconEl) return;
+
+  iconEl.innerHTML = listening ? STOP_ICON : MIC_ICON;
+
+  // Update SVG attributes based on icon type
+  if (listening) {
+    iconEl.setAttribute('fill', 'currentColor');
+    iconEl.setAttribute('stroke', 'none');
+  } else {
+    iconEl.setAttribute('fill', 'none');
+    iconEl.setAttribute('stroke', 'currentColor');
+    iconEl.setAttribute('stroke-width', '2');
+  }
 }
 
 function hasAudioState(flag: AudioState): boolean {
@@ -915,11 +925,14 @@ async function connect(): Promise<void> {
 
     console.log('✅ Agent found:', agent.name || 'unnamed agent');
 
-    // Request mic once through VoiceChannelController and share it
-    if (!sharedMicStream) {
-      sharedMicStream = await voiceController.requestMicrophone();
+    // Request mic only if needed immediately (e.g. hands-free was already on)
+    // Otherwise let PTT/Hands-Free toggle handle it
+    if (voiceController.isHandsFreeEnabled()) {
+       if (!sharedMicStream) {
+          sharedMicStream = await voiceController.requestMicrophone();
+       }
+       radialViz?.provideStream(sharedMicStream);
     }
-    radialViz?.provideStream(sharedMicStream);
 
     // Use sessionHandler to create and connect session
     const tools = currentContext ? createContextTools(currentContext) : [];
@@ -1414,48 +1427,59 @@ window.addEventListener('contextChanged', async (event: any) => {
   ensureReadyBanner(`${config.name} - tap the microphone to start`);
 });
 
-// Mobile menu toggle
-sidebarToggle.onclick = () => {
-  const isOpen = sidebar.classList.toggle('open');
-  updateSidebarToggleState(isOpen);
-};
-
-// Close sidebar on mobile when clicking outside
-document.addEventListener('click', (e) => {
-  if (window.innerWidth <= 768 &&
-      !sidebar.contains(e.target as Node) &&
-      e.target !== sidebarToggle) {
-    sidebar.classList.remove('open');
-    updateSidebarToggleState(false);
-  }
-});
-
-// Check if mobile on load and show toggle button
-function checkMobile() {
-  if (window.innerWidth <= 768) {
-    sidebarToggle.style.display = 'flex';
-    updateSidebarToggleState(sidebar.classList.contains('open'));
-  } else {
-    sidebarToggle.style.display = 'none';
-    sidebar.classList.remove('open');
-    updateSidebarToggleState(false);
-  }
-}
-
-window.addEventListener('resize', checkMobile);
-
 // Initialize page
 document.addEventListener("DOMContentLoaded", () => {
-  checkMobile();
+  // DOM elements - Query INSIDE DOMContentLoaded to ensure they exist
+  const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
+  const voiceButtonContainer = pttBtn; // The voice button itself is the container for visual states
+  const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
+  const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
+  const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
+  const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
+  const sidebar = document.getElementById("sidebar") as HTMLDivElement;
+  const voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
+  const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
+  const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
+  const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
+  const textInput = document.getElementById('textInput') as HTMLInputElement;
+  const sendTextBtn = document.getElementById('sendTextBtn');
+  const taskInboxContainer = document.getElementById('task-inbox-container');
 
-  // Set initial button state (must happen after DOM elements are loaded)
+  // --- HELPER FUNCTIONS ---
+  
+  function checkMobile() {
+    if (window.innerWidth <= 768) {
+      if (sidebarToggle) sidebarToggle.style.display = 'flex';
+      if (sidebar) updateSidebarToggleState(sidebar.classList.contains('open'));
+    } else {
+      if (sidebarToggle) sidebarToggle.style.display = 'none';
+      if (sidebar) {
+        sidebar.classList.remove('open');
+        updateSidebarToggleState(false);
+      }
+    }
+  }
+
+  // Initial check
+  checkMobile();
+  window.addEventListener('resize', checkMobile);
+
+  // Initialize conversation renderer
+  conversationRenderer = new ConversationRenderer(transcriptEl);
+  conversationController.setRenderer(conversationRenderer);
+
+  // Initialize Audio Visualizer
+  radialViz = pttBtn
+    ? new RadialVisualizer(pttBtn, { onLevel: handleMicLevel })
+    : null;
+  
+  // Set initial button state
   setVoiceButtonState(VoiceButtonState.IDLE);
 
   // Initialize controllers BEFORE setting up event handlers
-  // This prevents "undefined" errors when users interact before initializeApp completes
   console.log('🎛️ Initializing interaction controllers (sync)...');
 
-  // Configure voiceController with state change callbacks
+  // Configure voiceController
   voiceController = new VoiceController({
     onStateChange: (state: VoiceState) => {
       // Update UI based on voice state
@@ -1466,8 +1490,6 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
       }
-
-      // Mode transitions handled by voiceController internally
 
       // Handle audio feedback
       if (state.vadActive) {
@@ -1487,17 +1509,14 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     },
     onArmed: () => {
-      // Voice armed - update UI state
       setVoiceButtonState(VoiceButtonState.READY);
       logger.debug('Voice armed via callback');
     },
     onMuted: () => {
-      // Voice muted - update UI state
       setVoiceButtonState(VoiceButtonState.READY);
       logger.debug('Voice muted via callback');
     },
     onTranscript: (text: string, isFinal: boolean) => {
-      // Handle transcript updates
       if (!isFinal) {
         updatePendingUserPlaceholder(text);
       }
@@ -1505,7 +1524,6 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     onVADStateChange: (active: boolean) => {
       console.log(`[DEBUG main.ts] ✓ onVADStateChange callback received: active=${active}`);
-      // Handle VAD state changes
       if (active) {
         audioFeedback.playVoiceTick();
         setListeningMode(true).catch(() => {});
@@ -1513,13 +1531,10 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         setListeningMode(false).catch(() => {});
       }
-      logger.debug('VAD state change via callback:', active);
     },
     onModeTransition: (from: 'voice' | 'text', to: 'voice' | 'text') => {
-      // Handle mode transitions
       logger.info(`Mode transition via callback: ${from} → ${to}`);
       if (to === 'text') {
-        // When switching to text, ensure voice is muted
         setVoiceButtonState(VoiceButtonState.READY);
       }
     },
@@ -1532,59 +1547,59 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Create textChannelController after voiceController exists
+  // Create textChannelController
   textChannelController = new TextChannelController({
     autoConnect: true,
     maxRetries: 3
   });
 
-  // Wire controllers together (sync)
   textChannelController.setVoiceController(voiceController);
   textChannelController.setConnectCallback(connect);
 
-  console.log('✅ Interaction controllers created (async init will happen in initializeApp)');
+  console.log('✅ Interaction controllers created');
 
-  // WebSocket event handling now wired directly in connect() function
-  // (no more websocketHandler wrapper)
+  // --- EVENT HANDLERS ---
 
-  setupEventHandlers();
-  initializeApp();
-  // Optional autoconnect via ?autoconnect=1 or localStorage 'jarvis.autoconnect' = 'true'
-  const params = new URLSearchParams(window.location.search);
-  const autoParam = params.get('autoconnect');
-  const autoStored = localStorage.getItem('jarvis.autoconnect');
-  const shouldAuto = (autoParam === '1' || autoParam === 'true') || (autoStored === '1' || autoStored === 'true');
-  if (shouldAuto) {
-    setTimeout(() => connect(), 0);
-  }
-});
-
-// Setup all event handlers after DOM is ready
-function setupEventHandlers(): void {
-  // Transcript events now handled internally by voiceController
-  // (no longer need eventBus for voice_channel:transcript)
-
-  // Microphone button - modern voice interface with PTT support
+  // Microphone Button (PTT)
   if (pttBtn) {
-    pttBtn.onclick = async () => {
-      // Resume AudioContext from user gesture (Safari autoplay fix)
+    // 1. Click: Connect if IDLE. If Connected, it's handled by PTT logic (no-op for click)
+    pttBtn.addEventListener('click', async (e) => {
+      // Resume AudioContext from user gesture
       audioFeedback.resumeContext().catch(() => {});
 
-      // If not connected, clicking the button initiates connection
       if (stateManager.isIdle()) {
         await connect();
-        return;
+      }
+    });
+
+    // 2. Mouse/Touch PTT (Hold-to-Talk)
+    const startTalking = () => {
+      if (isConnected() && canStartPTT() && !voiceController.getState().handsFree) {
+        voiceController.startPTT();
       }
     };
 
-    // Set up mouse/touch PTT handlers via voiceController
-    voiceController.setupButtonHandlers(pttBtn);
+    const stopTalking = () => {
+      if (isConnected() && voiceController.getState().pttActive) {
+        voiceController.stopPTT();
+      }
+    };
 
-    // Set up keyboard shortcuts for PTT (Space bar) - Phase 7 accessibility
+    pttBtn.addEventListener('mousedown', startTalking);
+    pttBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault(); // Prevent mouse emulation
+      startTalking();
+    });
+
+    pttBtn.addEventListener('mouseup', stopTalking);
+    pttBtn.addEventListener('mouseleave', stopTalking);
+    pttBtn.addEventListener('touchend', stopTalking);
+    pttBtn.addEventListener('touchcancel', stopTalking);
+
+
+    // 3. Keyboard PTT (Space/Enter) - Hold-to-Talk
     voiceController.setupKeyboardHandlers(pttBtn);
 
-    // Button-level keyboard handlers for Space/Enter (critical for accessibility)
-    // CRITICAL: Must delegate to voiceController to properly update state!
     pttBtn.onkeydown = async (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
@@ -1596,123 +1611,79 @@ function setupEventHandlers(): void {
         }
 
         if (canStartPTT() && stateManager.isReady()) {
-          // CRITICAL: Delegate to voiceController to update state properly!
           voiceController.startPTT();
-
-          // voiceController's state change callback already handles:
-          // - stateManager.setVoiceButtonState(SPEAKING)
-          // - setMicState(true)
-          // - ensurePendingUserBubble()
         }
       }
     };
 
     pttBtn.onkeyup = (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
-        // CRITICAL: Delegate to voiceController to update state properly!
         voiceController.stopPTT();
-
-        // voiceController's state change callback already handles:
-        // - stateManager.setVoiceButtonState(READY) (for PTT)
-        // - setMicState(false)
       }
     };
 
-    console.log('✅ Microphone button handlers attached');
+    console.log('✅ Microphone button handlers attached (Hold-to-Talk)');
   } else {
     console.error('❌ Microphone button (pttBtn) not found');
   }
 
-  // Hands-Free Toggle Handler (Phase 11 - Voice/Text Separation)
+  // Hands-Free Toggle
   if (handsFreeToggle) {
     handsFreeToggle.addEventListener('click', () => {
       const wasEnabled = handsFreeToggle.getAttribute('aria-checked') === 'true';
       const enabled = !wasEnabled;
 
-      // Update aria-checked for accessibility and visual state
       handsFreeToggle.setAttribute('aria-checked', enabled.toString());
       console.log(`🎙️ Hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
-      // CRITICAL: If enabling hands-free while in text mode, transition to voice mode first
-      // Otherwise voiceController.setHandsFree() will arm the mic while we're
-      // still in text mode, breaking voice/text separation
       if (enabled && voiceController.isTextMode()) {
-        console.log('[HandsFree] Transitioning from text to voice mode');
         voiceController.transitionToVoice({
           armed: false,
-          handsFree: false  // Will be set by setHandsFree below
+          handsFree: false
         });
       }
 
-      // Update voice controller hands-free mode
       voiceController.setHandsFree(enabled);
 
-      // Show toast
       uiEnhancements.showToast(
         enabled ? 'Hands-free mode enabled' : 'Hands-free mode disabled',
         'info'
       );
 
-      // Update status message when enabled
       if (enabled && isConnected()) {
         setStatusLabel('Voice listening continuously');
       } else if (!enabled && isConnected()) {
         clearStatusLabel();
       }
     });
-
-    console.log('✅ Hands-free toggle handler attached');
-  } else {
-    console.warn('⚠️ Hands-free toggle not found');
   }
 
-  // Text input handlers (work independently of Zerg integration)
-  const textInput = document.getElementById('textInput') as HTMLInputElement;
-  const sendTextBtn = document.getElementById('sendTextBtn');
-
+  // Text Input
   if (textInput && sendTextBtn) {
     const handleTextCommand = async () => {
       const text = textInput.value.trim();
       if (!text) return;
 
-      console.log('💬 Text command:', text);
-
-      // Try to map to agent dispatch (only works if Zerg is available)
       const agent = findAgentByIntent(text);
 
       if (agent && jarvisClient) {
-        console.log(`🎯 Dispatching agent: ${agent.name}`);
         textInput.value = '';
-
         try {
           const result = await jarvisClient.dispatch({ agent_id: agent.id });
-          console.log('✅ Agent dispatched:', result);
           uiEnhancements.showToast(`Running ${agent.name}...`, 'success');
-
           conversationController.addUserTurn(text);
           conversationController.addAssistantTurn(`Started ${agent.name}. Check Task Inbox for updates.`);
         } catch (error: any) {
-          console.error('Dispatch failed:', error);
           uiEnhancements.showToast(error.message || 'Dispatch failed', 'error');
           conversationController.addAssistantTurn(`Failed to start ${agent.name}: ${error.message}`);
         }
       } else {
-        // Handle as regular conversation - use TextChannelController
         textInput.value = '';
         conversationController.addUserTurn(text);
-
-        // CRITICAL: Set conversation mode to text BEFORE sending
-        // This ensures auto-connect won't transition back to voice mode
         try {
-          // TextChannelController will handle:
-          // - Switching to text mode (via voiceController.transitionToText())
-          // - Muting voice channel
-          // - Auto-connecting if needed
-          // - Error handling and retries
           await textChannelController.sendText(text);
           uiEnhancements.showToast('Message sent', 'success');
         } catch (error: any) {
-          console.error('Failed to send text:', error);
           uiEnhancements.showToast(`Failed to send message: ${error.message}`, 'error');
         }
       }
@@ -1724,37 +1695,69 @@ function setupEventHandlers(): void {
         handleTextCommand();
       }
     });
-
-    console.log('✅ Text input handlers attached');
-  } else {
-    console.warn('⚠️ Text input elements not found (textInput or sendTextBtn)');
   }
 
-  // Sync button
-  syncNowBtn.onclick = async () => {
-    if (!sessionManager) return;
-    syncNowBtn.disabled = true;
-    try {
-      const { pushed, pulled } = await sessionManager.syncNow();
-      console.log(`🔄 Synced (pushed ${pushed}, pulled ${pulled})`);
-      uiEnhancements.showToast(`Synced ${pushed + pulled} items`, 'success');
-    } catch (e) {
-      console.error('Sync failed:', e);
-      uiEnhancements.showToast('Sync failed', 'error');
-    } finally {
-      syncNowBtn.disabled = false;
-    }
-  };
+  // Sidebar & Other UI
+  if (sidebarToggle) {
+    sidebarToggle.onclick = () => {
+      const isOpen = sidebar.classList.toggle('open');
+      updateSidebarToggleState(isOpen);
+    };
+  }
 
-  // Conversation management
+  // Close sidebar on mobile when clicking outside
+  document.addEventListener('click', (e) => {
+    if (window.innerWidth <= 768 &&
+        sidebar && sidebarToggle &&
+        !sidebar.contains(e.target as Node) &&
+        e.target !== sidebarToggle) {
+      sidebar.classList.remove('open');
+      updateSidebarToggleState(false);
+    }
+  });
+
+  if (syncNowBtn) {
+    syncNowBtn.onclick = async () => {
+      if (!sessionManager) return;
+      syncNowBtn.disabled = true;
+      try {
+        const { pushed, pulled } = await sessionManager.syncNow();
+        uiEnhancements.showToast(`Synced ${pushed + pulled} items`, 'success');
+      } catch (e) {
+        uiEnhancements.showToast('Sync failed', 'error');
+      } finally {
+        syncNowBtn.disabled = false;
+      }
+    };
+  }
+
   newConversationBtn.onclick = handleNewConversation;
   clearConvosBtn.onclick = handleClearConversations;
 
-  console.log('✅ Event handlers set up successfully');
+  // Speaker Monitor for Remote Audio
+  if (remoteAudio) {
+    const handleSpeakerStart = () => { void startSpeakerMonitor(); };
+    const handleSpeakerStop = () => { stopSpeakerMonitor(); };
 
-  // Add visual feedback that event handlers are ready
-  uiEnhancements.showToast('Application ready - tap the microphone to start', 'info');
-}
+    remoteAudio.addEventListener('play', handleSpeakerStart);
+    remoteAudio.addEventListener('playing', handleSpeakerStart);
+    remoteAudio.addEventListener('loadeddata', handleSpeakerStart);
+    remoteAudio.addEventListener('pause', handleSpeakerStop);
+    remoteAudio.addEventListener('ended', handleSpeakerStop);
+    remoteAudio.addEventListener('emptied', handleSpeakerStop);
+    remoteAudio.addEventListener('suspend', handleSpeakerStop);
+    remoteAudio.addEventListener('stalled', handleSpeakerStop);
+  }
+  
+  // Initialize App Logic
+  initializeApp();
+
+  const params = new URLSearchParams(window.location.search);
+  const shouldAuto = (params.get('autoconnect') === '1') || (localStorage.getItem('jarvis.autoconnect') === '1');
+  if (shouldAuto) {
+    setTimeout(() => connect(), 0);
+  }
+});
 
 // Expose functions for testing
 declare global {
