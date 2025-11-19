@@ -20,11 +20,12 @@ export interface ConversationState {
   pendingUserMessageId: string | null;
 }
 
-export interface ConversationConfig {
-  onConversationIdChange?: (id: string | null) => void;
-  onStreamingStart?: () => void;
-  onStreamingComplete?: () => void;
-}
+export type ConversationEvent = 
+  | { type: 'streamingStart' }
+  | { type: 'streamingStop' }
+  | { type: 'conversationIdChange', id: string | null };
+
+type ConversationListener = (event: ConversationEvent) => void;
 
 export class ConversationController {
   private state: ConversationState = {
@@ -36,10 +37,20 @@ export class ConversationController {
 
   private sessionManager: SessionManager | null = null;
   private renderer: ConversationRenderer | null = null;
-  private config: ConversationConfig;
+  private listeners: Set<ConversationListener> = new Set();
 
-  constructor(config: ConversationConfig = {}) {
-    this.config = config;
+  constructor() {}
+
+  addListener(listener: ConversationListener): void {
+    this.listeners.add(listener);
+  }
+
+  removeListener(listener: ConversationListener): void {
+    this.listeners.delete(listener);
+  }
+
+  private emit(event: ConversationEvent): void {
+    this.listeners.forEach(l => l(event));
   }
 
   // ============= Setup =============
@@ -63,7 +74,7 @@ export class ConversationController {
    */
   setConversationId(id: string | null): void {
     this.state.conversationId = id;
-    this.config.onConversationIdChange?.(id);
+    this.emit({ type: 'conversationIdChange', id });
   }
 
   /**
@@ -197,7 +208,7 @@ export class ConversationController {
       isStreaming: true
     });
 
-    this.config.onStreamingStart?.();
+    this.emit({ type: 'streamingStart' });
   }
 
   /**
@@ -242,7 +253,7 @@ export class ConversationController {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
 
-    this.config.onStreamingComplete?.();
+    this.emit({ type: 'streamingStop' });
   }
 
   /**

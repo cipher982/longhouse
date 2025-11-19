@@ -64,22 +64,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 4. Initialize App Controller (Core Logic)
   await appController.initialize();
   
-  // 5. Wire up State Listeners (Reactive UI)
-  stateManager.addListener((event: StateChangeEvent) => {
-    switch (event.type) {
-      case 'VOICE_BUTTON_STATE_CHANGED':
-        updateVoiceButtonUI(event.state);
-        break;
-      case 'STATUS_CHANGED':
-        if (event.active) {
-           // Handled via renderer usually
-        }
-        break;
-      case 'SESSION_CHANGED':
-        if (event.session) {
-          // Session connected logic if needed
-        }
-        break;
+  // 5. Wire up State Listeners (Reactive UI) - Direct Subscription Pattern
+  
+  // Voice State (Input)
+  voiceController.addListener((event) => {
+    if (event.type === 'stateChange') {
+      renderButtonState();
+    }
+  });
+
+  // Conversation State (Output)
+  conversationController.addListener((event) => {
+    if (event.type === 'streamingStart' || event.type === 'streamingStop') {
+      renderButtonState();
     }
   });
 
@@ -90,20 +87,29 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Click to connect
     pttBtn.addEventListener('click', async (e) => {
       feedbackSystem.resumeContext().catch(() => {});
-      if (stateManager.isIdle()) {
-        await appController.connect();
+      
+      // If not connected, connect
+      if (!voiceController.isConnected()) {
+        updateVoiceButtonUI(VoiceButtonState.CONNECTING);
+        try {
+          await appController.connect();
+          // Success will trigger voice state change -> renderButtonState
+        } catch (error) {
+          console.error('Connection failed:', error);
+          updateVoiceButtonUI(VoiceButtonState.IDLE);
+        }
       }
     });
 
     // Hold to talk
     const startTalking = () => {
-      if (stateManager.isConnected() && stateManager.isReady() && !stateManager.getState().voice.handsFree) {
+      if (voiceController.isConnected() && voiceController.getState().armed && !voiceController.getState().handsFree) {
         voiceController.startPTT();
       }
     };
 
     const stopTalking = () => {
-      if (stateManager.isConnected() && stateManager.getState().voice.pttActive) {
+      if (voiceController.isConnected() && voiceController.getState().pttActive) {
         voiceController.stopPTT();
       }
     };
@@ -120,11 +126,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         feedbackSystem.resumeContext().catch(() => {});
-        if (stateManager.isIdle()) {
-          await appController.connect();
-          return;
+        
+        if (!voiceController.isConnected()) {
+           updateVoiceButtonUI(VoiceButtonState.CONNECTING);
+           try {
+             await appController.connect();
+           } catch {
+             updateVoiceButtonUI(VoiceButtonState.IDLE);
+           }
+           return;
         }
-        if (stateManager.isReady()) {
+        
+        if (voiceController.getState().armed) {
           voiceController.startPTT();
         }
       }
@@ -142,7 +155,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Delegate to session manager via state
       const sm = stateManager.getState().sessionManager;
       if (sm) {
-        if (stateManager.isConnected()) await appController.disconnect();
+        if (voiceController.isConnected()) await appController.disconnect();
         const id = await sm.createNewConversation();
         conversationController.setConversationId(id);
         await conversationController.loadHistory();
@@ -231,11 +244,52 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Auto-connect check
   const params = new URLSearchParams(window.location.search);
   if (params.get('autoconnect') === '1') {
-    setTimeout(() => appController.connect(), 500);
+    setTimeout(() => {
+        updateVoiceButtonUI(VoiceButtonState.CONNECTING);
+        appController.connect().catch(() => updateVoiceButtonUI(VoiceButtonState.IDLE));
+    }, 500);
   }
 });
 
 // UI Helpers
+
+/**
+ * Derive and render button state from controllers
+ */
+function renderButtonState() {
+    if (!voiceController.isConnected()) {
+        // We don't automatically set IDLE here because "CONNECTING" is handled by the click handler
+        // But if we *were* connected and now are not, we should show IDLE.
+        // However, updating IDLE repeatedly is harmless.
+        // The issue is if we are "Connecting", voiceController.isConnected is false.
+        // So this would overwrite CONNECTING with IDLE.
+        // FIX: We only render active states here. 
+        // CONNECTING is a transient state managed by the connection flow.
+        // But wait, if connection finishes, isConnected becomes true.
+        return; 
+        // Actually, we need a way to know if we are connected.
+    }
+
+    const voiceState = voiceController.getState();
+    const isStreaming = conversationController.isStreaming();
+
+    let newState = VoiceButtonState.READY;
+
+    if (isStreaming) {
+        newState = VoiceButtonState.RESPONDING;
+    } else if (voiceState.pttActive || (voiceState.vadActive && voiceState.handsFree)) {
+        newState = VoiceButtonState.SPEAKING;
+    } else if (voiceState.active) {
+        // Active but not speaking? (e.g. VAD listening silence)
+        // VAD active means speaking.
+        // If active=true (mic on) but not speaking, it's listening.
+        // CSS treats 'speaking' and 'listening' similarly (active ring).
+        // Let's map to SPEAKING for visual feedback.
+        newState = VoiceButtonState.SPEAKING; // or LISTENING
+    } 
+
+    updateVoiceButtonUI(newState);
+}
 
 function updateVoiceButtonUI(state: VoiceButtonState) {
   if (!pttBtn) return;

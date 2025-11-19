@@ -179,9 +179,9 @@ export class TextChannelController {
     }
 
     // 2. Ensure voice is muted
-    if (this.voiceController && this.voiceController.isArmed()) {
+    if (this.voiceController && this.voiceController.getState().armed) {
       console.log('[TextController] Muting voice channel');
-      this.voiceController.mute();
+      this.voiceController.stopPTT();
     }
 
     // 3. Ensure session is connected

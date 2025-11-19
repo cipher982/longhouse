@@ -4,25 +4,23 @@
  * Coordinates Audio, Voice, Session, and UI State.
  */
 
-import { RealtimeAgent, RealtimeSession } from '@openai/agents/realtime';
-import { logger, SessionManager, getJarvisClient } from '@jarvis/core';
+import { type RealtimeSession } from '@openai/agents/realtime';
+import { logger } from '@jarvis/core';
 import { stateManager } from './state-manager';
 import { sessionHandler } from './session-handler';
 import { audioController } from './audio-controller';
-import { voiceController, initializeVoiceController, type VoiceState } from './voice-controller';
+import { voiceController, type VoiceEvent } from './voice-controller';
 import { conversationController } from './conversation-controller';
 import { uiEnhancements } from './ui-enhancements';
+import { uiController } from './ui-controller'; // Import UI Controller directly
 import { feedbackSystem } from './feedback-system';
-import { contextLoader } from '../contexts/context-loader';
 import { VoiceButtonState, CONFIG } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { createContextTools } from './tool-factory';
 
-// Types for integration
-import type { VoiceAgentConfig } from '../contexts/types';
-
 export class AppController {
   private initialized = false;
+  private connecting = false;
   private textChannelController: TextChannelController | null = null;
 
   constructor() {
@@ -39,8 +37,8 @@ export class AppController {
 
     logger.info('🚀 Initializing App Controller...');
 
-    // 1. Initialize Voice Controller callbacks
-    this.setupVoiceController();
+    // 1. Setup Event Listeners
+    this.setupVoiceListeners();
 
     // 2. Initialize Text Channel Controller
     this.textChannelController = new TextChannelController({
@@ -50,12 +48,11 @@ export class AppController {
     this.textChannelController.setVoiceController(voiceController);
     this.textChannelController.setConnectCallback(this.connect);
 
-    // 3. Initialize Audio Controller (AudioContext mainly)
-    // Note: DOM elements for visualization are passed separately via attachUI
-    
-    // 4. Async initialization
-    await voiceController.initialize();
+    // 3. Async initialization
     await this.textChannelController.initialize();
+    
+    // Initialize UI
+    uiController.initialize();
 
     this.initialized = true;
     logger.info('✅ App Controller initialized');
@@ -65,14 +62,15 @@ export class AppController {
    * Connect to Voice Session
    */
   async connect(): Promise<void> {
-    if (stateManager.isConnecting()) return;
+    if (this.connecting) return;
+    this.connecting = true;
 
     logger.info('🔗 Connect sequence starting...');
     
     let loadingOverlay: HTMLDivElement | null = null;
     
     try {
-      stateManager.setVoiceButtonState(VoiceButtonState.CONNECTING);
+      uiController.updateButtonState(VoiceButtonState.CONNECTING);
       loadingOverlay = uiEnhancements.showLoading('Requesting microphone access...');
 
       const currentContext = stateManager.getState().currentContext;
@@ -87,25 +85,10 @@ export class AppController {
         loadingOverlay.querySelector('.loading-text')!.textContent = 'Connecting to OpenAI...';
       }
 
-      // 2. Connect Session (via SessionHandler)
-      // We need to reconstruct the context tools here or get them from somewhere
-      // For now, we'll assume the session handler can handle tool creation if passed the config
-      // But sessionHandler.connect expects an array of tools.
-      // We need to extract the tool creation logic from main.ts or duplicate it.
-      // For this refactor, I'll assume we can pass the tools from the context.
-      // TODO: Refactor tool creation to a separate utility.
-      
-      // Quick fix: we need the tools. 
-      // Let's assume for this step we get the context from stateManager
+      // 2. Connect Session
       if (!currentContext) {
         throw new Error('No active context loaded');
       }
-      
-      // Re-create tools (we need to move createContextTools to a utility, 
-      // but for now we'll import it or define it here? 
-      // Better: Export it from main.ts or move it to a tool-factory file.
-      // For now, let's trust that sessionHandler manages the agent creation well enough
-      // if we pass the tools.
       
       // Create tools using factory
       const tools = createContextTools(currentContext, stateManager.getState().sessionManager);
@@ -131,7 +114,8 @@ export class AppController {
       this.textChannelController?.setSession(session);
 
       // 6. Finalize UI State
-      stateManager.setVoiceButtonState(VoiceButtonState.READY);
+      uiController.updateButtonState(VoiceButtonState.READY);
+      this.connecting = false;
       
       // Default to voice mode
       if (voiceController.isTextMode()) {
@@ -145,10 +129,11 @@ export class AppController {
 
     } catch (error: any) {
       logger.error('Connection failed', error);
+      this.connecting = false;
       
       // Cleanup
       audioController.releaseMicrophone();
-      stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
+      uiController.updateButtonState(VoiceButtonState.IDLE);
       
       if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
       uiEnhancements.showToast(`Connection failed: ${error.message}`, 'error');
@@ -182,74 +167,58 @@ export class AppController {
     } catch (error) {
       logger.error('Disconnect error', error);
     } finally {
-      stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
+      uiController.updateButtonState(VoiceButtonState.IDLE);
     }
   }
 
   // ================= PRIVATE HELPERS =================
 
-  private setupVoiceController() {
-    initializeVoiceController({
-      onStateChange: (state: VoiceState) => {
-        // Sync to global state manager
-        stateManager.setVoiceState(state);
-        
-        // Derive VoiceButtonState from VoiceState
-        if (state.pttActive) {
-          stateManager.setVoiceButtonState(VoiceButtonState.SPEAKING);
-        } else if (state.armed) {
-          stateManager.setVoiceButtonState(VoiceButtonState.READY);
-        } else if (stateManager.isConnected()) {
-          // If connected but not armed/active
-          stateManager.setVoiceButtonState(VoiceButtonState.READY);
-        } else {
-          stateManager.setVoiceButtonState(VoiceButtonState.IDLE);
-        }
-
-        // Handle audio feedback via AudioController
-        // VAD active means we should visualize listening
-        if (state.vadActive || state.active) {
-          audioController.setListeningMode(true).catch(() => {});
-        } else {
-          audioController.setListeningMode(false).catch(() => {});
-        }
-        
-        // Handle mic mute state
-        if (state.active) {
-          audioController.unmuteMicrophone();
-        } else {
-          audioController.muteMicrophone();
-        }
-      },
-      onArmed: () => {
-        logger.debug('Voice armed');
-      },
-      onMuted: () => {
-        logger.debug('Voice muted');
-      },
-      onTranscript: (text: string, isFinal: boolean) => {
-        if (!isFinal) {
-          conversationController.updateUserPreview(text);
-        } else {
-          // Optionally clear/finalize in controller (handled by onFinalTranscript)
-        }
-      },
-      onFinalTranscript: (text: string) => {
-        this.handleUserTranscript(text);
-      },
-      onVADStateChange: (active: boolean) => {
-        if (active) {
-          feedbackSystem.playVoiceTick();
-        }
-      },
-      onModeTransition: (from: 'voice' | 'text', to: 'voice' | 'text') => {
-        stateManager.setConversationMode(to);
-      },
-      onError: (error: Error) => {
-        logger.error('Voice controller error:', error);
-        uiEnhancements.showToast(`Voice error: ${error.message}`, 'error');
+  private setupVoiceListeners() {
+    voiceController.addListener((event: VoiceEvent) => {
+      switch (event.type) {
+        case 'stateChange':
+          this.handleVoiceStateChange(event.state);
+          break;
+        case 'transcript':
+          if (!event.isFinal) {
+            conversationController.updateUserPreview(event.text);
+          } else {
+            this.handleUserTranscript(event.text);
+          }
+          break;
+        case 'vadStateChange':
+          if (event.active) {
+            feedbackSystem.playVoiceTick();
+          }
+          break;
+        case 'error':
+          logger.error('Voice controller error:', event.error);
+          uiEnhancements.showToast(`Voice error: ${event.error.message}`, 'error');
+          break;
       }
     });
+  }
+
+  private handleVoiceStateChange(state: any) {
+    // Handle audio feedback via AudioController
+    // VAD active means we should visualize listening
+    if (state.vadActive || state.active) {
+      audioController.setListeningMode(true).catch(() => {});
+      uiController.updateButtonState(VoiceButtonState.SPEAKING); // Or SPEAKING/ACTIVE
+    } else {
+      audioController.setListeningMode(false).catch(() => {});
+      // If connected but not active, set to READY
+      if (voiceController.isConnected()) {
+         uiController.updateButtonState(VoiceButtonState.READY);
+      }
+    }
+    
+    // Handle mic mute state
+    if (state.active) {
+      audioController.unmuteMicrophone();
+    } else {
+      audioController.muteMicrophone();
+    }
   }
 
   private async handleUserTranscript(text: string): Promise<void> {
@@ -258,13 +227,6 @@ export class AppController {
 
     // Add to UI/Conversation
     conversationController.addUserTurn(finalText);
-    
-    // Here we would check for agent dispatch commands (Zerg)
-    // For now, just basic handling is fine, we can move the dispatch logic here later
-    // or import it. 
-    // Since main.ts had 'findAgentByIntent', we should ideally move that to a helper too.
-    // For this refactor step, I'll skip the specific Zerg dispatch logic to keep it focused
-    // on architecture, but conversationController will handle the display.
   }
 
   private setupSessionEvents(session: RealtimeSession) {
@@ -290,6 +252,7 @@ export class AppController {
         const delta = event.delta || '';
         if (delta) {
           conversationController.appendStreaming(delta);
+          uiController.updateButtonState(VoiceButtonState.RESPONDING);
         }
       }
 
@@ -302,7 +265,7 @@ export class AppController {
       if (t === 'response.done') {
         if (conversationController.isStreaming()) {
           conversationController.finalizeStreaming();
-          stateManager.setVoiceButtonState(VoiceButtonState.READY);
+          uiController.updateButtonState(VoiceButtonState.READY);
         }
       }
       
@@ -323,7 +286,6 @@ export class AppController {
   }
 
   private async getSessionToken(): Promise<string> {
-    // Copied from main.ts logic
     const r = await fetch(`${CONFIG.API_BASE}/session`);
     if (!r.ok) throw new Error('Failed to get session token');
     const js = await r.json();

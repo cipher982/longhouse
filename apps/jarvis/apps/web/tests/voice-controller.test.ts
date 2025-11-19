@@ -1,29 +1,22 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { VoiceController, type VoiceState } from '../lib/voice-controller';
+import { VoiceController, type VoiceState, type VoiceEvent } from '../lib/voice-controller';
 
 describe('VoiceController', () => {
   let controller: VoiceController;
-  let onStateChange: Mock;
-  let onFinalTranscript: Mock;
-  let onError: Mock;
+  let listener: Mock;
   let mockSession: any;
 
   beforeEach(() => {
-    // Reset mocks
-    onStateChange = vi.fn();
-    onFinalTranscript = vi.fn();
-    onError = vi.fn();
-
-    // Create controller with mock callbacks
-    controller = new VoiceController({
-      onStateChange,
-      onFinalTranscript,
-      onError
-    });
+    // Create controller
+    controller = new VoiceController();
+    
+    // Mock listener
+    listener = vi.fn();
+    controller.addListener(listener);
 
     // Create mock session
     mockSession = {
-      sendAudio: vi.fn() // Returns undefined by default
+      sendAudio: vi.fn() 
     };
 
     // Mock getUserMedia
@@ -31,7 +24,8 @@ describe('VoiceController', () => {
       mediaDevices: {
         getUserMedia: vi.fn().mockResolvedValue({
           getTracks: () => [{
-            stop: vi.fn()
+            stop: vi.fn(),
+            enabled: true // Default enabled
           }]
         })
       }
@@ -58,14 +52,19 @@ describe('VoiceController', () => {
   describe('PTT (Push-to-Talk)', () => {
     it('should activate on PTT press with session', async () => {
       controller.setSession(mockSession);
+      listener.mockClear(); // Clear initial state event
+      
       controller.startPTT();
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          active: true,
-          armed: true,
-          pttActive: true,
-          mode: 'ptt'
+          type: 'stateChange',
+          state: expect.objectContaining({
+            active: true,
+            armed: true,
+            pttActive: true,
+            mode: 'ptt'
+          })
         })
       );
     });
@@ -73,22 +72,33 @@ describe('VoiceController', () => {
     it('should still arm even without session (for testing)', () => {
       controller.startPTT();
 
-      // Should arm but not error (for backward compatibility with tests)
       expect(controller.getState().armed).toBe(true);
-      expect(onError).not.toHaveBeenCalled();
+      // Should trigger state change
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'stateChange',
+           state: expect.objectContaining({ armed: true })
+        })
+      );
     });
 
     it('should deactivate on PTT release', () => {
       controller.setSession(mockSession);
       controller.startPTT();
+      listener.mockClear();
+      
       controller.stopPTT();
 
-      const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1];
-      expect(lastCall[0]).toMatchObject({
-        active: false,
-        armed: false,
-        pttActive: false
-      });
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'stateChange',
+          state: expect.objectContaining({
+            active: false,
+            armed: false,
+            pttActive: false
+          })
+        })
+      );
     });
 
     it('should clear transcripts on new PTT press', () => {
@@ -109,34 +119,49 @@ describe('VoiceController', () => {
   describe('Transcript Handling', () => {
     beforeEach(() => {
       controller.setSession(mockSession);
+      listener.mockClear();
     });
 
-    it('should accept all transcripts (no gating with proper track.enabled PTT)', () => {
-      // With track.enabled PTT, OpenAI only sends transcripts when track is unmuted
-      // So all transcripts we receive are legitimate - no client-side filtering needed
+    it('should accept all transcripts', () => {
       controller.handleTranscript('Hello world', false);
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      // Should emit state change
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          transcript: 'Hello world'
+          type: 'stateChange',
+          state: expect.objectContaining({
+            transcript: 'Hello world'
+          })
         })
       );
-    });
-
-    it('should handle partial transcripts', () => {
-      controller.handleTranscript('Partial text', false);
-
-      const state = controller.getState();
-      expect(state.transcript).toBe('Partial text');
+      
+      // Should emit transcript event
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'transcript',
+          text: 'Hello world',
+          isFinal: false
+        })
+      );
     });
 
     it('should handle final transcripts', () => {
       controller.handleTranscript('Final speech', true);
 
-      expect(onFinalTranscript).toHaveBeenCalledWith('Final speech');
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          finalTranscript: 'Final speech'
+          type: 'transcript',
+          text: 'Final speech',
+          isFinal: true
+        })
+      );
+      
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'stateChange',
+           state: expect.objectContaining({
+             finalTranscript: 'Final speech'
+           })
         })
       );
     });
@@ -149,19 +174,23 @@ describe('VoiceController', () => {
       expect(state.transcript).toBe('');
       expect(state.finalTranscript).toBe('Final text');
     });
-
   });
 
   describe('Hands-Free Mode', () => {
     it('should enable hands-free mode', () => {
       controller.setSession(mockSession);
+      listener.mockClear();
+      
       controller.setHandsFree(true);
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          handsFree: true,
-          armed: true,
-          mode: 'vad'
+          type: 'stateChange',
+          state: expect.objectContaining({
+            handsFree: true,
+            armed: true,
+            mode: 'vad'
+          })
         })
       );
     });
@@ -169,12 +198,16 @@ describe('VoiceController', () => {
     it('should accept all transcripts in hands-free mode', () => {
       controller.setSession(mockSession);
       controller.setHandsFree(true);
+      listener.mockClear();
 
       controller.handleTranscript('Hands-free text', false);
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          transcript: 'Hands-free text'
+          type: 'stateChange',
+          state: expect.objectContaining({
+            transcript: 'Hands-free text'
+          })
         })
       );
     });
@@ -182,14 +215,20 @@ describe('VoiceController', () => {
     it('should disable hands-free mode', () => {
       controller.setSession(mockSession);
       controller.setHandsFree(true);
+      listener.mockClear();
+      
       controller.setHandsFree(false);
 
-      const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1];
-      expect(lastCall[0]).toMatchObject({
-        handsFree: false,
-        armed: false,
-        mode: 'ptt'
-      });
+      expect(listener).toHaveBeenCalledWith(
+         expect.objectContaining({
+           type: 'stateChange',
+           state: expect.objectContaining({
+             handsFree: false,
+             armed: false,
+             mode: 'ptt'
+           })
+         })
+      );
     });
   });
 
@@ -197,14 +236,25 @@ describe('VoiceController', () => {
     it('should handle VAD state in hands-free mode', () => {
       controller.setSession(mockSession);
       controller.setHandsFree(true);
+      listener.mockClear();
 
       controller.handleVADStateChange(true);
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          vadActive: true,
-          active: true
+          type: 'stateChange',
+          state: expect.objectContaining({
+            vadActive: true,
+            active: true
+          })
         })
+      );
+      
+      expect(listener).toHaveBeenCalledWith(
+         expect.objectContaining({
+           type: 'vadStateChange',
+           active: true
+         })
       );
     });
 
@@ -223,33 +273,42 @@ describe('VoiceController', () => {
       controller.setSession(mockSession);
       controller.setHandsFree(true);
       controller.handleVADStateChange(true);
+      listener.mockClear();
+      
       controller.handleVADStateChange(false);
 
-      const lastCall = onStateChange.mock.calls[onStateChange.mock.calls.length - 1];
-      expect(lastCall[0]).toMatchObject({
-        vadActive: false,
-        active: false
-      });
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'stateChange',
+          state: expect.objectContaining({
+            vadActive: false,
+            active: false
+          })
+        })
+      );
     });
   });
 
   describe('Session Management', () => {
     it('should handle session connection', () => {
       controller.setSession(mockSession);
-
-      // Session set, but not necessarily any state change yet
       expect(controller.getState().armed).toBe(false);
     });
 
     it('should reset state on session disconnect', () => {
       controller.setSession(mockSession);
       controller.startPTT();
+      listener.mockClear();
+      
       controller.setSession(null);
 
-      expect(onStateChange).toHaveBeenCalledWith(
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          active: false,
-          armed: false
+          type: 'stateChange',
+          state: expect.objectContaining({
+            active: false,
+            armed: false
+          })
         })
       );
     });
@@ -311,13 +370,12 @@ describe('VoiceController', () => {
       controller.setSession(mockSession);
       controller.startPTT();
 
-      // Clear the onStateChange calls from startPTT
-      onStateChange.mockClear();
+      listener.mockClear();
 
       controller.handleTranscript('', false);
 
       // Should not trigger any state change for empty text
-      expect(onStateChange).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
     });
 
     it('should handle rapid PTT presses', () => {

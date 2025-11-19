@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { VoiceController } from '../lib/voice-controller';
 import { StateManager } from '../lib/state-manager';
 import type { RealtimeSession } from '@openai/agents/realtime';
@@ -32,16 +32,15 @@ vi.mock('@jarvis/core', () => ({
 describe('Hands-Free Mode', () => {
   let controller: VoiceController;
   let mockSession: ReturnType<typeof createMockSession>;
-  let onVADStateChange: ReturnType<typeof vi.fn>;
+  let listener: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockSession = createMockSession();
-    onVADStateChange = vi.fn();
+    listener = vi.fn();
 
-    controller = new VoiceController({
-      onVADStateChange,
-    });
+    controller = new VoiceController();
+    controller.addListener(listener);
 
     controller.setSession(mockSession as any);
   });
@@ -118,13 +117,13 @@ describe('Hands-Free Mode', () => {
 
       // Track should be muted (not destroyed)
       expect(mockTrack.enabled).toBe(false);
-      expect((controller as any).micStream).not.toBeNull(); // Stream persists
     });
   });
 
   describe('VAD Integration', () => {
     beforeEach(() => {
       controller.setHandsFree(true);
+      listener.mockClear();
     });
 
     it('should handle VAD activation when hands-free is enabled', () => {
@@ -133,13 +132,19 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(true);
       expect(state.active).toBe(true);
-      expect(onVADStateChange).toHaveBeenCalledWith(true);
+      
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'vadStateChange',
+           active: true
+        })
+      );
     });
 
     it('should handle VAD deactivation when hands-free is enabled', () => {
       // Activate first
       controller.handleVADStateChange(true);
-      onVADStateChange.mockClear();
+      listener.mockClear();
 
       // Then deactivate
       controller.handleVADStateChange(false);
@@ -147,12 +152,19 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
       expect(state.active).toBe(false);
-      expect(onVADStateChange).toHaveBeenCalledWith(false);
+      
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'vadStateChange',
+           active: false
+        })
+      );
     });
 
     it('should ignore VAD events when in PTT mode (not hands-free)', () => {
       // Disable hands-free (back to PTT mode)
       controller.setHandsFree(false);
+      listener.mockClear();
 
       // Try to trigger VAD
       controller.handleVADStateChange(true);
@@ -160,52 +172,73 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
       expect(state.active).toBe(false);
-      expect(onVADStateChange).not.toHaveBeenCalled();
+      
+      // Should NOT emit vadStateChange
+      expect(listener).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'vadStateChange' })
+      );
     });
 
     it('should handle multiple VAD state changes', () => {
-      onVADStateChange.mockClear(); // Clear callback from setHandsFree(true) in beforeEach
-
       controller.handleVADStateChange(true);
       controller.handleVADStateChange(false);
       controller.handleVADStateChange(true);
 
-      expect(onVADStateChange).toHaveBeenCalledTimes(3);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(1, true);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(2, false);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(3, true);
+      // Filter for VAD events
+      const vadCalls = listener.mock.calls.filter(
+        args => args[0].type === 'vadStateChange'
+      );
+
+      expect(vadCalls).toHaveLength(3);
+      expect(vadCalls[0][0].active).toBe(true);
+      expect(vadCalls[1][0].active).toBe(false);
+      expect(vadCalls[2][0].active).toBe(true);
     });
   });
 
   describe('Speech Event Handlers', () => {
     beforeEach(() => {
       controller.setHandsFree(true);
+      listener.mockClear();
     });
 
     it('should handle speech start events', () => {
       controller.handleSpeechStart();
 
-      expect(onVADStateChange).toHaveBeenCalledWith(true);
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'vadStateChange',
+           active: true
+        })
+      );
     });
 
     it('should handle speech stop events', () => {
       controller.handleSpeechStart(); // Start first
-      onVADStateChange.mockClear();
+      listener.mockClear();
 
       controller.handleSpeechStop();
 
-      expect(onVADStateChange).toHaveBeenCalledWith(false);
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+           type: 'vadStateChange',
+           active: false
+        })
+      );
     });
 
     it('should handle speech events in PTT mode', () => {
       controller.setHandsFree(false);
+      listener.mockClear();
 
       // In PTT mode (not hands-free), speech events should be ignored
       controller.handleSpeechStart();
       controller.handleSpeechStop();
 
       // VAD events are ignored in PTT mode
-      expect(onVADStateChange).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'vadStateChange' })
+      );
     });
   });
 
@@ -286,6 +319,7 @@ describe('Hands-Free Mode', () => {
 
     it('should handle rapid VAD state changes', () => {
       controller.setHandsFree(true);
+      listener.mockClear();
 
       // Rapid toggle
       controller.handleVADStateChange(true);
@@ -293,11 +327,16 @@ describe('Hands-Free Mode', () => {
       controller.handleVADStateChange(true);
       controller.handleVADStateChange(false);
 
-      expect(onVADStateChange).toHaveBeenCalledTimes(4);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(1, true);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(2, false);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(3, true);
-      expect(onVADStateChange).toHaveBeenNthCalledWith(4, false);
+      // Filter for VAD events
+      const vadCalls = listener.mock.calls.filter(
+        args => args[0].type === 'vadStateChange'
+      );
+
+      expect(vadCalls).toHaveLength(4);
+      expect(vadCalls[0][0].active).toBe(true);
+      expect(vadCalls[1][0].active).toBe(false);
+      expect(vadCalls[2][0].active).toBe(true);
+      expect(vadCalls[3][0].active).toBe(false);
     });
 
     it('should maintain state consistency across transitions', () => {
@@ -340,13 +379,17 @@ describe('Hands-Free Mode', () => {
 
     it('should handle VAD events when not in voice mode', () => {
       controller.transitionToText();
+      listener.mockClear();
 
       // VAD events in text mode should be ignored
       controller.handleVADStateChange(true);
 
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
-      expect(onVADStateChange).not.toHaveBeenCalled();
+      
+      expect(listener).not.toHaveBeenCalledWith(
+         expect.objectContaining({ type: 'vadStateChange' })
+      );
     });
   });
 });

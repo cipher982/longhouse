@@ -260,7 +260,7 @@ export class AudioController {
       return;
     }
 
-    this.speakerAnalyser.getByteTimeDomainData(this.speakerDataArray);
+    this.speakerAnalyser.getByteTimeDomainData(this.speakerDataArray as any);
 
     let sumSquares = 0;
     for (let i = 0; i < this.speakerDataArray.length; i++) {

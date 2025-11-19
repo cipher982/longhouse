@@ -20,6 +20,13 @@ describe('TextChannelController', () => {
       retryDelay: 10 // Short delay for tests
     });
 
+    // Setup mock VoiceController environment
+    (global.navigator as any).mediaDevices = {
+      getUserMedia: vi.fn().mockResolvedValue({
+        getTracks: () => [{ stop: vi.fn(), enabled: true }]
+      } as any)
+    };
+    
     voiceController = new VoiceController();
 
     // Mock session
@@ -29,6 +36,7 @@ describe('TextChannelController', () => {
 
     textController.setSession(mockSession);
     textController.setVoiceController(voiceController);
+    voiceController.setSession(mockSession);
 
     eventBus.clear();
   });
@@ -72,18 +80,13 @@ describe('TextChannelController', () => {
     });
 
     it('should mute voice controller', async () => {
-      voiceController.arm();
-      expect(voiceController.isArmed()).toBe(true);
+      voiceController.startPTT();
+      expect(voiceController.getState().armed).toBe(true);
 
       await textController.sendText('Hello');
 
-      expect(voiceController.isArmed()).toBe(false);
+      expect(voiceController.getState().armed).toBe(false);
     });
-
-    // Note: OpenAI SDK's sendMessage() is void (fire-and-forget)
-    // It doesn't throw or return promises, so retry logic won't work in practice
-    // Errors come through session error events instead
-    // These tests are skipped since they test behavior incompatible with the real SDK
   });
 
   describe('auto-connect', () => {

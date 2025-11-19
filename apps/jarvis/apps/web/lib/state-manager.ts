@@ -6,8 +6,6 @@
 import type { RealtimeSession } from '@openai/agents/realtime';
 import type { SessionManager } from '@jarvis/core';
 import type { VoiceAgentConfig } from '../contexts/types';
-import { VoiceButtonState } from './config';
-import type { VoiceState } from './voice-controller';
 
 /**
  * Global application state
@@ -21,20 +19,14 @@ export interface AppState {
   // Conversation state
   currentStreamingText: string;
   currentConversationId: string | null;
-  voiceButtonState: VoiceButtonState;
   currentContext: any | null;
 
-  // Voice Controller State
-  voice: VoiceState;
-
   // Jarvis-Zerg integration
-  conversationMode: 'voice' | 'text';
   jarvisClient: any; // Type from @jarvis/core
   cachedAgents: any[];
 
   // UI state
   statusActive: boolean;
-  pendingUserText: string;
 
   // Media state
   sharedMicStream: MediaStream | null;
@@ -44,9 +36,6 @@ export interface AppState {
  * State change event types
  */
 export type StateChangeEvent =
-  | { type: 'VOICE_BUTTON_STATE_CHANGED'; state: VoiceButtonState }
-  | { type: 'VOICE_STATE_CHANGED'; state: VoiceState }
-  | { type: 'CONVERSATION_MODE_CHANGED'; mode: 'voice' | 'text' }
   | { type: 'SESSION_CHANGED'; session: RealtimeSession | null }
   | { type: 'AGENT_CHANGED'; agent: any }
   | { type: 'CONTEXT_CHANGED'; context: any }
@@ -80,30 +69,14 @@ export class StateManager {
       // Conversation state
       currentStreamingText: '',
       currentConversationId: null,
-      voiceButtonState: VoiceButtonState.IDLE,
       currentContext: null,
 
-      // Voice State
-      voice: {
-        mode: 'ptt',
-        interactionMode: 'voice',
-        active: false,
-        armed: false,
-        handsFree: false,
-        transcript: '',
-        finalTranscript: '',
-        vadActive: false,
-        pttActive: false
-      },
-
       // Jarvis-Zerg integration
-      conversationMode: 'voice',
       jarvisClient: null,
       cachedAgents: [],
 
       // UI state
       statusActive: false,
-      pendingUserText: '',
 
       // Media
       sharedMicStream: null,
@@ -115,34 +88,6 @@ export class StateManager {
    */
   getState(): Readonly<AppState> {
     return { ...this.state };
-  }
-
-  /**
-   * Update voice button state
-   */
-  setVoiceButtonState(state: VoiceButtonState): void {
-    if (this.state.voiceButtonState !== state) {
-      this.state.voiceButtonState = state;
-      this.notifyListeners({ type: 'VOICE_BUTTON_STATE_CHANGED', state });
-    }
-  }
-
-  /**
-   * Update full voice state
-   */
-  setVoiceState(voiceState: VoiceState): void {
-    this.state.voice = voiceState;
-    this.notifyListeners({ type: 'VOICE_STATE_CHANGED', state: voiceState });
-  }
-
-  /**
-   * Update conversation mode
-   */
-  setConversationMode(mode: 'voice' | 'text'): void {
-    if (this.state.conversationMode !== mode) {
-      this.state.conversationMode = mode;
-      this.notifyListeners({ type: 'CONVERSATION_MODE_CHANGED', mode });
-    }
   }
 
   /**
@@ -217,13 +162,6 @@ export class StateManager {
   }
 
   /**
-   * Update pending user text
-   */
-  setPendingUserText(text: string): void {
-    this.state.pendingUserText = text;
-  }
-
-  /**
    * Update shared mic stream
    */
   setSharedMicStream(stream: MediaStream | null): void {
@@ -240,34 +178,6 @@ export class StateManager {
   /**
    * State check helpers
    */
-  isIdle(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.IDLE;
-  }
-
-  isConnecting(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.CONNECTING;
-  }
-
-  isReady(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.READY;
-  }
-
-  isSpeaking(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.SPEAKING;
-  }
-
-  isResponding(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.RESPONDING;
-  }
-
-  isActive(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.ACTIVE;
-  }
-
-  isProcessing(): boolean {
-    return this.state.voiceButtonState === VoiceButtonState.PROCESSING;
-  }
-
   isConnected(): boolean {
     return this.state.session !== null;
   }

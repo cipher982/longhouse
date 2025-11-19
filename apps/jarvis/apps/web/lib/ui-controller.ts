@@ -55,12 +55,7 @@ export class UIController {
     // Sidebar toggle
     this.sidebarToggle?.addEventListener('click', () => this.toggleSidebar());
 
-    // Listen to state changes
-    stateManager.addListener((event) => {
-      if (event.type === 'VOICE_BUTTON_STATE_CHANGED') {
-        this.updateButtonState(event.state);
-      }
-    });
+    // State manager listeners removed - AppController calls updateButtonState directly
   }
 
   /**
