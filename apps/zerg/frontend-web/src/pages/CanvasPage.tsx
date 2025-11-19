@@ -103,6 +103,32 @@ function TriggerNode({ data }: { data: { label: string } }) {
   );
 }
 
+// Custom node component for the MiniMap
+// Uses foreignObject to render the actual node content (scaled down)
+function MiniMapNode(props: any) {
+  // Extract positioning and dimensions
+  const { x, y, width, height, id } = props;
+  
+  // Retrieve the full node data from the store using the ID
+  // properties like 'type' and 'data' are not passed directly to MiniMapNode in all versions
+  const node = useStore((s) => s.nodeLookup.get(id));
+  
+  if (!node) return null;
+  
+  const { type, data } = node;
+  
+  return (
+    <foreignObject x={x} y={y} width={width} height={height}>
+      {/* We use a div with 100% size to contain the node component */}
+      <div className="minimap-node-content" style={{ width: '100%', height: '100%' }}>
+        {type === 'agent' && <AgentNode data={data as { label: string; agentId?: number }} />}
+        {type === 'tool' && <ToolNode data={data as { label: string; toolType?: string }} />}
+        {type === 'trigger' && <TriggerNode data={data as { label: string }} />}
+      </div>
+    </foreignObject>
+  );
+}
+
 const nodeTypes: NodeTypes = {
   agent: AgentNode,
   tool: ToolNode,
@@ -1502,7 +1528,17 @@ function CanvasPageContent() {
                 )}
                 {guidesVisible && <Background gap={SNAP_GRID_SIZE} />}
                 <Controls />
-                <MiniMap />
+                <MiniMap 
+                  nodeComponent={MiniMapNode}
+                  maskColor="rgba(20, 20, 35, 0.6)"
+                  style={{
+                    backgroundColor: '#2a2a3a', // Match card background
+                    height: 120,
+                    width: 160,
+                    border: '1px solid #3d3d5c',
+                    borderRadius: '4px'
+                  }}
+                />
               </ReactFlow>
             </div>
             {showLogs && currentExecution && (
