@@ -1049,6 +1049,20 @@ async function connect(): Promise<void> {
 
   } catch (error) {
     logger.error('Connection failed', error);
+
+    // CRITICAL: Clean up mic stream on connection failure
+    // Without this, browser mic indicator stays lit and track keeps sampling
+    if (sharedMicStream) {
+      console.log('🧹 Cleaning up mic stream after connection failure...');
+      sharedMicStream.getTracks().forEach(track => {
+        track.enabled = false; // Disable first
+        track.stop();          // Then stop completely
+      });
+      sharedMicStream = null;
+      radialViz?.provideStream(null); // Clear visualizer reference
+      console.log('✅ Mic stream cleaned up');
+    }
+
     // Hide loading if it was created
     if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
     uiEnhancements.showToast(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
