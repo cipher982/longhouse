@@ -69,6 +69,16 @@
   text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
 }
 
+/* Voice Button Wrapper */
+.voice-button-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px; /* Space between button and text */
+  position: relative;
+}
+
 /* Main Voice Button - Hero Element with integrated state */
 .voice-button {
   position: relative;
@@ -83,8 +93,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-4);
+  /* Removed padding and gap as text is now external */
   box-shadow: 0 4px 20px rgba(139, 92, 246, 0.2);
 }
 
@@ -114,17 +123,24 @@
   color: var(--accent-purple);
   transition: all 0.3s ease;
   flex-shrink: 0;
+  width: 40px; /* Slightly larger icon since text is gone */
+  height: 40px;
 }
 
-/* Status text integrated into button */
+/* Status text external to button */
 .voice-status-text {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm); /* Slightly larger */
   font-weight: 500;
   color: var(--text-muted);
   text-align: center;
   transition: all 0.3s ease;
-  line-height: 1.2;
+  line-height: 1.4;
   user-select: none;
+  letter-spacing: 0.5px; /* Technical feel */
+  height: 24px; /* Prevent layout shifts */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Button States */
@@ -164,10 +180,12 @@
   filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.8));
 }
 
-.voice-button.speaking .voice-status-text,
-.voice-button.listening .voice-status-text {
-  color: var(--text-primary);
+/* Update status text color using sibling selector */
+.voice-button.speaking + .voice-status-text,
+.voice-button.listening + .voice-status-text {
+  color: var(--accent-purple); /* Match active state */
   font-weight: 600;
+  text-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
 }
 
 /* Responding state - different color */
@@ -181,9 +199,10 @@
   filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.7));
 }
 
-.voice-button.responding .voice-status-text {
-  color: var(--text-primary);
+.voice-button.responding + .voice-status-text {
+  color: var(--accent-blue); /* Match responding state */
   font-weight: 600;
+  text-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
 }
 
 /* Pulse animation for active ring */
