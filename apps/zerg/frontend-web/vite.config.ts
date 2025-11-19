@@ -19,6 +19,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     base: basePath,
+    resolve: {
+      // Ensure Vite resolves dependencies from workspace root node_modules
+      preserveSymlinks: false,
+    },
     server: {
       host: "0.0.0.0",
       port: frontendPort,
