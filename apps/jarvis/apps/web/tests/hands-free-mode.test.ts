@@ -82,33 +82,43 @@ describe('Hands-Free Mode', () => {
       expect(state.handsFree).toBe(false);
     });
 
-    it('should start microphone when enabling hands-free', async () => {
-      // Mock navigator.mediaDevices.getUserMedia
-      (global.navigator as any).mediaDevices = {
-        getUserMedia: vi.fn().mockResolvedValue({
-          getTracks: () => [{ stop: vi.fn() }],
-        } as any),
+    it('should unmute audio when enabling hands-free', async () => {
+      // Mock a microphone stream (normally provided by connect())
+      const mockTrack = { enabled: false, stop: vi.fn() };
+      const mockStream = {
+        getAudioTracks: () => [mockTrack],
+        getTracks: () => [mockTrack],
       } as any;
 
+      // Simulate mic stream already exists (from connect())
+      controller.setMicrophoneStream(mockStream);
+
+      // Enable hands-free should UNMUTE the track
       controller.setHandsFree(true);
 
-      // Give it a moment for the async startMicrophone call
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
+      // Track should now be enabled (unmuted)
+      expect(mockTrack.enabled).toBe(true);
     });
 
-    it('should stop microphone when disabling hands-free', () => {
-      // Mock microphone stream
-      (controller as any).micStream = {
-        getTracks: () => [{ stop: vi.fn() }],
-      };
+    it('should mute audio when disabling hands-free', () => {
+      // Mock microphone stream (from connect())
+      const mockTrack = { enabled: false, stop: vi.fn() };
+      const mockStream = {
+        getAudioTracks: () => [mockTrack],
+        getTracks: () => [mockTrack],
+      } as any;
 
+      controller.setMicrophoneStream(mockStream);
+
+      // Enable, then disable hands-free
       controller.setHandsFree(true);
+      expect(mockTrack.enabled).toBe(true); // Unmuted when enabled
+
       controller.setHandsFree(false);
 
-      // The microphone should be stopped when disabling
-      expect((controller as any).micStream).toBeNull();
+      // Track should be muted (not destroyed)
+      expect(mockTrack.enabled).toBe(false);
+      expect((controller as any).micStream).not.toBeNull(); // Stream persists
     });
   });
 
