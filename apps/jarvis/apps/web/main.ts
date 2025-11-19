@@ -890,7 +890,7 @@ async function connect(): Promise<void> {
   let loadingOverlay: HTMLDivElement | null = null;
   try {
     setVoiceButtonState(VoiceButtonState.CONNECTING);
-    loadingOverlay = uiEnhancements.showLoading('Connecting to voice service...');
+    loadingOverlay = uiEnhancements.showLoading('Requesting microphone access...');
 
     // Use the context-aware agent created during initialization
     if (!agent) {
@@ -900,20 +900,31 @@ async function connect(): Promise<void> {
 
     console.log('✅ Agent found:', agent.name || 'unnamed agent');
 
-    // Request mic only if needed immediately (e.g. hands-free was already on)
-    // Otherwise let PTT/Hands-Free toggle handle it
-    if (voiceController.isHandsFreeEnabled()) {
-       if (!sharedMicStream) {
-          sharedMicStream = await voiceController.requestMicrophone();
-       }
-       radialViz?.provideStream(sharedMicStream);
+    // CRITICAL: Request microphone FIRST (per OpenAI Realtime API requirements)
+    // The mic stream MUST be provided at connection time for WebRTC transport
+    if (!sharedMicStream) {
+      console.log('🎙️ Requesting microphone access...');
+      sharedMicStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      console.log('✅ Microphone access granted');
+      radialViz?.provideStream(sharedMicStream);
     }
 
-    // Use sessionHandler to create and connect session
+    // Update loading message after mic obtained
+    if (loadingOverlay) {
+      loadingOverlay.querySelector('.loading-text')!.textContent = 'Connecting to OpenAI...';
+    }
+
+    // Use sessionHandler to create and connect session WITH mic stream
     const tools = currentContext ? createContextTools(currentContext) : [];
     const { session: newSession, agent: sessionAgent } = await sessionHandler.connect({
       context: currentContext!,
-      mediaStream: sharedMicStream || undefined,
+      mediaStream: sharedMicStream,  // ← ALWAYS provided now (never undefined)
       audioElement: remoteAudio || undefined,
       tools,
       onTokenRequest: getSessionToken
