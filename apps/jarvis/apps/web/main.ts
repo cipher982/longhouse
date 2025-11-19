@@ -1009,8 +1009,9 @@ async function connect(): Promise<void> {
       // Could sync with our conversation manager here
     });
 
-    // Wire session to controllers
+    // Wire session and mic stream to controllers
     voiceController.setSession(session);
+    voiceController.setMicrophoneStream(sharedMicStream!); // Stream created above, never null here
     textChannelController.setSession(session);
     console.log('🎉 Connection established!');
 

@@ -101,22 +101,23 @@ export class VoiceController {
 
     if (session) {
       logger.info('Voice session connected');
-      
-      // If we have an active microphone stream AND we are armed/hands-free,
-      // attach it to the new session immediately.
-      if (this.micStream && (this.state.armed || this.state.handsFree)) {
-        logger.info('Attaching existing microphone stream to new session');
-        try {
-          // @ts-ignore - OpenAI types
-          this.session.sendAudio(this.micStream);
-        } catch (err) {
-          logger.error('Failed to attach existing mic stream to new session:', err);
-        }
-      }
     } else {
       logger.info('Voice session disconnected');
       this.setState({ active: false, armed: false });
     }
+  }
+
+  /**
+   * Set microphone stream (provided externally from connect())
+   * The stream is created ONCE during connection and reused.
+   */
+  setMicrophoneStream(stream: MediaStream): void {
+    this.micStream = stream;
+    logger.info('Microphone stream attached to voice controller');
+
+    // Start with audio muted (privacy-first)
+    // User must explicitly unmute via PTT or hands-free
+    this.muteAudio();
   }
 
   // ============= PTT (Push-to-Talk) =============
@@ -229,7 +230,7 @@ export class VoiceController {
     console.log(`[DEBUG VoiceController] ✓ Setting hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
     if (enabled) {
-      // When enabling hands-free, arm the controller
+      // When enabling hands-free, arm the controller and UNMUTE
       this.setState({
         handsFree: true,
         armed: true,
@@ -238,11 +239,10 @@ export class VoiceController {
       });
 
       console.log('[DEBUG VoiceController] State set to hands-free, mode=vad, armed=true');
-      this.startMicrophone().catch(err => {
-        logger.error('Failed to start microphone for hands-free:', err);
-      });
+      // Unmute audio - VAD will detect speech automatically
+      this.unmuteAudio();
     } else {
-      // When disabling hands-free, unarm back to PTT-ready state
+      // When disabling hands-free, unarm back to PTT-ready state and MUTE
       this.setState({
         handsFree: false,
         armed: false,
@@ -250,7 +250,8 @@ export class VoiceController {
         mode: 'ptt'
       });
       console.log('[DEBUG VoiceController] State set to PTT mode, armed=false');
-      this.stopMicrophone();
+      // Mute audio - wait for PTT press
+      this.muteAudio();
     }
   }
 
