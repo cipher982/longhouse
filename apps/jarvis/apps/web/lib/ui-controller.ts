@@ -17,7 +17,7 @@ export class UIController {
   private voiceButtonContainer: HTMLDivElement | null = null;
   private textInput: HTMLInputElement | null = null;
   private sendButton: HTMLButtonElement | null = null;
-  private handsFreeToggle: HTMLInputElement | null = null;
+  private handsFreeToggle: HTMLButtonElement | null = null;
   private sidebar: HTMLDivElement | null = null;
   private sidebarToggle: HTMLButtonElement | null = null;
 
@@ -43,7 +43,7 @@ export class UIController {
     this.voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
     this.textInput = document.getElementById('textInput') as HTMLInputElement;
     this.sendButton = document.getElementById('sendTextBtn') as HTMLButtonElement;
-    this.handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLInputElement;
+    this.handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
     this.sidebar = document.getElementById('sidebar') as HTMLDivElement;
     this.sidebarToggle = document.getElementById('sidebarToggle') as HTMLButtonElement;
   }
@@ -222,7 +222,7 @@ export class UIController {
   /**
    * Get hands-free toggle element
    */
-  getHandsFreeToggle(): HTMLInputElement | null {
+  getHandsFreeToggle(): HTMLButtonElement | null {
     return this.handsFreeToggle;
   }
 

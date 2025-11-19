@@ -24,6 +24,7 @@ let sidebar: HTMLDivElement | undefined;
 let sidebarToggle: HTMLButtonElement | undefined;
 let voiceStatusText: HTMLSpanElement | undefined;
 let remoteAudio: HTMLAudioElement | undefined;
+let handsFreeToggle: HTMLButtonElement | undefined;
 
 function createSessionManagerForContext(config: VoiceAgentConfig): SessionManager {
   return new SessionManager({}, {
@@ -45,7 +46,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
   sidebar = document.getElementById("sidebar") as HTMLDivElement;
   voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
-  const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
+  handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
   remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null || undefined;
   const textInput = document.getElementById('textInput') as HTMLInputElement;
   const sendTextBtn = document.getElementById('sendTextBtn');
@@ -178,9 +179,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Hands-free Toggle
   if (handsFreeToggle) {
     handsFreeToggle.addEventListener('click', () => {
-      const wasEnabled = handsFreeToggle.getAttribute('aria-checked') === 'true';
+      const wasEnabled = handsFreeToggle!.getAttribute('aria-checked') === 'true';
       const enabled = !wasEnabled;
-      handsFreeToggle.setAttribute('aria-checked', enabled.toString());
+      handsFreeToggle!.setAttribute('aria-checked', enabled.toString());
       
       if (enabled && voiceController.isTextMode()) {
         voiceController.transitionToVoice({ armed: false, handsFree: false });
@@ -257,21 +258,20 @@ document.addEventListener("DOMContentLoaded", async () => {
  * Derive and render button state from controllers
  */
 function renderButtonState() {
-    if (!voiceController.isConnected()) {
-        // We don't automatically set IDLE here because "CONNECTING" is handled by the click handler
-        // But if we *were* connected and now are not, we should show IDLE.
-        // However, updating IDLE repeatedly is harmless.
-        // The issue is if we are "Connecting", voiceController.isConnected is false.
-        // So this would overwrite CONNECTING with IDLE.
-        // FIX: We only render active states here. 
-        // CONNECTING is a transient state managed by the connection flow.
-        // But wait, if connection finishes, isConnected becomes true.
-        return; 
-        // Actually, we need a way to know if we are connected.
-    }
-
     const voiceState = voiceController.getState();
     const isStreaming = conversationController.isStreaming();
+
+    // Sync Hands-free toggle state
+    if (handsFreeToggle) {
+      const currentState = handsFreeToggle.getAttribute('aria-checked') === 'true';
+      if (currentState !== voiceState.handsFree) {
+        handsFreeToggle.setAttribute('aria-checked', voiceState.handsFree.toString());
+      }
+    }
+
+    if (!voiceController.isConnected()) {
+        return; 
+    }
 
     let newState = VoiceButtonState.READY;
 
@@ -280,11 +280,6 @@ function renderButtonState() {
     } else if (voiceState.pttActive || (voiceState.vadActive && voiceState.handsFree)) {
         newState = VoiceButtonState.SPEAKING;
     } else if (voiceState.active) {
-        // Active but not speaking? (e.g. VAD listening silence)
-        // VAD active means speaking.
-        // If active=true (mic on) but not speaking, it's listening.
-        // CSS treats 'speaking' and 'listening' similarly (active ring).
-        // Let's map to SPEAKING for visual feedback.
         newState = VoiceButtonState.SPEAKING; // or LISTENING
     } 
 
