@@ -296,43 +296,54 @@ export class VoiceController {
   // ============= Microphone Management =============
 
   /**
-   * Start microphone capture
+   * Unmute microphone (enable audio track)
+   * NOTE: Mic stream is already created and attached during connect().
+   * This just enables the audio track to start sending data.
    */
-  private async startMicrophone(): Promise<void> {
-    try {
-      // 1. Create stream if needed
-      if (!this.micStream) {
-        this.micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
-        logger.info('Microphone started');
-      }
+  private unmuteAudio(): void {
+    if (!this.micStream) {
+      logger.warn('Cannot unmute: no mic stream available');
+      return;
+    }
 
-      // 2. Send to OpenAI session if connected
-      // (Always try to send/attach when starting microphone)
-      if (this.session && this.micStream) {
-        // @ts-ignore - OpenAI types may vary
-        await this.session.sendAudio(this.micStream);
-      }
-    } catch (error) {
-      logger.error('Failed to access microphone:', error);
-      throw error;
+    const audioTrack = this.micStream.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = true;
+      logger.info('Audio track enabled (unmuted)');
     }
   }
 
   /**
-   * Stop microphone capture
+   * Mute microphone (disable audio track)
+   * This STOPS audio transmission to OpenAI without destroying the track.
+   * Much faster than stop/recreate, and maintains WebRTC connection.
+   */
+  private muteAudio(): void {
+    if (!this.micStream) {
+      return;
+    }
+
+    const audioTrack = this.micStream.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = false;
+      logger.info('Audio track disabled (muted)');
+    }
+  }
+
+  /**
+   * DEPRECATED: Use unmuteAudio() instead
+   * Kept for backward compatibility during refactor
+   */
+  private async startMicrophone(): Promise<void> {
+    this.unmuteAudio();
+  }
+
+  /**
+   * DEPRECATED: Use muteAudio() instead
+   * Kept for backward compatibility during refactor
    */
   private stopMicrophone(): void {
-    if (this.micStream) {
-      this.micStream.getTracks().forEach(track => track.stop());
-      this.micStream = null;
-      logger.info('Microphone stopped');
-    }
+    this.muteAudio();
   }
 
   // ============= Keyboard Support =============
