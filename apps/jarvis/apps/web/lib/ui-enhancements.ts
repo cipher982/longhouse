@@ -108,7 +108,7 @@ export class UIEnhancements {
         border-radius: 50%;
         animation: spin 1s linear infinite;
       "></div>
-      <div style="
+      <div class="loading-text" style="
         margin-top: 20px;
         color: white;
         font-size: 16px;

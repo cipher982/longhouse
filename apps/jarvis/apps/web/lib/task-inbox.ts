@@ -251,7 +251,8 @@ export async function createTaskInbox(
   options: TaskInboxOptions
 ): Promise<TaskInbox> {
   const inbox = new TaskInbox(options);
-  await inbox.initialize();
+  // Set container immediately so internal render calls work during initialization
   inbox.render(container);
+  await inbox.initialize();
   return inbox;
 }
