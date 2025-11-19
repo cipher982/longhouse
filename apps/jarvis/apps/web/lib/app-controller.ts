@@ -229,9 +229,9 @@ export class AppController {
       },
       onTranscript: (text: string, isFinal: boolean) => {
         if (!isFinal) {
-          stateManager.setPendingUserText(text);
+          conversationController.updateUserPreview(text);
         } else {
-          stateManager.setPendingUserText('');
+          // Optionally clear/finalize in controller (handled by onFinalTranscript)
         }
       },
       onFinalTranscript: (text: string) => {

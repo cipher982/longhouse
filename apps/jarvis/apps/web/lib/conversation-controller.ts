@@ -17,6 +17,7 @@ export interface ConversationState {
   conversationId: string | null;
   streamingMessageId: string | null;
   streamingText: string;
+  pendingUserMessageId: string | null;
 }
 
 export interface ConversationConfig {
@@ -29,7 +30,8 @@ export class ConversationController {
   private state: ConversationState = {
     conversationId: null,
     streamingMessageId: null,
-    streamingText: ''
+    streamingText: '',
+    pendingUserMessageId: null
   };
 
   private sessionManager: SessionManager | null = null;
@@ -74,20 +76,52 @@ export class ConversationController {
   // ============= Turn Management =============
 
   /**
+   * Update a pending user turn (preview)
+   */
+  async updateUserPreview(transcript: string): Promise<void> {
+    if (!this.renderer) return;
+
+    if (!this.state.pendingUserMessageId) {
+      // Create new pending message
+      this.state.pendingUserMessageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.renderer.addMessage({
+        id: this.state.pendingUserMessageId,
+        role: 'user',
+        content: transcript,
+        timestamp: new Date()
+      });
+    } else {
+      // Update existing
+      this.renderer.updateMessage(this.state.pendingUserMessageId, {
+        content: transcript
+      });
+    }
+  }
+
+  /**
    * Add user turn to UI and persist
    */
   async addUserTurn(transcript: string, timestamp?: Date): Promise<void> {
     if (!this.renderer) return;
 
-    const messageTimestamp = timestamp || new Date();
-    const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // If we have a pending message, use it to preserve the original timestamp
+    if (this.state.pendingUserMessageId && !timestamp) {
+      this.renderer.updateMessage(this.state.pendingUserMessageId, {
+        content: transcript
+      });
+      this.state.pendingUserMessageId = null;
+    } else {
+      // Create new if no pending or if loading from history
+      const messageTimestamp = timestamp || new Date();
+      const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    this.renderer.addMessage({
-      id: messageId,
-      role: 'user',
-      content: transcript,
-      timestamp: messageTimestamp
-    });
+      this.renderer.addMessage({
+        id: messageId,
+        role: 'user',
+        content: transcript,
+        timestamp: messageTimestamp
+      });
+    }
 
     // Record to IndexedDB if not from history loading (no timestamp provided)
     if (!timestamp) {
