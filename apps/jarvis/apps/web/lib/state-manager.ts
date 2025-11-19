@@ -7,6 +7,7 @@ import type { RealtimeSession } from '@openai/agents/realtime';
 import type { SessionManager } from '@jarvis/core';
 import type { VoiceAgentConfig } from '../contexts/types';
 import { VoiceButtonState } from './config';
+import type { VoiceState } from './voice-controller';
 
 /**
  * Global application state
@@ -22,6 +23,9 @@ export interface AppState {
   currentConversationId: string | null;
   voiceButtonState: VoiceButtonState;
   currentContext: any | null;
+
+  // Voice Controller State
+  voice: VoiceState;
 
   // Jarvis-Zerg integration
   conversationMode: 'voice' | 'text';
@@ -41,6 +45,7 @@ export interface AppState {
  */
 export type StateChangeEvent =
   | { type: 'VOICE_BUTTON_STATE_CHANGED'; state: VoiceButtonState }
+  | { type: 'VOICE_STATE_CHANGED'; state: VoiceState }
   | { type: 'CONVERSATION_MODE_CHANGED'; mode: 'voice' | 'text' }
   | { type: 'SESSION_CHANGED'; session: RealtimeSession | null }
   | { type: 'AGENT_CHANGED'; agent: any }
@@ -78,6 +83,19 @@ export class StateManager {
       voiceButtonState: VoiceButtonState.IDLE,
       currentContext: null,
 
+      // Voice State
+      voice: {
+        mode: 'ptt',
+        interactionMode: 'voice',
+        active: false,
+        armed: false,
+        handsFree: false,
+        transcript: '',
+        finalTranscript: '',
+        vadActive: false,
+        pttActive: false
+      },
+
       // Jarvis-Zerg integration
       conversationMode: 'voice',
       jarvisClient: null,
@@ -107,6 +125,14 @@ export class StateManager {
       this.state.voiceButtonState = state;
       this.notifyListeners({ type: 'VOICE_BUTTON_STATE_CHANGED', state });
     }
+  }
+
+  /**
+   * Update full voice state
+   */
+  setVoiceState(voiceState: VoiceState): void {
+    this.state.voice = voiceState;
+    this.notifyListeners({ type: 'VOICE_STATE_CHANGED', state: voiceState });
   }
 
   /**

@@ -691,3 +691,8 @@ Object.assign(VoiceController.prototype, {
 
 // Export singleton instance (will be configured in main.ts)
 export let voiceController: VoiceController;
+
+export function initializeVoiceController(config: VoiceConfig): VoiceController {
+  voiceController = new VoiceController(config);
+  return voiceController;
+}
