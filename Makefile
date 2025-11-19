@@ -98,7 +98,7 @@ test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 generate-sdk: ## Generate OpenAPI/AsyncAPI clients and tool manifest
 	@echo "🔄 Generating SDK..."
 	@cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
-	@cd packages/contracts && npm run generate
+	@cd packages/contracts && bun run generate
 	@uv run python scripts/generate-tool-manifest.py
 	@echo "✅ SDK generation complete"
 

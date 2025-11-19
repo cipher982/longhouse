@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "Unified Swarm Platform: Jarvis (voice/text UI) + Zerg (agent orchestration backend)",
   "private": true,
+  "packageManager": "bun@1.2.20",
   "workspaces": [
     "apps/jarvis/apps/*",
     "apps/jarvis/packages/*",
     "apps/jarvis/packages/data/*",
     "apps/zerg/frontend-web",
-    "apps/zerg/prerender",
+    "prerender",
     "packages/*"
   ],
   "scripts": {
@@ -19,7 +20,7 @@
     "test": "make test",
     "generate-sdk": "make generate-sdk",
     "validate:css": "node scripts/validate-css-classes.js",
-    "validate:all": "npm run validate:css && ./scripts/fast-contract-check.sh"
+    "validate:all": "bun run validate:css && ./scripts/fast-contract-check.sh"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",
