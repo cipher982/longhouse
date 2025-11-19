@@ -6,12 +6,13 @@ import { uiEnhancements } from './lib/ui-enhancements';
 import { ConversationRenderer } from './lib/conversation-renderer';
 import { ConversationUI } from './lib/conversation-ui';
 import { buildConversationManagerOptions } from './lib/config';
+import './lib/test-helpers'; // Load test helpers for e2e testing
 
 // Controllers & State
 import { appController } from './lib/app-controller';
 import { audioController } from './lib/audio-controller';
 import { stateManager, type StateChangeEvent } from './lib/state-manager';
-import { voiceController } from './lib/voice-controller';
+import { voiceController, initializeVoiceController } from './lib/voice-controller';
 import { conversationController } from './lib/conversation-controller';
 import { feedbackSystem } from './lib/feedback-system';
 import { VoiceButtonState } from './lib/config';
@@ -62,8 +63,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     audioController.initialize(remoteAudio, pttBtn);
   }
 
+  // 3.5. Initialize Voice Controller (must happen before App Controller)
+  initializeVoiceController({});
+
   // 4. Initialize App Controller (Core Logic)
   await appController.initialize();
+
+  // 4.5. Expose controllers to window for testing
+  if (typeof window !== 'undefined') {
+    (window as any).voiceController = voiceController;
+    (window as any).audioController = audioController;
+    (window as any).appController = appController;
+  }
   
   // 5. Wire up State Listeners (Reactive UI) - Direct Subscription Pattern
   
@@ -88,29 +99,36 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Click to connect
     pttBtn.addEventListener('click', async (e) => {
       feedbackSystem.resumeContext().catch(() => {});
-      
+
       // If not connected, connect
       if (!voiceController.isConnected()) {
         updateVoiceButtonUI(VoiceButtonState.CONNECTING);
         try {
           await appController.connect();
           // Success will trigger voice state change -> renderButtonState
-        } catch (error) {
+        } catch (error: any) {
           console.error('Connection failed:', error);
           updateVoiceButtonUI(VoiceButtonState.IDLE);
+          // Show visible error to user
+          setStatusLabel(`❌ Error: ${error.message || 'Connection failed'}`);
+          setTimeout(() => {
+            setStatusLabel('Start voice session');
+          }, 5000);
         }
       }
     });
 
     // Hold to talk
     const startTalking = () => {
-      if (voiceController.isConnected() && voiceController.getState().armed && !voiceController.getState().handsFree) {
+      const state = voiceController.getState();
+      if (voiceController.isConnected() && state.armed && !state.handsFree) {
         voiceController.startPTT();
       }
     };
 
     const stopTalking = () => {
-      if (voiceController.isConnected() && voiceController.getState().pttActive) {
+      const state = voiceController.getState();
+      if (voiceController.isConnected() && state.pttActive) {
         voiceController.stopPTT();
       }
     };

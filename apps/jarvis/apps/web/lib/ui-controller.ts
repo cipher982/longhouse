@@ -39,8 +39,8 @@ export class UIController {
   private cacheElements(): void {
     this.voiceButton = document.getElementById('pttBtn') as HTMLButtonElement;
     this.connectButton = null; // No connect button in current HTML
-    this.statusLabel = document.querySelector('.voice-status-label') as HTMLDivElement;
-    this.voiceButtonContainer = document.getElementById('voiceButtonContainer') as HTMLDivElement;
+    this.statusLabel = document.querySelector('.voice-status-text') as HTMLDivElement;
+    this.voiceButtonContainer = document.querySelector('.voice-button-wrapper') as HTMLDivElement;
     this.textInput = document.getElementById('textInput') as HTMLInputElement;
     this.sendButton = document.getElementById('sendTextBtn') as HTMLButtonElement;
     this.handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
@@ -59,67 +59,49 @@ export class UIController {
   }
 
   /**
-   * Update voice button state (adds classes to container for CSS compatibility)
+   * Update voice button state (matches main.ts pattern for compatibility)
    */
   updateButtonState(state: VoiceButtonState): void {
-    if (!this.voiceButton || !this.voiceButtonContainer) return;
+    if (!this.voiceButton) return;
 
-    // Remove all state classes from container
-    this.voiceButtonContainer.classList.remove(
-      'state-idle',
-      'state-connecting',
-      'state-ready',
-      'state-speaking',
-      'state-responding',
-      'state-active',
-      'state-processing'
-    );
+    // Remove all state classes from button (matches main.ts pattern)
+    this.voiceButton.classList.remove('idle', 'connecting', 'ready', 'speaking', 'listening', 'responding');
 
-    // Map state to CSS class format
-    const stateClassMap = {
-      [VoiceButtonState.IDLE]: 'state-ready',        // Ready to connect
-      [VoiceButtonState.CONNECTING]: 'state-processing', // Connecting/Processing
-      [VoiceButtonState.READY]: 'state-ready',      // Ready to interact
-      [VoiceButtonState.SPEAKING]: 'state-active',  // User is speaking
-      [VoiceButtonState.RESPONDING]: 'state-active', // Assistant is responding
-      [VoiceButtonState.ACTIVE]: 'state-active',
-      [VoiceButtonState.PROCESSING]: 'state-processing'
-    } as Record<VoiceButtonState, string>;
-
-    // Add new state class to container
-    const cssStateClass = stateClassMap[state] || 'state-ready';
-    this.voiceButtonContainer.classList.add(cssStateClass);
-
-    // Update ARIA attributes
+    // Update based on state
     switch (state) {
       case VoiceButtonState.IDLE:
+        this.voiceButton.classList.add('idle');
         this.voiceButton.disabled = false;
-        this.voiceButton.setAttribute('aria-label', 'Disconnected - Click to connect');
-        this.voiceButton.setAttribute('data-state', 'idle');
+        this.voiceButton.setAttribute('aria-label', 'Start voice session');
+        if (this.statusLabel) this.statusLabel.textContent = 'Start voice session';
         break;
 
       case VoiceButtonState.CONNECTING:
+        this.voiceButton.classList.add('connecting');
         this.voiceButton.disabled = true;
         this.voiceButton.setAttribute('aria-label', 'Connecting...');
-        this.voiceButton.setAttribute('data-state', 'connecting');
+        if (this.statusLabel) this.statusLabel.textContent = 'Connecting...';
         break;
 
       case VoiceButtonState.READY:
+        this.voiceButton.classList.add('ready');
         this.voiceButton.disabled = false;
-        this.voiceButton.setAttribute('aria-label', 'Ready - Click or hold to interact');
-        this.voiceButton.setAttribute('data-state', 'ready');
+        this.voiceButton.setAttribute('aria-label', 'Ready - hold to talk');
+        if (this.statusLabel) this.statusLabel.textContent = '🎙️ Ready - hold to talk';
         break;
 
       case VoiceButtonState.SPEAKING:
+        this.voiceButton.classList.add('speaking');
         this.voiceButton.disabled = false;
-        this.voiceButton.setAttribute('aria-label', 'Speaking - Release to send');
-        this.voiceButton.setAttribute('data-state', 'speaking');
+        this.voiceButton.setAttribute('aria-label', 'Recording...');
+        if (this.statusLabel) this.statusLabel.textContent = '🔴 Recording...';
         break;
 
       case VoiceButtonState.RESPONDING:
-        this.voiceButton.disabled = true;
-        this.voiceButton.setAttribute('aria-label', 'Assistant is responding...');
-        this.voiceButton.setAttribute('data-state', 'responding');
+        this.voiceButton.classList.add('responding');
+        this.voiceButton.disabled = false;
+        this.voiceButton.setAttribute('aria-label', 'Responding...');
+        if (this.statusLabel) this.statusLabel.textContent = '💬 Responding...';
         break;
     }
   }

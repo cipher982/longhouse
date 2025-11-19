@@ -116,11 +116,9 @@ export class AppController {
       // 6. Finalize UI State
       uiController.updateButtonState(VoiceButtonState.READY);
       this.connecting = false;
-      
-      // Default to voice mode
-      if (voiceController.isTextMode()) {
-        voiceController.transitionToVoice({ armed: false, handsFree: false });
-      }
+
+      // Arm PTT for ready state - always set this after connection
+      voiceController.transitionToVoice({ armed: true, handsFree: false });
 
       // Feedback
       feedbackSystem.playConnectChime();
@@ -215,13 +213,10 @@ export class AppController {
          uiController.updateButtonState(VoiceButtonState.READY);
       }
     }
-    
-    // Handle mic mute state
-    if (state.active) {
-      audioController.unmuteMicrophone();
-    } else {
-      audioController.muteMicrophone();
-    }
+
+    // NOTE: Mic muting/unmuting is handled exclusively by voiceController
+    // It manages track.enabled directly in startPTT(), stopPTT(), setHandsFree(), handleVADStateChange()
+    // Do NOT add duplicate mic control here - it causes conflicts
   }
 
   private async handleUserTranscript(text: string): Promise<void> {

@@ -145,7 +145,7 @@ export class VoiceController {
 
     this.setState({
       active: false,
-      armed: false,
+      // Keep armed: true so user can press PTT again
       pttActive: false
     });
 
@@ -190,7 +190,7 @@ export class VoiceController {
     } else {
       this.setState({
         handsFree: false,
-        armed: false,
+        armed: true, // Keep armed for PTT mode
         active: false,
         mode: 'ptt'
       });
