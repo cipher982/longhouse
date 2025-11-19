@@ -912,6 +912,15 @@ async function connect(): Promise<void> {
         }
       });
       console.log('✅ Microphone access granted');
+
+      // PRIVACY-CRITICAL: Mute the track IMMEDIATELY before WebRTC handshake
+      // Without this, audio streams to OpenAI during SDP negotiation!
+      const audioTrack = sharedMicStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = false;
+        console.log('🔒 Audio track muted (privacy-first)');
+      }
+
       radialViz?.provideStream(sharedMicStream);
     }
 
@@ -920,11 +929,11 @@ async function connect(): Promise<void> {
       loadingOverlay.querySelector('.loading-text')!.textContent = 'Connecting to OpenAI...';
     }
 
-    // Use sessionHandler to create and connect session WITH mic stream
+    // Use sessionHandler to create and connect session WITH mic stream (MUTED)
     const tools = currentContext ? createContextTools(currentContext) : [];
     const { session: newSession, agent: sessionAgent } = await sessionHandler.connect({
       context: currentContext!,
-      mediaStream: sharedMicStream,  // ← ALWAYS provided now (never undefined)
+      mediaStream: sharedMicStream,  // ← Stream is MUTED, no audio leaks during handshake
       audioElement: remoteAudio || undefined,
       tools,
       onTokenRequest: getSessionToken
