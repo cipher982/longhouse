@@ -92,6 +92,12 @@ logging.basicConfig(level=_log_level, format="%(levelname)s - %(message)s", hand
 # Suppress verbose INFO logs from known-noisy modules (e.g., websocket connects)
 for _noisy_mod in ("zerg.routers.websocket", "zerg.websocket.manager"):
     logging.getLogger(_noisy_mod).setLevel(logging.WARNING)
+
+# Suppress SSE ping/chunk debug logs (sse-starlette healthchecks)
+logging.getLogger("sse_starlette").setLevel(logging.WARNING)
+
+# Suppress Uvicorn access logs (healthchecks and routine requests)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # --------------------------------------------------------------------------
 
 # Create the FastAPI app
