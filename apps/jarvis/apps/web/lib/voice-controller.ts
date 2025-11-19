@@ -260,17 +260,12 @@ export class VoiceController {
   /**
    * Handle incoming transcript from WebSocket
    * This is the SINGLE entry point for all transcripts
+   *
+   * NOTE: With proper track.enabled PTT, OpenAI only receives audio when unmuted,
+   * so we don't need client-side filtering anymore. All transcripts are legitimate.
    */
   handleTranscript(text: string, isFinal: boolean): void {
     if (!text) return;
-
-    // CRITICAL GATING LOGIC
-    // Allow final transcripts through even when muted (OpenAI sends finals after PTT release)
-    // Block partial transcripts when not armed to prevent ambient noise
-    if (!this.state.armed && !this.state.handsFree && !isFinal) {
-      logger.debug('Dropping partial transcript (not armed):', text.substring(0, 50));
-      return;
-    }
 
     // Update state
     if (!isFinal) {
