@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     base: basePath,
     server: {
-      host: "127.0.0.1",
+      host: "0.0.0.0",
       port: frontendPort,
       // Enable file watching with polling for Docker volumes
       watch: {
@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => {
         interval: 1000,
       },
       proxy: {
+        "/api/ws": {
+          target: proxyTarget,
+          ws: true,
+          changeOrigin: true,
+        },
         "/api": {
           target: proxyTarget,
           changeOrigin: true,
