@@ -220,6 +220,7 @@ conversationRenderer = new ConversationRenderer(transcriptEl);
 conversationController.setRenderer(conversationRenderer);
 
 const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
+const voiceButtonContainer = pttBtn; // The voice button itself is the container for visual states
 const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
 const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
 const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
@@ -320,8 +321,8 @@ function updateAudioVisualization(): void {
 
   if (voiceButtonContainer) {
     voiceButtonContainer.dataset.state = `${audioState}`;
-    voiceButtonContainer.classList.toggle('audio-mic-active', micActive);
-    voiceButtonContainer.classList.toggle('audio-assistant-active', assistantActive);
+    // Visual feedback for mic/assistant audio levels is handled via CSS state classes
+    // The actual visual states (idle, ready, speaking, listening, responding) are managed elsewhere
   }
 }
 
@@ -940,6 +941,11 @@ async function connect(): Promise<void> {
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
+      // DEBUG: Log ALL event types to debug VAD issue
+      if (t.includes('speech') || t.includes('input_audio_buffer')) {
+        console.log(`[DEBUG VAD] Event type: "${t}"`, event);
+      }
+
       // Transcript handling
       if (t === 'conversation.item.input_audio_transcription.delta') {
         voiceController.handleTranscript(event.delta || '', false);
@@ -958,13 +964,14 @@ async function connect(): Promise<void> {
         }
       }
 
-      // VAD speech detection
-      if (t.includes('input_audio_buffer') && t.includes('speech_started')) {
+      // VAD speech detection - FIXED: Check exact event type format
+      if (t === 'input_audio_buffer.speech_started') {
+        console.log('[DEBUG VAD] ✓ Detected speech_started event!');
         voiceController.handleSpeechStart();
       }
 
-      if (t.includes('input_audio_buffer') &&
-          (t.includes('speech_stopped') || t.includes('speech_ended') || t.includes('speech_end'))) {
+      if (t === 'input_audio_buffer.speech_stopped' || t === 'input_audio_buffer.speech_ended' || t === 'input_audio_buffer.speech_end') {
+        console.log('[DEBUG VAD] ✓ Detected speech_stopped event!');
         voiceController.handleSpeechStop();
       }
 
@@ -1288,7 +1295,10 @@ async function initializeApp(): Promise<void> {
     // Setup UI state - button starts in idle state, ready to connect
     setVoiceButtonState(VoiceButtonState.IDLE);
     newConversationBtn.disabled = false;
-    
+
+    // Discover and auto-detect available contexts before creating selector
+    await contextLoader.autoDetectContext();
+
     // Create context selector in UI
     contextLoader.createContextSelector('context-selector-container');
     
@@ -1494,6 +1504,7 @@ document.addEventListener("DOMContentLoaded", () => {
       logger.debug(`Transcript callback (final=${isFinal}):`, text.substring(0, 50));
     },
     onVADStateChange: (active: boolean) => {
+      console.log(`[DEBUG main.ts] ✓ onVADStateChange callback received: active=${active}`);
       // Handle VAD state changes
       if (active) {
         audioFeedback.playVoiceTick();

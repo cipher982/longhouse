@@ -171,11 +171,14 @@ export class VoiceController {
    * Handle VAD state changes from OpenAI
    */
   handleVADStateChange(active: boolean): void {
+    console.log(`[DEBUG VoiceController] handleVADStateChange(${active}) - mode: ${this.state.mode}, handsFree: ${this.state.handsFree}`);
+
     if (this.state.mode !== 'vad' && !this.state.handsFree) {
+      console.log('[DEBUG VoiceController] ❌ Ignoring VAD change - not in VAD mode or hands-free');
       return; // Ignore VAD when in PTT mode
     }
 
-    logger.debug('VAD state changed:', active);
+    console.log(`[DEBUG VoiceController] ✓ Processing VAD state change: ${active}`);
 
     this.setState({
       vadActive: active,
@@ -183,13 +186,16 @@ export class VoiceController {
     });
 
     // Call callback (new pattern)
+    console.log('[DEBUG VoiceController] Calling onVADStateChange callback');
     this.config.onVADStateChange?.(active);
 
     if (active) {
+      console.log('[DEBUG VoiceController] VAD active - starting microphone');
       this.startMicrophone().catch(err => {
         logger.error('Failed to start microphone for VAD:', err);
       });
     } else {
+      console.log('[DEBUG VoiceController] VAD inactive');
       // Keep mic open in hands-free, just not "active"
       if (!this.state.handsFree) {
         this.stopMicrophone();
@@ -201,13 +207,15 @@ export class VoiceController {
    * Enable/disable hands-free mode
    */
   setHandsFree(enabled: boolean): void {
+    console.log(`[DEBUG VoiceController] setHandsFree(${enabled}) called`);
+
     // Guard: Can't enable hands-free in text mode
     if (enabled && this.isTextMode()) {
       console.warn('[VoiceController] Cannot enable hands-free in text mode. Transition to voice mode first.');
       return;
     }
 
-    logger.info(`Hands-free mode ${enabled ? 'enabled' : 'disabled'}`);
+    console.log(`[DEBUG VoiceController] ✓ Setting hands-free mode: ${enabled ? 'enabled' : 'disabled'}`);
 
     if (enabled) {
       // When enabling hands-free, arm the controller
@@ -218,6 +226,7 @@ export class VoiceController {
         pttActive: false
       });
 
+      console.log('[DEBUG VoiceController] State set to hands-free, mode=vad, armed=true');
       this.startMicrophone().catch(err => {
         logger.error('Failed to start microphone for hands-free:', err);
       });
@@ -229,6 +238,7 @@ export class VoiceController {
         active: false,
         mode: 'ptt'
       });
+      console.log('[DEBUG VoiceController] State set to PTT mode, armed=false');
       this.stopMicrophone();
     }
   }
@@ -612,10 +622,12 @@ Object.assign(VoiceController.prototype, {
   },
 
   handleSpeechStart(this: VoiceController): void {
+    console.log('[DEBUG VoiceController] ✓ handleSpeechStart() called');
     this.handleVADStateChange(true);
   },
 
   handleSpeechStop(this: VoiceController): void {
+    console.log('[DEBUG VoiceController] ✓ handleSpeechStop() called');
     this.handleVADStateChange(false);
   },
 
