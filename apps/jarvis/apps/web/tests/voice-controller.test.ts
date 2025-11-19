@@ -106,13 +106,14 @@ describe('VoiceController', () => {
     });
   });
 
-  describe('Transcript Gating', () => {
+  describe('Transcript Handling', () => {
     beforeEach(() => {
       controller.setSession(mockSession);
     });
 
-    it('should accept partial transcripts when armed', () => {
-      controller.startPTT(); // Arms the controller
+    it('should accept all transcripts (no gating with proper track.enabled PTT)', () => {
+      // With track.enabled PTT, OpenAI only sends transcripts when track is unmuted
+      // So all transcripts we receive are legitimate - no client-side filtering needed
       controller.handleTranscript('Hello world', false);
 
       expect(onStateChange).toHaveBeenCalledWith(
@@ -122,21 +123,14 @@ describe('VoiceController', () => {
       );
     });
 
-    it('should DROP partial transcripts when not armed', () => {
-      // Not armed
-      controller.handleTranscript('Ambient noise', false);
+    it('should handle partial transcripts', () => {
+      controller.handleTranscript('Partial text', false);
 
       const state = controller.getState();
-      expect(state.transcript).toBe('');
-      expect(onStateChange).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          transcript: 'Ambient noise'
-        })
-      );
+      expect(state.transcript).toBe('Partial text');
     });
 
-    it('should ALLOW final transcripts even when not armed', () => {
-      // Not armed, but final transcript
+    it('should handle final transcripts', () => {
       controller.handleTranscript('Final speech', true);
 
       expect(onFinalTranscript).toHaveBeenCalledWith('Final speech');
@@ -147,19 +141,7 @@ describe('VoiceController', () => {
       );
     });
 
-    it('should handle final transcript after PTT release', () => {
-      // This is the critical bug we fixed
-      controller.startPTT();
-      controller.stopPTT(); // User releases, now not armed
-
-      // OpenAI sends final transcript AFTER release
-      controller.handleTranscript('Final words', true);
-
-      expect(onFinalTranscript).toHaveBeenCalledWith('Final words');
-    });
-
     it('should clear partial transcript on final', () => {
-      controller.startPTT();
       controller.handleTranscript('Partial text', false);
       controller.handleTranscript('Final text', true);
 
@@ -167,6 +149,7 @@ describe('VoiceController', () => {
       expect(state.transcript).toBe('');
       expect(state.finalTranscript).toBe('Final text');
     });
+
   });
 
   describe('Hands-Free Mode', () => {

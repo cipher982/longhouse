@@ -436,7 +436,7 @@ describe('Voice/Text Separation Integration', () => {
       expect(voiceController.isHandsFreeEnabled()).toBe(true);
     });
 
-    it('Scenario: Multiple PTT presses with TV on', () => {
+    it('Scenario: Multiple PTT presses with proper track gating', () => {
       const transcriptHandler = vi.fn();
       eventBus.on('voice_channel:transcript', transcriptHandler);
 
@@ -446,10 +446,9 @@ describe('Voice/Text Separation Integration', () => {
       voiceController.handleTranscript('Check my calendar', true); // Final
       voiceController.muteVoice();
 
-      // TV noise between interactions
-      for (let i = 0; i < 5; i++) {
-        voiceController.handleTranscript(`TV noise ${i}`, false);
-      }
+      // With proper track.enabled PTT, OpenAI doesn't receive audio when muted
+      // So there are NO "TV noise" transcripts to filter - they never arrive!
+      // This is the correct behavior: muted track = no audio sent = no transcripts
 
       // Second PTT: User speaks again
       voiceController.armVoice();
@@ -457,7 +456,8 @@ describe('Voice/Text Separation Integration', () => {
       voiceController.handleTranscript('What time is it', true); // Final
       voiceController.muteVoice();
 
-      // Should have exactly 4 transcripts (2 partial + 2 final), no TV noise
+      // Should have exactly 4 transcripts (2 partial + 2 final)
+      // No TV noise transcripts because audio track was disabled between PTT presses
       expect(transcriptHandler).toHaveBeenCalledTimes(4);
       expect(transcriptHandler.mock.calls[0][0].transcript).toContain('Check my calendar');
       expect(transcriptHandler.mock.calls[2][0].transcript).toContain('What time is it');
