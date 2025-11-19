@@ -42,11 +42,19 @@ export class RadialVisualizer {
     this.canvas.style.pointerEvents = 'none';
     this.canvas.style.filter = 'drop-shadow(0 0 32px rgba(139,92,246,0.45))';
     this.canvas.style.zIndex = '5';
+    
+    // robust positioning: pin to corners instead of center transform
+    this.canvas.style.top = `-${this.outerInset}px`;
+    this.canvas.style.left = `-${this.outerInset}px`;
+    this.canvas.style.width = `calc(100% + ${this.outerInset * 2}px)`;
+    this.canvas.style.height = `calc(100% + ${this.outerInset * 2}px)`;
+
     this.container.style.position = 'relative';
     this.container.prepend(this.canvas);
     this.ctx = this.canvas.getContext('2d');
 
-    this.resize();
+    // Initial resize to set internal resolution
+    requestAnimationFrame(this.resize);
     window.addEventListener('resize', this.resize, { passive: true });
     this.animationId = requestAnimationFrame(this.animate);
   }
@@ -147,18 +155,14 @@ export class RadialVisualizer {
 
   private resize = (): void => {
     const dpr = window.devicePixelRatio || 1;
-    const rect = this.container.getBoundingClientRect();
-    const rectWidth = rect.width || this.container.offsetWidth || this.container.clientWidth || 0;
-    const rectHeight = rect.height || this.container.offsetHeight || this.container.clientHeight || 0;
-    const base = Math.max(rectWidth, rectHeight);
-    const sizeCss = Math.max(160, base + this.outerInset * 2);
-    this.canvas.style.width = `${sizeCss}px`;
-    this.canvas.style.height = `${sizeCss}px`;
-    this.canvas.style.left = `50%`;
-    this.canvas.style.top = `50%`;
-    this.canvas.style.transform = `translate(-50%, -50%)`;
-    this.canvas.width = Math.floor(sizeCss * dpr);
-    this.canvas.height = Math.floor(sizeCss * dpr);
+    const rect = this.canvas.getBoundingClientRect();
+    
+    if (rect.width === 0 || rect.height === 0) return;
+
+    // Sync internal bitmap size to CSS size
+    this.canvas.width = Math.floor(rect.width * dpr);
+    this.canvas.height = Math.floor(rect.height * dpr);
+    
     if (this.ctx) {
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
@@ -194,9 +198,10 @@ export class RadialVisualizer {
     if (!this.ctx) return;
 
     const ctx = this.ctx;
-    const rect = this.canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    // Use internal dimensions (DPR aware) converted back to CSS logical pixels for drawing logic
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.canvas.width / dpr;
+    const h = this.canvas.height / dpr;
 
     // Smoothly approach target level
     const lerp = this.running ? 0.25 : 0.18;
