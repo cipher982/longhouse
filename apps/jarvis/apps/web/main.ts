@@ -207,24 +207,17 @@ function canStartPTT(): boolean {
   return stateManager.isReady();
 }
 
-// DOM elements
-const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
-
-// Initialize conversation renderer
-conversationRenderer = new ConversationRenderer(transcriptEl);
-
-// Initialize and wire conversation controller
-conversationController.setRenderer(conversationRenderer);
-
-const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
-const voiceButtonContainer = pttBtn; // The voice button itself is the container for visual states
-const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
-const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
-const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
-const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
-const sidebar = document.getElementById("sidebar") as HTMLDivElement;
-const voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
-const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
+// DOM elements - will be initialized in DOMContentLoaded
+let transcriptEl: HTMLDivElement;
+let pttBtn: HTMLButtonElement;
+let voiceButtonContainer: HTMLButtonElement; // Same as pttBtn
+let newConversationBtn: HTMLButtonElement;
+let clearConvosBtn: HTMLButtonElement;
+let syncNowBtn: HTMLButtonElement;
+let sidebarToggle: HTMLButtonElement;
+let sidebar: HTMLDivElement;
+let voiceStatusText: HTMLSpanElement;
+let handsFreeToggle: HTMLButtonElement;
 
 const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
 let sharedMicStream: MediaStream | null = null;
@@ -1426,21 +1419,25 @@ window.addEventListener('contextChanged', async (event: any) => {
 
 // Initialize page
 document.addEventListener("DOMContentLoaded", () => {
-  // DOM elements - Query INSIDE DOMContentLoaded to ensure they exist
-  const pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
-  const voiceButtonContainer = pttBtn; // The voice button itself is the container for visual states
-  const newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
-  const clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
-  const syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
-  const sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
-  const sidebar = document.getElementById("sidebar") as HTMLDivElement;
-  const voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
-  const handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
-  const transcriptEl = document.getElementById("transcript") as HTMLDivElement;
+  // Initialize DOM element references - must happen INSIDE DOMContentLoaded
+  transcriptEl = document.getElementById("transcript") as HTMLDivElement;
+  pttBtn = document.getElementById("pttBtn") as HTMLButtonElement;
+  voiceButtonContainer = pttBtn; // The voice button itself is the container for visual states
+  newConversationBtn = document.getElementById("newConversationBtn") as HTMLButtonElement;
+  clearConvosBtn = document.getElementById("clearConvosBtn") as HTMLButtonElement;
+  syncNowBtn = document.getElementById("syncNowBtn") as HTMLButtonElement;
+  sidebarToggle = document.getElementById("sidebarToggle") as HTMLButtonElement;
+  sidebar = document.getElementById("sidebar") as HTMLDivElement;
+  voiceStatusText = document.querySelector('.voice-status-text') as HTMLSpanElement;
+  handsFreeToggle = document.getElementById('handsFreeToggle') as HTMLButtonElement;
   const remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null;
   const textInput = document.getElementById('textInput') as HTMLInputElement;
   const sendTextBtn = document.getElementById('sendTextBtn');
   const taskInboxContainer = document.getElementById('task-inbox-container');
+
+  // Initialize conversation renderer AFTER DOM elements exist
+  conversationRenderer = new ConversationRenderer(transcriptEl);
+  conversationController.setRenderer(conversationRenderer);
 
   // --- HELPER FUNCTIONS ---
   
