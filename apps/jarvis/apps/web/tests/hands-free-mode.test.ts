@@ -323,18 +323,19 @@ describe('Hands-Free Mode', () => {
   });
 
   describe('Error Handling', () => {
-    it('should handle microphone access failure gracefully', async () => {
-      (global.navigator as any).mediaDevices = {
-        getUserMedia: vi.fn().mockRejectedValue(new Error('Permission denied')),
-      } as any;
+    it('should handle missing microphone stream gracefully', async () => {
+      // With new implementation, mic stream is provided externally (from connect())
+      // Hands-free just unmutes the existing stream
+      // If no stream exists, unmuteAudio() logs a warning and returns
 
-      // setHandsFree is not async, so it won't reject
-      // The microphone error will be caught and logged
+      // Try to enable hands-free without providing a stream first
       controller.setHandsFree(true);
 
-      // State should still be updated even if mic fails
+      // State should be updated (mode changes)
       expect(controller.getState().handsFree).toBe(true);
-      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled();
+      expect(controller.getState().mode).toBe('vad');
+
+      // Note: In real usage, connect() provides the stream before hands-free is enabled
     });
 
     it('should handle VAD events when not in voice mode', () => {
