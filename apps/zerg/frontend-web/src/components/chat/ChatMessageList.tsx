@@ -1,5 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import clsx from "clsx";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ThreadMessage } from "../../services/api";
 import { formatTimestamp } from "./chatUtils";
 import { ToolMessage } from "./ToolMessage";
@@ -11,6 +15,48 @@ interface ChatMessageListProps {
   pendingTokenBuffer: string;
   onCopyMessage: (message: ThreadMessage) => void;
 }
+
+// Custom Code Block Component with Copy Button
+const CodeBlock = ({ inline, className, children, ...props }: any) => {
+  const [copied, setCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || '');
+  
+  if (inline) {
+    return <code className={className} {...props}>{children}</code>;
+  }
+
+  const codeString = String(children).replace(/\n$/, '');
+  
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeString);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="code-block-wrapper">
+      <div className="code-block-header">
+        <span className="code-language">{match ? match[1] : 'text'}</span>
+        <button 
+          className="code-copy-btn" 
+          onClick={handleCopy}
+          title="Copy code"
+        >
+          {copied ? '✓ Copied' : '📋 Copy'}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={match ? match[1] : 'text'}
+        PreTag="div"
+        customStyle={{ margin: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+        {...props}
+      >
+        {codeString}
+      </SyntaxHighlighter>
+    </div>
+  );
+};
 
 export function ChatMessageList({
   messages,
@@ -79,9 +125,25 @@ export function ChatMessageList({
                     data-role={`chat-message-${msg.role}`}
                     data-streaming={isStreaming ? "true" : undefined}
                   >
-                    <div className="message-content preserve-whitespace">
-                      {displayContent || (isStreaming ? "" : msg.content)}
-                      {isStreaming && <span className="streaming-cursor">▋</span>}
+                    <div className="message-content">
+                      {msg.role === "assistant" ? (
+                        <>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code: CodeBlock
+                            }}
+                          >
+                            {displayContent || ""}
+                          </ReactMarkdown>
+                          {isStreaming && <span className="streaming-cursor">▋</span>}
+                        </>
+                      ) : (
+                         // User messages rendered as plain text but preserving whitespace
+                        <div className="preserve-whitespace">
+                           {displayContent || msg.content}
+                        </div>
+                      )}
                     </div>
                     <div className="message-footer">
                       <div className="message-time">{formatTimestamp(msg.created_at)}</div>
@@ -115,8 +177,15 @@ export function ChatMessageList({
                 className="message assistant-message streaming"
                 data-streaming="true"
               >
-                <div className="message-content preserve-whitespace">
-                  {pendingTokenBuffer}
+                <div className="message-content">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code: CodeBlock
+                    }}
+                  >
+                    {pendingTokenBuffer}
+                  </ReactMarkdown>
                   <span className="streaming-cursor">▋</span>
                 </div>
               </article>
