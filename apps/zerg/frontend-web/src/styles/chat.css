@@ -426,6 +426,10 @@
     line-height: 1.5;
 }
 
+.preserve-whitespace {
+    white-space: pre-wrap;
+}
+
 /* Streaming message styles */
 .message.streaming {
     position: relative;
