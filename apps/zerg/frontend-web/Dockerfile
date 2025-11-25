@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package*.json ./
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy source code
 COPY . .
@@ -41,7 +41,7 @@ WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN bun install --frozen-lockfile
+RUN bun install
 
 # Copy source code (will be overridden by volume mount in docker-compose)
 COPY . .
