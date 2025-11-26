@@ -7,12 +7,12 @@
 .mcp-tab { padding: 8px 16px; background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-primary); }
 .mcp-tab.active { border-bottom-color: var(--primary); color: var(--primary); }
 
-.builtin-tools-section { margin-bottom: 24px; padding: 12px; background: var(--bg-darker); border-radius: 6px; }
+.builtin-tools-section { margin-bottom: 24px; padding: 12px; background: var(--color-surface-section); border-radius: 6px; }
 .builtin-tools-title { margin: 0 0 8px 0; color: var(--success); }
 .builtin-tools-list { margin: 0; padding-left: 20px; color: var(--text-secondary); }
 
 .mcp-presets-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; margin-bottom: 16px; }
-.mcp-preset-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; background: var(--bg-darker); cursor: pointer; transition: border-color 0.2s; }
+.mcp-preset-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; background: var(--color-surface-section); cursor: pointer; transition: border-color 0.2s; }
 .mcp-preset-card:hover { border-color: var(--primary); }
 .mcp-preset-card-header { display: flex; align-items: center; margin-bottom: 8px; }
 .mcp-preset-icon { margin-right: 8px; font-size: 1.2em; }
@@ -26,7 +26,7 @@
 .mcp-section-separator { margin: 16px 0; border: none; border-top: 1px solid var(--border-color); }
 .mcp-connected-title { margin: 0 0 12px 0; }
 .mcp-connected-empty { color: var(--text-secondary); font-style: italic; }
-.mcp-server-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 8px; background: var(--bg-darker); }
+.mcp-server-card { border: 1px solid var(--border-color); border-radius: 6px; padding: 12px; margin-bottom: 8px; background: var(--color-surface-section); }
 .mcp-server-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .mcp-server-details { font-size: 0.9em; color: var(--text-secondary); }
 .mcp-server-actions { display: flex; gap: 8px; }

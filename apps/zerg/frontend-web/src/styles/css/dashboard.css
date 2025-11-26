@@ -391,7 +391,7 @@
 .agents-table th.actions-header {
   position: sticky;
   right: 0;
-  background: var(--bg-dark);
+  background: var(--color-surface-card);
   box-shadow: -2px 0 5px rgba(0,0,0,0.2);
   min-width: var(--actions-column-width);
   z-index: 2;
@@ -413,10 +413,10 @@
 /* Generic card + action rows reused across dashboard */
 .card {
   padding: var(--spacing-sm);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--color-border-subtle);
   margin-top: var(--spacing-sm);
   border-radius: var(--radius-sm);
-  background: var(--bg-dark);
+  background: var(--color-surface-card);
 }
 
 .actions-row { display: flex; gap: 8px; margin-top: var(--spacing-sm); }
@@ -478,7 +478,7 @@
 .overview-list li { margin-bottom: var(--spacing-sm); }
 
 .raw-json {
-  background: var(--bg-darker);
+  background: var(--color-surface-section);
   color: var(--text-primary);
   padding: var(--spacing-sm);
   border-radius: var(--radius-sm);
@@ -547,7 +547,7 @@
 @media (max-width: 992px) {
   .dashboard-container { overflow-x: auto; padding-bottom: var(--spacing-md); }
   .agents-table th, .agents-table td { padding: var(--spacing-sm) var(--spacing-md); white-space: nowrap; }
-  .agents-table tr:hover .actions-cell { background: var(--bg-hover); }
+  .agents-table tr:hover .actions-cell { background: var(--color-surface-overlay); }
 }
 
 @media (max-width: 768px) {
@@ -565,7 +565,7 @@
 
   .agents-table { display: block; width: 100%; overflow: hidden; }
   .agents-table thead { display: none; }
-  .agents-table tr { display: block; background: var(--bg-darker); margin-bottom: var(--spacing-sm); border-radius: 6px; padding: var(--spacing-sm) var(--spacing-md); }
+  .agents-table tr { display: block; background: var(--color-surface-section); margin-bottom: var(--spacing-sm); border-radius: 6px; padding: var(--spacing-sm) var(--spacing-md); }
   .agents-table td { display: flex; justify-content: space-between; padding: var(--spacing-xs) 0; }
   .agents-table td::before { content: attr(data-label); font-weight: 600; color: var(--text-secondary); }
   .agents-table td.actions-cell { justify-content: flex-end; }
@@ -595,7 +595,7 @@
   border-radius: 4px;
   padding: 4px 8px;
   font: inherit;
-  background: var(--bg-dark);
+  background: var(--color-surface-card);
   color: var(--text-primary);
 }
 
