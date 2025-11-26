@@ -19,13 +19,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Add 'chat' and 'webhook' values to run_trigger_enum."""
-    # Only run ALTER TYPE on PostgreSQL; SQLite doesn't support it and doesn't need it
-    # (SQLite doesn't enforce enum constraints at the database level)
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'chat'")
-        op.execute("ALTER TYPE run_trigger_enum ADD VALUE IF NOT EXISTS 'webhook'")
+    """Add 'chat' and 'webhook' values to run_trigger_enum.
+    
+    Note: The model uses native_enum=False, so this is stored as VARCHAR in PostgreSQL,
+    not as a native ENUM type. No ALTER TYPE needed - the values are just strings.
+    """
+    # The model uses SAEnum(..., native_enum=False), which stores as VARCHAR
+    # No database-level enum type exists, so no ALTER TYPE is needed.
+    # New values can be inserted directly as strings.
+    pass
 
 
 def downgrade() -> None:
