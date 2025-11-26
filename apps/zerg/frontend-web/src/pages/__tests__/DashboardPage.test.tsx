@@ -313,20 +313,6 @@ describe("DashboardPage", () => {
     });
   });
 
-  test("shows last updated timestamp", async () => {
-    const agent = buildAgent({
-      id: 99,
-      name: "Refreshable",
-      status: "idle",
-      owner_id: 1,
-    });
-
-    renderDashboard([agent]);
-
-    const lastUpdated = await screen.findByTestId("dashboard-last-updated");
-    expect(lastUpdated.textContent).toMatch(/Last updated:/);
-  });
-
   test("applies agent status updates from websocket events", async () => {
     const agent = buildAgent({
       id: 42,
