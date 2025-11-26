@@ -37,7 +37,7 @@
 
 .kebab-menu-btn {
     cursor: pointer;
-    font-size: 14px;
+    font-size: var(--font-size-sm);
     line-height: 1;
     user-select: none;
 }
@@ -49,8 +49,8 @@
 .run-toggle-link {
     display: inline-block;
     margin-top: var(--spacing-xs);
-    font-size: 11px;
-    color: var(--primary);
+    font-size: var(--font-size-xs);
+    color: var(--color-brand-primary);
     cursor: pointer;
     text-decoration: none;
     user-select: none;
@@ -234,8 +234,8 @@
 }
 
 .last-updated-label {
-  font-size: 13px;
-  color: var(--text-muted, #9aa0ac);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 
@@ -252,38 +252,40 @@
 .search-container {
   display: flex;
   align-items: center;
-  background: var(--bg-dark);
-  border-radius: var(--radius-sm);
-  padding: 8px 16px;
-  width: min(100%, 300px);  /* Adaptive: 100% or 300px */
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  width: min(100%, 300px);
   flex-shrink: 0;
 }
 
-.search-icon { margin-right: 8px; color: #aaa; }
+.search-icon { margin-right: var(--space-2); color: var(--color-text-muted); }
 
 #agent-search {
   background: transparent;
   border: none;
-  color: #fff;
+  color: var(--color-text-primary);
   outline: none;
   width: 100%;
-  font-size: 14px;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
 }
 
-#agent-search::placeholder { color: #777; }
+#agent-search::placeholder { color: var(--color-text-muted); }
 
 .search-clear {
   cursor: pointer;
-  color: #aaa;
-  font-size: 18px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-lg);
   line-height: 1;
   padding: 2px;
-  margin-left: 4px;
+  margin-left: var(--space-1);
   user-select: none;
   flex-shrink: 0;
 }
 
-.search-clear:hover { color: #fff; }
+.search-clear:hover { color: var(--color-text-primary); }
 
 /* Scope selector */
 /* Legacy select is gone – new fancy toggle below */
@@ -297,9 +299,9 @@
 }
 
 .scope-text-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
   text-align: center;
   line-height: 1;
 }
@@ -325,10 +327,11 @@
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg-dark);
-  border: 1px solid var(--border-color);
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-full);
-  transition: background 0.3s, border-color 0.3s;
+  transition: background var(--motion-duration-normal) var(--motion-easing-standard),
+              border-color var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .slider::before {
@@ -339,9 +342,9 @@
   left: 4px;
   top: 50%;
   transform: translateY(-50%);
-  background: var(--primary);
+  background: var(--color-brand-primary);
   border-radius: 50%;
-  transition: transform 0.3s;
+  transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 /* Move knob to the right when checked */
@@ -351,39 +354,37 @@
 
 /* Highlight border on focus */
 .scope-toggle input:focus + .slider {
-  box-shadow: 0 0 0 2px rgba(100,255,218,0.4);
-  border-color: var(--primary);
+  box-shadow: var(--shadow-glow);
+  border-color: var(--color-brand-primary);
 }
-
-/* Small text labels */
-
 
 /* View tabs above dashboard/canvas */
 .view-tabs {
   display: flex;
-  background: var(--bg-dark);
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 10px;
-  padding: 0 10px;
+  background: var(--color-surface-page);
+  border-bottom: 1px solid var(--color-border-subtle);
+  margin-bottom: var(--space-2);
+  padding: 0 var(--space-2);
 }
 
 .view-tab-button {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
-  padding: 12px 20px;
-  margin-right: 4px;
+  color: var(--color-text-secondary);
+  padding: var(--space-3) var(--space-5);
+  margin-right: var(--space-1);
   cursor: pointer;
-  font-size: 14px;
-  transition: color 0.3s;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  transition: color var(--motion-duration-normal) var(--motion-easing-standard);
   border-bottom: 3px solid transparent;
   position: relative;
 }
 
-.view-tab-button:hover { color: #fff; }
+.view-tab-button:hover { color: var(--color-text-primary); }
 .view-tab-button.active {
-  color: var(--primary);
-  border-bottom: 3px solid var(--primary);
+  color: var(--color-brand-primary);
+  border-bottom: 3px solid var(--color-brand-primary);
 }
 
 /* Sticky actions column */
@@ -504,31 +505,36 @@
 .detail-actions { display: flex; gap: var(--spacing-md); justify-content: flex-start; }
 
 .detail-btn {
-  background: var(--bg-button);
-  color: var(--text-primary);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-surface-card);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
   cursor: pointer;
-  transition: background 0.2s, transform 0.1s;
-  font-size: 14px;
+  transition: background var(--motion-duration-fast) var(--motion-easing-standard),
+              transform var(--motion-duration-instant) var(--motion-easing-standard);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-xs);
+  gap: var(--space-1);
 }
 
-.detail-btn:hover { background: var(--bg-button-hover); transform: translateY(-2px); }
+.detail-btn:hover { 
+  background: var(--color-surface-elevated); 
+  transform: translateY(-2px); 
+}
 
-.last-run-indicator { margin-left: 5px; font-size: 0.8em; }
-.last-run-success { color: var(--success); }
-.last-run-failure { color: var(--error); }
+.last-run-indicator { margin-left: var(--space-1); font-size: var(--font-size-xs); }
+.last-run-success { color: var(--color-intent-success); }
+.last-run-failure { color: var(--color-intent-error); }
 
 /* Schedule / triggers summary text */
-.schedule-summary { font-size: 0.9em; color: #555; margin-top: 6px; }
+.schedule-summary { font-size: var(--font-size-sm); color: var(--color-text-muted); margin-top: var(--space-1); }
 
 .triggers-list { margin-top: var(--spacing-md); }
 
-.summary-text { font-size: 0.9em; color: #555; }
+.summary-text { font-size: var(--font-size-sm); color: var(--color-text-muted); }
 
 /* MCP (server manager) intro sections reuse card/grid util from dashboard */
 .mcp-intro-text, .mcp-custom-intro { margin-bottom: var(--spacing-md); color: var(--text-secondary); }
@@ -610,5 +616,5 @@
     width: 100%;
 }
 
-.empty-state-illustration { font-size: 64px; margin-bottom: var(--spacing-md); }
-.empty-state-text { margin: 0 0 var(--spacing-md) 0; font-size: 18px; text-align: center; }
+.empty-state-illustration { font-size: var(--font-size-5xl); margin-bottom: var(--spacing-md); }
+.empty-state-text { margin: 0 0 var(--spacing-md) 0; font-size: var(--font-size-lg); text-align: center; }
