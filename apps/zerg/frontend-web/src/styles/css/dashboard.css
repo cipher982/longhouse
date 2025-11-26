@@ -1,28 +1,32 @@
 /* ------------------------------------------------------------------
    Dashboard & Table Styles
+   Modern redesign: refined spacing, better hierarchy, subtle depth
    ------------------------------------------------------------------ */
 
 .run-history-table {
     width: 100%;
     border-collapse: collapse;
-    margin-top: var(--spacing-sm);
-    font-size: 14px;
+    margin-top: var(--space-3);
+    font-size: var(--font-size-sm);
 }
 
 .run-history-table th,
 .run-history-table td {
-    padding: 2px 6px;
-    line-height: 1.3em;
+    padding: var(--space-2) var(--space-3);
+    line-height: var(--font-line-height-snug);
 }
 
 .run-history-table th {
     text-align: left;
     font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
-.run-history-table td { color: var(--text-primary); }
+.run-history-table td { color: var(--color-text-primary); }
 
 /* Right-align numeric columns */
 .run-history-table td:nth-child(5),
@@ -60,35 +64,65 @@
 
 .agents-table {
   width: 100%;
-  border-collapse: collapse;
-  color: var(--text-primary);
-  margin-top: var(--spacing-md);
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--color-text-primary);
+  margin-top: var(--space-4);
 }
 
 .agents-table th,
 .agents-table td {
-  padding: var(--table-cell-padding);
+  padding: var(--space-3) var(--space-4);
   text-align: left;
-  border-bottom: 1px solid var(--border-color);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-snug);
 }
 
 .agents-table th {
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.agents-table th:first-child {
+  border-radius: var(--radius-lg) 0 0 0;
+}
+
+.agents-table th:last-child {
+  border-radius: 0 var(--radius-lg) 0 0;
 }
 
 .agents-table td {
-  color: var(--text-primary);
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border-muted);
 }
 
 .agents-table tr.agent-row {
   cursor: pointer;
+  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .agents-table tr.agent-row:hover {
-  background: rgba(255,255,255,0.04);
+  background: var(--color-surface-overlay);
+}
+
+.agents-table tr.agent-row:last-child td {
+  border-bottom: none;
+}
+
+.agents-table tr.agent-row:last-child td:first-child {
+  border-radius: 0 0 0 var(--radius-lg);
+}
+
+.agents-table tr.agent-row:last-child td:last-child {
+  border-radius: 0 0 var(--radius-lg) 0;
 }
 
 .owner-cell { text-align: center; vertical-align: middle; }
@@ -105,26 +139,41 @@
 #create-agent-button,
 .create-agent-button,
 .create-agent-btn {
-  background: var(--primary);
-  color: var(--dark);
+  background: var(--color-brand-primary);
+  color: white;
   border: none;
-  border-radius: var(--radius-sm);
-  padding: 10px 18px;
-  min-height: 40px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-5);
+  min-height: var(--component-button-height);
+  font-family: var(--font-family-base);
   font-weight: 500;
-  font-size: 14px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard),
+              transform var(--motion-duration-fast) var(--motion-easing-standard),
+              box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
 }
 
 #create-agent-button:hover,
 .create-agent-btn:hover {
-  background: var(--secondary);
+  background: var(--color-brand-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+#create-agent-button:active,
+.create-agent-btn:active {
+  transform: translateY(0);
 }
 
 .create-agent-button.loading {
-  opacity: 0.65;
+  opacity: 0.7;
   cursor: progress;
+  pointer-events: none;
 }
 
 /* Danger (reset db) button */
@@ -147,28 +196,33 @@
 
 .dashboard-container {
   flex: 1;
-  padding: 20px;
+  padding: var(--space-6);
   width: 100%;
-  max-width: 1200px;
-  /* min-width removed - allow fluid width on all screens */
+  max-width: 1280px;
   margin: 0 auto;
-  background: var(--dark-lighter);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  background: transparent;
   overflow-y: auto;
   min-height: 0;
   box-sizing: border-box;
+}
+
+.dashboard {
+  background: var(--color-surface-section);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-sm);
 }
 
 .dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;            /* Allow wrapping on very narrow viewports */
-  gap: var(--spacing-sm);
-  margin-bottom: 20px;
-  padding-bottom: 15px;
-  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 /* Container that groups the Create-Agent & Reset-DB buttons */
@@ -370,23 +424,48 @@
    Action buttons inside the Agents table
    ------------------------------------------------------------- */
 
-/* Keep them visually unobtrusive – transparent background, no forced fill
-   colours.  Icons (emoji/SVG) keep their native palette exactly like the
-   pre-refactor main branch. */
-
 .action-btn {
   background: transparent;
-  border: none;
-  font-size: 16px;
-  line-height: 1;
-  padding: 4px 6px;
+  border: 1px solid transparent;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  color: inherit;          /* don’t override intrinsic icon colour */
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.action-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .action-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-surface-overlay);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-muted);
+}
+
+.action-btn.run-btn:hover {
+  color: var(--color-intent-success);
+  background: var(--color-intent-success-muted);
+  border-color: var(--color-intent-success);
+}
+
+.action-btn.delete-btn:hover {
+  color: var(--color-intent-error);
+  background: var(--color-intent-error-muted);
+  border-color: var(--color-intent-error);
+}
+
+.action-btn.disabled,
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 

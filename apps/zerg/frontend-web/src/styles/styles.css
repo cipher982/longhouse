@@ -18,8 +18,32 @@
     font-family: var(--font-family-base);
     background-color: var(--color-surface-page);
     font-size: var(--font-size-base);
-    line-height: var(--component-body-line-height);
+    line-height: var(--font-line-height-default);
     color: var(--color-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  /* Display typography for headings */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-family-display);
+    font-weight: 600;
+    letter-spacing: var(--font-tracking-tight);
+    line-height: var(--font-line-height-tight);
+    color: var(--color-text-primary);
+    margin: 0;
+  }
+  
+  h1 { font-size: var(--font-size-3xl); }
+  h2 { font-size: var(--font-size-2xl); }
+  h3 { font-size: var(--font-size-xl); }
+  h4 { font-size: var(--font-size-lg); }
+  h5 { font-size: var(--font-size-md); }
+  h6 { font-size: var(--font-size-base); }
+  
+  /* Code and monospace */
+  code, pre, kbd, samp {
+    font-family: var(--font-family-mono);
   }
 
   /* Modal select helper – lives here until we refactor modal CSS */

@@ -1,21 +1,29 @@
 /* ------------------------------------------------------------------
-   Navigation & Header Styles – extracted from styles.css
+   Navigation & Header Styles
+   Modern redesign: solid colors, refined typography, subtle borders
    ------------------------------------------------------------------ */
 
 .header {
-    position: relative; /* contain absolutely positioned children */
+    position: relative;
     left: 0;
     right: 0;
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
-    color: var(--text);
-    padding: 10px 20px;
-    box-shadow: var(--shadow-md);
+    background: var(--color-surface-section);
+    color: var(--color-text-primary);
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--color-border-subtle);
     z-index: var(--z-toolbar);
+    display: flex;
+    align-items: center;
+    min-height: 56px;
 }
 
 .header h1 {
     margin: 0;
-    font-weight: 300;
+    font-family: var(--font-family-display);
+    font-weight: 600;
+    font-size: var(--font-size-lg);
+    letter-spacing: var(--font-tracking-tight);
+    color: var(--color-text-primary);
 }
 
 /* Shelf toggle button in header (mobile only) */
@@ -50,34 +58,40 @@
 
 /* Main navigation tabs */
 .tabs-container {
-    /* in-flow under header title */
-    background: linear-gradient(135deg, var(--secondary), var(--primary));
-    padding: 0 20px;
+    background: var(--color-surface-page);
+    padding: 0 24px;
     display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--color-border-subtle);
     z-index: var(--z-toolbar);
 }
 
 .tabs-container .tab-button {
     background-color: transparent;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--color-text-secondary);
     border: none;
-    padding: 12px 20px;
+    padding: 14px 16px;
     margin: 0;
-    font-size: 14px;
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
-    border-bottom: 3px solid transparent;
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                background-color var(--motion-duration-fast) var(--motion-easing-standard);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 .tabs-container .tab-button:hover {
-    color: white;
-    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--color-text-primary);
+    background-color: var(--color-surface-overlay);
 }
 
 .tabs-container .tab-button.active {
-    color: white;
-    border-bottom: 3px solid white;
-    font-weight: 500;
+    color: var(--color-brand-primary);
+    border-bottom-color: var(--color-brand-primary);
+    background-color: transparent;
 }
 
 /* --------------------------------------------------------- */
@@ -108,17 +122,17 @@
 
 
 .status-bar {
-    /* in-flow bottom row via grid */
-    background: linear-gradient(135deg, var(--secondary), var(--primary));
-    padding: 5px 15px;
-    font-size: 12px;
-    color: var(--text);
-    border-top: 1px solid rgba(0,0,0,0.15);
+    background: var(--color-surface-section);
+    padding: 6px 24px;
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+    color: var(--color-text-muted);
+    border-top: 1px solid var(--color-border-subtle);
     display: flex;
     align-items: center;
     justify-content: space-between;
     z-index: var(--z-toolbar);
-    min-height: 24px;
+    min-height: 28px;
 }
 
 .status-bar .packet-counter {
@@ -137,21 +151,74 @@
 }
 
 /* User menu / avatar (top-right) */
-.user-menu-container { position: absolute; right: 15px; top: 12px; transform: none; display: flex; align-items: center; z-index: 20; }
-
-.avatar-badge {
-  width: 36px; height: 36px; border-radius: 50%; background: #2c3e50; color: #fff;
-  display: flex; align-items: center; justify-content: center; font-weight: bold;
-  cursor: pointer; font-size: 16px; overflow: hidden; flex-shrink: 0;
-  border: 2px solid transparent; transition: border-color 0.2s;
+.user-menu-container { 
+    position: absolute; 
+    right: 24px; 
+    top: 50%; 
+    transform: translateY(-50%); 
+    display: flex; 
+    align-items: center; 
+    z-index: 20; 
 }
 
-.avatar-badge:hover { border-color: var(--primary); }
-.avatar-badge.small { width: 32px; height: 32px; font-size: 14px; }
+.avatar-badge {
+    width: 36px; 
+    height: 36px; 
+    border-radius: var(--radius-full); 
+    background: var(--color-surface-elevated); 
+    color: var(--color-text-primary);
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    font-weight: 600;
+    font-family: var(--font-family-display);
+    cursor: pointer; 
+    font-size: var(--font-size-sm); 
+    overflow: hidden; 
+    flex-shrink: 0;
+    border: 2px solid var(--color-border-subtle); 
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.avatar-badge:hover { 
+    border-color: var(--color-brand-primary); 
+    box-shadow: var(--shadow-glow);
+}
+
+.avatar-badge:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+}
+
+.avatar-badge.small { width: 32px; height: 32px; font-size: var(--font-size-xs); }
 
 .avatar-img { width: 100%; height: 100%; object-fit: cover; }
 
-.user-dropdown { position: absolute; top: 45px; right: 0; background: #fff; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); overflow: hidden; z-index: 25; }
+.user-dropdown { 
+    position: absolute; 
+    top: calc(100% + 8px); 
+    right: 0; 
+    background: var(--color-surface-card); 
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg); 
+    box-shadow: var(--shadow-lg); 
+    overflow: hidden; 
+    z-index: var(--z-dropdown);
+    min-width: 160px;
+}
+
 .user-dropdown.hidden { display: none; }
-.user-menu-item { padding: 10px 15px; color: #333; font-size: 14px; cursor: pointer; white-space: nowrap; transition: background 0.2s; }
-.user-menu-item:hover { background: #f1f1f1; }
+
+.user-menu-item { 
+    padding: 10px 16px; 
+    color: var(--color-text-primary); 
+    font-size: var(--font-size-sm); 
+    cursor: pointer; 
+    white-space: nowrap; 
+    transition: background-color var(--motion-duration-fast) var(--motion-easing-standard); 
+}
+
+.user-menu-item:hover { 
+    background: var(--color-surface-overlay); 
+}

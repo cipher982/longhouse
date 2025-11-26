@@ -12,21 +12,21 @@
  * This approach ensures E2E tests can find React Flow elements using legacy selectors
  */
 
-/* Override React Flow default styles to match Rust canvas */
+/* Override React Flow default styles for refined dark theme */
 .react-flow {
-  background: #33334a !important;
+  background: var(--color-surface-page) !important;
 }
 
 .react-flow__background {
-  background: #33334a !important;
+  background: var(--color-surface-page) !important;
 }
 
-/* Canvas workspace container - match Rust styling */
+/* Canvas workspace container */
 .canvas-workspace {
   flex: 1;
   min-height: 0;
   display: flex;
-  background: var(--dark-lighter);
+  background: var(--color-surface-page);
   position: relative;
   padding: 0;
 }
@@ -90,87 +90,90 @@
    See: src/styles/css/agent_shelf.css (agent-pill styles)
    Removed: 34 lines of duplicate styling */
 
-/* Custom Node Styles to match Rust implementation */
+/* Custom Node Styles - refined for modern aesthetic */
 .agent-node {
-  background: linear-gradient(135deg, #2e2e3e 0%, #2a2a3a 100%);
-  border: 1px solid #3d3d5c;
-  border-radius: var(--radius-lg, 8px);
-  padding: 12px 14px;
-  color: #e0e0e0;
-  font-size: 14px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 3px solid var(--color-brand-primary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  min-width: 120px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  font-family: var(--font-family-base);
+  min-width: 140px;
+  box-shadow: var(--shadow-sm);
   display: flex;
   align-items: center;
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .agent-node:hover {
-  background: linear-gradient(135deg, #3a3a4a 0%, #363646 100%);
-  border-color: #4d4d6c;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  border-color: var(--color-brand-primary);
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-2px);
 }
 
 .agent-node .agent-icon {
-  font-size: 16px;
-  margin-right: 8px;
-  opacity: 0.7;
+  font-size: var(--font-size-md);
+  margin-right: var(--space-2);
+  opacity: 0.8;
 }
 
 .tool-node {
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 10px 12px;
-  color: #1e293b;
-  font-size: 14px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 3px solid var(--color-intent-success);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  min-width: 120px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-family: var(--font-family-base);
+  min-width: 140px;
+  box-shadow: var(--shadow-sm);
   display: flex;
   align-items: center;
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .tool-node:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  border-color: var(--color-intent-success);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.2);
+  transform: translateY(-2px);
 }
 
 .tool-node .tool-icon {
-  font-size: 16px;
-  margin-right: 8px;
+  font-size: var(--font-size-md);
+  margin-right: var(--space-2);
 }
 
 .trigger-node {
-  background: linear-gradient(135deg, #fefce8 0%, #fef3c7 100%);
-  border: 1px solid #f59e0b;
-  border-radius: 6px;
-  padding: 10px 12px;
-  color: #92400e;
-  font-size: 14px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 3px solid var(--color-intent-warning);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  min-width: 120px;
-  box-shadow: 0 2px 4px rgba(245, 158, 11, 0.2);
+  font-family: var(--font-family-base);
+  min-width: 140px;
+  box-shadow: var(--shadow-sm);
   display: flex;
   align-items: center;
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .trigger-node:hover {
-  background: #fef3c7;
-  border-color: #d97706;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
+  border-color: var(--color-intent-warning);
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.2);
+  transform: translateY(-2px);
 }
 
 .trigger-node .trigger-icon {
-  font-size: 16px;
-  margin-right: 8px;
+  font-size: var(--font-size-md);
+  margin-right: var(--space-2);
 }
 
 .canvas-drag-preview {
@@ -296,9 +299,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--dark-card, #2a2a3a);
-  border-bottom: 1px solid var(--border-color, #3d3d5c);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface-section);
+  border-bottom: 1px solid var(--color-border-subtle);
   margin-bottom: 0;
 }
 
