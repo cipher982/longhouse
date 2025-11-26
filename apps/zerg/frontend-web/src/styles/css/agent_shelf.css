@@ -1,18 +1,17 @@
 /* ------------------------------------------------------------------
-   Agent Shelf & Pill Styles – extracted from styles.css
+   Agent Shelf & Pill Styles – refined for modern aesthetic
    ------------------------------------------------------------------ */
 
 #agent-shelf {
     width: 260px;
     flex-shrink: 0;
-    background: linear-gradient(to bottom, #2a2a3a, #252535);
-    border-right: 1px solid #3d3d5c;
-    padding: 16px;
+    background: var(--color-surface-section);
+    border-right: 1px solid var(--color-border-subtle);
+    padding: var(--space-4);
     box-sizing: border-box;
     display: block;
     overflow-y: auto;
     height: 100%;
-    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
 }
 
 .agent-shelf-section {
@@ -234,39 +233,39 @@
 /* Agent pills */
 .agent-pill {
     cursor: grab;
-    margin-bottom: 10px;
-    padding: 12px 14px;
-    background: linear-gradient(135deg, #2e2e3e 0%, #2a2a3a 100%);
-    border: 1px solid #3d3d5c;
+    margin-bottom: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-lg);
-    font-size: 14px;
-    color: #e0e0e0;
-    transition: all 0.2s ease;
+    font-size: var(--font-size-sm);
+    font-family: var(--font-family-base);
+    color: var(--color-text-primary);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     position: relative;
     overflow: hidden;
-    box-shadow: var(--shadow-sm);
-    padding-left: 40px; /* space for icon */
-    display: flex; /* Added for alignment */
-    align-items: center; /* Added for vertical centering */
-    font-weight: 500; /* Increased font weight for better visibility */
-    touch-action: none; /* CRITICAL: Prevent browser default pan/zoom when dragging on mobile */
+    padding-left: 40px;
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+    touch-action: none;
 }
 
 .agent-pill::before {
     content: "🤖";
     position: absolute;
-    left: 12px;
+    left: var(--space-3);
     top: 50%;
     transform: translateY(-50%);
-    font-size: 16px;
+    font-size: var(--font-size-md);
     opacity: 0.7;
 }
 
 .agent-pill:hover {
-    background: linear-gradient(135deg, #3a3a4a 0%, #363646 100%);
-    border-color: #4d4d6c;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    background: var(--color-surface-elevated);
+    border-color: var(--color-brand-primary);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
 }
 
 .agent-pill.disabled {

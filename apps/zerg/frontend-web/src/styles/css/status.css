@@ -1,62 +1,92 @@
-/* additional status colours in tables */
-.status-idle    { color: var(--color-neutral); }
-.status-error   { color: var(--error); }
-.status-running { color: var(--success); }
-.status-scheduled { color: var(--primary); }
-.status-paused  { color: var(--warning); }
+/* Status indicator styles - refined for modern aesthetic */
+
+/* Table status colors */
+.status-idle      { color: var(--color-text-muted); }
+.status-error     { color: var(--color-intent-error); }
+.status-running   { color: var(--color-intent-success); }
+.status-scheduled { color: var(--color-brand-primary); }
+.status-paused    { color: var(--color-intent-warning); }
+.status-processing { color: var(--color-brand-secondary); }
+
 /* ------------------------------------------------------------------ */
 /*  Status indicators (task, API heartbeat, etc.)                      */
 /* ------------------------------------------------------------------ */
 
 #status {
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  color: #fff;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  color: white;
   font-weight: 500;
+  font-size: var(--font-size-sm);
 }
 
-#status.red   { background-color: var(--error); }
-#status.green { background-color: var(--success); }
+#status.red   { background-color: var(--color-intent-error); }
+#status.green { background-color: var(--color-intent-success); }
 #status.yellow {
-  background-color: #f1c40f;
-  color: #2c3e50; /* darker text for contrast */
+  background-color: var(--color-intent-warning);
+  color: var(--color-text-inverse);
 }
 
 /* layout-status is text-only version for inline use */
-#layout-status.red    { color: var(--error); }
-#layout-status.green  { color: var(--success); }
-#layout-status.yellow { color: #f1c40f; }
+#layout-status.red    { color: var(--color-intent-error); }
+#layout-status.green  { color: var(--color-intent-success); }
+#layout-status.yellow { color: var(--color-intent-warning); }
 
 /* Network/API activity indicator */
 #api-status {
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-weight: 500;
-  font-family: monospace;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
 }
 
 #api-status::before {
   content: "";
   width: 6px;
   height: 6px;
-  border-radius: 50%;
-  background-color: #2c3e50;
-  box-shadow: 0 0 2px #2c3e50;
-  transition: all 0.05s ease;
+  border-radius: var(--radius-full);
+  background-color: var(--color-text-muted);
+  box-shadow: 0 0 2px var(--color-text-muted);
+  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
 }
 
 #api-status.flash::before {
-  background-color: #27ae60;
-  box-shadow: 0 0 4px #2ecc71;
+  background-color: var(--color-intent-success);
+  box-shadow: 0 0 6px var(--color-intent-success);
 }
 
 /* Inline status chips used inside agents table */
-.status-indicator { padding: 4px 10px; border-radius: 12px; font-size: 0.9em; font-weight: 500; }
-.status-running   { color: var(--success); }
-.status-idle      { color: var(--color-neutral); }
-.status-error     { color: var(--error); }
-.status-scheduled { color: var(--primary); }
-.status-paused    { color: var(--warning); }
+.status-indicator { 
+  padding: var(--space-1) var(--space-3); 
+  border-radius: var(--radius-full); 
+  font-size: var(--font-size-xs); 
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Status indicator with background badges */
+.status-indicator.status-running {
+  background: var(--color-intent-success-muted);
+  color: var(--color-intent-success);
+}
+
+.status-indicator.status-error {
+  background: var(--color-intent-error-muted);
+  color: var(--color-intent-error);
+}
+
+.status-indicator.status-idle {
+  background: var(--color-surface-overlay);
+  color: var(--color-text-secondary);
+}
+
+.status-indicator.status-processing {
+  background: rgba(129, 140, 248, 0.15);
+  color: var(--color-brand-secondary);
+}

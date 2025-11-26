@@ -58,14 +58,26 @@ ReactDOM.createRoot(container).render(
             toastOptions={{
               duration: 4000,
               style: {
-                background: '#363636',
-                color: '#fff',
+                background: '#27272a',
+                color: '#fafafa',
+                border: '1px solid #3f3f46',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
               },
               success: {
                 duration: 3000,
+                iconTheme: {
+                  primary: '#10b981',
+                  secondary: '#fafafa',
+                },
               },
               error: {
                 duration: 6000,
+                iconTheme: {
+                  primary: '#ef4444',
+                  secondary: '#fafafa',
+                },
               },
             }}
           />
