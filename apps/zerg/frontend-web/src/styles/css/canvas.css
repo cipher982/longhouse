@@ -75,7 +75,7 @@
   align-items: center;
   padding: var(--spacing-md);
   background: var(--dark-card);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--color-border-subtle);
   z-index: 5;
   gap: var(--spacing-sm);
   flex-shrink: 0;
@@ -123,7 +123,7 @@
   justify-content: flex-start;
   height: 40px;
   background: var(--dark-card);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--color-border-subtle);
   padding: 0 var(--spacing-md);
   overflow-x: auto;
   flex-shrink: 0;
@@ -160,14 +160,14 @@
 }
 
 .workflow-tab-list .tab:hover {
-  background: var(--bg-hover);
+  background: var(--color-surface-overlay);
   color: var(--text);
 }
 
 .workflow-tab-list .tab.active {
   background: var(--bg-button);
   color: var(--text);
-  border-color: var(--border-color);
+  border-color: var(--color-border-subtle);
 }
 
 .workflow-tab-list .plus-tab {
@@ -198,7 +198,7 @@ body.space-pan #node-canvas {
 
 .toolbar-btn {
   background: transparent;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--color-border-subtle);
   border-radius: 4px;
   padding: 0 6px;
   font: 500 15px/1 system-ui, sans-serif;
@@ -241,7 +241,7 @@ body.space-pan #node-canvas {
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition-fast);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--color-border-subtle);
   z-index: 100;
 }
 
@@ -289,7 +289,7 @@ body.space-pan #node-canvas {
 .dropdown-menu {
   position: absolute;
   background: var(--dark-card);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   padding: 4px 0;
   min-width: 120px;
