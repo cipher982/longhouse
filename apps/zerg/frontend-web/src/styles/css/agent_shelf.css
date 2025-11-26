@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------
-   Agent Shelf & Pill Styles – refined for modern aesthetic
+   Agent Shelf & Pill Styles – unified with design tokens
    ------------------------------------------------------------------ */
 
 #agent-shelf {
@@ -17,67 +17,72 @@
 .agent-shelf-section {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--space-3);
 }
 
 .agent-shelf-section + .agent-shelf-section {
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid rgba(61, 61, 92, 0.8);
+    margin-top: var(--space-6);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border-muted);
 }
 
 .agent-shelf-heading {
-    font-size: 16px;
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-md);
     font-weight: 600;
-    color: #F0F0F0;
-    margin: 0 0 16px 0;
+    color: var(--color-text-primary);
+    margin: 0 0 var(--space-4) 0;
 }
 
 .shelf-search-label {
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(240, 240, 240, 0.6);
+    color: var(--color-text-muted);
 }
 
 .shelf-search-input {
     width: 100%;
-    padding: 8px 12px;
-    border: 1px solid rgba(226, 232, 240, 0.35);
-    border-radius: 6px;
-    background: rgba(15, 23, 42, 0.6);
-    color: #f8fafc;
-    font-size: 14px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-card);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
     outline: none;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .shelf-search-input::placeholder {
-    color: rgba(148, 163, 184, 0.8);
+    color: var(--color-text-muted);
 }
 
 .shelf-search-input:focus {
-    border-color: rgba(59, 130, 246, 0.7);
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
+    border-color: var(--color-brand-primary);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
 .shelf-section-toggle {
     width: 100%;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 0;
     border: none;
     background: none;
-    color: #f8fafc;
-    font-size: 14px;
+    font-family: var(--font-family-base);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
     font-weight: 600;
     cursor: pointer;
     text-align: left;
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .shelf-section-toggle:hover {
-    color: #ffffff;
+    color: var(--color-brand-primary);
 }
 
 .shelf-section-toggle .caret {
@@ -88,18 +93,18 @@
 
 .shelf-section-toggle .count {
     margin-left: auto;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: rgba(59, 130, 246, 0.15);
-    font-size: 12px;
+    padding: var(--space-0) var(--space-2);
+    border-radius: var(--radius-full);
+    background: var(--color-surface-overlay);
+    font-size: var(--font-size-xs);
     font-weight: 500;
-    color: rgba(148, 163, 184, 0.9);
+    color: var(--color-text-secondary);
 }
 
 .shelf-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .recent-list .agent-pill,
@@ -109,42 +114,45 @@
 
 .shelf-empty {
     margin: 0;
-    font-size: 13px;
-    color: rgba(226, 232, 240, 0.7);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
 }
 
 .tool-palette-content {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
+/* Tool palette items - dark theme consistent with agent nodes */
 .tool-palette-item {
     cursor: grab;
-    padding: 10px 12px;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    font-size: 14px;
-    color: #1e293b;
-    transition: all 0.2s ease;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-intent-success);
+    border-radius: var(--radius-lg);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     display: flex;
     align-items: center;
     font-weight: 500;
     user-select: none;
-    touch-action: none; /* CRITICAL: Prevent browser default pan/zoom when dragging on mobile */
+    touch-action: none;
 }
 
 .tool-palette-item:hover {
-    background: #eff6ff;
-    border-color: #3b82f6;
+    background: var(--color-surface-elevated);
+    border-color: var(--color-intent-success);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-md);
 }
 
 .tool-palette-item .tool-icon {
-    font-size: 16px;
-    margin-right: 8px;
+    font-size: var(--font-size-md);
+    margin-right: var(--space-2);
 }
 
 .tool-palette-item .tool-name {
@@ -153,81 +161,93 @@
 
 /* Agent shelf header */
 .agent-shelf-header {
-    font-size: 14px;
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-sm);
     font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border-color);
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-4);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 /* Node Palette header */
 .palette-header h3 {
-    font-size: 16px;
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-md);
     font-weight: 600;
-    color: #F0F0F0; /* Light color for visibility */
-    margin: 0 0 16px 0; /* Match original inline margin */
+    color: var(--color-text-primary);
+    margin: 0 0 var(--space-4) 0;
 }
 
 /* Palette search input */
 .palette-search-input {
     width: 100%;
-    padding: 8px 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    margin-bottom: 16px;
-    font-size: 14px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+    background: var(--color-surface-card);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
     outline: none;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.palette-search-input:focus {
+    border-color: var(--color-brand-primary);
 }
 
 /* Palette category header */
 .palette-category-header {
-    margin: 0 0 8px 0;
-    font-size: 14px;
+    margin: 0 0 var(--space-2) 0;
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-xs);
     font-weight: 600;
-    color: #64748b;
+    color: var(--color-text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.05em;
 }
 
 /* Palette node icon */
 .palette-node-icon {
-    font-size: 16px;
-    margin-right: 8px;
+    font-size: var(--font-size-md);
+    margin-right: var(--space-2);
 }
 
 /* Palette node name */
 .palette-node-name {
-    font-size: 14px;
+    font-size: var(--font-size-sm);
     font-weight: 500;
-    color: #1e293b;
+    color: var(--color-text-primary);
 }
 
 /* Palette node description */
 .palette-node-description {
-    font-size: 12px;
-    color: #64748b;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
     margin-top: 2px;
 }
 
-/* Palette node */
+/* Palette node - consistent with tool palette items */
 .palette-node {
     display: flex;
     align-items: center;
-    padding: 8px 12px;
-    margin-bottom: 4px;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-1);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
     cursor: grab;
-    transition: all 0.2s ease;
-    background: #f8fafc;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    background: var(--color-surface-card);
 }
 
+.palette-node:hover,
 .palette-node.hover {
-    border: 1px solid #3b82f6;
-    background: #eff6ff;
+    border-color: var(--color-brand-primary);
+    background: var(--color-surface-elevated);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
 }
 
 /* Agent pills */
@@ -237,6 +257,7 @@
     padding: var(--space-3) var(--space-4);
     background: var(--color-surface-card);
     border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-brand-primary);
     border-radius: var(--radius-lg);
     font-size: var(--font-size-sm);
     font-family: var(--font-family-base);
@@ -271,95 +292,92 @@
 .agent-pill.disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    background: linear-gradient(135deg, #1e1e2e 0%, #1a1a2a 100%);
-    border-color: #2d2d3c;
+    background: var(--color-surface-section);
+    border-color: var(--color-border-muted);
 }
 
 .agent-pill.disabled::before { content: "⏸️"; }
 
 .agent-pill.disabled:hover {
-    background: linear-gradient(135deg, #1e1e2e 0%, #1a1a2a 100%);
+    background: var(--color-surface-section);
     transform: none;
-    box-shadow: var(--shadow-sm);
+    box-shadow: none;
 }
 
 /* Loading & empty states */
 .agent-shelf-loading, .agent-shelf-empty {
     text-align: center;
-    padding: 20px;
-    color: var(--text-secondary);
-    font-size: 14px;
-    opacity: 0.7;
+    padding: var(--space-5);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
 }
 
 /* Drag and drop */
-
-/* Harmonised drag ghost – token colours */
 .agent-pill.dragging {
-  opacity: 0.92;
-  background: linear-gradient(135deg, var(--secondary) 0%, var(--primary) 100%);
-  box-shadow: var(--shadow-lg);
-  transform: scale(1.05) rotate(-2deg);
-  border: 2px dashed var(--primary);
-  cursor: grabbing;
-  z-index: 1000;
+    opacity: 0.92;
+    background: var(--color-brand-primary);
+    box-shadow: var(--shadow-lg);
+    transform: scale(1.05) rotate(-2deg);
+    border: 2px dashed var(--color-brand-secondary);
+    cursor: grabbing;
+    z-index: var(--z-overlay);
 }
 
 #canvas-container.canvas-drop-target {
-    outline: 2px dashed #7f8ec0;
+    outline: 2px dashed var(--color-brand-secondary);
     outline-offset: -2px;
-    background-color: rgba(127, 142, 192, 0.1);
+    background-color: rgba(99, 102, 241, 0.08);
 }
 
-/* Off-canvas responsive behaviour (mirrors earlier media query) */
+/* Off-canvas responsive behaviour */
 @media (max-width: 767px) {
-  #agent-shelf {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    transform: translateX(-100%);
-    transition: transform var(--transition-normal);
-    width: 240px;
-    box-shadow: var(--shadow-lg);
-    z-index: 1500;
-  }
+    #agent-shelf {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
+        width: 240px;
+        box-shadow: var(--shadow-xl);
+        z-index: var(--z-modal);
+    }
 
-  #agent-shelf.open { transform: translateX(0); }
+    #agent-shelf.open { transform: translateX(0); }
 }
 
 /* Scrim overlay when shelf is open on mobile */
 .shelf-scrim {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.35);
-  opacity: 0;
-  pointer-events: none; /* CRITICAL: stays none to allow canvas drops */
-  transition: opacity 200ms ease;
-  z-index: 1400; /* below shelf (1500), above content */
-  display: none; /* only used on mobile */
+    position: fixed;
+    inset: 0;
+    background: rgba(9, 9, 11, 0.6);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
+    z-index: var(--z-overlay);
+    display: none;
 }
 
-/* Activate scrim when shelf is open (via React state) */
+/* Activate scrim when shelf is open */
 .shelf-scrim--visible {
-  opacity: 1;
-  pointer-events: none; /* IMPORTANT: keeps none to not block drag/drop on canvas */
-  display: block;
+    opacity: 1;
+    pointer-events: none;
+    display: block;
 }
 
 /* Legacy: keep body.shelf-open support for backward compatibility */
 body.shelf-open .shelf-scrim {
-  opacity: 1;
-  pointer-events: none; /* stays none now */
+    opacity: 1;
+    pointer-events: none;
 }
 
 /* Disable animations for users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  #agent-shelf { transition: none; }
-  .shelf-scrim { transition: none; }
+    #agent-shelf { transition: none; }
+    .shelf-scrim { transition: none; }
 }
 
 /* Only show scrim on small screens */
 @media (max-width: 767px) {
-  .shelf-scrim { display: block; }
+    .shelf-scrim { display: block; }
 }
