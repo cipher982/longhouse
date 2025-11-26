@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -17,6 +21,33 @@ from zerg.services.ops_service import get_timeseries as svc_get_timeseries
 from zerg.services.ops_service import get_top_agents as svc_get_top_agents
 
 router = APIRouter(prefix="/ops", tags=["ops"], dependencies=[Depends(require_admin)])
+
+# ---------------------------------------------------------------------------
+# Frontend Error Beacon (public, no auth required)
+# ---------------------------------------------------------------------------
+beacon_router = APIRouter(prefix="/ops", tags=["ops"])
+_frontend_errors: list[dict[str, Any]] = []
+
+
+@beacon_router.post("/beacon", include_in_schema=False)
+async def error_beacon(request: Request):
+    """Capture frontend errors from anonymous users. No auth required."""
+    try:
+        data = await request.json()
+        data["ts"] = datetime.utcnow().isoformat()
+        data["ip"] = request.client.host if request.client else None
+        _frontend_errors.append(data)
+        if len(_frontend_errors) > 500:
+            _frontend_errors.pop(0)
+    except Exception:
+        pass  # Never fail the beacon
+    return {}
+
+
+@router.get("/errors")
+def get_frontend_errors(current_user: UserModel = Depends(require_admin)):
+    """Admin-only: view recent frontend errors captured via beacon."""
+    return _frontend_errors[-100:]
 
 
 @router.get("/summary", response_model=OpsSummary)

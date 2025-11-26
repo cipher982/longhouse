@@ -54,6 +54,7 @@ from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
+from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.system import router as system_router
@@ -343,6 +344,7 @@ app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis p
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
 app.include_router(ops_router, prefix=f"{API_PREFIX}")
+app.include_router(ops_beacon_router, prefix=f"{API_PREFIX}")  # Public beacon (no auth)
 app.include_router(agent_config_router, prefix=f"{API_PREFIX}")
 
 # ---------------------------------------------------------------------------
