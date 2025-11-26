@@ -45,6 +45,10 @@ def upgrade() -> None:
     else:
         print("Summary column already exists - skipping")
 
+    # Detect database dialect for correct NOW() syntax
+    dialect = connection.dialect.name
+    now_func = "CURRENT_TIMESTAMP" if dialect == "postgresql" else "datetime('now')"
+
     # Add created_at column (nullable, no default - SQLite limitation)
     if "created_at" not in columns:
         print("Adding created_at column to agent_runs table")
@@ -54,7 +58,7 @@ def upgrade() -> None:
         )
         # Backfill with started_at or current time for existing rows
         connection.execute(
-            sa.text("UPDATE agent_runs SET created_at = COALESCE(started_at, datetime('now')) WHERE created_at IS NULL")
+            sa.text(f"UPDATE agent_runs SET created_at = COALESCE(started_at, {now_func}) WHERE created_at IS NULL")
         )
         print("created_at column added and backfilled successfully")
     else:
@@ -69,7 +73,7 @@ def upgrade() -> None:
         )
         # Backfill with finished_at or started_at or current time
         connection.execute(
-            sa.text("UPDATE agent_runs SET updated_at = COALESCE(finished_at, started_at, datetime('now')) WHERE updated_at IS NULL")
+            sa.text(f"UPDATE agent_runs SET updated_at = COALESCE(finished_at, started_at, {now_func}) WHERE updated_at IS NULL")
         )
         print("updated_at column added and backfilled successfully")
     else:
