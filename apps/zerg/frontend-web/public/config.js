@@ -10,7 +10,7 @@ if (LOCAL_HOSTS.has(window.location.hostname)) {
   window.API_BASE_URL = "http://127.0.0.1:" + port + "/api";
   window.WS_BASE_URL = "ws://127.0.0.1:" + port;
 } else if (window.location.hostname === 'swarmlet.com') {
-  window.API_BASE_URL = "/api";
+  window.API_BASE_URL = "https://api.swarmlet.com/api";
   window.WS_BASE_URL = "wss://api.swarmlet.com";
 } else {
   window.API_BASE_URL = "/api";
