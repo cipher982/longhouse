@@ -41,4 +41,4 @@ echo "=== Migration Log $(date) ===" > "$MIGRATION_LOG"
 cat "$MIGRATION_LOG" >&2
 
 echo "Starting server..."
-exec python -m uvicorn zerg.main:app --host 0.0.0.0 --port 8000
+exec python -m uvicorn zerg.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
