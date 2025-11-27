@@ -26,6 +26,18 @@
     color: var(--color-text-primary);
 }
 
+.header-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.header-logo {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+}
+
 /* Shelf toggle button in header (mobile only) */
 #shelf-toggle-btn { display: none; }
 
