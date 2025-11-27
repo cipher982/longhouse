@@ -1,30 +1,62 @@
 # Production Status & Pending Work
-**Last Updated**: 2025-11-25
-**Session**: Production deployment debugging
+**Last Updated**: 2025-11-27
+**Session**: WebSocket fix and infrastructure improvements
 
 ---
 
 ## 🚨 Current Production Issues
 
-### 1. 500 Error on Dashboard (UNRESOLVED)
-**Symptom**: `GET https://swarmlet.com/api/agents/dashboard?scope=my&runs_limit=50` returns 500
-
-**Status**: ERROR - Backend crashes on authenticated requests
-**Impact**: Dashboard page unusable for logged-in users
-
-**Need**: Backend logs to see Python traceback
-- Can't access via SSH (zerg user lacks Docker permissions)
-- Must check via Coolify UI or fix permissions
-
-### 2. CSP Violation - HTTP Requests (UNRESOLVED)
-**Symptom**: `Connecting to 'http://swarmlet.com/api/models/' violates CSP`
-
-**Status**: INVESTIGATING - Something makes HTTP instead of HTTPS requests
-**Impact**: Browser blocks requests, causes errors in console
+None - all known issues resolved!
 
 ---
 
 ## ✅ Fixes Completed This Session
+
+### WebSocket 403 Forbidden (FIXED - 2025-11-27)
+**Commits**: `cb1680a` - Frontend config fix
+**Manual Fix**: Caddy override file on zerg server
+
+**Problem**:
+- WebSocket connections failing with 403 Forbidden
+- Frontend connecting to wrong URL (wss://swarmlet.com instead of wss://api.swarmlet.com)
+- Coolify's auto-generated Caddy labels included `try_files` which breaks WebSocket upgrades
+
+**Root Cause**:
+1. Coolify deploys frontend/backend as separate containers (nginx can't proxy "backend" hostname)
+2. Coolify adds `try_files` labels to ALL services (meant for SPAs but breaks APIs)
+3. Labels merge instead of override, causing conflicting Caddy config
+
+**Solution**:
+1. **Frontend**: Updated `config.js` to connect directly to `wss://api.swarmlet.com`
+2. **Caddy Override**: Created `/data/coolify/proxy/caddy/dynamic/api-swarmlet-websocket.caddy`
+   ```caddy
+   https://api.swarmlet.com {
+       encode zstd gzip
+       header -Server
+       reverse_proxy backend:8000
+   }
+   ```
+
+**Why This is Robust**:
+- ✅ Manual Caddy file persists through redeployments
+- ✅ Uses stable hostname `backend` (Docker Compose service name)
+- ✅ Overrides Docker labels when ambiguous site detected
+- ✅ Clean config (no try_files, no handle_path)
+- ✅ Works for both HTTP and WebSocket
+
+**Testing**:
+- HTTP: `curl https://api.swarmlet.com/api/system/health` → 200 OK
+- WebSocket: Requests reach backend correctly (403 is expected for invalid tokens)
+- Backend logs confirm: `('172.19.0.2', 41400) - "WebSocket /api/ws?token=test" 403`
+
+### Docker Permissions (FIXED - 2025-11-27)
+**Issue**: `zerg` user couldn't access Docker logs for debugging
+**Fix**: Added zerg user to docker group: `sudo usermod -aG docker zerg`
+**Result**: Can now debug production issues via SSH
+
+---
+
+## ✅ Previous Session Fixes (2025-11-25)
 
 ### Build & Deployment (FIXED)
 **Commit**: `e1bc30b` - fix(docker): remove frozen-lockfile flag
@@ -53,17 +85,13 @@
 
 ## 🔧 Infrastructure Issues Discovered
 
-### Docker Permissions (BLOCKING DEBUGGING)
-**Problem**: Can't access backend logs to debug 500 error
+### Docker Permissions (RESOLVED)
+**Problem**: ~~Can't access backend logs to debug 500 error~~ FIXED
 
-**Current State**:
-- Server: zerg (Hetzner VPS at 100.120.197.80)
-- SSH: `ssh zerg` (uses user `zerg`, not `drose`)
-- Docker: `zerg` user NOT in docker group → permission denied
-
-**Options**:
-1. Add `zerg` user to docker group: `sudo usermod -aG docker zerg`
-2. Check logs via Coolify UI only (manual process)
+**Resolution** (2025-11-27):
+- Added `zerg` user to docker group
+- Can now access Docker logs via SSH
+- Enabled direct debugging of production issues
 
 ### Naming Confusion
 **Problem**: Server name "zerg" collides with project name "zerg"
@@ -122,25 +150,10 @@ This solves the "can't check Docker logs" problem.
 
 ## 🔍 Next Steps
 
-### Immediate Priority: Fix Production
-1. **Get backend logs**
-   - Either: Add docker permissions to zerg user
-   - Or: Check logs manually via Coolify UI
-   - Look for Python traceback showing cause of 500 error
-
-2. **Fix 500 error on /api/agents/dashboard**
-   - Likely database query failing
-   - Could be authentication issue
-   - Need actual error message to diagnose
-
-3. **Investigate CSP HTTP violation**
-   - Find what's making HTTP requests instead of HTTPS
-   - Likely browser extension or dev tools artifact
-
 ### Optional: Infrastructure Improvements
-1. **Rename server** (follow checklist above)
-2. **Add docker permissions** (makes debugging easier)
-3. **Update documentation** (record lessons learned)
+1. **Rename server** (follow checklist above) - Eliminate "zerg" name collision
+2. **Monitor beacon errors**: `curl -sH "Authorization: Bearer $TOKEN" https://api.swarmlet.com/api/ops/errors | jq`
+3. **Test workflows end-to-end** - Verify WebSocket real-time updates work in production
 
 ---
 
