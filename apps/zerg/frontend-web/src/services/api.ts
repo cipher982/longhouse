@@ -161,10 +161,13 @@ type ApiBaseConfig = {
   relative: string;
 };
 
-const apiBaseOverride =
-  typeof window !== "undefined"
+// Lazy getter for API base - reads window.API_BASE_URL on each call
+// This ensures config.js has time to set the value before first API request
+function getApiBaseOverride(): string | undefined {
+  return typeof window !== "undefined"
     ? (window as typeof window & { API_BASE_URL?: string }).API_BASE_URL
     : undefined;
+}
 
 function normalizePathname(pathname: string): string {
   const trimmed = pathname.replace(/\/+$/, "");
@@ -219,16 +222,17 @@ function computeApiBase(override?: string): ApiBaseConfig {
   }
 }
 
-const API_BASE = computeApiBase(apiBaseOverride);
-
 export function buildUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  // Compute API base lazily on each call to ensure config.js has loaded
+  const override = getApiBaseOverride();
+  const apiBase = computeApiBase(override);
 
-  if (API_BASE.absolute) {
-    return new URL(normalizedPath, API_BASE.absolute).toString();
+  if (apiBase.absolute) {
+    return new URL(normalizedPath, apiBase.absolute).toString();
   }
 
-  const prefix = API_BASE.relative.endsWith("/") ? API_BASE.relative.slice(0, -1) : API_BASE.relative;
+  const prefix = apiBase.relative.endsWith("/") ? apiBase.relative.slice(0, -1) : apiBase.relative;
   return `${prefix}/${normalizedPath}`;
 }
 

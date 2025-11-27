@@ -1026,7 +1026,7 @@ function CanvasPageContent() {
         setExecutionLogs(prev => [...prev, {
           timestamp: Date.now(),
           type: 'execution',
-          message: `EXECUTION ${result.toUpperCase()}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
+          message: `EXECUTION ${result ? String(result).toUpperCase() : 'FINISHED'}${duration_ms ? ` (${duration_ms.toFixed(0)}ms)` : ''}${error_message ? ` - ${error_message}` : ''}`
         }]);
 
         console.log('[CanvasPage] 🏁 Execution finished:', result);
