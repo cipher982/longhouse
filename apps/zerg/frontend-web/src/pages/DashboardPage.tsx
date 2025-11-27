@@ -16,8 +16,10 @@ import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
-import { EmptyStateIllustration } from "../components/EmptyStateIllustration";
 import type { WebSocketMessage } from "../generated/ws-messages";
+
+// App logo (served from public folder)
+const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 
 type Scope = "my" | "all";
 type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
@@ -957,7 +959,11 @@ export default function DashboardPage() {
               <tr>
                 <td colSpan={emptyColspan}>
                   <div className="empty-state">
-                    <EmptyStateIllustration className="empty-state-illustration" />
+                    <img 
+                      src={appLogo} 
+                      alt="Swarmlet Logo" 
+                      className="empty-state-illustration"
+                    />
                     <p className="empty-state-text">
                       No agents found. Click 'Create Agent' to get started.
                     </p>
