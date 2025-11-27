@@ -66,6 +66,12 @@ services:
     networks:
       - zerg-network
     logging: *default-logging
+    # Caddy labels for WebSocket-friendly reverse proxy (no try_files)
+    labels:
+      - "caddy_0=https://api.swarmlet.com"
+      - "caddy_0.reverse_proxy={{upstreams 8000}}"
+      - "caddy_0.encode=zstd gzip"
+      - "caddy_0.header=-Server"
     # Security: read-only root filesystem
     read_only: true
     tmpfs:
