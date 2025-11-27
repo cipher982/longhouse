@@ -1376,14 +1376,31 @@ function CanvasPageContent() {
           {/* Execution Controls */}
           <div className="execution-controls">
             <div className="execution-buttons">
-              <button
-                className={`run-button ${executeWorkflowMutation.isPending ? 'loading' : ''}`}
-                onClick={() => executeWorkflowMutation.mutate()}
-                disabled={executeWorkflowMutation.isPending || !workflow?.id || (currentExecution?.phase === 'running')}
-                title="Run Workflow"
-              >
-                {executeWorkflowMutation.isPending ? '⏳' : '▶️'} Run
-              </button>
+              {(() => {
+                const hasNodes = nodes.length > 0;
+                const isRunning = currentExecution?.phase === 'running';
+                const isPending = executeWorkflowMutation.isPending;
+                const noWorkflow = !workflow?.id;
+                const isDisabled = isPending || noWorkflow || isRunning || !hasNodes;
+                
+                // Determine the appropriate tooltip
+                let tooltip = "Run Workflow";
+                if (isPending) tooltip = "Starting workflow...";
+                else if (isRunning) tooltip = "Workflow is already running";
+                else if (noWorkflow) tooltip = "No workflow loaded";
+                else if (!hasNodes) tooltip = "Add nodes to the canvas before running";
+                
+                return (
+                  <button
+                    className={`run-button ${isPending ? 'loading' : ''}`}
+                    onClick={() => executeWorkflowMutation.mutate()}
+                    disabled={isDisabled}
+                    title={tooltip}
+                  >
+                    {isPending ? '⏳' : '▶️'} Run
+                  </button>
+                );
+              })()}
 
               {currentExecution?.phase === 'running' && (
                 <button
