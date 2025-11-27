@@ -616,5 +616,11 @@
     width: 100%;
 }
 
-.empty-state-illustration { font-size: var(--font-size-5xl); margin-bottom: var(--spacing-md); }
+.empty-state-illustration {
+    width: 160px;
+    height: 160px;
+    margin-bottom: var(--spacing-md);
+    color: var(--color-text-muted);
+    opacity: 0.8;
+}
 .empty-state-text { margin: 0 0 var(--spacing-md) 0; font-size: var(--font-size-lg); text-align: center; }
