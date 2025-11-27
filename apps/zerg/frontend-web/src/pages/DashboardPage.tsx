@@ -16,6 +16,7 @@ import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
+import { EmptyStateIllustration } from "../components/EmptyStateIllustration";
 import type { WebSocketMessage } from "../generated/ws-messages";
 
 type Scope = "my" | "all";
@@ -956,7 +957,7 @@ export default function DashboardPage() {
               <tr>
                 <td colSpan={emptyColspan}>
                   <div className="empty-state">
-                    <div className="empty-state-illustration">🤖</div>
+                    <EmptyStateIllustration className="empty-state-illustration" />
                     <p className="empty-state-text">
                       No agents found. Click 'Create Agent' to get started.
                     </p>
