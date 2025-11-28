@@ -22,7 +22,7 @@ import type { WebSocketMessage } from "../generated/ws-messages";
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
 
 type Scope = "my" | "all";
-type SortKey = "name" | "status" | "last_run" | "next_run" | "success";
+type SortKey = "name" | "status" | "created_at" | "last_run" | "next_run" | "success";
 
 type SortConfig = {
   key: SortKey;
@@ -33,6 +33,7 @@ type AgentRunsState = Record<number, AgentRun[]>;
 
 type LegacyAgentRow = {
   agent: AgentSummary;
+  createdDisplay: string;
   lastRunDisplay: string;
   nextRunDisplay: string;
 };
@@ -666,6 +667,7 @@ export default function DashboardPage() {
   const sortedRows: LegacyAgentRow[] = useMemo(() => {
     return sortAgents(agents, runsByAgent, sortConfig).map((agent) => ({
       agent,
+      createdDisplay: formatDateTimeShort(agent.created_at ?? null),
       lastRunDisplay: formatDateTimeShort(agent.last_run_at ?? null),
       nextRunDisplay: formatDateTimeShort(agent.next_run_at ?? null),
     }));
@@ -693,7 +695,7 @@ export default function DashboardPage() {
   }
 
   const includeOwner = scope === "all";
-  const emptyColspan = includeOwner ? 7 : 6;
+  const emptyColspan = includeOwner ? 8 : 7;
 
   return (
     <div id="dashboard-container" className="dashboard-container">
@@ -737,6 +739,7 @@ export default function DashboardPage() {
               {renderHeaderCell("Name", "name", sortConfig, handleSort)}
               {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
               {renderHeaderCell("Status", "status", sortConfig, handleSort)}
+              {renderHeaderCell("Created", "created_at", sortConfig, handleSort)}
               {renderHeaderCell("Last Run", "last_run", sortConfig, handleSort)}
               {renderHeaderCell("Next Run", "next_run", sortConfig, handleSort)}
               {renderHeaderCell("Success Rate", "success", sortConfig, handleSort)}
@@ -753,7 +756,7 @@ export default function DashboardPage() {
             </tr>
           </thead>
           <tbody id="agents-table-body">
-            {sortedRows.map(({ agent, lastRunDisplay, nextRunDisplay }) => {
+            {sortedRows.map(({ agent, createdDisplay, lastRunDisplay, nextRunDisplay }) => {
               const runs = runsByAgent[agent.id];
               const isExpanded = expandedAgentId === agent.id;
               const isRunHistoryExpanded = expandedRunHistory.has(agent.id);
@@ -826,6 +829,7 @@ export default function DashboardPage() {
                         </span>
                       )}
                     </td>
+                    <td data-label="Created">{createdDisplay}</td>
                     <td data-label="Last Run">{lastRunDisplay}</td>
                     <td data-label="Next Run">{nextRunDisplay}</td>
                     <td data-label="Success Rate">{successStats.display}</td>
@@ -1137,6 +1141,10 @@ function compareAgents(
       return left.name.toLowerCase().localeCompare(right.name.toLowerCase());
     case "status":
       return (STATUS_ORDER[left.status] ?? 99) - (STATUS_ORDER[right.status] ?? 99);
+    case "created_at":
+      return formatDateTimeShort(left.created_at ?? null).localeCompare(
+        formatDateTimeShort(right.created_at ?? null)
+      );
     case "last_run":
       return formatDateTimeShort(left.last_run_at ?? null).localeCompare(
         formatDateTimeShort(right.last_run_at ?? null)
@@ -1282,6 +1290,7 @@ function loadSortConfig(): SortConfig {
   const keyMap: Record<string, SortKey> = {
     name: "name",
     status: "status",
+    created_at: "created_at",
     last_run: "last_run",
     next_run: "next_run",
     success: "success",
