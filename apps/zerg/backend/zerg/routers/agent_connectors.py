@@ -17,7 +17,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from sqlalchemy.orm import Session
 
 from zerg.connectors.registry import CONNECTOR_REGISTRY, ConnectorType, get_required_fields
@@ -126,7 +126,7 @@ def list_agent_connectors(
                 display_name=cred.display_name if cred else None,
                 test_status=cred.test_status if cred else "untested",
                 last_tested_at=cred.last_tested_at if cred else None,
-                metadata=cred.metadata if cred else None,
+                metadata=cred.connector_metadata if cred else None,
             )
         )
 
@@ -186,7 +186,7 @@ def configure_connector(
         existing.display_name = request.display_name
         existing.test_status = "untested"
         existing.last_tested_at = None
-        existing.metadata = None
+        existing.connector_metadata = None
         logger.info("Updated %s credentials for agent %d", conn_type.value, agent_id)
     else:
         # Create new
@@ -274,7 +274,7 @@ def test_configured_connector(
     cred.test_status = "success" if result["success"] else "failed"
     cred.last_tested_at = datetime.utcnow()
     if result.get("metadata"):
-        cred.metadata = result["metadata"]
+        cred.connector_metadata = result["metadata"]
 
     db.commit()
 
@@ -291,7 +291,7 @@ def delete_connector(
     agent_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: Any = Depends(get_current_user),
-) -> None:
+) -> Response:
     """Remove connector credentials from an agent.
 
     This deletes the stored credentials permanently.
@@ -304,3 +304,4 @@ def delete_connector(
     db.commit()
 
     logger.info("Deleted %s credentials for agent %d", connector_type, agent_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

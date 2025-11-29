@@ -598,7 +598,8 @@ class ConnectorCredential(Base):
 
     # Metadata discovered during test (e.g., GitHub username, Slack workspace).
     # Stored as JSON, NOT encrypted (no secrets here).
-    metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
+    # Note: Named "connector_metadata" to avoid conflict with SQLAlchemy's reserved "metadata".
+    connector_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
 
     # Test status tracking
     test_status = Column(String(20), nullable=False, default="untested")

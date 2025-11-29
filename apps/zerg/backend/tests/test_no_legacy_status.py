@@ -39,7 +39,8 @@ def test_no_legacy_status_literals_in_schemas():
             for line_num, line in enumerate(lines, 1):
                 if legacy_regex.search(line):
                     # Skip agent status references (different system)
-                    if "agent" not in line.lower() and "Agent" not in line:
+                    # Skip connector test_status references (credential testing, not workflow status)
+                    if "agent" not in line.lower() and "Agent" not in line and "test_status" not in line:
                         violations.append(f"{file_path}:{line_num} - {line.strip()}")
         except Exception as e:
             print(f"Warning: Could not read {file_path}: {e}")
