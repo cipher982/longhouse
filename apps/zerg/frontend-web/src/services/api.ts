@@ -528,3 +528,65 @@ export interface ModelConfig {
 export async function fetchModels(): Promise<ModelConfig[]> {
   return request<ModelConfig[]>(`/models`);
 }
+
+// ---------------------------------------------------------------------------
+// Agent Connector Credentials API
+// ---------------------------------------------------------------------------
+
+import type {
+  ConnectorStatus,
+  ConnectorConfigureRequest,
+  ConnectorTestRequest,
+  ConnectorTestResponse,
+  ConnectorSuccessResponse,
+} from "../types/connectors";
+
+export type {
+  ConnectorStatus,
+  ConnectorConfigureRequest,
+  ConnectorTestRequest,
+  ConnectorTestResponse,
+  ConnectorSuccessResponse,
+};
+
+export async function fetchAgentConnectors(agentId: number): Promise<ConnectorStatus[]> {
+  return request<ConnectorStatus[]>(`/agents/${agentId}/connectors`);
+}
+
+export async function configureAgentConnector(
+  agentId: number,
+  payload: ConnectorConfigureRequest
+): Promise<ConnectorSuccessResponse> {
+  return request<ConnectorSuccessResponse>(`/agents/${agentId}/connectors`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testAgentConnectorBeforeSave(
+  agentId: number,
+  payload: ConnectorTestRequest
+): Promise<ConnectorTestResponse> {
+  return request<ConnectorTestResponse>(`/agents/${agentId}/connectors/test`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testAgentConnector(
+  agentId: number,
+  connectorType: string
+): Promise<ConnectorTestResponse> {
+  return request<ConnectorTestResponse>(`/agents/${agentId}/connectors/${connectorType}/test`, {
+    method: "POST",
+  });
+}
+
+export async function deleteAgentConnector(
+  agentId: number,
+  connectorType: string
+): Promise<void> {
+  return request<void>(`/agents/${agentId}/connectors/${connectorType}`, {
+    method: "DELETE",
+  });
+}
