@@ -7,12 +7,15 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 
 def send_discord_webhook(
-    webhook_url: str,
     content: Optional[str] = None,
+    webhook_url: Optional[str] = None,
     username: Optional[str] = None,
     avatar_url: Optional[str] = None,
     embeds: Optional[List[Dict[str, Any]]] = None,
@@ -28,9 +31,10 @@ def send_discord_webhook(
     retry logic for rate limits - the caller should handle 429 responses if needed.
 
     Args:
+        content: Message text content (max 2000 characters). Optional if embeds are provided.
         webhook_url: Discord webhook URL in format:
             https://discord.com/api/webhooks/{webhook.id}/{webhook.token}
-        content: Message text content (max 2000 characters). Optional if embeds are provided.
+            Optional - uses configured credentials from Agent Settings if not provided.
         username: Override the webhook's default username (optional)
         avatar_url: Override the webhook's default avatar (optional)
         embeds: List of embed objects for rich content (max 10 embeds). See below for structure.
@@ -87,12 +91,21 @@ def send_discord_webhook(
         {"success": True, "status_code": 204}
     """
     try:
+        # Try to get webhook URL from context if not provided
+        resolved_webhook_url = webhook_url
+        if not resolved_webhook_url:
+            resolver = get_credential_resolver()
+            if resolver:
+                creds = resolver.get(ConnectorType.DISCORD)
+                if creds:
+                    resolved_webhook_url = creds.get("webhook_url")
+
         # Validate webhook URL format
-        if not webhook_url or not webhook_url.startswith("https://discord.com/api/webhooks/"):
+        if not resolved_webhook_url or not resolved_webhook_url.startswith("https://discord.com/api/webhooks/"):
             return {
                 "success": False,
                 "status_code": 0,
-                "error": "Invalid webhook URL. Must start with 'https://discord.com/api/webhooks/'",
+                "error": "Discord webhook URL not configured or invalid. Either provide webhook_url parameter or configure Discord in Agent Settings -> Connectors.",
             }
 
         # Validate that we have at least content or embeds
@@ -168,7 +181,7 @@ def send_discord_webhook(
         # Make the request
         with httpx.Client() as client:
             response = client.post(
-                webhook_url,
+                resolved_webhook_url,
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -219,7 +232,7 @@ def send_discord_webhook(
         }
 
     except httpx.TimeoutException:
-        logger.error(f"Discord webhook timeout for URL: {webhook_url}")
+        logger.error(f"Discord webhook timeout for URL: {resolved_webhook_url}")
         return {
             "success": False,
             "status_code": 0,
@@ -245,6 +258,6 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=send_discord_webhook,
         name="send_discord_webhook",
-        description="Send a message to Discord via webhook. Supports text content, custom usernames/avatars, and rich embeds with formatting, images, and fields.",
+        description="Send a message to Discord via webhook. Supports text content, custom usernames/avatars, and rich embeds with formatting, images, and fields. Uses webhook URL from Agent Settings -> Connectors if not explicitly provided.",
     ),
 ]

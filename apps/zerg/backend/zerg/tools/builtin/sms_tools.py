@@ -9,15 +9,18 @@ from typing import Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 
 def send_sms(
-    account_sid: str,
-    auth_token: str,
-    from_number: str,
     to_number: str,
     message: str,
+    account_sid: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    from_number: Optional[str] = None,
     status_callback: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send an SMS message via Twilio API.
@@ -25,12 +28,15 @@ def send_sms(
     This tool uses the Twilio Programmable Messaging API to send SMS messages.
     Phone numbers must be in E.164 format (+[country code][number], e.g., +14155552671).
 
+    Credentials can be provided as parameters or configured in Agent Settings -> Connectors.
+    If configured, the tool will automatically use those credentials.
+
     Args:
-        account_sid: Twilio Account SID (starts with 'AC', 34 characters)
-        auth_token: Twilio Auth Token (32 hexadecimal characters)
-        from_number: Sender phone number in E.164 format (must be a Twilio number)
         to_number: Recipient phone number in E.164 format
         message: SMS message body (max 1600 characters)
+        account_sid: Twilio Account SID (optional if configured in Agent Settings)
+        auth_token: Twilio Auth Token (optional if configured in Agent Settings)
+        from_number: Sender phone number in E.164 format (optional if configured in Agent Settings)
         status_callback: Optional webhook URL to receive delivery status updates
 
     Returns:
@@ -46,9 +52,6 @@ def send_sms(
 
     Example:
         >>> send_sms(
-        ...     account_sid="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        ...     auth_token="your_auth_token_here",
-        ...     from_number="+14155552671",
         ...     to_number="+14155552672",
         ...     message="Hello from Zerg!",
         ... )
@@ -70,29 +73,50 @@ def send_sms(
         - Status callback requires a publicly accessible HTTPS endpoint
     """
     try:
+        # Try to get credentials from context if not provided
+        resolved_account_sid = account_sid
+        resolved_auth_token = auth_token
+        resolved_from_number = from_number
+        if not all([resolved_account_sid, resolved_auth_token, resolved_from_number]):
+            resolver = get_credential_resolver()
+            if resolver:
+                creds = resolver.get(ConnectorType.SMS)
+                if creds:
+                    resolved_account_sid = resolved_account_sid or creds.get("account_sid")
+                    resolved_auth_token = resolved_auth_token or creds.get("auth_token")
+                    resolved_from_number = resolved_from_number or creds.get("from_number")
+
+        # Validate required credentials
+        if not resolved_account_sid:
+            return {"success": False, "error": "Twilio Account SID not configured. Either provide account_sid parameter or configure SMS in Agent Settings -> Connectors."}
+        if not resolved_auth_token:
+            return {"success": False, "error": "Twilio Auth Token not configured. Either provide auth_token parameter or configure SMS in Agent Settings -> Connectors."}
+        if not resolved_from_number:
+            return {"success": False, "error": "From phone number not configured. Either provide from_number parameter or configure SMS in Agent Settings -> Connectors."}
+
         # Validate inputs
-        if not account_sid or not account_sid.startswith("AC") or len(account_sid) != 34:
+        if not resolved_account_sid or not resolved_account_sid.startswith("AC") or len(resolved_account_sid) != 34:
             return {
                 "success": False,
                 "error_message": "Invalid Account SID format. Must start with 'AC' and be 34 characters long",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
-        if not auth_token or len(auth_token) != 32:
+        if not resolved_auth_token or len(resolved_auth_token) != 32:
             return {
                 "success": False,
                 "error_message": "Invalid Auth Token format. Must be 32 characters long",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
         # Validate phone numbers (E.164 format)
-        if not from_number or not from_number.startswith("+") or not from_number[1:].isdigit():
+        if not resolved_from_number or not resolved_from_number.startswith("+") or not resolved_from_number[1:].isdigit():
             return {
                 "success": False,
-                "error_message": f"Invalid from_number format. Must be E.164 format (e.g., +14155552671). Got: {from_number}",
-                "from_number": from_number,
+                "error_message": f"Invalid from_number format. Must be E.164 format (e.g., +14155552671). Got: {resolved_from_number}",
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
@@ -100,7 +124,7 @@ def send_sms(
             return {
                 "success": False,
                 "error_message": f"Invalid to_number format. Must be E.164 format (e.g., +14155552671). Got: {to_number}",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
@@ -109,7 +133,7 @@ def send_sms(
             return {
                 "success": False,
                 "error_message": "Message body cannot be empty",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
@@ -117,7 +141,7 @@ def send_sms(
             return {
                 "success": False,
                 "error_message": f"Message too long ({len(message)} characters). Maximum is 1600 characters",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
@@ -126,16 +150,16 @@ def send_sms(
             return {
                 "success": False,
                 "error_message": "Status callback URL must start with http:// or https://",
-                "from_number": from_number,
+                "from_number": resolved_from_number,
                 "to_number": to_number,
             }
 
         # Build Twilio API URL
-        api_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
+        api_url = f"https://api.twilio.com/2010-04-01/Accounts/{resolved_account_sid}/Messages.json"
 
         # Build request payload (Twilio uses form data, not JSON)
         payload = {
-            "From": from_number,
+            "From": resolved_from_number,
             "To": to_number,
             "Body": message,
         }
@@ -144,7 +168,7 @@ def send_sms(
             payload["StatusCallback"] = status_callback
 
         # Create HTTP Basic Auth header
-        credentials = f"{account_sid}:{auth_token}"
+        credentials = f"{resolved_account_sid}:{resolved_auth_token}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
         headers = {
             "Authorization": f"Basic {encoded_credentials}",
@@ -195,7 +219,7 @@ def send_sms(
                     "error_code": error_code,
                     "error_message": error_message,
                     "status_code": response.status_code,
-                    "from_number": from_number,
+                    "from_number": resolved_from_number,
                     "to_number": to_number,
                 }
 
@@ -211,7 +235,7 @@ def send_sms(
                     "success": False,
                     "error_message": f"Twilio API error (status {response.status_code})",
                     "status_code": response.status_code,
-                    "from_number": from_number,
+                    "from_number": resolved_from_number,
                     "to_number": to_number,
                 }
 
@@ -220,7 +244,7 @@ def send_sms(
         return {
             "success": False,
             "error_message": "Request timed out after 30 seconds",
-            "from_number": from_number,
+            "from_number": resolved_from_number,
             "to_number": to_number,
         }
     except httpx.RequestError as e:
@@ -228,7 +252,7 @@ def send_sms(
         return {
             "success": False,
             "error_message": f"Request failed: {str(e)}",
-            "from_number": from_number,
+            "from_number": resolved_from_number,
             "to_number": to_number,
         }
     except Exception as e:
@@ -236,7 +260,7 @@ def send_sms(
         return {
             "success": False,
             "error_message": f"Unexpected error: {str(e)}",
-            "from_number": from_number,
+            "from_number": resolved_from_number,
             "to_number": to_number,
         }
 
@@ -246,8 +270,9 @@ TOOLS = [
         func=send_sms,
         name="send_sms",
         description=(
-            "Send an SMS message via Twilio. Requires Twilio account credentials "
-            "and phone numbers in E.164 format (+[country code][number]). "
+            "Send an SMS message via Twilio. Credentials can be provided as parameters "
+            "or configured in Agent Settings -> Connectors (SMS). "
+            "Phone numbers must be in E.164 format (+[country code][number]). "
             "Returns message SID and status if successful."
         ),
     ),

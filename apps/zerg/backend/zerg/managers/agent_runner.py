@@ -33,6 +33,10 @@ from zerg.agents_def import zerg_react_agent
 
 # Token streaming context helper
 from zerg.callbacks.token_stream import set_current_thread_id
+
+# Connector credential context helper
+from zerg.connectors.context import set_credential_resolver
+from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import crud
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import Thread as ThreadModel
@@ -134,6 +138,14 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         _ctx_token = set_current_thread_id(thread.id)
         logger.info("[AgentRunner] Set current thread ID context token")
 
+        # ------------------------------------------------------------------
+        # Credential resolver context: inject the resolver so connector tools
+        # can access agent-specific credentials without explicit parameters.
+        # ------------------------------------------------------------------
+        credential_resolver = CredentialResolver(agent_id=self.agent.id, db=db)
+        _cred_ctx_token = set_credential_resolver(credential_resolver)
+        logger.debug("[AgentRunner] Set credential resolver context for agent %s", self.agent.id)
+
         try:
             # TODO: Token streaming needs LangChain version compatibility investigation
             logger.info(f"[AgentRunner] Calling runnable.ainvoke with {len(original_msgs)} messages")
@@ -149,7 +161,8 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         finally:
             # Reset context so unrelated calls aren't attributed to this thread
             set_current_thread_id(None)
-            logger.info("[AgentRunner] Reset current thread ID context")
+            set_credential_resolver(None)
+            logger.info("[AgentRunner] Reset thread ID and credential resolver context")
 
         # Extract only the new messages since our last context
         # The zerg_react_agent returns ALL messages including the history

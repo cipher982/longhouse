@@ -22,7 +22,38 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
+
+
+def _resolve_jira_credentials(domain: Optional[str] = None, email: Optional[str] = None, api_token: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[str], Optional[dict]]:
+    """Resolve Jira credentials from parameters or context.
+
+    Returns: (domain, email, api_token, error_response) - if error_response is not None, return it.
+    """
+    resolved_domain = domain
+    resolved_email = email
+    resolved_api_token = api_token
+
+    if not all([resolved_domain, resolved_email, resolved_api_token]):
+        resolver = get_credential_resolver()
+        if resolver:
+            creds = resolver.get(ConnectorType.JIRA)
+            if creds:
+                resolved_domain = resolved_domain or creds.get("domain")
+                resolved_email = resolved_email or creds.get("email")
+                resolved_api_token = resolved_api_token or creds.get("api_token")
+
+    if not resolved_domain:
+        return None, None, None, {"success": False, "error": "Jira domain not configured. Configure Jira in Agent Settings -> Connectors."}
+    if not resolved_email:
+        return None, None, None, {"success": False, "error": "Jira email not configured. Configure Jira in Agent Settings -> Connectors."}
+    if not resolved_api_token:
+        return None, None, None, {"success": False, "error": "Jira API token not configured. Configure Jira in Agent Settings -> Connectors."}
+
+    return resolved_domain, resolved_email, resolved_api_token, None
 
 
 def _build_jira_auth_header(email: str, api_token: str) -> str:
@@ -80,9 +111,6 @@ def _text_to_adf(text: str) -> Dict[str, Any]:
 
 
 def jira_create_issue(
-    domain: str,
-    email: str,
-    api_token: str,
     project_key: str,
     issue_type: str,
     summary: str,
@@ -90,13 +118,15 @@ def jira_create_issue(
     priority: Optional[str] = None,
     labels: Optional[List[str]] = None,
     assignee: Optional[str] = None,
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new issue in a Jira project.
 
+    Credentials are automatically resolved from agent configuration if not provided.
+
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         project_key: Project key (e.g., 'PROJ', 'TEAM')
         issue_type: Issue type name (e.g., 'Task', 'Bug', 'Story')
         summary: Issue summary/title (required)
@@ -104,6 +134,9 @@ def jira_create_issue(
         priority: Priority name (e.g., 'High', 'Medium', 'Low') (optional)
         labels: List of label strings (optional)
         assignee: Assignee account ID - NOT email or name (optional)
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -115,9 +148,6 @@ def jira_create_issue(
 
     Example:
         >>> jira_create_issue(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
         ...     project_key="PROJ",
         ...     issue_type="Task",
         ...     summary="Implement new feature",
@@ -133,11 +163,16 @@ def jira_create_issue(
         }
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, project_key, issue_type, summary]):
+        if not all([project_key, issue_type, summary]):
             return {
                 "success": False,
-                "error": "Missing required fields: domain, email, api_token, project_key, issue_type, summary",
+                "error": "Missing required fields: project_key, issue_type, summary",
             }
 
         # Build payload
@@ -208,22 +243,24 @@ def jira_create_issue(
 
 
 def jira_list_issues(
-    domain: str,
-    email: str,
-    api_token: str,
     project_key: str,
     jql: Optional[str] = None,
     max_results: int = 50,
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List issues in a Jira project using JQL search.
 
+    Credentials are automatically resolved from agent configuration if not provided.
+
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         project_key: Project key to search within
         jql: Custom JQL query (optional, defaults to all project issues)
         max_results: Maximum number of results to return (default: 50, max: 100)
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -234,9 +271,6 @@ def jira_list_issues(
 
     Example:
         >>> jira_list_issues(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
         ...     project_key="PROJ",
         ...     jql="status = 'In Progress' AND assignee = currentUser()",
         ...     max_results=20
@@ -257,9 +291,14 @@ def jira_list_issues(
         }
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, project_key]):
-            return {"success": False, "error": "Missing required fields: domain, email, api_token, project_key"}
+        if not project_key:
+            return {"success": False, "error": "Missing required field: project_key"}
 
         # Build JQL query
         if jql:
@@ -329,14 +368,21 @@ def jira_list_issues(
         return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
 
-def jira_get_issue(domain: str, email: str, api_token: str, issue_key: str) -> Dict[str, Any]:
+def jira_get_issue(
+    issue_key: str,
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Get detailed information about a specific Jira issue.
 
+    Credentials are automatically resolved from agent configuration if not provided.
+
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         issue_key: Issue key (e.g., 'PROJ-123')
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -345,12 +391,7 @@ def jira_get_issue(domain: str, email: str, api_token: str, issue_key: str) -> D
         - error: Error message if request failed
 
     Example:
-        >>> jira_get_issue(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
-        ...     issue_key="PROJ-123"
-        ... )
+        >>> jira_get_issue(issue_key="PROJ-123")
         {
             "success": True,
             "issue": {
@@ -363,9 +404,14 @@ def jira_get_issue(domain: str, email: str, api_token: str, issue_key: str) -> D
         }
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, issue_key]):
-            return {"success": False, "error": "Missing required fields: domain, email, api_token, issue_key"}
+        if not issue_key:
+            return {"success": False, "error": "Missing required field: issue_key"}
 
         # Build URL
         url = _build_jira_url(domain, f"/issue/{issue_key}")
@@ -434,15 +480,23 @@ def jira_get_issue(domain: str, email: str, api_token: str, issue_key: str) -> D
         return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
 
-def jira_add_comment(domain: str, email: str, api_token: str, issue_key: str, body: str) -> Dict[str, Any]:
+def jira_add_comment(
+    issue_key: str,
+    body: str,
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Add a comment to a Jira issue.
 
+    Credentials are automatically resolved from agent configuration if not provided.
+
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         issue_key: Issue key (e.g., 'PROJ-123')
         body: Comment text in plain text
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -452,18 +506,20 @@ def jira_add_comment(domain: str, email: str, api_token: str, issue_key: str, bo
 
     Example:
         >>> jira_add_comment(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
         ...     issue_key="PROJ-123",
         ...     body="Agent completed the task successfully"
         ... )
         {"success": True, "comment_id": "10050"}
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, issue_key, body]):
-            return {"success": False, "error": "Missing required fields: domain, email, api_token, issue_key, body"}
+        if not all([issue_key, body]):
+            return {"success": False, "error": "Missing required fields: issue_key, body"}
 
         # Build payload with ADF format
         payload = {"body": _text_to_adf(body)}
@@ -504,18 +560,26 @@ def jira_add_comment(domain: str, email: str, api_token: str, issue_key: str, bo
         return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
 
-def jira_transition_issue(domain: str, email: str, api_token: str, issue_key: str, transition_id: str) -> Dict[str, Any]:
+def jira_transition_issue(
+    issue_key: str,
+    transition_id: str,
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Transition a Jira issue to a new status.
+
+    Credentials are automatically resolved from agent configuration if not provided.
 
     Note: To find available transitions for an issue, use jira_get_issue and check
     the available transitions, or query /rest/api/3/issue/{issueKey}/transitions
 
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         issue_key: Issue key (e.g., 'PROJ-123')
         transition_id: Transition ID as string (e.g., '21' for 'In Progress -> Done')
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -524,20 +588,22 @@ def jira_transition_issue(domain: str, email: str, api_token: str, issue_key: st
 
     Example:
         >>> jira_transition_issue(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
         ...     issue_key="PROJ-123",
         ...     transition_id="21"
         ... )
         {"success": True}
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, issue_key, transition_id]):
+        if not all([issue_key, transition_id]):
             return {
                 "success": False,
-                "error": "Missing required fields: domain, email, api_token, issue_key, transition_id",
+                "error": "Missing required fields: issue_key, transition_id",
             }
 
         # Build payload
@@ -576,15 +642,23 @@ def jira_transition_issue(domain: str, email: str, api_token: str, issue_key: st
         return {"success": False, "error": f"Unexpected error: {str(e)}"}
 
 
-def jira_update_issue(domain: str, email: str, api_token: str, issue_key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+def jira_update_issue(
+    issue_key: str,
+    fields: Dict[str, Any],
+    domain: Optional[str] = None,
+    email: Optional[str] = None,
+    api_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Update fields on an existing Jira issue.
 
+    Credentials are automatically resolved from agent configuration if not provided.
+
     Args:
-        domain: Jira Cloud domain (e.g., 'yourcompany.atlassian.net')
-        email: User email for authentication
-        api_token: API token from Atlassian account settings
         issue_key: Issue key (e.g., 'PROJ-123')
         fields: Dictionary of field updates (e.g., {"summary": "New title", "priority": {"name": "Low"}})
+        domain: Jira Cloud domain (optional, resolved from context if not provided)
+        email: User email for authentication (optional, resolved from context if not provided)
+        api_token: API token from Atlassian account settings (optional, resolved from context if not provided)
 
     Returns:
         Dictionary containing:
@@ -593,18 +667,20 @@ def jira_update_issue(domain: str, email: str, api_token: str, issue_key: str, f
 
     Example:
         >>> jira_update_issue(
-        ...     domain="company.atlassian.net",
-        ...     email="user@company.com",
-        ...     api_token="abc123",
         ...     issue_key="PROJ-123",
         ...     fields={"summary": "Updated title", "priority": {"name": "Low"}}
         ... )
         {"success": True}
     """
     try:
+        # Resolve credentials
+        domain, email, api_token, error = _resolve_jira_credentials(domain, email, api_token)
+        if error:
+            return error
+
         # Validate required fields
-        if not all([domain, email, api_token, issue_key, fields]):
-            return {"success": False, "error": "Missing required fields: domain, email, api_token, issue_key, fields"}
+        if not all([issue_key, fields]):
+            return {"success": False, "error": "Missing required fields: issue_key, fields"}
 
         if not isinstance(fields, dict):
             return {"success": False, "error": "Fields must be a dictionary"}
@@ -710,31 +786,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=jira_create_issue,
         name="jira_create_issue",
-        description="Create a new issue in a Jira project with summary, description, priority, labels, and assignee",
+        description="Create a new issue in a Jira project with summary, description, priority, labels, and assignee. Credentials are automatically resolved from agent configuration.",
     ),
     StructuredTool.from_function(
         func=jira_list_issues,
         name="jira_list_issues",
-        description="List issues in a Jira project using JQL search. Supports custom queries and result limits.",
+        description="List issues in a Jira project using JQL search. Supports custom queries and result limits. Credentials are automatically resolved from agent configuration.",
     ),
     StructuredTool.from_function(
         func=jira_get_issue,
         name="jira_get_issue",
-        description="Get detailed information about a specific Jira issue by its key",
+        description="Get detailed information about a specific Jira issue by its key. Credentials are automatically resolved from agent configuration.",
     ),
     StructuredTool.from_function(
         func=jira_add_comment,
         name="jira_add_comment",
-        description="Add a comment to an existing Jira issue",
+        description="Add a comment to an existing Jira issue. Credentials are automatically resolved from agent configuration.",
     ),
     StructuredTool.from_function(
         func=jira_transition_issue,
         name="jira_transition_issue",
-        description="Transition a Jira issue to a new status using a transition ID",
+        description="Transition a Jira issue to a new status using a transition ID. Credentials are automatically resolved from agent configuration.",
     ),
     StructuredTool.from_function(
         func=jira_update_issue,
         name="jira_update_issue",
-        description="Update fields on an existing Jira issue (summary, priority, labels, etc.)",
+        description="Update fields on an existing Jira issue (summary, priority, labels, etc.). Credentials are automatically resolved from agent configuration.",
     ),
 ]
