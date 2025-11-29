@@ -1,0 +1,74 @@
+/**
+ * TypeScript types for agent connector credentials.
+ */
+
+export interface CredentialField {
+  key: string;
+  label: string;
+  type: "text" | "password" | "url";
+  placeholder: string;
+  required: boolean;
+}
+
+export interface ConnectorStatus {
+  type: string;
+  name: string;
+  description: string;
+  category: "notifications" | "project_management";
+  icon: string;
+  docs_url: string;
+  fields: CredentialField[];
+  configured: boolean;
+  display_name: string | null;
+  test_status: "untested" | "success" | "failed";
+  last_tested_at: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface ConnectorConfigureRequest {
+  connector_type: string;
+  credentials: Record<string, string>;
+  display_name?: string;
+}
+
+export interface ConnectorTestRequest {
+  connector_type: string;
+  credentials: Record<string, string>;
+}
+
+export interface ConnectorTestResponse {
+  success: boolean;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConnectorSuccessResponse {
+  success: boolean;
+}
+
+export type ConnectorCategory = "notifications" | "project_management";
+
+// Connector type identifiers
+export type ConnectorType =
+  | "slack"
+  | "discord"
+  | "email"
+  | "sms"
+  | "github"
+  | "jira"
+  | "linear"
+  | "notion"
+  | "imessage";
+
+// Icon mapping for connectors (Lucide icon names)
+export const CONNECTOR_ICONS: Record<string, string> = {
+  slack: "slack",
+  discord: "discord",
+  email: "mail",
+  sms: "smartphone",
+  github: "github",
+  jira: "clipboard",
+  linear: "layout",
+  notion: "file-text",
+  imessage: "message-circle",
+};

@@ -12,6 +12,7 @@ import {
   useDebouncedUpdateAllowedTools,
 } from "../../hooks/useAgentConfig";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
+import { ConnectorCredentialsPanel } from "./ConnectorCredentialsPanel";
 
 type AgentSettingsDrawerProps = {
   agentId: number;
@@ -475,6 +476,19 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
               </div>
             </form>
           )}
+        </section>
+
+        <section className="agent-settings-section">
+          <header className="section-header">
+            <div>
+              <h3>Connectors</h3>
+              <p className="section-description">
+                Configure API keys and webhooks for built-in tools. Once configured, tools will use these
+                credentials automatically.
+              </p>
+            </div>
+          </header>
+          <ConnectorCredentialsPanel agentId={agentId} />
         </section>
 
         <footer className="agent-settings-footer">
