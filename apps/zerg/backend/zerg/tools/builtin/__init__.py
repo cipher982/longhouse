@@ -9,9 +9,17 @@ from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
 from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
+from zerg.tools.builtin.discord_tools import TOOLS as DISCORD_TOOLS
+from zerg.tools.builtin.github_tools import TOOLS as GITHUB_TOOLS
+from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
+from zerg.tools.builtin.email_tools import TOOLS as EMAIL_TOOLS
+from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
+from zerg.tools.builtin.jira_tools import TOOLS as JIRA_TOOLS
+from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
+from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.registry import ToolRegistry
 
-BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + CONTAINER_TOOLS
+BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + CONTAINER_TOOLS + DISCORD_TOOLS + GITHUB_TOOLS + SLACK_TOOLS + EMAIL_TOOLS + SMS_TOOLS + JIRA_TOOLS + NOTION_TOOLS + LINEAR_TOOLS
 
 __all__ = [
     "BUILTIN_TOOLS",
