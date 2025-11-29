@@ -15,6 +15,39 @@ class ToolName(str, Enum):
     DATETIME_DIFF = "datetime_diff"
     GENERATE_UUID = "generate_uuid"
     CONTAINER_EXEC = "container_exec"
+    # Notification tools
+    SEND_DISCORD_WEBHOOK = "send_discord_webhook"
+    SEND_SLACK_WEBHOOK = "send_slack_webhook"
+    SEND_EMAIL = "send_email"
+    SEND_SMS = "send_sms"
+    # Project management tools
+    GITHUB_CREATE_ISSUE = "github_create_issue"
+    GITHUB_LIST_ISSUES = "github_list_issues"
+    GITHUB_GET_ISSUE = "github_get_issue"
+    GITHUB_ADD_COMMENT = "github_add_comment"
+    GITHUB_LIST_PULL_REQUESTS = "github_list_pull_requests"
+    GITHUB_GET_PULL_REQUEST = "github_get_pull_request"
+    JIRA_CREATE_ISSUE = "jira_create_issue"
+    JIRA_LIST_ISSUES = "jira_list_issues"
+    JIRA_GET_ISSUE = "jira_get_issue"
+    JIRA_ADD_COMMENT = "jira_add_comment"
+    JIRA_TRANSITION_ISSUE = "jira_transition_issue"
+    JIRA_UPDATE_ISSUE = "jira_update_issue"
+    LINEAR_CREATE_ISSUE = "linear_create_issue"
+    LINEAR_LIST_ISSUES = "linear_list_issues"
+    LINEAR_GET_ISSUE = "linear_get_issue"
+    LINEAR_UPDATE_ISSUE = "linear_update_issue"
+    LINEAR_ADD_COMMENT = "linear_add_comment"
+    LINEAR_LIST_TEAMS = "linear_list_teams"
+    NOTION_CREATE_PAGE = "notion_create_page"
+    NOTION_GET_PAGE = "notion_get_page"
+    NOTION_UPDATE_PAGE = "notion_update_page"
+    NOTION_SEARCH = "notion_search"
+    NOTION_QUERY_DATABASE = "notion_query_database"
+    NOTION_APPEND_BLOCKS = "notion_append_blocks"
+    # iMessage tools (macOS only)
+    SEND_IMESSAGE = "send_imessage"
+    LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
 
 
 class ServerName(str, Enum):
@@ -25,6 +58,15 @@ class ServerName(str, Enum):
     DATETIME = "datetime"
     UUID = "uuid"
     CONTAINER = "container"
+    DISCORD = "discord"
+    SLACK = "slack"
+    EMAIL = "email"
+    SMS = "sms"
+    GITHUB = "github"
+    JIRA = "jira"
+    LINEAR = "linear"
+    NOTION = "notion"
+    IMESSAGE = "imessage"
 
 
 # Tool to server mapping for validation
@@ -35,6 +77,42 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
+    # Notification tools
+    ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
+    ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
+    ToolName.SEND_EMAIL: ServerName.EMAIL,
+    ToolName.SEND_SMS: ServerName.SMS,
+    # GitHub tools
+    ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
+    ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
+    ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
+    ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
+    ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
+    ToolName.GITHUB_GET_PULL_REQUEST: ServerName.GITHUB,
+    # Jira tools
+    ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
+    ToolName.JIRA_LIST_ISSUES: ServerName.JIRA,
+    ToolName.JIRA_GET_ISSUE: ServerName.JIRA,
+    ToolName.JIRA_ADD_COMMENT: ServerName.JIRA,
+    ToolName.JIRA_TRANSITION_ISSUE: ServerName.JIRA,
+    ToolName.JIRA_UPDATE_ISSUE: ServerName.JIRA,
+    # Linear tools
+    ToolName.LINEAR_CREATE_ISSUE: ServerName.LINEAR,
+    ToolName.LINEAR_LIST_ISSUES: ServerName.LINEAR,
+    ToolName.LINEAR_GET_ISSUE: ServerName.LINEAR,
+    ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
+    ToolName.LINEAR_ADD_COMMENT: ServerName.LINEAR,
+    ToolName.LINEAR_LIST_TEAMS: ServerName.LINEAR,
+    # Notion tools
+    ToolName.NOTION_CREATE_PAGE: ServerName.NOTION,
+    ToolName.NOTION_GET_PAGE: ServerName.NOTION,
+    ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
+    ToolName.NOTION_SEARCH: ServerName.NOTION,
+    ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
+    ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
+    # iMessage tools
+    ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
+    ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
 }
 
 
