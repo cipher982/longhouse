@@ -547,3 +547,66 @@ class NodeExecutionState(Base):
 
     # ORM relationship
     workflow_execution = relationship("WorkflowExecution", back_populates="node_states")
+
+
+# ---------------------------------------------------------------------------
+# ConnectorCredential – encrypted credentials for built-in connector tools
+# ---------------------------------------------------------------------------
+
+
+class ConnectorCredential(Base):
+    """Encrypted credential for a built-in connector tool.
+
+    Scoped to a single agent. Each agent can have at most one credential
+    per connector type (e.g., one Slack webhook, one GitHub token).
+
+    Credentials are stored encrypted using Fernet (AES-GCM) via the
+    ``zerg.utils.crypto`` module. The ``encrypted_value`` column contains
+    a JSON blob with the credential fields specific to each connector type.
+    """
+
+    __tablename__ = "connector_credentials"
+    __table_args__ = (
+        # One credential per connector type per agent
+        UniqueConstraint("agent_id", "connector_type", name="uix_agent_connector"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Foreign key to agent with CASCADE delete – when an agent is deleted,
+    # all its credentials are automatically removed.
+    agent_id = Column(
+        Integer,
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Connector type identifier: 'slack', 'discord', 'email', 'sms',
+    # 'github', 'jira', 'linear', 'notion', 'imessage'
+    connector_type = Column(String(50), nullable=False)
+
+    # Encrypted credential value (Fernet AES-GCM).
+    # Stored as JSON containing connector-specific fields:
+    # - Slack/Discord: {"webhook_url": "..."}
+    # - GitHub: {"token": "..."}
+    # - Jira: {"domain": "...", "email": "...", "api_token": "..."}
+    encrypted_value = Column(Text, nullable=False)
+
+    # Optional user-friendly label (e.g., "#engineering channel")
+    display_name = Column(String(255), nullable=True)
+
+    # Metadata discovered during test (e.g., GitHub username, Slack workspace).
+    # Stored as JSON, NOT encrypted (no secrets here).
+    metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
+
+    # Test status tracking
+    test_status = Column(String(20), nullable=False, default="untested")
+    last_tested_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    agent = relationship("Agent", backref="connector_credentials")
