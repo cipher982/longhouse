@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column('connector_type', sa.String(50), nullable=False),
         sa.Column('encrypted_value', sa.Text(), nullable=False),
         sa.Column('display_name', sa.String(255), nullable=True),
-        sa.Column('metadata', sa.JSON(), nullable=True),
+        sa.Column('connector_metadata', sa.JSON(), nullable=True),
         sa.Column('test_status', sa.String(20), nullable=False, server_default='untested'),
         sa.Column('last_tested_at', sa.DateTime(), nullable=True),
         sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
