@@ -1,439 +1,170 @@
-# Implementation Roadmap: 100% Scenario Coverage
+# Implementation Roadmap: Connector Tools
 
-> Gaps sorted by implementation effort, grouped into sprints
-
----
-
-## Summary Matrix
-
-| Effort | Count | Time Est. | Value |
-|--------|-------|-----------|-------|
-| 🟢 Easy Wins | 12 items | 1-2 weeks | High - Quick user value |
-| 🟡 Medium Effort | 10 items | 3-4 weeks | High - Core features |
-| 🔴 Complex/Long | 8 items | 6-8 weeks | Medium - Power users |
+> Status tracking for agent connector implementations
 
 ---
 
-## 🟢 EASY WINS (1-3 days each)
+## ✅ Completed (Sprint 1 - Nov 2024)
 
-These require minimal new infrastructure and can be shipped quickly.
+### Output/Notification Tools
 
-### Week 1: Core Output Tools
+| Tool | Status | Notes |
+|------|--------|-------|
+| **Slack Webhook** | ✅ Done | `send_slack_webhook` - messages + Block Kit |
+| **Discord Webhook** | ✅ Done | `send_discord_webhook` - messages + embeds |
+| **Email (Resend)** | ✅ Done | `send_email` - text/HTML via Resend API |
+| **SMS (Twilio)** | ✅ Done | `send_sms` - SMS via Twilio API |
 
-| # | Feature | Effort | Description | Dependencies |
-|---|---------|--------|-------------|--------------|
-| 1 | **Slack Webhook Tool** | 2 hrs | Wrap `http_request` with Slack message formatting | None |
-| 2 | **Discord Webhook Tool** | 2 hrs | Wrap `http_request` with Discord embed formatting | None |
-| 3 | **Email via API** | 4 hrs | SendGrid/Mailgun/Resend API wrapper | API key config |
-| 4 | **SMS via Twilio** | 4 hrs | Simple Twilio API wrapper | API key config |
+### Project Management Connectors
 
-```python
-# Implementation sketch - all are thin wrappers
-def send_slack_webhook(webhook_url: str, text: str, blocks: dict = None) -> dict:
-    payload = {"text": text}
-    if blocks:
-        payload["blocks"] = blocks
-    return http_request(webhook_url, method="POST", data=payload)
-```
+| Connector | Status | Tools Included |
+|-----------|--------|----------------|
+| **GitHub** | ✅ Done | `github_create_issue`, `github_list_issues`, `github_get_issue`, `github_add_comment`, `github_list_pull_requests`, `github_get_pull_request` |
+| **Jira** | ✅ Done | `jira_create_issue`, `jira_list_issues`, `jira_get_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_update_issue` |
+| **Linear** | ✅ Done | `linear_create_issue`, `linear_list_issues`, `linear_get_issue`, `linear_update_issue`, `linear_add_comment`, `linear_list_teams` |
+| **Notion** | ✅ Done | `notion_create_page`, `notion_get_page`, `notion_update_page`, `notion_search`, `notion_query_database`, `notion_append_blocks` |
 
-**Why easy:** These are literally specialized `http_request` calls with better DX.
+### Test Coverage
+
+- **104 unit tests** with mocked HTTP (all passing)
+- **Integration test infrastructure** with strict credential requirements
+- Credentials stored in `.env.test` (gitignored)
 
 ---
 
-### Week 1: Simple State/Memory
+## 🔜 Next Up (Prioritized)
 
-| # | Feature | Effort | Description | Dependencies |
-|---|---------|--------|-------------|--------------|
-| 5 | **Key-Value Store** | 1 day | New `agent_state` table + CRUD tools | DB migration |
-| 6 | **State TTL/Expiry** | 2 hrs | Add `expires_at` column, cleanup job | #5 |
+### Priority 1: State/Memory Tools
 
-```sql
--- Simple schema
-CREATE TABLE agent_state (
-    id SERIAL PRIMARY KEY,
-    agent_id INTEGER REFERENCES agents(id),
-    key VARCHAR(255) NOT NULL,
-    value JSONB NOT NULL,
-    expires_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(agent_id, key)
-);
-```
+| Feature | Effort | Description |
+|---------|--------|-------------|
+| Key-Value Store | 1 day | `agent_state` table + CRUD tools |
+| State TTL/Expiry | 2 hrs | Add `expires_at` column |
 
 ```python
 # Tools to add
-def kv_get(key: str) -> Any: ...
-def kv_set(key: str, value: Any, ttl_seconds: int = None) -> bool: ...
-def kv_delete(key: str) -> bool: ...
-def kv_list(prefix: str = None) -> List[str]: ...
+kv_get(key: str) -> Any
+kv_set(key: str, value: Any, ttl_seconds: int = None) -> bool
+kv_delete(key: str) -> bool
+kv_list(prefix: str = None) -> List[str]
 ```
 
-**Why easy:** Just a new table + 4 simple tools. No external deps.
+### Priority 2: File Operations
+
+| Feature | Effort | Description |
+|---------|--------|-------------|
+| Write File | 4 hrs | Write to agent workspace |
+| Read File | 2 hrs | Read from workspace |
+| Generate CSV | 2 hrs | Python csv module |
+| Generate PDF | 3 days | WeasyPrint or Playwright |
+
+### Priority 3: Enhanced Workflows
+
+| Feature | Effort | Description |
+|---------|--------|-------------|
+| Scheduled Actions | 4 days | Queue future tool executions |
+| Multi-Agent Calls | 3 days | Tool to invoke another agent |
+| Human Approval | 7 days | Approval nodes with notifications |
+
+### Priority 4: OAuth Connectors
+
+| Feature | Effort | Description |
+|---------|--------|-------------|
+| Google OAuth | 5 days | OAuth2 flow, token refresh |
+| Google Calendar | 3 days | Calendar read/write |
+| Google Sheets | 3 days | Sheets read/write |
+| Slack App OAuth | 5 days | Full Slack bot integration |
 
 ---
 
-### Week 1: Basic File Operations
+## Tool Inventory
 
-| # | Feature | Effort | Description | Dependencies |
-|---|---------|--------|-------------|--------------|
-| 7 | **Write File** | 4 hrs | Write to agent workspace directory | Storage config |
-| 8 | **Read File** | 2 hrs | Read from agent workspace | #7 |
-| 9 | **List Files** | 2 hrs | List workspace contents | #7 |
-| 10 | **Generate CSV** | 2 hrs | Python stdlib csv module | None |
-
-```python
-def write_file(filename: str, content: str) -> dict:
-    """Write content to agent's workspace directory."""
-    workspace = get_agent_workspace(current_agent_id)
-    path = workspace / sanitize_filename(filename)
-    path.write_text(content)
-    return {"path": str(path), "size": len(content)}
-
-def generate_csv(data: List[Dict], filename: str) -> dict:
-    """Generate CSV from list of dicts and save to workspace."""
-    import csv, io
-    output = io.StringIO()
-    if data:
-        writer = csv.DictWriter(output, fieldnames=data[0].keys())
-        writer.writeheader()
-        writer.writerows(data)
-    return write_file(filename, output.getvalue())
-```
-
-**Why easy:** Python stdlib, just need workspace directory management.
-
----
-
-### Week 2: Platform Basics
-
-| # | Feature | Effort | Description | Dependencies |
-|---|---------|--------|-------------|--------------|
-| 11 | **Audit Logs** | 4 hrs | Log tool invocations to new table | DB migration |
-| 12 | **Rate Limit per Tool** | 4 hrs | Token bucket per agent/tool | Redis or DB |
-
-```sql
-CREATE TABLE audit_logs (
-    id SERIAL PRIMARY KEY,
-    agent_id INTEGER,
-    run_id INTEGER,
-    tool_name VARCHAR(255),
-    input JSONB,
-    output JSONB,
-    duration_ms INTEGER,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-**Why easy:** Already have event system, just persist more.
-
----
-
-## 🟡 MEDIUM EFFORT (3-7 days each)
-
-These require some new infrastructure but are well-understood patterns.
-
-### Week 3-4: Enhanced Outputs
-
-| # | Feature | Effort | Est. | Description |
-|---|---------|--------|------|-------------|
-| 13 | **Email via SMTP** | 3 days | Native SMTP support (no API dependency) |
-| 14 | **PDF Generation** | 3 days | Headless Chrome or WeasyPrint |
-| 15 | **S3 Upload** | 2 days | boto3 integration with creds |
-| 16 | **Image Generation** | 3 days | DALL-E/Stable Diffusion API wrapper |
-
-```python
-# PDF via WeasyPrint (pure Python, no Chrome needed)
-def generate_pdf(html_content: str, filename: str) -> dict:
-    from weasyprint import HTML
-    pdf_bytes = HTML(string=html_content).write_pdf()
-    return write_file(filename, pdf_bytes, binary=True)
-```
-
-**Considerations:**
-- SMTP needs server config (host, port, auth)
-- PDF needs either WeasyPrint (lighter) or Playwright (full Chrome)
-- S3 needs secure credential storage
-
----
-
-### Week 4-5: Connectors (API Key Auth)
-
-| # | Feature | Effort | Est. | Description |
-|---|---------|--------|------|-------------|
-| 17 | **GitHub Connector** | 3 days | REST API wrapper with PAT auth |
-| 18 | **Jira Connector** | 3 days | REST API for issues/comments |
-| 19 | **Linear Connector** | 2 days | GraphQL API wrapper |
-| 20 | **Notion Connector** | 2 days | REST API for pages/databases |
-
-```python
-# Connector pattern
-class GitHubConnector:
-    def __init__(self, api_token: str):
-        self.token = api_token
-        self.base_url = "https://api.github.com"
-    
-    async def create_issue(self, repo: str, title: str, body: str) -> dict: ...
-    async def list_issues(self, repo: str, state: str = "open") -> List[dict]: ...
-    async def add_comment(self, repo: str, issue_number: int, body: str) -> dict: ...
-```
-
-**Why medium:** 
-- API design is straightforward
-- Need secure token storage (already have crypto utils)
-- Each connector is ~200-400 lines
-
----
-
-### Week 5-6: Workflow Features
-
-| # | Feature | Effort | Est. | Description |
-|---|---------|--------|------|-------------|
-| 21 | **Scheduled Actions** | 4 days | Queue future tool executions |
-| 22 | **Multi-Agent Calls** | 3 days | Tool to invoke another agent |
-
-```python
-# Scheduled action tool
-def schedule_action(
-    action: str,  # "send_email", "send_slack", etc.
-    params: dict,
-    run_at: datetime,
-    idempotency_key: str = None
-) -> dict:
-    """Schedule a tool to run at a future time."""
-    job = ScheduledAction(
-        agent_id=current_agent_id,
-        action=action,
-        params=params,
-        run_at=run_at,
-        idempotency_key=idempotency_key
-    )
-    db.add(job)
-    return {"job_id": job.id, "scheduled_for": run_at.isoformat()}
-
-# Multi-agent tool
-def invoke_agent(
-    agent_id: int,
-    message: str,
-    wait_for_completion: bool = True,
-    timeout_seconds: int = 300
-) -> dict:
-    """Invoke another agent and optionally wait for result."""
-    # Uses existing execute_agent_task infrastructure
-    ...
-```
-
-**Why medium:**
-- Scheduled actions need a job queue (APScheduler already exists)
-- Multi-agent mostly reuses existing AgentRunner
-
----
-
-## 🔴 COMPLEX/LONG (1-2 weeks each)
-
-These require significant new infrastructure or external integrations.
-
-### Week 7-10: OAuth Connectors
-
-| # | Feature | Effort | Est. | Description |
-|---|---------|--------|------|-------------|
-| 23 | **Google OAuth Flow** | 5 days | OAuth2 dance, token refresh |
-| 24 | **Google Calendar** | 3 days | Calendar API (requires #23) |
-| 25 | **Google Sheets** | 3 days | Sheets API (requires #23) |
-| 26 | **Google Drive** | 2 days | Drive API (requires #23) |
-| 27 | **Slack App OAuth** | 5 days | Slack OAuth, bot tokens |
-
-**Complexity factors:**
-- OAuth requires frontend UI for "Connect" flow
-- Token refresh logic
-- Scope management
-- Per-user credential storage
-
-```python
-# OAuth infrastructure needed
-class OAuthConnector(Base):
-    __tablename__ = "oauth_connectors"
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    provider = Column(String)  # "google", "slack", "github"
-    access_token = Column(String)  # encrypted
-    refresh_token = Column(String)  # encrypted
-    expires_at = Column(DateTime)
-    scopes = Column(JSON)
-    created_at = Column(DateTime)
-    
-# Frontend routes needed
-GET  /oauth/{provider}/authorize  -> redirect to provider
-GET  /oauth/{provider}/callback   -> exchange code for token
-POST /oauth/{provider}/refresh    -> refresh token
-```
-
----
-
-### Week 9-12: Advanced Workflow Features
-
-| # | Feature | Effort | Est. | Description |
-|---|---------|--------|------|-------------|
-| 28 | **Human-in-the-Loop** | 7 days | Approval nodes with notifications |
-| 29 | **Workflow Variables UI** | 5 days | Define inputs, pass between nodes |
-| 30 | **Conditional Branching UI** | 3 days | Visual condition builder |
-
-```python
-# Human approval node
-class ApprovalNodeExecutor(BaseNodeExecutor):
-    async def _execute_node_logic(self, db, state, execution_id):
-        # 1. Create approval request record
-        approval = ApprovalRequest(
-            execution_id=execution_id,
-            node_id=self.node_id,
-            message=self.node.config.get("message"),
-            options=self.node.config.get("options", ["Approve", "Reject"]),
-            timeout_hours=self.node.config.get("timeout_hours", 24),
-            notify_via=self.node.config.get("notify_via", "email"),
-        )
-        db.add(approval)
-        
-        # 2. Send notification
-        await self._send_approval_notification(approval)
-        
-        # 3. Pause execution (workflow engine needs to support this)
-        raise WorkflowPausedException(
-            approval_id=approval.id,
-            resume_endpoint=f"/api/approvals/{approval.id}/respond"
-        )
-```
-
-**Complexity factors:**
-- Workflow engine needs pause/resume capability
-- Need approval UI (inbox, respond)
-- Need notification dispatch
-- Timeout handling
-
----
-
-## 📅 Recommended Sprint Plan
-
-### Sprint 1 (Week 1-2): Foundation
-**Goal:** Users can send notifications and store state
-
-| Day | Tasks |
-|-----|-------|
-| 1 | Slack webhook tool + Discord webhook tool |
-| 2 | Email via SendGrid/Resend API |
-| 3 | SMS via Twilio |
-| 4 | KV store schema + migration |
-| 5 | KV store tools (get/set/delete/list) |
-| 6 | Write file tool + workspace management |
-| 7 | Read file + list files + CSV generation |
-| 8 | Testing + documentation |
-| 9 | Audit log schema + logging |
-| 10 | Rate limiting per tool |
-
-**Deliverable:** 12 new tools, agents can notify and remember
-
----
-
-### Sprint 2 (Week 3-4): Enhanced Outputs
-**Goal:** Rich output formats and cloud storage
-
-| Day | Tasks |
-|-----|-------|
-| 1-2 | SMTP email support |
-| 3-4 | PDF generation (WeasyPrint) |
-| 5-6 | S3 upload tool |
-| 7-8 | GitHub connector (issues, PRs, comments) |
-| 9-10 | Jira connector (issues, comments) |
-
-**Deliverable:** Professional document output, dev tool integrations
-
----
-
-### Sprint 3 (Week 5-6): Workflow Power
-**Goal:** Agents can chain and schedule
-
-| Day | Tasks |
-|-----|-------|
-| 1-2 | Scheduled actions (job queue) |
-| 3-4 | Multi-agent invocation tool |
-| 5-6 | Linear connector |
-| 7-8 | Notion connector |
-| 9-10 | Testing + polish |
-
-**Deliverable:** Complex multi-step automations possible
-
----
-
-### Sprint 4 (Week 7-10): OAuth & Enterprise
-**Goal:** First-class integrations with major platforms
-
-| Day | Tasks |
-|-----|-------|
-| 1-5 | Google OAuth infrastructure |
-| 6-8 | Google Calendar connector |
-| 9-10 | Google Sheets connector |
-| 11-12 | Google Drive connector |
-| 13-15 | Slack App OAuth |
-| 16-18 | Human approval nodes |
-| 19-20 | Testing + documentation |
-
-**Deliverable:** Enterprise-ready, human-in-the-loop workflows
-
----
-
-## 🎯 Success Metrics by Sprint
-
-| Sprint | Scenarios Fully Covered | Key Capability |
-|--------|------------------------|----------------|
-| Sprint 1 | 2/6 (Briefing*, E-commerce*) | Notifications + State |
-| Sprint 2 | 4/6 (+Developer, +Analyst*) | Documents + Dev tools |
-| Sprint 3 | 5/6 (+Support*) | Chaining + Scheduling |
-| Sprint 4 | 6/6 (All scenarios) | OAuth + Approvals |
-
-*\* = Partially covered, core flow works*
-
----
-
-## Implementation Order Cheat Sheet
+### ✅ Implemented (32 tools)
 
 ```
-Week 1:  🟢 Slack → Discord → Email API → SMS → KV Store
-Week 2:  🟢 File Write → CSV → Audit → Rate Limit  
-Week 3:  🟡 SMTP → PDF → S3
-Week 4:  🟡 GitHub → Jira
-Week 5:  🟡 Scheduled Actions → Multi-Agent
-Week 6:  🟡 Linear → Notion
-Week 7:  🔴 Google OAuth
-Week 8:  🔴 Calendar → Sheets → Drive
-Week 9:  🔴 Slack OAuth
-Week 10: 🔴 Human Approval
+Notifications:
+  send_slack_webhook     - Slack messages via webhook
+  send_discord_webhook   - Discord messages + embeds
+  send_email             - Email via Resend API
+  send_sms               - SMS via Twilio
+
+GitHub (6 tools):
+  github_create_issue, github_list_issues, github_get_issue,
+  github_add_comment, github_list_pull_requests, github_get_pull_request
+
+Jira (6 tools):
+  jira_create_issue, jira_list_issues, jira_get_issue,
+  jira_add_comment, jira_transition_issue, jira_update_issue
+
+Linear (6 tools):
+  linear_create_issue, linear_list_issues, linear_get_issue,
+  linear_update_issue, linear_add_comment, linear_list_teams
+
+Notion (6 tools):
+  notion_create_page, notion_get_page, notion_update_page,
+  notion_search, notion_query_database, notion_append_blocks
 ```
 
----
+### 🔜 Planned
 
-## Quick Reference: What to Build
-
-### New Tools (20 total)
 ```
-Output:     send_slack, send_discord, send_email, send_sms
 State:      kv_get, kv_set, kv_delete, kv_list
 Files:      write_file, read_file, list_files, generate_csv, generate_pdf
-Cloud:      upload_s3
-Workflow:   schedule_action, invoke_agent
-Connectors: github_*, jira_*, linear_*, notion_*
+Cloud:      upload_s3, upload_gcs
+Workflow:   schedule_action, invoke_agent, request_approval
+OAuth:      google_calendar_*, google_sheets_*, slack_*
 ```
 
-### New DB Tables (4 total)
+---
+
+## File Locations
+
 ```
-agent_state       - KV store for agent memory
-audit_logs        - Tool invocation history  
-scheduled_actions - Future action queue
-oauth_connectors  - OAuth token storage
+apps/zerg/backend/zerg/tools/
+├── builtin/
+│   ├── __init__.py          # Tool registry
+│   ├── discord_tools.py     # ✅
+│   ├── slack_tools.py       # ✅
+│   ├── email_tools.py       # ✅
+│   ├── sms_tools.py         # ✅
+│   ├── github_tools.py      # ✅
+│   ├── jira_tools.py        # ✅
+│   ├── linear_tools.py      # ✅
+│   └── notion_tools.py      # ✅
+└── tests/
+    └── test_*_tools.py      # 104 unit tests
 ```
 
-### New Workflow Nodes (2 total)
-```
-approval_node  - Human-in-the-loop
-delay_node     - Wait for duration/condition
+---
+
+## Credential Setup
+
+Copy `.env.test.example` to `.env.test` and fill in:
+
+```bash
+# Notifications
+TEST_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+TEST_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+TEST_RESEND_API_KEY=re_...
+TEST_TWILIO_ACCOUNT_SID=AC...
+TEST_TWILIO_AUTH_TOKEN=...
+TEST_TWILIO_FROM_NUMBER=+1...
+TEST_TWILIO_TO_NUMBER=+1...
+
+# Project Management
+TEST_GITHUB_TOKEN=ghp_...
+TEST_GITHUB_REPO=owner/repo
+TEST_JIRA_DOMAIN=company.atlassian.net
+TEST_JIRA_EMAIL=...
+TEST_JIRA_API_TOKEN=...
+TEST_JIRA_PROJECT_KEY=...
+TEST_LINEAR_API_KEY=lin_api_...
+TEST_NOTION_API_KEY=secret_...
+TEST_NOTION_PAGE_ID=...
 ```
 
+Run integration tests: `pytest tests/integration/ -v`
+
+---
+
+*Last updated: November 2024*
