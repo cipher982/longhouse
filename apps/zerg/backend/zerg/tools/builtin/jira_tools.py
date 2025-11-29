@@ -270,8 +270,8 @@ def jira_list_issues(
         # Limit max_results to reasonable bounds
         max_results = max(1, min(max_results, 100))
 
-        # Build URL with query parameters
-        url = _build_jira_url(domain, "/search")
+        # Build URL with query parameters (using new v3 /search/jql endpoint)
+        url = _build_jira_url(domain, "/search/jql")
         params = {"jql": query, "maxResults": max_results}
 
         headers = {
