@@ -160,8 +160,12 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             raise
         finally:
             # Reset context so unrelated calls aren't attributed to this thread
-            set_current_thread_id(None)
-            set_credential_resolver(None)
+            # Use the tokens to restore previous state (Carmack-approved)
+            from zerg.callbacks.token_stream import reset_current_thread_id
+            from zerg.connectors.context import reset_credential_resolver
+
+            reset_current_thread_id(_ctx_token)
+            reset_credential_resolver(_cred_ctx_token)
             logger.info("[AgentRunner] Reset thread ID and credential resolver context")
 
         # Extract only the new messages since our last context
