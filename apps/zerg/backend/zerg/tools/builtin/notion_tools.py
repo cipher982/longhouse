@@ -3,8 +3,10 @@
 These tools allow agents to create pages, query databases, append blocks, and search
 within a Notion workspace. Authentication is handled via Notion Integration Tokens.
 
-Configuration Required:
-- api_key: Notion Integration Token (create at notion.so/my-integrations)
+Configuration:
+- Configure Notion credentials in Agent Settings -> Connectors, OR
+- Pass api_key parameter directly to each tool function
+- Create integration at notion.so/my-integrations
 - The integration must be shared with target pages/databases
 
 API Documentation: https://developers.notion.com/reference/intro
@@ -17,11 +19,35 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 # Notion API Configuration
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2025-09-03"  # Latest version as of Nov 2025
+
+
+def _resolve_notion_api_key(api_key: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
+    """Resolve Notion API key from parameter or context.
+
+    Returns: (api_key, error_response) - if error_response is not None, return it.
+    """
+    resolved_api_key = api_key
+    if not resolved_api_key:
+        resolver = get_credential_resolver()
+        if resolver:
+            creds = resolver.get(ConnectorType.NOTION)
+            if creds:
+                resolved_api_key = creds.get("api_key")
+
+    if not resolved_api_key:
+        return None, {
+            "success": False,
+            "error": "Notion API key not configured. Either provide api_key parameter or configure Notion in Agent Settings -> Connectors."
+        }
+    return resolved_api_key, None
 
 
 def _make_notion_request(
@@ -127,22 +153,22 @@ def _make_notion_request(
 
 
 def notion_create_page(
-    api_key: str,
     parent_id: str,
     title: str,
     content_blocks: Optional[List[Dict[str, Any]]] = None,
     properties: Optional[Dict[str, Any]] = None,
     is_database_item: bool = False,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new page in Notion.
 
     Args:
-        api_key: Notion Integration Token
         parent_id: Parent page ID or database ID where the page will be created
         title: Page title
         content_blocks: Optional list of block objects to add as page content
         properties: Optional properties dict (required if parent is a database)
         is_database_item: If True, parent_id is treated as database_id, otherwise as page_id
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -152,9 +178,8 @@ def notion_create_page(
         - error: Error message (if failed)
 
     Example:
-        >>> # Create a simple page
+        >>> # Create a simple page (using configured credentials)
         >>> result = notion_create_page(
-        ...     api_key="secret_abc123",
         ...     parent_id="parent-page-uuid",
         ...     title="Meeting Notes",
         ...     is_database_item=False
@@ -162,14 +187,13 @@ def notion_create_page(
 
         >>> # Create a database item with properties
         >>> result = notion_create_page(
-        ...     api_key="secret_abc123",
         ...     parent_id="database-uuid",
         ...     title="New Task",
         ...     properties={"Status": {"select": {"name": "In Progress"}}},
         ...     is_database_item=True
         ... )
 
-        >>> # Create page with content blocks
+        >>> # Create page with content blocks and explicit API key
         >>> blocks = [
         ...     {
         ...         "object": "block",
@@ -180,13 +204,18 @@ def notion_create_page(
         ...     }
         ... ]
         >>> result = notion_create_page(
-        ...     api_key="secret_abc123",
         ...     parent_id="parent-uuid",
         ...     title="My Page",
         ...     content_blocks=blocks,
-        ...     is_database_item=False
+        ...     is_database_item=False,
+        ...     api_key="secret_abc123"
         ... )
     """
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
     # Build parent object
     parent_key = "database_id" if is_database_item else "page_id"
     parent = {parent_key: parent_id}
@@ -216,7 +245,7 @@ def notion_create_page(
         request_body["children"] = content_blocks
 
     # Make API request
-    result = _make_notion_request(api_key, "/pages", method="POST", data=request_body)
+    result = _make_notion_request(resolved_api_key, "/pages", method="POST", data=request_body)
 
     if result["success"]:
         page_data = result["data"]
@@ -234,12 +263,12 @@ def notion_create_page(
         }
 
 
-def notion_get_page(api_key: str, page_id: str) -> Dict[str, Any]:
+def notion_get_page(page_id: str, api_key: Optional[str] = None) -> Dict[str, Any]:
     """Retrieve a page from Notion.
 
     Args:
-        api_key: Notion Integration Token
         page_id: ID of the page to retrieve
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -248,11 +277,20 @@ def notion_get_page(api_key: str, page_id: str) -> Dict[str, Any]:
         - error: Error message (if failed)
 
     Example:
-        >>> result = notion_get_page(api_key="secret_abc123", page_id="page-uuid")
+        >>> # Using configured credentials
+        >>> result = notion_get_page(page_id="page-uuid")
         >>> if result["success"]:
         ...     print(result["page"]["properties"])
+
+        >>> # Using explicit API key
+        >>> result = notion_get_page(page_id="page-uuid", api_key="secret_abc123")
     """
-    result = _make_notion_request(api_key, f"/pages/{page_id}", method="GET")
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
+    result = _make_notion_request(resolved_api_key, f"/pages/{page_id}", method="GET")
 
     if result["success"]:
         return {
@@ -268,18 +306,18 @@ def notion_get_page(api_key: str, page_id: str) -> Dict[str, Any]:
 
 
 def notion_update_page(
-    api_key: str,
     page_id: str,
     properties: Optional[Dict[str, Any]] = None,
     archived: Optional[bool] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Update a page's properties or archive status.
 
     Args:
-        api_key: Notion Integration Token
         page_id: ID of the page to update
         properties: Optional properties to update
         archived: Optional boolean to archive/unarchive the page
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -288,20 +326,24 @@ def notion_update_page(
         - error: Error message (if failed)
 
     Example:
-        >>> # Update properties
+        >>> # Update properties (using configured credentials)
         >>> result = notion_update_page(
-        ...     api_key="secret_abc123",
         ...     page_id="page-uuid",
         ...     properties={"Status": {"select": {"name": "Done"}}}
         ... )
 
-        >>> # Archive a page
+        >>> # Archive a page with explicit API key
         >>> result = notion_update_page(
-        ...     api_key="secret_abc123",
         ...     page_id="page-uuid",
-        ...     archived=True
+        ...     archived=True,
+        ...     api_key="secret_abc123"
         ... )
     """
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
     request_body = {}
 
     if properties is not None:
@@ -316,7 +358,7 @@ def notion_update_page(
             "error": "Must provide either properties or archived parameter",
         }
 
-    result = _make_notion_request(api_key, f"/pages/{page_id}", method="PATCH", data=request_body)
+    result = _make_notion_request(resolved_api_key, f"/pages/{page_id}", method="PATCH", data=request_body)
 
     if result["success"]:
         return {
@@ -332,18 +374,18 @@ def notion_update_page(
 
 
 def notion_search(
-    api_key: str,
     query: str,
     filter_type: Optional[str] = None,
     page_size: int = 10,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search across pages and databases in the workspace.
 
     Args:
-        api_key: Notion Integration Token
         query: Search query string
         filter_type: Optional filter - "page" or "database" to limit results
         page_size: Number of results to return (default: 10, max: 100)
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -353,16 +395,21 @@ def notion_search(
         - error: Error message (if failed)
 
     Example:
-        >>> # Search all content
-        >>> result = notion_search(api_key="secret_abc123", query="meeting notes")
+        >>> # Search all content (using configured credentials)
+        >>> result = notion_search(query="meeting notes")
 
-        >>> # Search only pages
+        >>> # Search only pages with explicit API key
         >>> result = notion_search(
-        ...     api_key="secret_abc123",
         ...     query="project",
-        ...     filter_type="page"
+        ...     filter_type="page",
+        ...     api_key="secret_abc123"
         ... )
     """
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
     request_body: Dict[str, Any] = {
         "query": query,
         "page_size": min(page_size, 100),  # Cap at API maximum
@@ -376,7 +423,7 @@ def notion_search(
             }
         request_body["filter"] = {"value": filter_type, "property": "object"}
 
-    result = _make_notion_request(api_key, "/search", method="POST", data=request_body)
+    result = _make_notion_request(resolved_api_key, "/search", method="POST", data=request_body)
 
     if result["success"]:
         data = result["data"]
@@ -395,20 +442,20 @@ def notion_search(
 
 
 def notion_query_database(
-    api_key: str,
     database_id: str,
     filter_conditions: Optional[Dict[str, Any]] = None,
     sorts: Optional[List[Dict[str, str]]] = None,
     page_size: int = 100,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Query a Notion database with filters and sorting.
 
     Args:
-        api_key: Notion Integration Token
         database_id: ID of the database to query
         filter_conditions: Optional filter object (see Notion API docs for structure)
         sorts: Optional list of sort objects, e.g., [{"property": "Name", "direction": "ascending"}]
         page_size: Number of results to return (default: 100, max: 100)
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -418,23 +465,27 @@ def notion_query_database(
         - error: Error message (if failed)
 
     Example:
-        >>> # Query all items
+        >>> # Query all items (using configured credentials)
         >>> result = notion_query_database(
-        ...     api_key="secret_abc123",
         ...     database_id="database-uuid"
         ... )
 
-        >>> # Query with filter and sort
+        >>> # Query with filter and sort using explicit API key
         >>> result = notion_query_database(
-        ...     api_key="secret_abc123",
         ...     database_id="database-uuid",
         ...     filter_conditions={
         ...         "property": "Status",
         ...         "select": {"equals": "In Progress"}
         ...     },
-        ...     sorts=[{"property": "Due Date", "direction": "ascending"}]
+        ...     sorts=[{"property": "Due Date", "direction": "ascending"}],
+        ...     api_key="secret_abc123"
         ... )
     """
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
     request_body: Dict[str, Any] = {
         "page_size": min(page_size, 100),  # Cap at API maximum
     }
@@ -446,7 +497,7 @@ def notion_query_database(
         request_body["sorts"] = sorts
 
     result = _make_notion_request(
-        api_key, f"/databases/{database_id}/query", method="POST", data=request_body
+        resolved_api_key, f"/databases/{database_id}/query", method="POST", data=request_body
     )
 
     if result["success"]:
@@ -466,16 +517,16 @@ def notion_query_database(
 
 
 def notion_append_blocks(
-    api_key: str,
     page_id: str,
     blocks: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Append content blocks to a page.
 
     Args:
-        api_key: Notion Integration Token
         page_id: ID of the page to append blocks to
         blocks: List of block objects to append
+        api_key: Optional Notion Integration Token (uses configured credentials if not provided)
 
     Returns:
         Dictionary containing:
@@ -508,12 +559,23 @@ def notion_append_blocks(
         ...         }
         ...     }
         ... ]
+        >>> # Using configured credentials
         >>> result = notion_append_blocks(
-        ...     api_key="secret_abc123",
         ...     page_id="page-uuid",
         ...     blocks=blocks
         ... )
+        >>> # Using explicit API key
+        >>> result = notion_append_blocks(
+        ...     page_id="page-uuid",
+        ...     blocks=blocks,
+        ...     api_key="secret_abc123"
+        ... )
     """
+    # Resolve API key
+    resolved_api_key, error = _resolve_notion_api_key(api_key)
+    if error:
+        return error
+
     if not blocks:
         return {
             "success": False,
@@ -522,7 +584,7 @@ def notion_append_blocks(
 
     request_body = {"children": blocks}
 
-    result = _make_notion_request(api_key, f"/blocks/{page_id}/children", method="PATCH", data=request_body)
+    result = _make_notion_request(resolved_api_key, f"/blocks/{page_id}/children", method="PATCH", data=request_body)
 
     if result["success"]:
         data = result["data"]
@@ -543,31 +605,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=notion_create_page,
         name="notion_create_page",
-        description="Create a new page in Notion workspace (in a page or database)",
+        description="Create a new page in Notion workspace (in a page or database). Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_get_page,
         name="notion_get_page",
-        description="Retrieve a page from Notion by its ID",
+        description="Retrieve a page from Notion by its ID. Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_update_page,
         name="notion_update_page",
-        description="Update a Notion page's properties or archive status",
+        description="Update a Notion page's properties or archive status. Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_search,
         name="notion_search",
-        description="Search across pages and databases in Notion workspace",
+        description="Search across pages and databases in Notion workspace. Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_query_database,
         name="notion_query_database",
-        description="Query a Notion database with filters and sorting",
+        description="Query a Notion database with filters and sorting. Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_append_blocks,
         name="notion_append_blocks",
-        description="Append content blocks to an existing Notion page",
+        description="Append content blocks to an existing Notion page. Uses configured Notion credentials from Agent Settings if api_key not provided.",
     ),
 ]

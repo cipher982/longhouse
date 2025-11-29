@@ -23,10 +23,34 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 # Linear GraphQL API endpoint
 LINEAR_GRAPHQL_ENDPOINT = "https://api.linear.app/graphql"
+
+
+def _resolve_linear_api_key(api_key: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
+    """Resolve Linear API key from parameter or context.
+
+    Returns: (api_key, error_response) - if error_response is not None, return it.
+    """
+    resolved_api_key = api_key
+    if not resolved_api_key:
+        resolver = get_credential_resolver()
+        if resolver:
+            creds = resolver.get(ConnectorType.LINEAR)
+            if creds:
+                resolved_api_key = creds.get("api_key")
+
+    if not resolved_api_key:
+        return None, {
+            "success": False,
+            "error": "Linear API key not configured. Either provide api_key parameter or configure Linear in Agent Settings -> Connectors."
+        }
+    return resolved_api_key, None
 
 
 def _make_linear_request(
@@ -149,7 +173,6 @@ def _make_linear_request(
 
 
 def linear_create_issue(
-    api_key: str,
     team_id: str,
     title: str,
     description: Optional[str] = None,
@@ -157,11 +180,11 @@ def linear_create_issue(
     state_id: Optional[str] = None,
     assignee_id: Optional[str] = None,
     label_ids: Optional[List[str]] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new issue in Linear.
 
     Args:
-        api_key: Linear Personal API Key
         team_id: ID of the team to create the issue in (required)
         title: Issue title (required)
         description: Issue description/body (optional)
@@ -169,6 +192,7 @@ def linear_create_issue(
         state_id: ID of the workflow state (optional)
         assignee_id: ID of the user to assign to (optional)
         label_ids: List of label IDs to apply (optional)
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -178,7 +202,6 @@ def linear_create_issue(
 
     Example:
         >>> linear_create_issue(
-        ...     api_key="lin_api_xxxxx",
         ...     team_id="abc123",
         ...     title="Bug: Login not working",
         ...     description="Users cannot log in with valid credentials",
@@ -186,6 +209,11 @@ def linear_create_issue(
         ... )
         {'success': True, 'data': {'id': '...', 'identifier': 'ENG-42', 'url': '...'}}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     if not title or not title.strip():
         return {
             "success": False,
@@ -250,7 +278,7 @@ def linear_create_issue(
         input_data["labelIds"] = label_ids
 
     variables = {"input": input_data}
-    result = _make_linear_request(api_key, mutation, variables)
+    result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -277,18 +305,18 @@ def linear_create_issue(
 
 
 def linear_list_issues(
-    api_key: str,
     team_id: Optional[str] = None,
     state: Optional[str] = None,
     first: int = 50,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List issues in Linear with optional filtering.
 
     Args:
-        api_key: Linear Personal API Key
         team_id: Filter by team ID (optional)
         state: Filter by workflow state name (e.g., "In Progress", "Done") (optional)
         first: Number of results to return, max 250 (default: 50)
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -299,13 +327,17 @@ def linear_list_issues(
 
     Example:
         >>> linear_list_issues(
-        ...     api_key="lin_api_xxxxx",
         ...     team_id="abc123",
         ...     state="In Progress",
         ...     first=25
         ... )
         {'success': True, 'data': [...], 'count': 5}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     if first < 1 or first > 250:
         return {
             "success": False,
@@ -358,7 +390,7 @@ def linear_list_issues(
     if filter_obj:
         variables["filter"] = filter_obj
 
-    result = _make_linear_request(api_key, query, variables)
+    result = _make_linear_request(resolved_api_key, query, variables)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -392,14 +424,14 @@ def linear_list_issues(
 
 
 def linear_get_issue(
-    api_key: str,
     issue_id: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get details of a specific Linear issue.
 
     Args:
-        api_key: Linear Personal API Key
         issue_id: Issue ID (not identifier - use the UUID, not "ENG-42")
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -409,11 +441,15 @@ def linear_get_issue(
 
     Example:
         >>> linear_get_issue(
-        ...     api_key="lin_api_xxxxx",
         ...     issue_id="abc-123-def-456"
         ... )
         {'success': True, 'data': {'identifier': 'ENG-42', 'title': '...', 'comments': [...]}}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     if not issue_id or not issue_id.strip():
         return {
             "success": False,
@@ -465,7 +501,7 @@ def linear_get_issue(
     """
 
     variables = {"id": issue_id.strip()}
-    result = _make_linear_request(api_key, query, variables)
+    result = _make_linear_request(resolved_api_key, query, variables)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -504,22 +540,22 @@ def linear_get_issue(
 
 
 def linear_update_issue(
-    api_key: str,
     issue_id: str,
     title: Optional[str] = None,
     description: Optional[str] = None,
     state_id: Optional[str] = None,
     priority: Optional[int] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Update an existing Linear issue.
 
     Args:
-        api_key: Linear Personal API Key
         issue_id: Issue ID to update (UUID, not identifier)
         title: New issue title (optional)
         description: New issue description (optional)
         state_id: New workflow state ID (optional)
         priority: New priority level: 0=None, 1=Urgent, 2=High, 3=Medium, 4=Low (optional)
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -529,13 +565,17 @@ def linear_update_issue(
 
     Example:
         >>> linear_update_issue(
-        ...     api_key="lin_api_xxxxx",
         ...     issue_id="abc-123-def-456",
         ...     title="Bug: Login fixed",
         ...     priority=4
         ... )
         {'success': True, 'data': {'identifier': 'ENG-42', 'title': 'Bug: Login fixed'}}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     if not issue_id or not issue_id.strip():
         return {
             "success": False,
@@ -590,7 +630,7 @@ def linear_update_issue(
         "input": input_data
     }
 
-    result = _make_linear_request(api_key, mutation, variables)
+    result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -616,16 +656,16 @@ def linear_update_issue(
 
 
 def linear_add_comment(
-    api_key: str,
     issue_id: str,
     body: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Add a comment to a Linear issue.
 
     Args:
-        api_key: Linear Personal API Key
         issue_id: Issue ID to comment on (UUID, not identifier)
         body: Comment text (required)
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -635,12 +675,16 @@ def linear_add_comment(
 
     Example:
         >>> linear_add_comment(
-        ...     api_key="lin_api_xxxxx",
         ...     issue_id="abc-123-def-456",
         ...     body="Thanks for reporting this! We'll look into it."
         ... )
         {'success': True, 'data': {'id': '...', 'body': '...', 'url': '...'}}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     if not body or not body.strip():
         return {
             "success": False,
@@ -682,7 +726,7 @@ def linear_add_comment(
         }
     }
 
-    result = _make_linear_request(api_key, mutation, variables)
+    result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -707,12 +751,12 @@ def linear_add_comment(
 
 
 def linear_list_teams(
-    api_key: str,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List all teams accessible to the API key.
 
     Args:
-        api_key: Linear Personal API Key
+        api_key: Linear Personal API Key (optional, uses agent context if not provided)
 
     Returns:
         Dictionary containing:
@@ -722,9 +766,14 @@ def linear_list_teams(
         - error: Error message (if failed)
 
     Example:
-        >>> linear_list_teams(api_key="lin_api_xxxxx")
+        >>> linear_list_teams()
         {'success': True, 'data': [{'id': '...', 'name': 'Engineering', 'key': 'ENG'}], 'count': 3}
     """
+    # Resolve API key from parameter or context
+    resolved_api_key, error = _resolve_linear_api_key(api_key)
+    if error:
+        return error
+
     query = """
     query Teams {
       teams {
@@ -738,7 +787,7 @@ def linear_list_teams(
     }
     """
 
-    result = _make_linear_request(api_key, query)
+    result = _make_linear_request(resolved_api_key, query)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -762,31 +811,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=linear_create_issue,
         name="linear_create_issue",
-        description="Create a new issue in Linear. Returns the issue identifier and URL. Requires team_id.",
+        description="Create a new issue in Linear. Returns the issue identifier and URL. Requires team_id. API key can be provided or uses agent's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_list_issues,
         name="linear_list_issues",
-        description="List issues in Linear with optional filtering by team and state.",
+        description="List issues in Linear with optional filtering by team and state. API key can be provided or uses agent's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_get_issue,
         name="linear_get_issue",
-        description="Get detailed information about a specific Linear issue by ID including comments.",
+        description="Get detailed information about a specific Linear issue by ID including comments. API key can be provided or uses agent's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_update_issue,
         name="linear_update_issue",
-        description="Update an existing Linear issue's title, description, state, or priority.",
+        description="Update an existing Linear issue's title, description, state, or priority. API key can be provided or uses agent's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_add_comment,
         name="linear_add_comment",
-        description="Add a comment to an existing Linear issue.",
+        description="Add a comment to an existing Linear issue. API key can be provided or uses agent's configured Linear connector.",
     ),
     StructuredTool.from_function(
         func=linear_list_teams,
         name="linear_list_teams",
-        description="List all teams accessible to the API key. Use this to find team IDs for creating issues.",
+        description="List all teams accessible to the API key. Use this to find team IDs for creating issues. API key can be provided or uses agent's configured Linear connector.",
     ),
 ]

@@ -11,6 +11,9 @@ from typing import Union
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 # Resend API constants
@@ -56,12 +59,12 @@ def _validate_email_list(emails: Union[str, List[str]]) -> List[str]:
 
 
 def send_email(
-    api_key: str,
-    from_email: str,
     to: Union[str, List[str]],
     subject: str,
     text: Optional[str] = None,
     html: Optional[str] = None,
+    api_key: Optional[str] = None,
+    from_email: Optional[str] = None,
     reply_to: Optional[str] = None,
     cc: Optional[Union[str, List[str]]] = None,
     bcc: Optional[Union[str, List[str]]] = None,
@@ -70,7 +73,7 @@ def send_email(
     """Send an email using the Resend API.
 
     This tool allows agents to send emails via the Resend email service.
-    Requires a valid Resend API key (get one at resend.com).
+    Credentials can be configured in Agent Settings -> Connectors or provided directly.
 
     Important notes:
     - Domain verification required before sending (see resend.com/domains)
@@ -79,12 +82,12 @@ def send_email(
     - Must maintain <4% bounce rate and <0.08% spam rate
 
     Args:
-        api_key: Resend API key (starts with 're_')
-        from_email: Sender email address (must be from verified domain)
         to: Recipient email address(es) - string or list
         subject: Email subject line
         text: Plain text email content (optional if html provided)
         html: HTML email content (optional if text provided)
+        api_key: Resend API key (starts with 're_') - optional if configured in Agent Settings
+        from_email: Sender email address (must be from verified domain) - optional if configured in Agent Settings
         reply_to: Reply-to email address (optional)
         cc: CC recipient email address(es) - string or list (optional)
         bcc: BCC recipient email address(es) - string or list (optional)
@@ -98,8 +101,6 @@ def send_email(
 
     Example:
         >>> send_email(
-        ...     api_key="re_xxxxxxxxx",
-        ...     from_email="noreply@mydomain.com",
         ...     to="user@example.com",
         ...     subject="Welcome!",
         ...     html="<h1>Welcome to our service!</h1>",
@@ -108,17 +109,30 @@ def send_email(
         {"success": True, "message_id": "abc123..."}
     """
     try:
+        # Try to get credentials from context if not provided
+        resolved_api_key = api_key
+        resolved_from_email = from_email
+        if not resolved_api_key or not resolved_from_email:
+            resolver = get_credential_resolver()
+            if resolver:
+                creds = resolver.get(ConnectorType.EMAIL)
+                if creds:
+                    resolved_api_key = resolved_api_key or creds.get("api_key")
+                    resolved_from_email = resolved_from_email or creds.get("from_email")
+
+        # Validate required credentials
+        if not resolved_api_key:
+            return {"success": False, "error": "Email API key not configured. Either provide api_key parameter or configure Email in Agent Settings -> Connectors."}
+        if not resolved_from_email:
+            return {"success": False, "error": "From email not configured. Either provide from_email parameter or configure Email in Agent Settings -> Connectors."}
+
         # Validate API key format
-        if not api_key or not api_key.startswith("re_"):
+        if not resolved_api_key.startswith("re_"):
             logger.error("Invalid API key format")
             return {
                 "success": False,
                 "error": "Invalid API key format. Resend API keys start with 're_'",
             }
-
-        # Validate required fields
-        if not from_email:
-            return {"success": False, "error": "from_email is required"}
 
         if not to:
             return {"success": False, "error": "to is required"}
@@ -133,9 +147,9 @@ def send_email(
             }
 
         # Validate from_email
-        if not _validate_email(from_email):
-            logger.error(f"Invalid from_email: {from_email}")
-            return {"success": False, "error": f"Invalid from_email: {from_email}"}
+        if not _validate_email(resolved_from_email):
+            logger.error(f"Invalid from_email: {resolved_from_email}")
+            return {"success": False, "error": f"Invalid from_email: {resolved_from_email}"}
 
         # Validate to addresses
         try:
@@ -146,7 +160,7 @@ def send_email(
 
         # Build request payload
         payload = {
-            "from": from_email,
+            "from": resolved_from_email,
             "to": to_list,
             "subject": subject,
         }
@@ -188,13 +202,13 @@ def send_email(
 
         # Prepare headers
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {resolved_api_key}",
             "Content-Type": "application/json",
             "User-Agent": "Zerg-Agent/1.0",
         }
 
         # Make API request
-        logger.info(f"Sending email from {from_email} to {to_list}")
+        logger.info(f"Sending email from {resolved_from_email} to {to_list}")
         with httpx.Client() as client:
             response = client.post(
                 RESEND_API_URL,
@@ -264,6 +278,7 @@ TOOLS: List[StructuredTool] = [
         description=(
             "Send an email using the Resend API. "
             "Supports text/HTML content, CC/BCC, reply-to, and attachments. "
+            "Credentials can be configured in Agent Settings -> Connectors or provided as parameters. "
             "Requires verified domain in Resend account."
         ),
     ),

@@ -24,10 +24,34 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 # GitHub API base URL
 GITHUB_API_BASE = "https://api.github.com"
+
+
+def _resolve_github_token(token: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
+    """Resolve GitHub token from parameter or context.
+
+    Returns: (token, error_response) - if error_response is not None, return it.
+    """
+    resolved_token = token
+    if not resolved_token:
+        resolver = get_credential_resolver()
+        if resolver:
+            creds = resolver.get(ConnectorType.GITHUB)
+            if creds:
+                resolved_token = creds.get("token")
+
+    if not resolved_token:
+        return None, {
+            "success": False,
+            "error": "GitHub token not configured. Either provide token parameter or configure GitHub in Agent Settings -> Connectors."
+        }
+    return resolved_token, None
 
 
 def _make_github_request(
@@ -146,24 +170,24 @@ def _make_github_request(
 
 
 def github_create_issue(
-    token: str,
     owner: str,
     repo: str,
     title: str,
     body: Optional[str] = None,
     labels: Optional[List[str]] = None,
     assignees: Optional[List[str]] = None,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new issue in a GitHub repository.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         title: Issue title (required)
         body: Issue description/body (optional)
         labels: List of label names to apply (optional)
         assignees: List of usernames to assign (optional)
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -173,7 +197,6 @@ def github_create_issue(
 
     Example:
         >>> github_create_issue(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     title="Bug: Login not working",
@@ -182,6 +205,10 @@ def github_create_issue(
         ... )
         {'success': True, 'data': {'number': 42, 'state': 'open', 'html_url': '...'}}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if not title or not title.strip():
         return {
             "success": False,
@@ -198,7 +225,7 @@ def github_create_issue(
     if assignees:
         payload["assignees"] = assignees
 
-    result = _make_github_request(token, "POST", endpoint, data=payload)
+    result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -215,22 +242,22 @@ def github_create_issue(
 
 
 def github_list_issues(
-    token: str,
     owner: str,
     repo: str,
     state: str = "open",
     labels: Optional[str] = None,
     per_page: int = 30,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List issues in a GitHub repository.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         state: Issue state filter: "open", "closed", or "all" (default: "open")
         labels: Comma-separated list of label names to filter by (optional)
         per_page: Number of results per page, max 100 (default: 30)
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -241,7 +268,6 @@ def github_list_issues(
 
     Example:
         >>> github_list_issues(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     state="open",
@@ -249,6 +275,10 @@ def github_list_issues(
         ... )
         {'success': True, 'data': [...], 'count': 5}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if state not in ["open", "closed", "all"]:
         return {
             "success": False,
@@ -270,7 +300,7 @@ def github_list_issues(
     if labels:
         params["labels"] = labels
 
-    result = _make_github_request(token, "GET", endpoint, params=params)
+    result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -293,18 +323,18 @@ def github_list_issues(
 
 
 def github_get_issue(
-    token: str,
     owner: str,
     repo: str,
     issue_number: int,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get details of a specific GitHub issue.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         issue_number: Issue number
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -314,13 +344,16 @@ def github_get_issue(
 
     Example:
         >>> github_get_issue(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     issue_number=42
         ... )
         {'success': True, 'data': {'number': 42, 'title': '...', 'body': '...'}}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if not isinstance(issue_number, int) or issue_number < 1:
         return {
             "success": False,
@@ -328,7 +361,7 @@ def github_get_issue(
         }
 
     endpoint = f"/repos/{owner}/{repo}/issues/{issue_number}"
-    result = _make_github_request(token, "GET", endpoint)
+    result = _make_github_request(resolved_token, "GET", endpoint)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -348,20 +381,20 @@ def github_get_issue(
 
 
 def github_add_comment(
-    token: str,
     owner: str,
     repo: str,
     issue_number: int,
     body: str,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Add a comment to a GitHub issue or pull request.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         issue_number: Issue or PR number to comment on
         body: Comment text (required)
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -371,7 +404,6 @@ def github_add_comment(
 
     Example:
         >>> github_add_comment(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     issue_number=42,
@@ -379,6 +411,10 @@ def github_add_comment(
         ... )
         {'success': True, 'data': {'id': 12345, 'html_url': '...'}}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if not body or not body.strip():
         return {
             "success": False,
@@ -394,7 +430,7 @@ def github_add_comment(
     endpoint = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
     payload = {"body": body.strip()}
 
-    result = _make_github_request(token, "POST", endpoint, data=payload)
+    result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -410,20 +446,20 @@ def github_add_comment(
 
 
 def github_list_pull_requests(
-    token: str,
     owner: str,
     repo: str,
     state: str = "open",
     per_page: int = 30,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """List pull requests in a GitHub repository.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         state: PR state filter: "open", "closed", or "all" (default: "open")
         per_page: Number of results per page, max 100 (default: 30)
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -434,13 +470,16 @@ def github_list_pull_requests(
 
     Example:
         >>> github_list_pull_requests(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     state="open"
         ... )
         {'success': True, 'data': [...], 'count': 3}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if state not in ["open", "closed", "all"]:
         return {
             "success": False,
@@ -459,7 +498,7 @@ def github_list_pull_requests(
         "per_page": per_page
     }
 
-    result = _make_github_request(token, "GET", endpoint, params=params)
+    result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -483,18 +522,18 @@ def github_list_pull_requests(
 
 
 def github_get_pull_request(
-    token: str,
     owner: str,
     repo: str,
     pr_number: int,
+    token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get details of a specific GitHub pull request.
 
     Args:
-        token: GitHub Personal Access Token
         owner: Repository owner (username or organization)
         repo: Repository name
         pr_number: Pull request number
+        token: GitHub Personal Access Token (optional, can be configured in Agent Settings)
 
     Returns:
         Dictionary containing:
@@ -504,13 +543,16 @@ def github_get_pull_request(
 
     Example:
         >>> github_get_pull_request(
-        ...     token="ghp_xxxxx",
         ...     owner="octocat",
         ...     repo="hello-world",
         ...     pr_number=10
         ... )
         {'success': True, 'data': {'number': 10, 'title': '...', 'head': 'feature', 'base': 'main'}}
     """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
     if not isinstance(pr_number, int) or pr_number < 1:
         return {
             "success": False,
@@ -518,7 +560,7 @@ def github_get_pull_request(
         }
 
     endpoint = f"/repos/{owner}/{repo}/pulls/{pr_number}"
-    result = _make_github_request(token, "GET", endpoint)
+    result = _make_github_request(resolved_token, "GET", endpoint)
 
     # Simplify response for agent consumption
     if result.get("success") and "data" in result:
@@ -545,31 +587,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=github_create_issue,
         name="github_create_issue",
-        description="Create a new issue in a GitHub repository. Returns the issue number and URL.",
+        description="Create a new issue in a GitHub repository. Token can be provided or configured in Agent Settings -> Connectors. Returns the issue number and URL.",
     ),
     StructuredTool.from_function(
         func=github_list_issues,
         name="github_list_issues",
-        description="List issues in a GitHub repository with optional filtering by state and labels.",
+        description="List issues in a GitHub repository with optional filtering by state and labels. Token can be provided or configured in Agent Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_get_issue,
         name="github_get_issue",
-        description="Get detailed information about a specific GitHub issue by number.",
+        description="Get detailed information about a specific GitHub issue by number. Token can be provided or configured in Agent Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_add_comment,
         name="github_add_comment",
-        description="Add a comment to an existing GitHub issue or pull request.",
+        description="Add a comment to an existing GitHub issue or pull request. Token can be provided or configured in Agent Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_list_pull_requests,
         name="github_list_pull_requests",
-        description="List pull requests in a GitHub repository with optional filtering by state.",
+        description="List pull requests in a GitHub repository with optional filtering by state. Token can be provided or configured in Agent Settings -> Connectors.",
     ),
     StructuredTool.from_function(
         func=github_get_pull_request,
         name="github_get_pull_request",
-        description="Get detailed information about a specific GitHub pull request by number.",
+        description="Get detailed information about a specific GitHub pull request by number. Token can be provided or configured in Agent Settings -> Connectors.",
     ),
 ]
