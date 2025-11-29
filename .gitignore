@@ -234,3 +234,6 @@ comet_latest.dmg
 # UV cache
 .uv_cache/
 apps/jarvis/.yarn
+
+# Test credentials (never commit!)
+.env.test
