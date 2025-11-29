@@ -54,7 +54,7 @@ def _make_linear_request(
             }
 
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": api_key,  # Personal API keys don't use Bearer prefix
             "Content-Type": "application/json",
             "User-Agent": "Zerg-Agent/1.0"
         }
