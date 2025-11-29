@@ -48,13 +48,16 @@ def test_basic_llm_invoke(monkeypatch, dummy_agent_row):
 
     # Stub ChatOpenAI to return a fixed AIMessage
     class DummyLLM:
-        def __init__(self, model, temperature, streaming, api_key):
+        def __init__(self, model, temperature=None, streaming=False, api_key=None, **kwargs):
             pass
 
         def bind_tools(self, tools):
             return self
 
         def invoke(self, messages):
+            return AIMessage(content="res")
+
+        async def ainvoke(self, messages, **kwargs):
             return AIMessage(content="res")
 
     # Patch LLM and disable MemorySaver to avoid checkpoint config errors
