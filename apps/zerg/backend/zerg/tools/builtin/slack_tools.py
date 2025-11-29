@@ -6,12 +6,15 @@ from typing import Any, Dict, List, Optional
 import httpx
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+
 logger = logging.getLogger(__name__)
 
 
 def send_slack_webhook(
-    webhook_url: str,
     text: str,
+    webhook_url: Optional[str] = None,
     blocks: Optional[List[Dict[str, Any]]] = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
     unfurl_links: bool = True,
@@ -20,16 +23,17 @@ def send_slack_webhook(
     """Send a message to Slack via an incoming webhook.
 
     This tool allows agents to send rich, formatted messages to Slack channels.
-    Slack webhooks support simple text messages as well as advanced formatting
-    using Block Kit blocks and legacy attachments.
+    If Slack is configured in Agent Settings, the webhook URL is used automatically.
+    Otherwise, you must provide the webhook_url parameter.
 
     Rate Limits:
         - 1 request per second (short bursts allowed)
         - HTTP 429 responses include Retry-After header
 
     Args:
-        webhook_url: The Slack webhook URL (format: https://hooks.slack.com/services/...)
         text: Main message text (also used as fallback for notifications)
+        webhook_url: Optional Slack webhook URL. If not provided, uses the
+            webhook configured in Agent Settings -> Connectors -> Slack.
         blocks: Optional list of Block Kit blocks for rich formatting.
             See https://api.slack.com/block-kit for block structure.
         attachments: Optional list of legacy attachments for additional content.
@@ -45,11 +49,8 @@ def send_slack_webhook(
         - error: Error message if request failed (present only on failure)
 
     Example:
-        # Simple text message
-        >>> send_slack_webhook(
-        ...     webhook_url="https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
-        ...     text="Hello from Zerg agent!"
-        ... )
+        # Simple text message (uses configured webhook)
+        >>> send_slack_webhook(text="Hello from Zerg agent!")
         {"success": True, "status_code": 200, "response": "ok"}
 
         # Rich message with blocks
@@ -62,11 +63,7 @@ def send_slack_webhook(
         ...         }
         ...     }
         ... ]
-        >>> send_slack_webhook(
-        ...     webhook_url="https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
-        ...     text="Deployment completed",
-        ...     blocks=blocks
-        ... )
+        >>> send_slack_webhook(text="Deployment completed", blocks=blocks)
         {"success": True, "status_code": 200, "response": "ok"}
 
     Error Codes:
@@ -76,12 +73,21 @@ def send_slack_webhook(
         - 429: Rate limit exceeded (check Retry-After header)
         - 500/502/503: Slack server errors
     """
+    # Try to get webhook URL from context if not provided
+    resolved_webhook_url = webhook_url
+    if not resolved_webhook_url:
+        resolver = get_credential_resolver()
+        if resolver:
+            creds = resolver.get(ConnectorType.SLACK)
+            if creds:
+                resolved_webhook_url = creds.get("webhook_url")
+
     # Validate inputs
-    if not webhook_url or not webhook_url.strip():
+    if not resolved_webhook_url or not resolved_webhook_url.strip():
         return {
             "success": False,
             "status_code": 0,
-            "error": "webhook_url cannot be empty",
+            "error": "Slack webhook URL not configured. Either provide webhook_url parameter or configure Slack in Agent Settings -> Connectors.",
         }
 
     if not text or not text.strip():
@@ -92,7 +98,7 @@ def send_slack_webhook(
         }
 
     # Validate webhook URL format
-    if not webhook_url.startswith("https://hooks.slack.com/"):
+    if not resolved_webhook_url.startswith("https://hooks.slack.com/"):
         return {
             "success": False,
             "status_code": 0,
@@ -130,7 +136,7 @@ def send_slack_webhook(
     try:
         with httpx.Client() as client:
             response = client.post(
-                webhook_url,
+                resolved_webhook_url,
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -177,7 +183,7 @@ def send_slack_webhook(
         return result
 
     except httpx.TimeoutException:
-        logger.error(f"Slack webhook timeout for URL: {webhook_url}")
+        logger.error("Slack webhook timeout")
         return {
             "success": False,
             "status_code": 0,
@@ -205,6 +211,7 @@ TOOLS: List[StructuredTool] = [
         name="send_slack_webhook",
         description=(
             "Send a message to Slack via incoming webhook. "
+            "If Slack is configured in Agent Settings -> Connectors, the webhook URL is used automatically. "
             "Supports simple text messages and rich formatting with Block Kit blocks. "
             "Use this to send notifications, alerts, or status updates to Slack channels."
         ),
