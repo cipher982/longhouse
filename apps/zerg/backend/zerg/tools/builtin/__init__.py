@@ -17,9 +17,10 @@ from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.jira_tools import TOOLS as JIRA_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
 from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
+from zerg.tools.builtin.imessage_tools import TOOLS as IMESSAGE_TOOLS
 from zerg.tools.registry import ToolRegistry
 
-BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + UUID_TOOLS + CONTAINER_TOOLS + DISCORD_TOOLS + GITHUB_TOOLS + SLACK_TOOLS + EMAIL_TOOLS + SMS_TOOLS + JIRA_TOOLS + NOTION_TOOLS + LINEAR_TOOLS
+BUILTIN_TOOLS = DATETIME_TOOLS + HTTP_TOOLS + MATH_TOOLS + UUID_TOOLS + CONTAINER_TOOLS + DISCORD_TOOLS + GITHUB_TOOLS + SLACK_TOOLS + EMAIL_TOOLS + SMS_TOOLS + JIRA_TOOLS + NOTION_TOOLS + LINEAR_TOOLS + IMESSAGE_TOOLS
 
 __all__ = [
     "BUILTIN_TOOLS",
