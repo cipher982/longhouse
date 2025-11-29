@@ -147,6 +147,15 @@ def set_current_thread_id(thread_id: int | None):  # noqa: D401 – tiny setter 
     return current_thread_id_var.set(int(thread_id))
 
 
+def reset_current_thread_id(token: contextvars.Token) -> None:
+    """Reset the thread_id context using a token from set_current_thread_id.
+
+    This ensures we restore the context to exactly what it was before,
+    rather than arbitrarily clearing it.
+    """
+    current_thread_id_var.reset(token)
+
+
 def set_current_user_id(user_id: int | None):  # noqa: D401 – tiny setter helper
     """Set *user_id* as the active context for token streaming.
 
@@ -165,5 +174,6 @@ __all__ = [
     "current_thread_id_var",
     "current_user_id_var",
     "set_current_thread_id",
+    "reset_current_thread_id",
     "set_current_user_id",
 ]
