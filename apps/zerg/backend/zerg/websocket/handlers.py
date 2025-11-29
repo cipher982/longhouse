@@ -508,7 +508,7 @@ async def handle_send_message(client_id: str, message: Dict[str, Any], db: Sessi
             "thread_id": db_msg.thread_id,
             "role": db_msg.role,
             "content": db_msg.content,
-            "timestamp": db_msg.timestamp.isoformat() if db_msg.timestamp else None,
+            "timestamp": db_msg.sent_at.isoformat() if db_msg.sent_at else None,
             "processed": db_msg.processed,
         }
 

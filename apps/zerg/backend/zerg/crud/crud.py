@@ -110,26 +110,26 @@ def create_agent(
     db: Session,
     *,
     owner_id: int,
+    name: Optional[str] = None,
     system_instructions: str,
     task_instructions: str,
     model: str,
     schedule: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
 ):
-    """Create a new agent with 'New Agent' placeholder name.
+    """Create a new agent.
 
     ``owner_id`` is **required** – every agent belongs to exactly one user.
-    Name is always set to "New Agent" by default.
-    Users can rename via the update endpoint after creation.
+    ``name`` defaults to "New Agent" if not provided.
     """
 
     # Validate cron expression if provided
     _validate_cron_or_raise(schedule)
 
-    # Create agent with "New Agent" placeholder
+    # Create agent
     db_agent = Agent(
         owner_id=owner_id,
-        name="New Agent",
+        name=name or "New Agent",
         system_instructions=system_instructions,
         task_instructions=task_instructions,
         model=model,

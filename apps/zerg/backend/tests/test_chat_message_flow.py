@@ -55,16 +55,8 @@ class TestChatMessageFlow:
         """Test the complete flow of sending a chat message and receiving response"""
         logger.info("Starting chat message flow test")
 
-        # 1. Subscribe to thread first
-        sub_msg = {
-            "type": MessageType.SUBSCRIBE_THREAD,
-            "thread_id": test_thread.id,
-            "message_id": "test-sub-1",
-        }
-        logger.info(f"Subscribing to thread: {test_thread.id}")
-        ws_client.send_json(sub_msg)
-
-        # 2. Send test message
+        # Note: subscribe_thread is deprecated - streaming is automatic to user:{user_id}
+        # Just send message directly
         message = {
             "type": MessageType.SEND_MESSAGE,
             "thread_id": test_thread.id,
@@ -74,14 +66,14 @@ class TestChatMessageFlow:
         logger.info(f"Sending message: {message}")
         ws_client.send_json(message)
 
-        # 3. Wait for response
+        # Wait for response
         raw_response = ws_client.receive_json()
         logger.info(f"Received response: {raw_response}")
 
         # Check for error on raw envelope layer
         if raw_response["type"] == "error":
             logger.error(f"Error sending message: {raw_response}")
-            assert False, f"Error sending message: {raw_response.get('error')}"
+            assert False, f"Error sending message: {raw_response.get('data', {}).get('error')}"
 
         # Check envelope format
         assert raw_response["type"] == MessageType.THREAD_MESSAGE
@@ -93,15 +85,7 @@ class TestChatMessageFlow:
 
     def test_multiple_messages(self, ws_client, test_thread):
         """Test sending multiple messages in sequence"""
-        # First subscribe to thread
-        logger.info(f"Subscribing to thread: {test_thread.id}")
-        ws_client.send_json(
-            {
-                "type": MessageType.SUBSCRIBE_THREAD,
-                "thread_id": test_thread.id,
-                "message_id": "test-sub-2",
-            }
-        )
+        # Note: subscribe_thread is deprecated - streaming is automatic to user:{user_id}
 
         # Send multiple messages
         messages = ["First test message", "Second test message", "Third test message"]
@@ -123,7 +107,7 @@ class TestChatMessageFlow:
             # Check for error
             if raw["type"] == "error":
                 logger.error(f"Error response for message {idx + 1}: {raw}")
-                assert False, f"Error sending message {idx + 1}: {raw.get('error')}"
+                assert False, f"Error sending message {idx + 1}: {raw.get('data', {}).get('error')}"
 
             # Check envelope format
             assert raw["type"] == MessageType.THREAD_MESSAGE
