@@ -51,8 +51,11 @@ def test_invoke_calls_llm(agent_row):
         mock_instance = MagicMock()
         # When llm_with_tools.invoke is called, return AIMessage("hi")
         from langchain_core.messages import AIMessage
+        from unittest.mock import AsyncMock
 
         mock_instance.bind_tools.return_value.invoke.return_value = AIMessage(content="hi")
+        # Fix: The runtime now awaits ainvoke() inside _call_model_async
+        mock_instance.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
         mock_llm_cls.return_value = mock_instance
 
         runnable = mod.get_runnable(agent_row)
