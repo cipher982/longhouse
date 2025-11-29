@@ -1,12 +1,14 @@
 # Zerg Agent Platform - Real-World Scenarios & Gap Analysis
 
-> Generated analysis of real-world use cases and platform capabilities
+> Analysis of real-world use cases and platform capabilities
 
 ---
 
 ## Overview
 
-This document examines real-world scenarios where users would deploy AI agents, evaluates current platform support, and identifies critical gaps for product development prioritization.
+This document examines real-world scenarios where users would deploy AI agents, evaluates current platform support, and identifies remaining gaps.
+
+**Update (Nov 2024):** 8 connector tools implemented covering notifications and project management.
 
 ---
 
@@ -20,7 +22,7 @@ This document examines real-world scenarios where users would deploy AI agents, 
 
 **Requirements:**
 - Weather for her city
-- Her calendar for the day  
+- Her calendar for the day
 - Top 3 news items in her industry
 - Unread Slack messages that mention her
 - **Delivered to her preferred channel**
@@ -34,12 +36,14 @@ This document examines real-world scenarios where users would deploy AI agents, 
 | Fetch news | ✅ Yes | `http_request` to news API |
 | Read calendar | ❌ No | No Google Calendar integration |
 | Read Slack | ⚠️ Partial | Could use MCP server or raw API |
-| **Deliver the briefing** | ❌ No | **No notification/delivery channel** |
+| **Deliver via Slack** | ✅ Yes | `send_slack_webhook` |
+| **Deliver via Discord** | ✅ Yes | `send_discord_webhook` |
+| **Deliver via Email** | ✅ Yes | `send_email` (Resend) |
+| **Deliver via SMS** | ✅ Yes | `send_sms` (Twilio) |
 
-**Gaps Identified:**
-1. No built-in **notification/delivery channels** - email, SMS, Slack message, push notification
-2. No **Google Calendar connector**
-3. Agent can *generate* content but cannot easily *deliver* it to user
+**Remaining Gaps:**
+1. No **Google Calendar connector** (OAuth required)
+2. No **persistent memory** for tracking what was already sent
 
 ---
 
@@ -47,7 +51,7 @@ This document examines real-world scenarios where users would deploy AI agents, 
 
 **Persona:** Mike, E-commerce Store Owner
 
-**User Story:** "As a store owner, I want real-time alerts for high-value orders and inventory issues so I can respond quickly to business-critical events."
+**User Story:** "As a store owner, I want real-time alerts for high-value orders and inventory issues so I can quickly respond to business-critical events."
 
 **Requirements:**
 - Alert when a high-value order (>$500) comes in
@@ -63,14 +67,14 @@ This document examines real-world scenarios where users would deploy AI agents, 
 | Check order value (conditional) | ✅ Yes | Agent can reason about JSON payload |
 | Query inventory API | ✅ Yes | `http_request` to store API |
 | Scheduled daily summary | ✅ Yes | Cron schedule |
-| Send Slack alert | ⚠️ Partial | Via `http_request` to Slack webhook |
+| **Send Slack alert** | ✅ Yes | `send_slack_webhook` with Block Kit |
+| **Send Discord alert** | ✅ Yes | `send_discord_webhook` with embeds |
 | Write to Google Sheet | ❌ No | No sheets integration |
 | Deduplicate alerts | ❌ No | No state/memory between runs |
 
-**Gaps Identified:**
-1. First-class **Slack/Discord output tools** would be more reliable than raw webhooks
-2. **Google Sheets connector** for logging/reporting
-3. **State/memory between runs** - "don't alert me twice for the same order"
+**Remaining Gaps:**
+1. **Google Sheets connector** for logging/reporting
+2. **State/memory between runs** - "don't alert me twice for the same order"
 
 ---
 
@@ -96,7 +100,7 @@ This document examines real-world scenarios where users would deploy AI agents, 
 | Schedule future posts | ❌ No | Agent runs now, can't queue future actions |
 | Store/track metrics | ❌ No | No persistent storage |
 
-**Gaps Identified:**
+**Remaining Gaps:**
 1. **OAuth connectors** for social platforms (complex auth flows)
 2. **Scheduled output actions** (not just scheduled triggers)
 3. **Persistent memory/database** for tracking metrics over time
@@ -122,14 +126,16 @@ This document examines real-world scenarios where users would deploy AI agents, 
 | GitHub webhook trigger | ✅ Yes | Webhook trigger |
 | Parse failure details | ✅ Yes | LLM reasoning on payload |
 | Suggest fixes | ✅ Yes | LLM core capability |
-| Create Jira ticket | ⚠️ Partial | `http_request` with API key auth |
+| **Create GitHub issue** | ✅ Yes | `github_create_issue` |
+| **Create Jira ticket** | ✅ Yes | `jira_create_issue` |
+| **Create Linear issue** | ✅ Yes | `linear_create_issue` |
+| **Add comments** | ✅ Yes | `github_add_comment`, `jira_add_comment` |
+| **Send Slack alert** | ✅ Yes | `send_slack_webhook` |
 | Rollback deployment | ⚠️ Partial | `container_exec` or `http_request` |
 | Human approval before action | ❌ No | No human-in-the-loop capability |
 
-**Gaps Identified:**
+**Remaining Gaps:**
 1. **Human approval workflows** - "Agent proposes, human confirms"
-2. Better **secrets management** for API keys
-3. **GitHub/Jira/Linear first-class connectors**
 
 ---
 
@@ -151,15 +157,16 @@ This document examines real-world scenarios where users would deploy AI agents, 
 |------------|------------|----------------|
 | Email trigger | ✅ Yes | Gmail connector with push notifications |
 | Categorize/prioritize | ✅ Yes | LLM reasoning |
-| Update ticket system | ⚠️ Partial | `http_request` to Zendesk/Intercom API |
-| Send response email | ❌ No | No email send capability |
+| **Update Jira** | ✅ Yes | `jira_update_issue`, `jira_transition_issue` |
+| **Update Linear** | ✅ Yes | `linear_update_issue` |
+| **Send response email** | ✅ Yes | `send_email` (Resend) |
+| **Notify via Slack** | ✅ Yes | `send_slack_webhook` |
 | Time-based escalation | ⚠️ Partial | Would need separate scheduled agent |
 | Track response time | ❌ No | No state between runs |
 
-**Gaps Identified:**
-1. **Email send/reply capability** - critical for support workflows
-2. **Stateful multi-step workflows** - "if X doesn't happen in Y time, do Z"
-3. **Integration with ticket systems** (Zendesk, Intercom, Freshdesk)
+**Remaining Gaps:**
+1. **Stateful multi-step workflows** - "if X doesn't happen in Y time, do Z"
+2. Integration with ticket systems (Zendesk, Intercom, Freshdesk)
 
 ---
 
@@ -182,43 +189,48 @@ This document examines real-world scenarios where users would deploy AI agents, 
 | Scheduled weekly | ✅ Yes | Cron schedule |
 | Query data APIs | ✅ Yes | `http_request` |
 | Generate text report | ✅ Yes | LLM output |
+| **Email report** | ✅ Yes | `send_email` (text/HTML) |
+| **Log to Notion** | ✅ Yes | `notion_create_page`, `notion_append_blocks` |
 | Create PDF | ❌ No | No document generation |
 | Create spreadsheet | ❌ No | No Excel/Sheets generation |
-| Email with attachment | ❌ No | No email send capability |
 | Upload to Drive | ❌ No | No Google Drive connector |
 
-**Gaps Identified:**
+**Remaining Gaps:**
 1. **File generation** (PDF, XLSX, CSV)
 2. **File storage/upload** (S3, Google Drive, Dropbox)
-3. **Email with attachments**
 
 ---
 
 ## 🔴 Gap Analysis Summary
 
-### Tier 1: Essential for Real-World Use
+### ✅ Solved (Nov 2024)
 
-These gaps prevent most real-world scenarios from being fully automated.
+| Gap | Solution |
+|-----|----------|
+| Output Notifications | `send_slack_webhook`, `send_discord_webhook`, `send_email`, `send_sms` |
+| GitHub Integration | 6 tools for issues, PRs, comments |
+| Jira Integration | 6 tools for issues, comments, transitions |
+| Linear Integration | 6 tools for issues, comments, teams |
+| Notion Integration | 6 tools for pages, databases, search |
+
+### 🔜 Remaining Gaps
+
+#### Tier 1: High Impact
 
 | Gap | Impact | Use Cases Affected | Difficulty |
 |-----|--------|-------------------|------------|
-| **Output Notifications** (Email/Slack/SMS) | Critical | All 6 scenarios | Medium |
 | **Persistent Memory/State** | High | 5 of 6 scenarios | Medium |
 | **Human-in-the-Loop Approval** | High | 4 of 6 scenarios | Medium-Hard |
 
-### Tier 2: Power User Expectations
-
-These are table-stakes for sophisticated users.
+#### Tier 2: Power User Expectations
 
 | Gap | Impact | Use Cases Affected | Difficulty |
 |-----|--------|-------------------|------------|
-| **OAuth Connectors** (Google, Slack, GitHub) | High | 5 of 6 scenarios | Hard |
+| **OAuth Connectors** (Google, Slack full) | High | 4 of 6 scenarios | Hard |
 | **File Output** (PDF, CSV, images) | Medium | 2 of 6 scenarios | Medium |
 | **Scheduled Actions** (not just triggers) | Medium | 2 of 6 scenarios | Medium |
 
-### Tier 3: Enterprise/Pro Features
-
-Nice-to-have for initial launch, essential for enterprise.
+#### Tier 3: Enterprise/Pro Features
 
 | Gap | Impact | Use Cases Affected | Difficulty |
 |-----|--------|-------------------|------------|
@@ -229,130 +241,57 @@ Nice-to-have for initial launch, essential for enterprise.
 
 ---
 
-## 💡 Recommended New Tools
+## Current Built-in Tools Reference
 
-### Priority 1: Notification Tools
+### Notification Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `send_slack_webhook` | Send messages to Slack via webhook (supports Block Kit) |
+| `send_discord_webhook` | Send messages to Discord via webhook (supports embeds) |
+| `send_email` | Send email via Resend API (text/HTML) |
+| `send_sms` | Send SMS via Twilio |
 
-```python
-# Email
-send_email(
-    to: str | List[str],
-    subject: str,
-    body: str,
-    html_body: Optional[str] = None,
-    attachments: Optional[List[Attachment]] = None
-) -> EmailResult
+### GitHub Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `github_create_issue` | Create a new issue |
+| `github_list_issues` | List issues with filters |
+| `github_get_issue` | Get issue details |
+| `github_add_comment` | Add comment to issue/PR |
+| `github_list_pull_requests` | List PRs |
+| `github_get_pull_request` | Get PR details |
 
-# Slack
-send_slack_message(
-    channel_or_user: str,
-    message: str,
-    blocks: Optional[List[Block]] = None,
-    thread_ts: Optional[str] = None
-) -> SlackResult
+### Jira Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `jira_create_issue` | Create issue in Jira |
+| `jira_list_issues` | List issues with JQL |
+| `jira_get_issue` | Get issue details |
+| `jira_add_comment` | Add comment |
+| `jira_transition_issue` | Change status |
+| `jira_update_issue` | Update fields |
 
-# Discord
-send_discord_message(
-    webhook_url: str,
-    content: str,
-    embeds: Optional[List[Embed]] = None
-) -> DiscordResult
+### Linear Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `linear_create_issue` | Create issue |
+| `linear_list_issues` | List issues |
+| `linear_get_issue` | Get issue details |
+| `linear_update_issue` | Update issue |
+| `linear_add_comment` | Add comment |
+| `linear_list_teams` | List teams |
 
-# SMS (via Twilio or similar)
-send_sms(
-    to: str,
-    message: str
-) -> SmsResult
-```
+### Notion Tools (NEW)
+| Tool | Description |
+|------|-------------|
+| `notion_create_page` | Create page or database item |
+| `notion_get_page` | Get page details |
+| `notion_update_page` | Update page properties |
+| `notion_search` | Search workspace |
+| `notion_query_database` | Query database with filters |
+| `notion_append_blocks` | Add content to page |
 
-### Priority 2: State/Memory Tools
-
-```python
-# Key-value store for agent state
-kv_get(key: str) -> Optional[Any]
-kv_set(key: str, value: Any, ttl_seconds: Optional[int] = None) -> bool
-kv_delete(key: str) -> bool
-kv_list(prefix: Optional[str] = None) -> List[str]
-
-# Structured memory (for tracking entities over time)
-memory_upsert(collection: str, id: str, data: Dict) -> bool
-memory_query(collection: str, filter: Dict) -> List[Dict]
-memory_delete(collection: str, id: str) -> bool
-```
-
-### Priority 3: File Tools
-
-```python
-# File operations
-write_file(path: str, content: str | bytes) -> FileResult
-read_file(path: str) -> str | bytes
-list_files(directory: str) -> List[FileInfo]
-
-# Cloud storage
-upload_to_s3(bucket: str, key: str, content: str | bytes) -> S3Result
-upload_to_gcs(bucket: str, path: str, content: str | bytes) -> GcsResult
-
-# Document generation
-generate_pdf(html_content: str, options: PdfOptions) -> bytes
-generate_csv(data: List[Dict], headers: List[str]) -> str
-```
-
-### Priority 4: Human Approval
-
-```python
-# Request human approval (pauses workflow)
-request_approval(
-    message: str,
-    options: List[str] = ["Approve", "Reject"],
-    notify_via: str = "email",  # or "slack", "sms"
-    timeout_hours: int = 24,
-    default_on_timeout: Optional[str] = None
-) -> ApprovalResult  # Returns selected option or timeout
-```
-
----
-
-## 🎯 Prioritization Framework
-
-### Questions for Product Direction
-
-1. **Who is the primary target user?**
-   - Developers → Prioritize GitHub, Jira, code execution, webhooks
-   - Business users → Prioritize Google Workspace, Slack, reports, email
-   - Personal users → Prioritize calendar, email, simple notifications
-
-2. **What's the distribution model?**
-   - Self-hosted → MCP flexibility is valuable
-   - SaaS → Need polished OAuth flows for connectors
-
-3. **What's the desired "wow moment"?**
-   - Current: "I scheduled a cron job that calls GPT and it ran!"
-   - Should be: "I connected my Gmail, and it automatically triaged, drafted, and sent a reply"
-
-### Recommended Roadmap
-
-**Phase 1: Core Value (4-6 weeks)**
-- [ ] Email send tool (SMTP or SendGrid/Mailgun)
-- [ ] Slack message tool
-- [ ] Simple key-value state storage
-- [ ] Basic file write (to agent workspace)
-
-**Phase 2: Power Features (6-8 weeks)**
-- [ ] Google OAuth connector (Calendar, Drive, Gmail send)
-- [ ] PDF generation (via headless Chrome or similar)
-- [ ] CSV/Excel generation
-- [ ] S3/GCS upload
-
-**Phase 3: Enterprise (8-12 weeks)**
-- [ ] Human approval workflow node
-- [ ] Secrets vault integration
-- [ ] Audit logging
-- [ ] Multi-agent coordination
-
----
-
-## Appendix: Current Built-in Tools Reference
-
+### Core Tools (Existing)
 | Tool | Description | Category |
 |------|-------------|----------|
 | `http_request` | Make HTTP requests (GET/POST/PUT/DELETE) | Network |
@@ -374,5 +313,4 @@ request_approval(
 ---
 
 *Document generated: 2024*
-*Last updated by: Claude (AI Assistant)*
-
+*Last updated: November 2024 - Added 32 new connector tools*
