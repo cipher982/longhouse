@@ -611,3 +611,73 @@ class ConnectorCredential(Base):
 
     # Relationships
     agent = relationship("Agent", backref="connector_credentials")
+
+
+# ---------------------------------------------------------------------------
+# AccountConnectorCredential – account-level credentials for built-in tools
+# ---------------------------------------------------------------------------
+
+
+class AccountConnectorCredential(Base):
+    """Account-level encrypted credential for built-in connector tools.
+
+    These credentials are shared across all agents owned by the user.
+    Agents can optionally override with per-agent credentials in
+    ConnectorCredential (agent-level overrides).
+
+    Resolution order in CredentialResolver:
+    1. Agent-level override (ConnectorCredential)
+    2. Account-level credential (this table)
+    3. None if neither exists
+
+    The organization_id column is nullable and reserved for future
+    multi-tenant support. When populated, credentials can be shared
+    across an organization and agents reference organization_id for
+    credential resolution.
+    """
+
+    __tablename__ = "account_connector_credentials"
+    __table_args__ = (
+        # One credential per connector type per owner
+        UniqueConstraint("owner_id", "connector_type", name="uix_account_owner_connector"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Owner – the user who owns this credential
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Reserved for future organization/team support
+    # When populated, enforces (organization_id, connector_type) uniqueness
+    organization_id = Column(Integer, nullable=True, index=True)
+
+    # Connector type identifier: 'slack', 'discord', 'email', 'sms',
+    # 'github', 'jira', 'linear', 'notion', 'imessage'
+    connector_type = Column(String(50), nullable=False)
+
+    # Encrypted credential value (Fernet AES-GCM).
+    # Same format as ConnectorCredential.encrypted_value
+    encrypted_value = Column(Text, nullable=False)
+
+    # Optional user-friendly label (e.g., "Engineering Slack workspace")
+    display_name = Column(String(255), nullable=True)
+
+    # Metadata discovered during test (e.g., GitHub username, Slack workspace).
+    # Stored as JSON, NOT encrypted (no secrets here).
+    connector_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
+
+    # Test status tracking
+    test_status = Column(String(20), nullable=False, default="untested")
+    last_tested_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    owner = relationship("User", backref="account_connector_credentials")
