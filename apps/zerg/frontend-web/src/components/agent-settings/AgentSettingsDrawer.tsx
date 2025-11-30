@@ -11,8 +11,17 @@ import {
   useToolOptions,
   useDebouncedUpdateAllowedTools,
 } from "../../hooks/useAgentConfig";
+import {
+  useAgentConnectors,
+  useConfigureConnector,
+  useTestConnectorBeforeSave,
+} from "../../hooks/useAgentConnectors";
+import { useAccountConnectors } from "../../hooks/useAccountConnectors";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
-import { ConnectorCredentialsPanel } from "./ConnectorCredentialsPanel";
+import { TOOL_GROUPS, UTILITY_TOOLS } from "../../constants/toolGroups";
+import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
+import type { ConnectorStatus } from "../../types/connectors";
+import { Link } from "react-router-dom";
 
 type AgentSettingsDrawerProps = {
   agentId: number;
@@ -36,6 +45,17 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const addMcpServer = useAddMcpServer(isOpen ? agentId : null);
   const removeMcpServer = useRemoveMcpServer(isOpen ? agentId : null);
   const testMcpServer = useTestMcpServer(isOpen ? agentId : null);
+  
+  // Connector Hooks
+  const { data: connectors } = useAgentConnectors(isOpen ? agentId : null);
+  const { data: accountConnectors } = useAccountConnectors();
+  const configureConnector = useConfigureConnector(agentId);
+  const testBeforeSave = useTestConnectorBeforeSave(agentId);
+  
+  // Helper to check if a connector is configured at account level
+  const isConfiguredAtAccountLevel = (type: string) => {
+    return accountConnectors?.find((c) => c.type === type)?.configured ?? false;
+  };
 
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [customTool, setCustomTool] = useState("");
@@ -47,6 +67,14 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const [authToken, setAuthToken] = useState("");
   const [formAllowedTools, setFormAllowedTools] = useState("");
   const [isTesting, setIsTesting] = useState(false);
+  
+  // Connector Config Modal State
+  const [connectorModal, setConnectorModal] = useState<ConfigModalState>({
+    isOpen: false,
+    connector: null,
+    credentials: {},
+    displayName: "",
+  });
 
   // Unified close handler that guards all close paths
   const handleClose = useCallback(() => {
@@ -110,8 +138,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     };
   }, [isOpen, handleClose]);
 
-  const builtinTools = useMemo(() => (availableTools ? availableTools.builtin : []), [availableTools]);
-  const mcpTools = useMemo(() => availableTools?.mcp ?? {}, [availableTools]);
+  // --- Tool Logic ---
 
   const toggleTool = (tool: string) => {
     setSelectedTools((prev) => {
@@ -134,12 +161,92 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     }
     setSelectedTools((prev) => {
       const next = new Set(prev).add(trimmed);
-      // Auto-save via debounced mutation
       debouncedUpdateAllowedTools.mutate(Array.from(next));
       return next;
     });
     setCustomTool("");
   };
+
+  // --- Integration Logic ---
+
+  const isIntegrationEnabled = (key: string) => {
+    const tools = TOOL_GROUPS[key];
+    if (!tools) return false;
+    // Integration is "enabled" if ANY of its tools are selected.
+    // Toggling it ON will add ALL. Toggling OFF will remove ALL.
+    return tools.some((t) => selectedTools.has(t));
+  };
+
+  const toggleIntegration = (key: string, enabled: boolean) => {
+    const tools = TOOL_GROUPS[key];
+    if (!tools) return;
+
+    setSelectedTools((prev) => {
+      const next = new Set(prev);
+      tools.forEach((t) => {
+        if (enabled) next.add(t);
+        else next.delete(t);
+      });
+      debouncedUpdateAllowedTools.mutate(Array.from(next));
+      return next;
+    });
+
+    if (enabled) {
+      // Check if we need to configure credentials
+      const connector = connectors?.find((c) => c.type === key);
+      if (connector && !connector.configured) {
+        openConnectorModal(connector);
+      }
+    }
+  };
+
+  const openConnectorModal = (connector: ConnectorStatus) => {
+    const initialCreds: Record<string, string> = {};
+    for (const field of connector.fields) {
+      initialCreds[field.key] = "";
+    }
+    setConnectorModal({
+      isOpen: true,
+      connector,
+      credentials: initialCreds,
+      displayName: connector.display_name ?? "",
+    });
+  };
+
+  const closeConnectorModal = () => {
+    setConnectorModal({
+      isOpen: false,
+      connector: null,
+      credentials: {},
+      displayName: "",
+    });
+  };
+
+  // Connector Modal Handlers
+  const handleConnectorSave = (e: FormEvent) => {
+    e.preventDefault();
+    if (!connectorModal.connector) return;
+    configureConnector.mutate(
+      {
+        connector_type: connectorModal.connector.type,
+        credentials: connectorModal.credentials,
+        display_name: connectorModal.displayName || undefined,
+      },
+      {
+        onSuccess: () => closeConnectorModal(),
+      }
+    );
+  };
+
+  const handleConnectorTest = () => {
+    if (!connectorModal.connector) return;
+    testBeforeSave.mutate({
+      connector_type: connectorModal.connector.type,
+      credentials: connectorModal.credentials,
+    });
+  };
+
+  // --- MCP Logic ---
 
   const resetForm = () => {
     setShowAddForm(false);
@@ -205,21 +312,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     removeMcpServer.mutate(server.name);
   };
 
-  const renderToolOption = (option: AllowedToolOption) => {
-    const id = `tool-${option.name}`;
-    return (
-      <label key={option.name} className="tool-option" htmlFor={id}>
-        <input
-          id={id}
-          type="checkbox"
-          checked={selectedTools.has(option.name)}
-          onChange={() => toggleTool(option.name)}
-        />
-        <span>{option.label}</span>
-        <span className="tool-badge">{option.source}</span>
-      </label>
-    );
-  };
+  // --- Rendering ---
 
   return (
     <div
@@ -285,12 +378,16 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
           )}
         </section>
 
+        {/* Unified Integrations Section */}
         <section className="agent-settings-section">
           <div className="section-header">
             <div>
-              <h3>Allowed Tools</h3>
+              <h3>Integrations & Tools</h3>
               <p className="section-description">
-                Select which tools this agent can invoke. Leave empty to allow all tools. You can also add wildcard entries.
+                Enable tools and configure credentials for external services.
+                <Link to="/settings/integrations" className="settings-link">
+                  Manage integrations →
+                </Link>
               </p>
             </div>
             {debouncedUpdateAllowedTools.isPending && (
@@ -299,20 +396,134 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
               </span>
             )}
           </div>
-          <div className="tools-list">
-            {toolOptions.map(renderToolOption)}
+
+          {/* High-Level Integrations */}
+          <div className="integrations-list">
+            {connectors?.map((connector) => {
+              const isEnabled = isIntegrationEnabled(connector.type);
+              const hasAccountCreds = isConfiguredAtAccountLevel(connector.type);
+              const hasAgentOverride = connector.configured;
+              const isConfigured = hasAgentOverride || hasAccountCreds;
+              
+              return (
+                <div key={connector.type} className="integration-card">
+                  <div className="integration-info">
+                    <div className="integration-icon">
+                      {/* Use the emoji icon from metadata if available, or fallback */}
+                      {connector.icon && connector.icon.length < 5 ? connector.icon : "🔌"}
+                    </div>
+                    <div>
+                      <h4>{connector.name}</h4>
+                      <p>{connector.description}</p>
+                      {/* Integration status badges */}
+                      {isEnabled && (
+                        <div className="integration-status-badges">
+                          {hasAccountCreds && !hasAgentOverride && (
+                            <span className="status-badge account-level" title="Using account-level credentials">
+                              Account
+                            </span>
+                          )}
+                          {hasAgentOverride && (
+                            <span className="status-badge agent-override" title="Using agent-specific credentials">
+                              Override
+                            </span>
+                          )}
+                          {!isConfigured && (
+                            <span className="status-badge needs-setup" title="Credentials not configured">
+                              Needs setup
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="integration-actions">
+                     {isEnabled && !hasAccountCreds && !hasAgentOverride && (
+                      <Link to="/settings/integrations" className="btn-sm btn-primary-outline">
+                        Configure
+                      </Link>
+                    )}
+                    {isEnabled && hasAgentOverride && (
+                      <button
+                        type="button"
+                        className="btn-sm btn-secondary"
+                        onClick={() => openConnectorModal(connector)}
+                      >
+                        Edit Override
+                      </button>
+                    )}
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={isEnabled}
+                        onChange={(e) => toggleIntegration(connector.type, e.target.checked)}
+                      />
+                      <span className="slider round" />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div className="custom-tool-input">
-            <input
-              type="text"
-              placeholder="Add custom tool (e.g. http_*)"
-              value={customTool}
-              onChange={(event) => setCustomTool(event.target.value)}
-            />
-            <button type="button" onClick={handleAddCustomTool}>
-              Add
-            </button>
+
+          <div className="tools-separator">
+            <h4>Built-in Utilities</h4>
           </div>
+
+          <div className="tools-list utility-tools">
+             {UTILITY_TOOLS.map(toolName => (
+                <label key={toolName} className="tool-option">
+                  <input
+                    type="checkbox"
+                    checked={selectedTools.has(toolName)}
+                    onChange={() => toggleTool(toolName)}
+                  />
+                  <span>{toolName}</span>
+                </label>
+             ))}
+          </div>
+
+          <details className="advanced-tools">
+             <summary>Advanced / Custom Tools</summary>
+             <div className="tools-list">
+                {/* Render tools that aren't in ANY group or Utility list */}
+                {toolOptions
+                  .filter(opt => {
+                     // Check if this tool is part of any known group
+                     const isGrouped = Object.values(TOOL_GROUPS).some(group => group.includes(opt.name));
+                     const isUtility = UTILITY_TOOLS.includes(opt.name);
+                     return !isGrouped && !isUtility;
+                  })
+                  .map(option => {
+                    const id = `tool-${option.name}`;
+                    return (
+                      <label key={option.name} className="tool-option" htmlFor={id}>
+                        <input
+                          id={id}
+                          type="checkbox"
+                          checked={selectedTools.has(option.name)}
+                          onChange={() => toggleTool(option.name)}
+                        />
+                        <span>{option.label}</span>
+                        <span className="tool-badge">{option.source}</span>
+                      </label>
+                    );
+                  })
+                }
+             </div>
+             <div className="custom-tool-input">
+                <input
+                  type="text"
+                  placeholder="Add custom tool (e.g. http_*)"
+                  value={customTool}
+                  onChange={(event) => setCustomTool(event.target.value)}
+                />
+                <button type="button" onClick={handleAddCustomTool}>
+                  Add
+                </button>
+              </div>
+          </details>
+
         </section>
 
         <section className="agent-settings-section">
@@ -478,25 +689,31 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
           )}
         </section>
 
-        <section className="agent-settings-section">
-          <header className="section-header">
-            <div>
-              <h3>Connectors</h3>
-              <p className="section-description">
-                Configure API keys and webhooks for built-in tools. Once configured, tools will use these
-                credentials automatically.
-              </p>
-            </div>
-          </header>
-          <ConnectorCredentialsPanel agentId={agentId} />
-        </section>
-
         <footer className="agent-settings-footer">
           <button type="button" className="btn-primary" onClick={handleClose}>
             Close
           </button>
         </footer>
       </aside>
+
+      {/* Config Modal */}
+      <ConnectorConfigModal
+        modal={connectorModal}
+        onClose={closeConnectorModal}
+        onSave={handleConnectorSave}
+        onTest={handleConnectorTest}
+        onCredentialChange={(key, value) =>
+          setConnectorModal((prev) => ({
+            ...prev,
+            credentials: { ...prev.credentials, [key]: value },
+          }))
+        }
+        onDisplayNameChange={(value) =>
+           setConnectorModal((prev) => ({ ...prev, displayName: value }))
+        }
+        isSaving={configureConnector.isPending}
+        isTesting={testBeforeSave.isPending}
+      />
     </div>
   );
 }

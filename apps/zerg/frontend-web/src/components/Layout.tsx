@@ -130,6 +130,7 @@ export default function Layout({ children }: PropsWithChildren) {
     location.pathname === "/" || location.pathname.startsWith("/dashboard");
   const isCanvasRoute = location.pathname.startsWith("/canvas");
   const isProfileRoute = location.pathname.startsWith("/profile");
+  const isIntegrationsRoute = location.pathname.startsWith("/settings/integrations");
   const isAdminRoute = location.pathname.startsWith("/admin");
 
   // Check if user has admin access using authoritative role field
@@ -160,6 +161,15 @@ export default function Layout({ children }: PropsWithChildren) {
           onClick={() => handleTabClick("/canvas")}
         >
           Canvas Editor
+        </button>
+        <button
+          id="global-integrations-tab"
+          type="button"
+          data-testid="global-integrations-tab"
+          className={clsx("tab-button", { active: isIntegrationsRoute })}
+          onClick={() => handleTabClick("/settings/integrations")}
+        >
+          Integrations
         </button>
         {isAdmin && (
           <button

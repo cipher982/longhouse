@@ -1,31 +1,27 @@
 /**
- * Connector Credentials Panel for Agent Settings.
+ * Account-level Integrations Settings Page.
  *
- * Displays all available connectors, their configuration status,
- * and provides UI for configuring/testing/removing credentials.
+ * Allows users to configure connector credentials at the account level.
+ * These credentials are shared across all agents owned by the user.
  */
 
 import { useState, type FormEvent } from "react";
 import {
-  useAgentConnectors,
-  useConfigureConnector,
-  useDeleteConnector,
-  useTestConnector,
-  useTestConnectorBeforeSave,
-} from "../../hooks/useAgentConnectors";
-import type { ConnectorStatus } from "../../types/connectors";
-import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
+  useAccountConnectors,
+  useConfigureAccountConnector,
+  useDeleteAccountConnector,
+  useTestAccountConnector,
+  useTestAccountConnectorBeforeSave,
+} from "../hooks/useAccountConnectors";
+import type { AccountConnectorStatus } from "../types/connectors";
+import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
 
-type ConnectorCredentialsPanelProps = {
-  agentId: number;
-};
-
-export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanelProps) {
-  const { data: connectors, isLoading } = useAgentConnectors(agentId);
-  const configureConnector = useConfigureConnector(agentId);
-  const deleteConnector = useDeleteConnector(agentId);
-  const testConnector = useTestConnector(agentId);
-  const testBeforeSave = useTestConnectorBeforeSave(agentId);
+export default function IntegrationsPage() {
+  const { data: connectors, isLoading, error } = useAccountConnectors();
+  const configureConnector = useConfigureAccountConnector();
+  const deleteConnector = useDeleteAccountConnector();
+  const testConnector = useTestAccountConnector();
+  const testBeforeSave = useTestAccountConnectorBeforeSave();
 
   const [modal, setModal] = useState<ConfigModalState>({
     isOpen: false,
@@ -34,7 +30,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     displayName: "",
   });
 
-  const openConfigModal = (connector: ConnectorStatus) => {
+  const openConfigModal = (connector: AccountConnectorStatus) => {
     const initialCreds: Record<string, string> = {};
     for (const field of connector.fields) {
       initialCreds[field.key] = "";
@@ -90,14 +86,14 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     );
   };
 
-  const handleDelete = (connector: ConnectorStatus) => {
-    if (!window.confirm(`Remove ${connector.name} credentials from this agent?`)) {
+  const handleDelete = (connector: AccountConnectorStatus) => {
+    if (!window.confirm(`Remove ${connector.name} integration from your account?`)) {
       return;
     }
     deleteConnector.mutate(connector.type);
   };
 
-  const handleTest = (connector: ConnectorStatus) => {
+  const handleTest = (connector: AccountConnectorStatus) => {
     testConnector.mutate(connector.type);
   };
 
@@ -105,50 +101,71 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
 
-  if (isLoading) {
-    return <p className="muted">Loading connectors…</p>;
+  if (error) {
+    return (
+      <div className="integrations-container">
+        <div className="integrations-content">
+          <h2>Integrations</h2>
+          <p className="error-message">Failed to load integrations: {String(error)}</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <>
-      <div className="connector-groups">
-        <div className="connector-group">
-          <h4>Notifications</h4>
-          <p className="section-description">
-            Configure webhooks and API keys for notification tools (Slack, Discord, Email, SMS).
+    <div className="integrations-container">
+      <div className="integrations-content">
+        <div className="integrations-header">
+          <h2>Integrations</h2>
+          <p className="integrations-description">
+            Configure credentials for external services. These integrations are shared across all your agents.
+            Individual agents can override these settings if needed.
           </p>
-          <div className="connector-cards">
-            {notifications.map((connector) => (
-              <ConnectorCard
-                key={connector.type}
-                connector={connector}
-                onConfigure={() => openConfigModal(connector)}
-                onTest={() => handleTest(connector)}
-                onDelete={() => handleDelete(connector)}
-                isTesting={testConnector.isPending}
-              />
-            ))}
-          </div>
         </div>
 
-        <div className="connector-group">
-          <h4>Project Management</h4>
-          <p className="section-description">
-            Configure API tokens for project management tools (GitHub, Jira, Linear, Notion).
-          </p>
-          <div className="connector-cards">
-            {projectManagement.map((connector) => (
-              <ConnectorCard
-                key={connector.type}
-                connector={connector}
-                onConfigure={() => openConfigModal(connector)}
-                onTest={() => handleTest(connector)}
-                onDelete={() => handleDelete(connector)}
-                isTesting={testConnector.isPending}
-              />
-            ))}
+        {isLoading ? (
+          <p className="muted">Loading integrations…</p>
+        ) : (
+          <div className="connector-groups">
+            <div className="connector-group">
+              <h3>Notifications</h3>
+              <p className="section-description">
+                Configure webhooks and API keys for notification tools (Slack, Discord, Email, SMS).
+              </p>
+              <div className="connector-cards">
+                {notifications.map((connector) => (
+                  <IntegrationCard
+                    key={connector.type}
+                    connector={connector}
+                    onConfigure={() => openConfigModal(connector)}
+                    onTest={() => handleTest(connector)}
+                    onDelete={() => handleDelete(connector)}
+                    isTesting={testConnector.isPending}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="connector-group">
+              <h3>Project Management</h3>
+              <p className="section-description">
+                Configure API tokens for project management tools (GitHub, Jira, Linear, Notion).
+              </p>
+              <div className="connector-cards">
+                {projectManagement.map((connector) => (
+                  <IntegrationCard
+                    key={connector.type}
+                    connector={connector}
+                    onConfigure={() => openConfigModal(connector)}
+                    onTest={() => handleTest(connector)}
+                    onDelete={() => handleDelete(connector)}
+                    isTesting={testConnector.isPending}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <ConnectorConfigModal
@@ -161,19 +178,19 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
         isSaving={configureConnector.isPending}
         isTesting={testBeforeSave.isPending}
       />
-    </>
+    </div>
   );
 }
 
-type ConnectorCardProps = {
-  connector: ConnectorStatus;
+type IntegrationCardProps = {
+  connector: AccountConnectorStatus;
   onConfigure: () => void;
   onTest: () => void;
   onDelete: () => void;
   isTesting: boolean;
 };
 
-function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: ConnectorCardProps) {
+function IntegrationCard({ connector, onConfigure, onTest, onDelete, isTesting }: IntegrationCardProps) {
   const statusClass = connector.configured
     ? connector.test_status === "success"
       ? "status-success"
@@ -237,4 +254,3 @@ function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: 
   );
 }
 
-export default ConnectorCredentialsPanel;

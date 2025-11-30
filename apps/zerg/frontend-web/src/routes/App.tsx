@@ -5,6 +5,7 @@ import DashboardPage from "../pages/DashboardPage";
 import ChatPage from "../pages/ChatPage";
 import CanvasPage from "../pages/CanvasPage";
 import ProfilePage from "../pages/ProfilePage";
+import IntegrationsPage from "../pages/IntegrationsPage";
 import AdminPage from "../pages/AdminPage";
 import { AuthGuard } from "../lib/auth";
 import { ShelfProvider } from "../lib/useShelfState";
@@ -54,6 +55,14 @@ export default function App() {
       element: (
         <ErrorBoundary>
           <ProfilePage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/settings/integrations",
+      element: (
+        <ErrorBoundary>
+          <IntegrationsPage />
         </ErrorBoundary>
       )
     },
