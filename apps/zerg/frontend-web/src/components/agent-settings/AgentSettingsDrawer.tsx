@@ -209,14 +209,8 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
       }
 
       // If user is not the owner, we cannot know the true account-level status.
-      // Do not auto-prompt for overrides to avoid confusion.
-      // They can explicitly click "Setup Override" if needed.
-      if (!isOwner) {
-        return;
-      }
-
-      // Otherwise, if not configured at agent level either, prompt for override
-      if (!connector.configured) {
+      // Only prompt for override if user is owner. Non-owners can use "Setup Override" button.
+      if (isOwner && !connector.configured) {
         openConnectorModal(connector);
       }
     }
