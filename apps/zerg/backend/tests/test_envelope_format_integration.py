@@ -41,14 +41,14 @@ async def test_envelope_format_all_node_types(db, test_user, sample_agent):
             mock_msg1.id = 1
             mock_msg1.role = "assistant"
             mock_msg1.content = "Analysis complete. Grade is excellent."
-            mock_msg.sent_at = None
+            mock_msg1.sent_at = None
             mock_msg1.thread_id = thread.id
 
             mock_msg2 = type("MockMessage", (), {})()
             mock_msg2.id = 2
             mock_msg2.role = "assistant"
             mock_msg2.content = "Recommendation: Student performed very well."
-            mock_msg.sent_at = None
+            mock_msg2.sent_at = None
             mock_msg2.thread_id = thread.id
 
             return [mock_msg1, mock_msg2]

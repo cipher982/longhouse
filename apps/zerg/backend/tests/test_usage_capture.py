@@ -26,6 +26,19 @@ class _UsageStub:
         }
         return AIMessage(content="ok", response_metadata=meta)
 
+    async def ainvoke(self, messages, **kwargs):
+        from langchain_core.messages import AIMessage
+
+        # Simulate OpenAI usage metadata via LangChain AIMessage.response_metadata
+        meta = {
+            "token_usage": {
+                "prompt_tokens": 8,
+                "completion_tokens": 9,
+                "total_tokens": 17,
+            }
+        }
+        return AIMessage(content="ok", response_metadata=meta)
+
 
 @pytest.mark.asyncio
 async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatch):
@@ -83,6 +96,11 @@ class _NoUsageStub:
         return self
 
     def invoke(self, messages):
+        from langchain_core.messages import AIMessage
+
+        return AIMessage(content="ok")
+
+    async def ainvoke(self, messages, **kwargs):
         from langchain_core.messages import AIMessage
 
         return AIMessage(content="ok")

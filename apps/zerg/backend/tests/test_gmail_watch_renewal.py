@@ -19,12 +19,16 @@ async def test_gmail_process_connector_updates_history(client, db_session, _dev_
     # Prepare connector with expired watch and baseline history
     from zerg.crud import crud as _crud
 
+    # Encrypt dummy token
+    from zerg.utils import crypto
+    enc_token = crypto.encrypt("dummy_refresh_token")
+
     conn = _crud.create_connector(
         db_session,
         owner_id=_dev_user.id,
         type="email",
         provider="gmail",
-        config={"refresh_token": "enc", "history_id": 0, "watch_expiry": int(time.time() * 1000) - 1000},
+        config={"refresh_token": enc_token, "history_id": 0, "watch_expiry": int(time.time() * 1000) - 1000},
     )
 
     # Patch token refresh and history

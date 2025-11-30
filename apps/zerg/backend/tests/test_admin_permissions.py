@@ -70,6 +70,7 @@ def test_admin_route_requires_super_admin(monkeypatch, client: TestClient, db_se
     # Create a patched settings object with testing=False and no admin emails
     settings = get_settings()
     settings.testing = False
+    settings.auth_disabled = False  # Explicitly disable auth bypass
     settings.admin_emails = ""
 
     # Mock get_settings to return our patched version

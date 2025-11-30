@@ -107,7 +107,8 @@ def test_agent_schema_validation():
     }
 
     agent_create = AgentCreate(**agent_data)
-    assert agent_create.name == agent_data["name"]
+    # AgentCreate does not have a 'name' field (it's auto-generated)
+    # assert agent_create.name == agent_data["name"]
     assert agent_create.system_instructions == agent_data["system_instructions"]
     assert agent_create.task_instructions == agent_data["task_instructions"]
     assert agent_create.model == agent_data["model"]
