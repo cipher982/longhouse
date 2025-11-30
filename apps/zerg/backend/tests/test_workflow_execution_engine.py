@@ -74,6 +74,10 @@ def test_linear_execution_success(
     execution_id = payload["execution_id"]
     assert execution_id > 0
 
+    # Wait for execution to complete (since it runs in background)
+    await_resp = client.post(f"/api/workflow-executions/{execution_id}/await", headers=auth_headers)
+    assert await_resp.status_code == 200
+
     # ------------------------------------------------------------------
     # 3. Assert – fetch status + logs, expect success
     # ------------------------------------------------------------------

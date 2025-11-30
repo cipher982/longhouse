@@ -381,20 +381,41 @@ class WorkflowEngine:
         Returns:
             True if execution completed, False if timed out or not found
         """
-        task = self._running_tasks.get(execution_id)
-        if not task:
-            # Check if execution already completed
+        start_time = utc_now_naive()
+        
+        # Retry loop to handle startup delay (race between /start response and background task registration)
+        while True:
+            task = self._running_tasks.get(execution_id)
+            if task:
+                break
+            
+            # Check if execution already completed or is pending
             session_factory = get_session_factory()
             with session_factory() as db:
                 execution = db.query(WorkflowExecution).filter_by(id=execution_id).first()
                 if execution and execution.phase == "finished":
                     logger.info(f"[WorkflowEngine] Execution {execution_id} already completed")
                     return True
-            logger.warning(f"[WorkflowEngine] No running task found for execution_id={execution_id}")
-            return False
+                if not execution:
+                    logger.warning(f"[WorkflowEngine] Execution {execution_id} not found in DB")
+                    return False
+            
+            # Check timeout
+            if timeout and (utc_now_naive() - start_time).total_seconds() > timeout:
+                logger.warning(f"[WorkflowEngine] Timeout waiting for task registration execution_id={execution_id}")
+                return False
+                
+            # Wait for task to appear (handle the 100ms delay in start_workflow_execution)
+            await asyncio.sleep(0.05)
 
         try:
-            await asyncio.wait_for(task, timeout=timeout)
+            # Adjust timeout for time spent waiting for registration
+            remaining_timeout = None
+            if timeout:
+                elapsed = (utc_now_naive() - start_time).total_seconds()
+                remaining_timeout = max(0.1, timeout - elapsed)
+                
+            await asyncio.wait_for(task, timeout=remaining_timeout)
             return True
         except asyncio.TimeoutError:
             logger.warning(f"[WorkflowEngine] Timeout waiting for execution_id={execution_id}")
