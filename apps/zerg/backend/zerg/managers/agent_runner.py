@@ -141,10 +141,20 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # ------------------------------------------------------------------
         # Credential resolver context: inject the resolver so connector tools
         # can access agent-specific credentials without explicit parameters.
+        # The resolver now supports account-level fallback when owner_id is
+        # provided (v2 account credentials architecture).
         # ------------------------------------------------------------------
-        credential_resolver = CredentialResolver(agent_id=self.agent.id, db=db)
+        credential_resolver = CredentialResolver(
+            agent_id=self.agent.id,
+            db=db,
+            owner_id=self.agent.owner_id,
+        )
         _cred_ctx_token = set_credential_resolver(credential_resolver)
-        logger.debug("[AgentRunner] Set credential resolver context for agent %s", self.agent.id)
+        logger.debug(
+            "[AgentRunner] Set credential resolver context for agent %s (owner_id=%s)",
+            self.agent.id,
+            self.agent.owner_id,
+        )
 
         try:
             # TODO: Token streaming needs LangChain version compatibility investigation
