@@ -270,6 +270,24 @@
   cursor: not-allowed;
 }
 
+.btn-danger {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  background: var(--color-intent-error-muted);
+  color: var(--color-intent-error);
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.btn-danger:hover {
+  background: var(--color-intent-error);
+  color: white;
+}
+
 .mcp-server-list {
   list-style: none;
   margin: 0 0 var(--space-6);
@@ -415,4 +433,372 @@
   .agent-settings-section {
     padding: var(--space-4);
   }
+}
+
+/* ------------------------------------------------------------------
+   Integrations & Tools – New unified section
+   ------------------------------------------------------------------ */
+
+.integrations-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.integration-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4);
+  background: var(--color-surface-overlay);
+  border-radius: var(--radius-lg);
+  gap: var(--space-4);
+}
+
+.integration-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.integration-icon {
+  font-size: var(--font-size-xl);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-elevated);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.integration-info h4 {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: 600;
+}
+
+.integration-info p {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.btn-sm {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-weight: 600;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.btn-primary-outline {
+  border: 1px solid var(--color-brand-primary);
+  color: var(--color-brand-primary);
+  background: transparent;
+}
+
+.btn-primary-outline:hover {
+  background: var(--color-brand-primary);
+  color: white;
+}
+
+/* Toggle Switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--color-surface-elevated);
+  transition: 0.4s;
+  border-radius: 34px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: 0.4s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--color-brand-primary);
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px var(--color-brand-primary);
+}
+
+input:checked + .slider:before {
+  transform: translateX(16px);
+}
+
+/* Separator */
+.tools-separator {
+  margin: var(--space-6) 0 var(--space-3);
+  border-top: 1px solid var(--color-border-muted);
+  padding-top: var(--space-4);
+}
+
+.tools-separator h4 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.utility-tools {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.advanced-tools {
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--color-border-muted);
+  padding-top: var(--space-4);
+}
+
+.advanced-tools summary {
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-4);
+  user-select: none;
+}
+
+.advanced-tools summary:hover {
+  color: var(--color-text-primary);
+}
+
+/* ------------------------------------------------------------------
+   Connector Config Modal
+   ------------------------------------------------------------------ */
+
+.connector-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: calc(var(--z-modal) + 1);
+}
+
+.connector-modal {
+  background: var(--color-surface-card);
+  width: min(500px, 90%);
+  max-height: 90vh;
+  overflow-y: auto;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+}
+
+.connector-modal-header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.connector-modal-header h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.connector-modal-body {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.connector-modal-footer {
+  padding: var(--space-4);
+  border-top: 1px solid var(--color-border-muted);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  background: var(--color-surface-section);
+}
+
+.connector-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.connector-docs-link {
+  color: var(--color-brand-primary);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+}
+
+.connector-docs-link:hover {
+  text-decoration: underline;
+}
+
+.connector-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.required {
+  color: var(--color-intent-error);
+  margin-left: 4px;
+}
+
+/* ------------------------------------------------------------------
+   Integrations Page (Account-Level Credentials)
+   ------------------------------------------------------------------ */
+
+.integrations-container {
+  padding: var(--space-8);
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.integrations-content {
+  background: var(--color-surface-section);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-md);
+}
+
+.integrations-header {
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-muted);
+}
+
+.integrations-header h2 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.integrations-description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* Reuse connector-groups and connector-cards from agent-settings */
+.integrations-content .connector-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.integrations-content .connector-group h3 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.integrations-content .section-description {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.integrations-content .error-message {
+  color: var(--color-intent-error);
+  padding: var(--space-4);
+  background: var(--color-surface-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-intent-error);
+}
+
+/* ------------------------------------------------------------------
+   Integration Status Badges
+   ------------------------------------------------------------------ */
+
+.settings-link {
+  display: inline-block;
+  margin-left: var(--space-2);
+  color: var(--color-accent-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+.integration-status-badges {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.status-badge.account-level {
+  background: var(--color-intent-success-muted, rgba(16, 185, 129, 0.15));
+  color: var(--color-intent-success);
+}
+
+.status-badge.agent-override {
+  background: var(--color-accent-muted, rgba(139, 92, 246, 0.15));
+  color: var(--color-accent-primary);
+}
+
+.status-badge.needs-setup {
+  background: var(--color-intent-warning-muted, rgba(245, 158, 11, 0.15));
+  color: var(--color-intent-warning);
 }
