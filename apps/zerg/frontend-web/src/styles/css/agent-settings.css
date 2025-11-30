@@ -802,3 +802,9 @@ input:checked + .slider:before {
   background: var(--color-intent-warning-muted, rgba(245, 158, 11, 0.15));
   color: var(--color-intent-warning);
 }
+
+.status-badge.unknown-status {
+  background: var(--color-surface-overlay);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-muted);
+}
