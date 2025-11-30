@@ -208,6 +208,13 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
         return;
       }
 
+      // If user is not the owner, we cannot know the true account-level status.
+      // Do not auto-prompt for overrides to avoid confusion.
+      // They can explicitly click "Setup Override" if needed.
+      if (!isOwner) {
+        return;
+      }
+
       // Otherwise, if not configured at agent level either, prompt for override
       if (!connector.configured) {
         openConnectorModal(connector);
@@ -449,6 +456,12 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                           {isOwner && !isConfigured && (
                             <span className="status-badge needs-setup" title="Credentials not configured">
                               Needs setup
+                            </span>
+                          )}
+                          {/* Unknown status for non-owners */}
+                          {!isOwner && !hasAgentOverride && (
+                            <span className="status-badge unknown-status" title="Account-level status hidden">
+                              Owner managed
                             </span>
                           )}
                         </div>

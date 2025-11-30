@@ -1,7 +1,6 @@
 import json
 from unittest.mock import patch
 
-import pytest
 from zerg.connectors.registry import ConnectorType
 from zerg.connectors.resolver import CredentialResolver
 from zerg.models.models import AccountConnectorCredential, ConnectorCredential
