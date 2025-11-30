@@ -55,7 +55,13 @@ class TestMCPServers:
         assert "mcp_servers" in updated_agent["config"]
         assert len(updated_agent["config"]["mcp_servers"]) == 1
         assert updated_agent["config"]["mcp_servers"][0]["preset"] == "github"
-        assert updated_agent["config"]["mcp_servers"][0]["auth_token"] == "ghp_test_token"
+        
+        # Token should be encrypted
+        encrypted_token = updated_agent["config"]["mcp_servers"][0]["auth_token"]
+        assert encrypted_token != "ghp_test_token"
+        
+        from zerg.utils import crypto
+        assert crypto.decrypt(encrypted_token) == "ghp_test_token"
 
     def test_add_custom_mcp_server(self, client, auth_headers, test_agent, db):
         """Test adding a custom MCP server."""
@@ -80,7 +86,14 @@ class TestMCPServers:
         server_config = updated_agent["config"]["mcp_servers"][0]
         assert server_config["url"] == "https://custom.example.com/mcp"
         assert server_config["name"] == "custom"
-        assert server_config["auth_token"] == "custom_token"
+        
+        # Token should be encrypted
+        encrypted_token = server_config["auth_token"]
+        assert encrypted_token != "custom_token"
+        
+        from zerg.utils import crypto
+        assert crypto.decrypt(encrypted_token) == "custom_token"
+        
         assert server_config["allowed_tools"] == ["tool1", "tool2"]
 
     def test_add_mcp_server_invalid_request(self, client, auth_headers, test_agent):
