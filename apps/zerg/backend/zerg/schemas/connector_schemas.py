@@ -53,6 +53,27 @@ class ConnectorStatusResponse(BaseModel):
     metadata: Optional[dict[str, Any]] = Field(None, description="Metadata from last successful test")
 
 
+class AccountConnectorStatusResponse(BaseModel):
+    """Status of a connector type at account level.
+
+    Similar to ConnectorStatusResponse but for account-level credentials
+    that are shared across all agents owned by the user.
+    """
+
+    type: str = Field(..., description="Connector type identifier (e.g., 'slack', 'github')")
+    name: str = Field(..., description="Human-readable name")
+    description: str = Field(..., description="Short description of the connector")
+    category: str = Field(..., description="Category: 'notifications' or 'project_management'")
+    icon: str = Field(..., description="Icon identifier for UI")
+    docs_url: str = Field(..., description="URL to setup documentation")
+    fields: list[CredentialFieldSchema] = Field(..., description="Required credential fields")
+    configured: bool = Field(..., description="Whether credentials are configured at account level")
+    display_name: Optional[str] = Field(None, description="User-provided display name")
+    test_status: str = Field("untested", description="Test status: 'untested', 'success', 'failed'")
+    last_tested_at: Optional[datetime] = Field(None, description="When credentials were last tested")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Metadata from last successful test")
+
+
 # ---------------------------------------------------------------------------
 # Configure Connector Request
 # ---------------------------------------------------------------------------
