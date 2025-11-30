@@ -17,6 +17,7 @@ import {
   useTestConnectorBeforeSave,
 } from "../../hooks/useAgentConnectors";
 import { useAccountConnectors } from "../../hooks/useAccountConnectors";
+import { useAuth } from "../../lib/auth";
 import type { McpServerAddRequest, McpServerResponse } from "../../services/api";
 import { TOOL_GROUPS, UTILITY_TOOLS } from "../../constants/toolGroups";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
@@ -36,6 +37,7 @@ type AllowedToolOption = {
 };
 
 export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsDrawerProps) {
+  const { user } = useAuth();
   const { data: agent } = useAgentDetails(isOpen ? agentId : null);
   const { data: policy } = useContainerPolicy();
   const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? agentId : null);
@@ -52,8 +54,13 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const configureConnector = useConfigureConnector(agentId);
   const testBeforeSave = useTestConnectorBeforeSave(agentId);
   
+  // Helper to check ownership
+  const isOwner = user?.id === agent?.owner_id;
+
   // Helper to check if a connector is configured at account level
+  // Only valid if current user is the owner (since accountConnectors fetches MY connectors)
   const isConfiguredAtAccountLevel = (type: string) => {
+    if (!isOwner) return false;
     return accountConnectors?.find((c) => c.type === type)?.configured ?? false;
   };
 
@@ -194,7 +201,15 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     if (enabled) {
       // Check if we need to configure credentials
       const connector = connectors?.find((c) => c.type === key);
-      if (connector && !connector.configured) {
+      if (!connector) return;
+
+      // If configured at account level, we don't need to prompt
+      if (isConfiguredAtAccountLevel(key)) {
+        return;
+      }
+
+      // Otherwise, if not configured at agent level either, prompt for override
+      if (!connector.configured) {
         openConnectorModal(connector);
       }
     }
@@ -418,17 +433,20 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                       {/* Integration status badges */}
                       {isEnabled && (
                         <div className="integration-status-badges">
-                          {hasAccountCreds && !hasAgentOverride && (
+                          {/* Account-level badge (only show for owner) */}
+                          {isOwner && hasAccountCreds && !hasAgentOverride && (
                             <span className="status-badge account-level" title="Using account-level credentials">
                               Account
                             </span>
                           )}
+                          {/* Override badge (always valid if configured) */}
                           {hasAgentOverride && (
                             <span className="status-badge agent-override" title="Using agent-specific credentials">
                               Override
                             </span>
                           )}
-                          {!isConfigured && (
+                          {/* Needs setup badge (only if we know for sure) */}
+                          {isOwner && !isConfigured && (
                             <span className="status-badge needs-setup" title="Credentials not configured">
                               Needs setup
                             </span>
@@ -438,10 +456,19 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                     </div>
                   </div>
                   <div className="integration-actions">
-                     {isEnabled && !hasAccountCreds && !hasAgentOverride && (
+                     {isEnabled && isOwner && !hasAccountCreds && !hasAgentOverride && (
                       <Link to="/settings/integrations" className="btn-sm btn-primary-outline">
                         Configure
                       </Link>
+                    )}
+                    {isEnabled && !isOwner && !hasAgentOverride && (
+                      <button
+                        type="button"
+                        className="btn-sm btn-primary-outline"
+                        onClick={() => openConnectorModal(connector)}
+                      >
+                        Setup Override
+                      </button>
                     )}
                     {isEnabled && hasAgentOverride && (
                       <button
