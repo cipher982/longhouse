@@ -88,6 +88,9 @@ def test_agent_connection_workflow_execution(
     execution_id = payload["execution_id"]
     assert execution_id > 0
 
+    # Wait for completion (since it runs in background)
+    client.post(f"/api/workflow-executions/{execution_id}/await", headers=auth_headers)
+
     # Check execution status immediately since we're using mocked agents
 
     # Check execution status
