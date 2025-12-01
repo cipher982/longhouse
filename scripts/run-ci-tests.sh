@@ -9,10 +9,10 @@ echo "🤖 CI Test Suite Starting..."
 echo "═══════════════════════════════════════════════════════════════════════════════"
 
 # Ensure we're in project root
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 echo "🧪 Running React Unit Tests..."
-cd frontend-web
+cd apps/zerg/frontend-web
 npm run test -- --run --reporter=basic
 echo "  ✅ React unit tests passed"
 
@@ -30,7 +30,7 @@ else
     echo "  ⚠️  Backend tests had issues (may need OpenAI key)"
 fi
 
-cd ..
+cd ../../..
 
 echo ""
 echo "🔍 Running Contract Validation..."

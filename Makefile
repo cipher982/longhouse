@@ -35,9 +35,9 @@ dev: ## ⭐ Start full platform (Docker + Nginx, isolated ports)
 
 zerg: ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "🚀 Starting Zerg platform..."
-	docker compose -f docker-compose.dev.yml up -d --build
+	docker compose -f docker/docker-compose.dev.yml up -d --build
 	@sleep 3
-	@docker compose -f docker-compose.dev.yml ps
+	@docker compose -f docker/docker-compose.dev.yml ps
 	@echo ""
 	@echo "✅ Backend:  http://localhost:$${ZERG_BACKEND_PORT:-47300}"
 	@echo "✅ Frontend: http://localhost:$${ZERG_FRONTEND_PORT:-47200}"
@@ -48,19 +48,19 @@ jarvis: ## Start Jarvis only (native Node processes)
 
 stop: ## Stop all services (dev, zerg, jarvis)
 	@echo "🛑 Stopping all services..."
-	@docker compose -f docker-compose.unified.yml down 2>/dev/null || true
-	@docker compose -f docker-compose.dev.yml down 2>/dev/null || true
+	@docker compose -f docker/docker-compose.unified.yml down 2>/dev/null || true
+	@docker compose -f docker/docker-compose.dev.yml down 2>/dev/null || true
 	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
 	@echo "✅ All services stopped"
 
 logs: ## View logs from running services
 	@echo "📋 Checking for running services..."
-	@if docker compose -f docker-compose.unified.yml ps -q 2>/dev/null | grep -q .; then \
+	@if docker compose -f docker/docker-compose.unified.yml ps -q 2>/dev/null | grep -q .; then \
 		echo "Following logs from unified dev environment..."; \
-		docker compose -f docker-compose.unified.yml logs -f; \
-	elif docker compose -f docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose -f docker/docker-compose.unified.yml logs -f; \
+	elif docker compose -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
 		echo "Following logs from Zerg..."; \
-		docker compose -f docker-compose.dev.yml logs -f; \
+		docker compose -f docker/docker-compose.dev.yml logs -f; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
@@ -68,8 +68,8 @@ logs: ## View logs from running services
 
 reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
-	@docker compose -f docker-compose.dev.yml down -v
-	@docker compose -f docker-compose.dev.yml up -d
+	@docker compose -f docker/docker-compose.dev.yml down -v
+	@docker compose -f docker/docker-compose.dev.yml up -d
 	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------

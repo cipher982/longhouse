@@ -10,7 +10,7 @@ echo "════════════════════════�
 echo ""
 
 # Ensure we're in project root
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # Configuration
 BACKEND_PORT=47300
@@ -91,16 +91,16 @@ echo "🚀 Starting services..."
 
 # Start backend in testing mode
 echo "  📡 Starting backend on port $BACKEND_PORT..."
-cd backend && TESTING=1 ENVIRONMENT=test:e2e NODE_ENV=test uv run python -m uvicorn zerg.main:app \
-    --host=127.0.0.1 --port=$BACKEND_PORT --log-level=warning > ../visual-backend.log 2>&1 &
+cd apps/zerg/backend && TESTING=1 ENVIRONMENT=test:e2e NODE_ENV=test uv run python -m uvicorn zerg.main:app \
+    --host=127.0.0.1 --port=$BACKEND_PORT --log-level=warning > ../../../visual-backend.log 2>&1 &
 BACKEND_PID=$!
-cd ..
+cd ../../..
 
 # Start React frontend
 echo "  ⚛️  Starting React frontend on port $FRONTEND_PORT..."
-cd frontend-web && npm run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../visual-frontend.log 2>&1 &
+cd apps/zerg/frontend-web && npm run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../../../visual-frontend.log 2>&1 &
 FRONTEND_PID=$!
-cd ..
+cd ../../..
 
 # Wait for services to start
 echo "  ⏳ Waiting for services to initialize..."
@@ -126,7 +126,7 @@ echo "  ✅ Services ready"
 echo ""
 
 # Navigate to E2E directory
-cd e2e
+cd apps/zerg/e2e
 
 # Prepare Playwright command
 PLAYWRIGHT_CMD="npx playwright test comprehensive-visual-test.ts"

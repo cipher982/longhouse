@@ -1,5 +1,5 @@
 # Unified Docker Compose - All services in one network
-# Use: docker-compose -f docker-compose.unified.yml up
+# Use: docker-compose -f docker/docker-compose.unified.yml up
 #
 # REQUIRED: Configure all ports via environment variables:
 #   - JARPXY_PORT - Jarvis PWA entry point (e.g., 30080)
@@ -9,7 +9,7 @@
 #   - ZERG_BACKEND_PORT - Internal backend port (e.g., 8000)
 #   - ZERG_FRONTEND_PORT - Internal frontend port (e.g., 5173)
 #
-# Example: JARPXY_PORT=30080 ZGPXY_PORT=30081 docker-compose -f docker-compose.unified.yml up
+# Example: JARPXY_PORT=30080 ZGPXY_PORT=30081 docker-compose -f docker/docker-compose.unified.yml up
 
 x-common-variables: &common-variables
   # Required ports - FAIL FAST if not set
@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - ./logs/postgres:/var/log/postgresql
+      - ../logs/postgres:/var/log/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -42,7 +42,7 @@ services:
   # Zerg Backend API
   zerg-backend:
     build:
-      context: apps/zerg/backend
+      context: ../apps/zerg/backend
       dockerfile: ../../../docker/backend.dockerfile
       target: development
       args:
@@ -72,9 +72,9 @@ services:
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ./apps/zerg/backend:/app:cached
+      - ../apps/zerg/backend:/app:cached
       - backend_dev_static:/app/static
-      - ./logs/backend:/app/logs
+      - ../logs/backend:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${ZERG_BACKEND_PORT}/"]
       interval: 10s
@@ -87,7 +87,7 @@ services:
   # Zerg Frontend (React Dashboard)
   zerg-frontend:
     build:
-      context: apps/zerg/frontend-web
+      context: ../apps/zerg/frontend-web
       dockerfile: Dockerfile
       target: development
     restart: unless-stopped
@@ -101,9 +101,9 @@ services:
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ./apps/zerg/frontend-web:/app:cached
+      - ../apps/zerg/frontend-web:/app:cached
       - /app/node_modules
-      - ./logs/frontend:/app/logs
+      - ../logs/frontend:/app/logs
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${ZERG_FRONTEND_PORT}/"]
       interval: 15s
@@ -116,7 +116,7 @@ services:
   # Jarvis Web UI (PWA)
   jarvis-web:
     build:
-      context: .
+      context: ..
       dockerfile: apps/jarvis/apps/web/Dockerfile
     restart: unless-stopped
     environment:
@@ -128,11 +128,11 @@ services:
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ./apps/jarvis/apps/web:/app/apps/web:cached
-      - ./apps/jarvis/configs:/app/configs:cached
-      - ./apps/jarvis/packages:/app/packages:cached
+      - ../apps/jarvis/apps/web:/app/apps/web:cached
+      - ../apps/jarvis/configs:/app/configs:cached
+      - ../apps/jarvis/packages:/app/packages:cached
       - /app/node_modules
-      - ./logs/jarvis-web:/app/logs
+      - ../logs/jarvis-web:/app/logs
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${JARVIS_WEB_PORT}/"]
       interval: 15s
@@ -145,7 +145,7 @@ services:
   # Jarvis Server (OpenAI bridge + MCP tools)
   jarvis-server:
     build:
-      context: .
+      context: ..
       dockerfile: apps/jarvis/apps/server/Dockerfile
     restart: unless-stopped
     environment:
@@ -158,10 +158,10 @@ services:
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ./apps/jarvis/apps/server:/app/apps/server:cached
-      - ./apps/jarvis/configs:/app/configs:cached
-      - ./apps/jarvis/packages:/app/packages:cached
-      - ./logs/jarvis-server:/app/logs
+      - ../apps/jarvis/apps/server:/app/apps/server:cached
+      - ../apps/jarvis/configs:/app/configs:cached
+      - ../apps/jarvis/packages:/app/packages:cached
+      - ../logs/jarvis-server:/app/logs
     networks:
       - swarm-network
     healthcheck:
@@ -183,8 +183,8 @@ services:
       - "${JARPXY_PORT}:80"      # Jarvis PWA
       - "${ZGPXY_PORT}:81"      # Zerg Dashboard
     volumes:
-      - ./docker/nginx/docker-compose.unified.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./logs/nginx:/var/log/nginx
+      - ./nginx/docker-compose.unified.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../logs/nginx:/var/log/nginx
     depends_on:
       - jarvis-web
       - jarvis-server
