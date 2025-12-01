@@ -111,6 +111,9 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
         conn = _crud.get_connector(db, int(connector_id))
         if conn is None:
             raise HTTPException(status_code=404, detail="Connector not found")
+        # Security: ensure connector belongs to same user as agent
+        if conn.owner_id != agent.owner_id:
+            raise HTTPException(status_code=403, detail="Connector belongs to different user")
         # Normalise provider field to connector provider
         cfg["provider"] = conn.provider
         new_config = cfg
