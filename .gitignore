@@ -237,3 +237,8 @@ apps/jarvis/.yarn
 
 # Test credentials (never commit!)
 .env.test
+
+# Agent Instructions (Local Only)
+AGENTS.md
+WARP.md
+CLAUDE.md

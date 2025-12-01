@@ -10,7 +10,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Central compose file reference
-export COMPOSE_FILE="docker-compose.unified.yml"
+export COMPOSE_FILE="docker/docker-compose.unified.yml"
 STARTED=false
 LOGS_PID=""
 CLEANUP_DONE=false

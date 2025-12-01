@@ -1,5 +1,5 @@
 # Development Docker Compose - Optimized for local development
-# Use: docker-compose -f docker-compose.dev.yml up
+# Use: docker-compose -f docker/docker-compose.dev.yml up
 
 # Docker Compose for Zerg AI Agent Platform - Enhanced Development Mode
 
@@ -15,7 +15,7 @@ services:
     volumes:
       # Ephemeral database - data is lost when containers stop
       # Development: expose logs  
-      - ./logs/postgres:/var/log/postgresql
+      - ../logs/postgres:/var/log/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -27,7 +27,7 @@ services:
   # Backend API Service (Development mode)
   backend:
     build:
-      context: apps/zerg/backend
+      context: ../apps/zerg/backend
       dockerfile: ../../../docker/backend.dockerfile
       target: development
       args:
@@ -58,10 +58,10 @@ services:
       - "${BACKEND_PORT}:8000"
     volumes:
       # Hot reload: mount source code
-      - ./apps/zerg/backend:/app:cached
+      - ../apps/zerg/backend:/app:cached
       - backend_dev_static:/app/static
       # Development logs
-      - ./logs/backend:/app/logs
+      - ../logs/backend:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 10s
@@ -74,7 +74,7 @@ services:
   # Frontend Service (Development mode - Vite dev server)
   frontend:
     build:
-      context: apps/zerg/frontend-web
+      context: ../apps/zerg/frontend-web
       dockerfile: Dockerfile
       target: development
     restart: unless-stopped
@@ -92,11 +92,11 @@ services:
     stop_grace_period: 3s
     volumes:
       # Hot reload: mount entire source directory
-      - ./apps/zerg/frontend-web:/app:cached
+      - ../apps/zerg/frontend-web:/app:cached
       # Prevent node_modules from being overridden by host
       - /app/node_modules
       # Development logs
-      - ./logs/frontend:/app/logs
+      - ../logs/frontend:/app/logs
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173/"]
       interval: 15s

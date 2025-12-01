@@ -9,7 +9,7 @@ echo "💨 Quick Smoke Test Starting..."
 echo "═══════════════════════════════════════════════════════════════════════════════"
 
 # Ensure we're in project root
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # Kill any existing processes on our ports first
 echo "🧹 Cleaning up existing processes..."
@@ -20,9 +20,9 @@ sleep 2
 echo "🚀 Starting backend service..."
 
 # Start backend in the background
-cd backend && uv run python -m uvicorn zerg.main:app --host=127.0.0.1 --port=47300 --log-level=warning > ../test-backend.log 2>&1 &
+cd apps/zerg/backend && uv run python -m uvicorn zerg.main:app --host=127.0.0.1 --port=47300 --log-level=warning > ../../../test-backend.log 2>&1 &
 BACKEND_PID=$!
-cd ..
+cd ../../..
 
 # Give backend time to start
 echo "  ⏳ Waiting for backend to initialize..."
@@ -46,7 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Navigate to e2e directory
-cd e2e
+cd apps/zerg/e2e
 
 # Just test that we can reach the dashboards in both UIs
 echo ""
