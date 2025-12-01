@@ -133,19 +133,22 @@ One platform, multiple interfaces.
 
 ---
 
-## 📁 Monorepo Structure
+## 📁 Project Structure
 
 ```
 apps/
 ├── zerg/
-│   ├── backend/        # FastAPI service, LangGraph agents
+│   ├── backend/        # FastAPI + LangGraph agents
 │   ├── frontend-web/   # React dashboard
 │   └── e2e/            # Playwright tests
 └── jarvis/             # Voice/device PWA
 
-packages/
-├── contracts/          # OpenAPI/AsyncAPI clients
-└── tool-manifest/      # Tool manifest generator
+config/                 # Environment configs
+docker/                 # Docker Compose + Dockerfiles
+docs/                   # Documentation + branding
+schemas/                # OpenAPI, AsyncAPI, JSON schemas
+scripts/                # Dev tools + generators
+tests/                  # Integration tests
 ```
 
 ---
