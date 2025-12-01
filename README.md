@@ -1,83 +1,149 @@
-## Zerg Agent Platform
+# Zerg
 
-Create and orchestrate AI agents with real‑time streaming. This monorepo contains the Zerg backend (FastAPI) and React UI, plus the Jarvis PWA.
+**Visual AI workflow automation with real-time streaming.**
 
-- **Backend**: FastAPI (Python 3.12), WebSockets, LangGraph agents
-- **Frontend**: React + TypeScript + Vite (`apps/zerg/frontend-web`)
-- **Database**: PostgreSQL (prod) / SQLite (dev)
-- **Monorepo**: also includes `apps/jarvis` (PWA) and shared packages
+Zerg combines chat-based AI agents, a visual workflow canvas, and per-token LLM streaming into a unified platform. Build automations where every visual node maps directly to runtime execution—not config files, not YAML, but a live canvas.
 
-### Quick start
-1) Copy env and set secrets
-```bash
-cp .env.example .env
-# minimally set OPENAI_API_KEY; JWT_SECRET for auth-enabled runs
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        React Dashboard                          │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│   │ Workflow     │  │ Agent        │  │ Execution            │  │
+│   │ Canvas       │  │ Chat         │  │ Monitor              │  │
+│   └──────────────┘  └──────────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                    WebSocket (per-token streaming)
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                      FastAPI Backend                            │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │
+│  │ LangGraph      │  │ Workflow       │  │ MCP              │   │
+│  │ Agent Runner   │  │ Engine         │  │ Adapter          │   │
+│  └────────────────┘  └────────────────┘  └──────────────────┘   │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │
+│  │ Credential     │  │ Topic-based    │  │ Trigger          │   │
+│  │ Resolver       │  │ Pub/Sub        │  │ Service          │   │
+│  └────────────────┘  └────────────────┘  └──────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              PostgreSQL + Encrypted Credential Store
 ```
 
-2) Run the platform
+---
 
-**Option A: Full Platform (Recommended)**
-```bash
-make dev              # starts all services (Jarvis + Zerg) with Nginx proxy
-# Jarvis PWA:        http://localhost:30080
-# Zerg Dashboard:    http://localhost:30081
-```
-Benefits: Single command, only 2 host ports, production-like, isolated
+## Key Features
 
-**Option B: Component-Only Development**
-```bash
-make zerg             # Zerg only (Postgres + backend + React UI)
-make jarvis           # Jarvis only (native Node processes)
-```
+### Visual Workflow Canvas
+Drag-and-drop workflow builder with four node types:
+- **Triggers** — Gmail, webhooks, cron schedules
+- **Agents** — LangGraph-powered with tool access
+- **Tools** — HTTP calls, math, containers, MCP tools
+- **Conditionals** — Branch logic based on node outputs
 
-3) Stop / logs / reset
-```bash
-make logs              # View logs from running services
-make stop              # Stop all services
-make reset             # Reset database (destroys data)
-```
+Parallel execution is native. The StateGraph engine handles concurrent branches with typed reducers—no race conditions, no manual synchronization.
 
-### Tests
-```bash
-make test           # all tests (Jarvis + Zerg)
-make test-zerg      # Zerg backend + frontend + e2e
-make test-jarvis    # Jarvis only
+### Per-Token LLM Streaming
+Every token streams over WebSocket as it's generated. The `WsTokenCallback` handler forwards chunks in real-time, so your UI updates character-by-character instead of waiting for complete responses.
+
+```python
+# Under the hood: async callback handler with context vars
+class WsTokenCallback(AsyncCallbackHandler):
+    async def on_llm_new_token(self, token: str, **kwargs):
+        await topic_manager.publish(f"thread:{thread_id}", StreamChunkData(token))
 ```
 
-### Configuration
-- Root `.env` is loaded by the Makefile and `uv`.
-- **Required**: `OPENAI_API_KEY`
-- **Common secrets**: `JWT_SECRET`, `TRIGGER_SIGNING_SECRET`
-- **Feature flags**:
-  - `AUTH_DISABLED` (dev default `1`): bypass Google/JWT auth in local runs
-  - `LLM_TOKEN_STREAM` (`true|1`): emit per‑token chunks over WS
-- **Ports (defaults)**: `ZERG_BACKEND_PORT=47300`, `ZERG_FRONTEND_PORT=47200`
+### MCP Integration
+First-class [Model Context Protocol](https://modelcontextprotocol.io/) support. Connect any MCP server or use built-in presets:
 
-### Monorepo layout (essentials)
-- `apps/zerg/backend` – FastAPI service, schedulers, WebSocket hub
-- `apps/zerg/frontend-web` – React UI (TypeScript + Vite)
-- `apps/zerg/e2e` – Playwright end-to-end tests
-- `apps/jarvis` – PWA app
-- `packages/contracts` – OpenAPI/AsyncAPI clients and types
-- `packages/tool-manifest` – tool manifest generator
+| Service | Capabilities |
+|---------|-------------|
+| GitHub | Issues, PRs, repos, code search |
+| Slack | Messages, channels, threads |
+| Linear | Issues, projects, cycles |
+| Notion | Pages, databases, blocks |
+| Custom | Any MCP-compliant server |
 
-### Key capabilities
-- Authenticated WebSockets (`/api/ws?token=<jwt>`; 4401 on invalid JWT)
-- Token‑level streaming when `LLM_TOKEN_STREAM` is enabled
-- LangGraph‑based functional agents with run history and scheduling
+MCP tools coexist with built-in tools in a unified registry. The adapter handles connection pooling, retries (3× with 30s timeout), and HTTP/2 multiplexing.
 
-### Dev tips
-- Prefer Make targets and `uv run` over calling `python`/`pytest` directly
-- Generate SDK and tool manifest:
-```bash
-make generate-sdk      # OpenAPI/AsyncAPI clients + tool manifest
-make seed-agents       # Seed baseline agents for Jarvis
+### Two-Tier Credential Management
+Enterprise-ready credential resolution:
+
+1. **Account-level** — Shared org credentials (e.g., team Slack workspace)
+2. **Agent-level** — Per-agent overrides for isolated secrets
+
+Credentials resolve at runtime through a cascading lookup with Fernet encryption at rest.
+
+### Jarvis Integration
+Voice and device UI powered by the same backend. Jarvis is a PWA that dispatches to Zerg agents via device-secret authentication:
+
+```
+Jarvis PWA → Device Auth → JWT Session → Agent Dispatch → SSE Stream
 ```
 
-### Docs
-- Deployment: `docs/DEPLOYMENT.md`, `DEPLOY.md`
-- React migration notes: `docs/react_dashboard_migration.md`
-- Contracts and protocols: `asyncapi/*.yml`, `contracts/*.json`
+One platform, multiple interfaces.
 
-### License
+---
+
+## Technical Highlights
+
+**LangGraph Agent Execution**
+- Functional ReAct agents compiled to async runnables
+- Process-local cache with edit-based invalidation
+- Full async execution—no blocking thread pools
+
+**Workflow Engine** (~150 LOC)
+- StateGraph with typed state and `Annotated` reducers
+- Fail-fast semantics: `first_error` reducer halts on exception
+- Envelope-based outputs with node metadata
+
+**WebSocket Architecture**
+- Topic-based pub/sub (`agent:123`, `thread:45`, `workflow:99`)
+- JWT pre-authentication before handshake acceptance
+- Custom close codes (4401 for invalid JWT)
+
+**Trigger System**
+- Gmail OAuth with push notifications via Cloud Pub/Sub
+- Webhook endpoints with signature verification
+- APScheduler for cron/interval jobs
+
+---
+
+## Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | React, TypeScript, Vite |
+| Backend | FastAPI, Python 3.12, LangGraph |
+| Database | PostgreSQL (prod), SQLite (test) |
+| Real-time | WebSocket with topic pub/sub |
+| Auth | JWT, Google OAuth, device secrets |
+| Tools | MCP protocol, built-in registry |
+| Observability | LangSmith tracing (optional) |
+
+---
+
+## Monorepo Structure
+
+```
+apps/
+├── zerg/
+│   ├── backend/        # FastAPI service, LangGraph agents
+│   ├── frontend-web/   # React dashboard
+│   └── e2e/            # Playwright tests
+└── jarvis/             # Voice/device PWA
+
+packages/
+├── contracts/          # OpenAPI/AsyncAPI clients
+└── tool-manifest/      # Tool manifest generator
+```
+
+---
+
+## License
+
 ISC
