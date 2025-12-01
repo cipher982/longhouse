@@ -14,11 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-# lib/ - commented out to allow frontend-web/src/lib/ source files
-# Only ignore build artifacts, not source code
 /lib/
-backend/lib/
-frontend/lib/
 lib64/
 parts/
 sdist/
@@ -31,8 +27,6 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -86,42 +80,12 @@ target/
 profile_default/
 ipython_config.py
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
 # pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
 .pdm.toml
 .pdm-python
 .pdm-build/
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+# PEP 582
 __pypackages__/
 
 # Celery stuff
@@ -167,72 +131,55 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
 # PyPI configuration file
 .pypirc
 
-# Prerender
-prerender/node_modules/
-prerender/dist/
-prerender/googlebot.html
-prerender/human.html
-scratch/
-backend/data
-.DS_Store
-.cursorrules
-.cursor/
-app.db
-e2e/node_modules
-e2e/test-results
-e2e/playwright-report/
-.clinerules
-*.pw_tmp*
-*.db
-frontend/tmp/*
-backend/zerg/ws_schema/
-frontend/generated/
-apps/zerg/frontend-web/src/styles/generated/
+# Node
 node_modules/
+
+# Databases
+*.db
+app.db
+
+# IDE
+.vscode/
+.cursor/
+.cursorrules
+
+# OS
+.DS_Store
+
+# Test outputs
 test-results/
 playwright-report/
+e2e/test-results
+e2e/playwright-report/
 e2e/*.png
 e2e/*/*.txt
 e2e/canvas-*.js
 e2e/debug-*.html
 e2e/test-config.js
-.vscode/
-# Generated OpenAPI specifications
-openapi.json
-backend/openapi.json
-openapi-generated.json
-backend/openapitools.json
-
-# Frontend build artifacts
-frontend/pkg/
-frontend/www/agent_platform_frontend*
-frontend/www/bootstrap.js
-frontend/www/config.js
-frontend/www/index.html
-frontend/www/react/
-
-# Visual testing outputs
 e2e/visual-reports/
 e2e/visual-baseline/*.png
 e2e/*-visual-test*.js
 e2e/enhanced-analysis.js
-comet_latest.dmg
+*.pw_tmp*
 
-# Yarn
-.yarn/install-state.gz
+# Generated files
+openapi.json
+apps/zerg/frontend-web/src/styles/generated/
+
+# Logs (local dev only)
+logs/
+
+# Local dev scratch space
+scratch/
 
 # UV cache
 .uv_cache/
+
+# Yarn
+.yarn/install-state.gz
 apps/jarvis/.yarn
 
 # Test credentials (never commit!)
@@ -242,3 +189,7 @@ apps/jarvis/.yarn
 AGENTS.md
 WARP.md
 CLAUDE.md
+
+# Misc
+comet_latest.dmg
+.clinerules/
