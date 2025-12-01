@@ -1291,3 +1291,5 @@ alembic/versions/
 | 2024-11-29 | David Rose & Claude | Initial research (`CONNECTOR_CREDENTIALS_UI.md`) |
 | 2024-11-29 | David Rose & Claude | Revised to per-agent scope, this document |
 
+
+
