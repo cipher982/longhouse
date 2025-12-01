@@ -98,15 +98,15 @@ describe('Voice/Text Separation Integration', () => {
 
   describe('Text mode isolation', () => {
     it('should mute voice when sending text', async () => {
-      // Start in voice mode, armed
+      // Start in voice mode with PTT active
       voiceController.startPTT();
-      expect(voiceController.getState().armed).toBe(true);
+      expect(voiceController.getState().pttActive).toBe(true);
 
       // Send text message
       await textController.sendText('Hello');
 
-      // Voice should be muted
-      expect(voiceController.getState().armed).toBe(false);
+      // Voice should be muted and in text mode
+      expect(voiceController.getState().pttActive).toBe(false);
       expect(voiceController.isTextMode()).toBe(true);
     });
 
@@ -125,7 +125,7 @@ describe('Voice/Text Separation Integration', () => {
       await textController.sendText('Hello');
 
       // Switch back to voice
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ handsFree: false });
 
       // Next transcript should be fresh
       voiceController.handleTranscript('Fresh speech', false);
@@ -140,11 +140,11 @@ describe('Voice/Text Separation Integration', () => {
   });
 
   describe('Hands-free mode', () => {
-    it('should auto-arm when enabling hands-free', () => {
+    it('should enable voice mode when enabling hands-free', () => {
       voiceController.setHandsFree(true);
 
       expect(voiceController.getState().handsFree).toBe(true);
-      expect(voiceController.getState().armed).toBe(true);
+      expect(voiceController.getState().interactionMode).toBe('voice');
     });
 
     it('should process transcripts continuously in hands-free', () => {
@@ -160,43 +160,43 @@ describe('Voice/Text Separation Integration', () => {
       expect(transcripts).toHaveLength(2);
     });
 
-    it('should unarm when disabling hands-free', () => {
+    it('should deactivate when disabling hands-free', () => {
       voiceController.setHandsFree(true);
       voiceController.handleTranscript('First', false);
 
       voiceController.setHandsFree(false);
       voiceListener.mockClear();
 
-      // Only first transcript received
-      // Check state
-      expect(voiceController.getState().armed).toBe(false);
+      // Check state - should be back to PTT mode
+      expect(voiceController.getState().active).toBe(false);
       expect(voiceController.getState().mode).toBe('ptt');
     });
   });
 
   describe('State machine synchronization', () => {
     it('should keep voice controller in sync via events', async () => {
-      // Transition to voice and arm
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
-      expect(voiceController.getState().armed).toBe(true);
+      // Transition to voice
+      voiceController.transitionToVoice({ handsFree: false });
+      expect(voiceController.isVoiceMode()).toBe(true);
 
       // Transition to text
       voiceController.transitionToText();
-      expect(voiceController.getState().armed).toBe(false);
+      expect(voiceController.isTextMode()).toBe(true);
+      expect(voiceController.getState().active).toBe(false);
     });
 
     it('should handle rapid mode switches', async () => {
-      // Voice → arm → transcript
+      // Voice → PTT → transcript
       voiceController.startPTT();
       voiceController.handleTranscript('Voice 1', false);
       voiceController.stopPTT();
 
-      // Text 
+      // Text
       voiceController.transitionToText();
 
-      // Back to voice 
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
-      voiceController.startPTT(); 
+      // Back to voice
+      voiceController.transitionToVoice({ handsFree: false });
+      voiceController.startPTT();
       voiceController.handleTranscript('Voice 2', false);
 
       const transcripts = voiceListener.mock.calls.filter((call: any[]) => call[0].type === 'transcript');
@@ -214,7 +214,7 @@ describe('Voice/Text Separation Integration', () => {
 
       // User releases PTT
       voiceController.stopPTT();
-      expect(voiceController.getState().armed).toBe(false);
+      expect(voiceController.getState().pttActive).toBe(false);
 
       // OpenAI sends final transcript after 50ms delay (typical)
       voiceController.handleTranscript('Hello world', true); // Final
@@ -229,7 +229,7 @@ describe('Voice/Text Separation Integration', () => {
       // First PTT interaction
       voiceController.startPTT();
       voiceController.handleTranscript('First speech', false);
-      voiceController.stopPTT(); 
+      voiceController.stopPTT();
 
       // Second PTT interaction
       voiceController.startPTT();
@@ -271,7 +271,7 @@ describe('Voice/Text Separation Integration', () => {
       voiceController.transitionToText();
 
       // Proper way: transition to voice first
-      voiceController.transitionToVoice({ armed: false, handsFree: true });
+      voiceController.transitionToVoice({ handsFree: true });
       voiceController.setHandsFree(true);
 
       expect(voiceController.isVoiceMode()).toBe(true);
@@ -296,31 +296,33 @@ describe('Voice/Text Separation Integration', () => {
 
   describe('Performance and state consistency', () => {
     it('should handle rapid state changes without race conditions', async () => {
-      // Rapid arm/mute cycles
+      // Rapid PTT cycles
       for (let i = 0; i < 10; i++) {
         voiceController.startPTT();
         voiceController.handleTranscript(`Message ${i}`, false);
         voiceController.stopPTT();
       }
 
-      // Should have exactly 10 transcripts (all during armed windows)
+      // Should have exactly 10 transcripts (all during PTT active windows)
       const transcripts = voiceListener.mock.calls.filter((call: any[]) => call[0].type === 'transcript');
       expect(transcripts).toHaveLength(10);
     });
 
     it('should maintain state consistency across multiple transitions', () => {
       // Complex sequence
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ handsFree: false });
       expect(voiceController.isVoiceMode()).toBe(true);
-      expect(voiceController.getState().armed).toBe(true);
+
+      voiceController.startPTT();
+      expect(voiceController.getState().pttActive).toBe(true);
 
       voiceController.stopPTT();
-      expect(voiceController.getState().armed).toBe(false);
+      expect(voiceController.getState().pttActive).toBe(false);
 
       voiceController.transitionToText();
       expect(voiceController.isTextMode()).toBe(true);
 
-      voiceController.transitionToVoice({ armed: false, handsFree: true });
+      voiceController.transitionToVoice({ handsFree: true });
       expect(voiceController.getState().handsFree).toBe(true);
 
       // State should be consistent throughout
@@ -348,7 +350,7 @@ describe('Voice/Text Separation Integration', () => {
       expect(voiceController.isTextMode()).toBe(true);
 
       // User presses PTT (transitions back to voice)
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
+      voiceController.transitionToVoice({ handsFree: false });
       voiceController.handleTranscript('Voice message', false);
 
       // Should process voice transcript
@@ -362,7 +364,7 @@ describe('Voice/Text Separation Integration', () => {
       expect(voiceController.isTextMode()).toBe(true);
 
       // Transition to voice mode first (UI handler does this)
-      voiceController.transitionToVoice({ armed: false, handsFree: true });
+      voiceController.transitionToVoice({ handsFree: true });
       voiceController.setHandsFree(true);
 
       // Should now process continuous transcripts
@@ -394,24 +396,24 @@ describe('Voice/Text Separation Integration', () => {
     });
 
     it('Scenario: Rapid voice/text switching', async () => {
-      // Voice 
+      // Voice
       voiceController.startPTT();
-      expect(voiceController.getState().armed).toBe(true);
+      expect(voiceController.getState().pttActive).toBe(true);
       voiceController.handleTranscript('Voice 1', false);
       voiceController.stopPTT();
-      expect(voiceController.getState().armed).toBe(false);
+      expect(voiceController.getState().pttActive).toBe(false);
 
       // Text
       await textController.sendText('Text 1');
       expect(voiceController.isTextMode()).toBe(true);
 
-      // Voice 
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
-      voiceController.startPTT(); 
-      expect(voiceController.getState().armed).toBe(true);
+      // Voice
+      voiceController.transitionToVoice({ handsFree: false });
+      voiceController.startPTT();
+      expect(voiceController.getState().pttActive).toBe(true);
       voiceController.handleTranscript('Voice 2', false);
       voiceController.stopPTT();
-      expect(voiceController.getState().armed).toBe(false);
+      expect(voiceController.getState().pttActive).toBe(false);
 
       // Text
       await textController.sendText('Text 2');

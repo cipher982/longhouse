@@ -43,20 +43,19 @@ test.describe('Voice Controller State Logic', () => {
       vc.setMicrophoneStream(mockStream);
 
       // Set initial state
-      vc.transitionToVoice({ armed: true, handsFree: false });
+      vc.transitionToVoice({ handsFree: false });
     });
 
     await page.waitForTimeout(500);
   });
 
-  test('PTT: armed state should be true after mock connection', async ({ page }) => {
+  test('PTT: voice mode should be active after mock connection', async ({ page }) => {
     const state = await page.evaluate(() => {
       return (window as any).voiceController.getState();
     });
 
-    expect(state.armed).toBe(true);
-    expect(state.handsFree).toBe(false);
     expect(state.interactionMode).toBe('voice');
+    expect(state.handsFree).toBe(false);
   });
 
   test('PTT: startPTT should activate microphone', async ({ page }) => {
@@ -71,7 +70,7 @@ test.describe('Voice Controller State Logic', () => {
 
     expect(state.pttActive).toBe(true);
     expect(state.active).toBe(true);
-    expect(state.armed).toBe(true);
+    expect(state.interactionMode).toBe('voice');
 
     // Check mic track is enabled
     const micEnabled = await page.evaluate(() => {
@@ -98,7 +97,7 @@ test.describe('Voice Controller State Logic', () => {
 
     expect(state.pttActive).toBe(false);
     expect(state.active).toBe(false);
-    expect(state.armed).toBe(true); // Should remain armed for next PTT
+    expect(state.interactionMode).toBe('voice'); // Should remain in voice mode
 
     // Check mic track is disabled
     const micEnabled = await page.evaluate(() => {
@@ -122,7 +121,7 @@ test.describe('Voice Controller State Logic', () => {
     });
 
     expect(state.handsFree).toBe(true);
-    expect(state.armed).toBe(true);
+    expect(state.interactionMode).toBe('voice');
     expect(state.mode).toBe('vad');
 
     // Mic should be unmuted

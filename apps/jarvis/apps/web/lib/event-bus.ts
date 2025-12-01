@@ -6,11 +6,11 @@
  *
  * Usage:
  *   // Emit an event
- *   eventBus.emit('voice_channel:armed', { armed: true });
+ *   eventBus.emit('voice_channel:muted', { muted: true });
  *
  *   // Subscribe to an event
- *   const unsubscribe = eventBus.on('voice_channel:armed', (data) => {
- *     console.log('Voice armed:', data.armed);
+ *   const unsubscribe = eventBus.on('voice_channel:muted', (data) => {
+ *     console.log('Voice muted:', data.muted);
  *   });
  *
  *   // Unsubscribe when done
@@ -20,7 +20,6 @@
 // Define all possible events and their payloads
 export interface EventMap {
   // Voice Channel Events
-  'voice_channel:armed': { armed: boolean };
   'voice_channel:muted': { muted: boolean };
   'voice_channel:transcript': { transcript: string; isFinal: boolean };
   'voice_channel:speaking_started': { timestamp: number };
@@ -52,7 +51,6 @@ export type InteractionMode = 'voice' | 'text';
 
 export interface VoiceInteractionState {
   mode: 'voice';
-  armed: boolean;  // Is microphone armed and listening?
   handsFree: boolean;  // Is hands-free mode enabled?
 }
 

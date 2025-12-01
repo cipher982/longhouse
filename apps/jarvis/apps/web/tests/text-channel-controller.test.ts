@@ -81,11 +81,13 @@ describe('TextChannelController', () => {
 
     it('should mute voice controller', async () => {
       voiceController.startPTT();
-      expect(voiceController.getState().armed).toBe(true);
+      expect(voiceController.getState().pttActive).toBe(true);
 
       await textController.sendText('Hello');
 
-      expect(voiceController.getState().armed).toBe(false);
+      // After sending text, we should be in text mode with PTT stopped
+      expect(voiceController.getState().interactionMode).toBe('text');
+      expect(voiceController.getState().pttActive).toBe(false);
     });
   });
 

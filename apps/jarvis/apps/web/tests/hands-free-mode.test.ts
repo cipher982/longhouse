@@ -51,9 +51,9 @@ describe('Hands-Free Mode', () => {
 
       const state = controller.getState();
       expect(state.handsFree).toBe(true);
-      expect(state.armed).toBe(true);
       expect(state.mode).toBe('vad');
       expect(state.pttActive).toBe(false);
+      expect(state.interactionMode).toBe('voice');
     });
 
     it('should disable hands-free mode', () => {
@@ -65,7 +65,6 @@ describe('Hands-Free Mode', () => {
 
       const state = controller.getState();
       expect(state.handsFree).toBe(false);
-      expect(state.armed).toBe(false);
       expect(state.active).toBe(false);
       expect(state.mode).toBe('ptt');
     });
@@ -271,7 +270,6 @@ describe('Hands-Free Mode', () => {
 
       // Transition to voice mode (already in voice mode, but testing state consistency)
       controller.transitionToVoice({
-        armed: true,
         handsFree: true
       });
 

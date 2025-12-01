@@ -110,15 +110,15 @@ test.describe('PTT Button Real Interaction', () => {
     // STEP 2: Test PTT (press and hold)
     console.log('\n=== Testing PTT Press ===');
 
-    // Check armed state before PTT
+    // Check voice mode state before PTT
     const beforePTT = await page.evaluate(() => {
       const vc = (window as any).voiceController;
       return vc?.getState();
     });
     console.log('State before PTT:', JSON.stringify(beforePTT, null, 2));
 
-    if (!beforePTT.armed) {
-      console.log('❌ ARMED is FALSE - PTT will not work!');
+    if (beforePTT.interactionMode !== 'voice') {
+      console.log('❌ NOT IN VOICE MODE - PTT will not work!');
     }
 
     // Press button (mousedown)
@@ -161,9 +161,9 @@ test.describe('PTT Button Real Interaction', () => {
     });
     console.log('State after PTT release:', JSON.stringify(afterPTT, null, 2));
 
-    // Verify mic is muted but still armed
+    // Verify mic is muted but still in voice mode
     expect(afterPTT.voiceState.pttActive).toBe(false);
-    expect(afterPTT.voiceState.armed).toBe(true); // Should stay armed!
+    expect(afterPTT.voiceState.interactionMode).toBe('voice'); // Should stay in voice mode!
     expect(afterPTT.trackEnabled).toBe(false);
 
     console.log('\n✅ PTT TEST PASSED');
@@ -205,7 +205,7 @@ test.describe('PTT Button Real Interaction', () => {
       const pressing = await page.evaluate(() => {
         return (window as any).voiceController?.getState();
       });
-      console.log(`Pressing ${i}:`, pressing.pttActive, pressing.armed);
+      console.log(`Pressing ${i}:`, pressing.pttActive, pressing.interactionMode);
       expect(pressing.pttActive).toBe(true);
 
       // Release
@@ -215,9 +215,9 @@ test.describe('PTT Button Real Interaction', () => {
       const released = await page.evaluate(() => {
         return (window as any).voiceController?.getState();
       });
-      console.log(`Released ${i}:`, released.pttActive, released.armed);
+      console.log(`Released ${i}:`, released.pttActive, released.interactionMode);
       expect(released.pttActive).toBe(false);
-      expect(released.armed).toBe(true);
+      expect(released.interactionMode).toBe('voice');
     }
 
     console.log('\n✅ MULTIPLE PTT CYCLES PASSED');

@@ -87,8 +87,8 @@ export async function mockConnect() {
   voiceController.setMicrophoneStream(mockStream);
   audioController.micStream = mockStream;
 
-  // Set armed for PTT
-  voiceController.transitionToVoice({ armed: true, handsFree: false });
+  // Set voice mode for PTT
+  voiceController.transitionToVoice({ handsFree: false });
 
   return { session: mockSession, stream: mockStream };
 }

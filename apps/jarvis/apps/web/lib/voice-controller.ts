@@ -12,7 +12,6 @@ export interface VoiceState {
   mode: 'ptt' | 'vad' | 'off';
   interactionMode: 'voice' | 'text';  // Overall interaction mode
   active: boolean;  // Is mic currently hot?
-  armed: boolean;   // Ready to receive input?
   handsFree: boolean;
   transcript: string;
   finalTranscript: string;
@@ -41,7 +40,6 @@ export class VoiceController {
     mode: 'ptt',
     interactionMode: 'voice',
     active: false,
-    armed: false,
     handsFree: false,
     transcript: '',
     finalTranscript: '',
@@ -109,7 +107,7 @@ export class VoiceController {
       logger.info('Voice session connected');
     } else {
       logger.info('Voice session disconnected');
-      this.setState({ active: false, armed: false });
+      this.setState({ active: false, pttActive: false });
     }
   }
 
@@ -122,12 +120,12 @@ export class VoiceController {
   // ============= PTT (Push-to-Talk) =============
 
   startPTT(): void {
-    logger.info('PTT pressed - arming voice');
+    logger.info('PTT pressed - activating voice');
 
     this.setState({
       mode: 'ptt',
+      interactionMode: 'voice',
       active: true,
-      armed: true,
       pttActive: true,
       transcript: '',
       finalTranscript: ''
@@ -145,7 +143,6 @@ export class VoiceController {
 
     this.setState({
       active: false,
-      // Keep armed: true so user can press PTT again
       pttActive: false
     });
 
@@ -181,8 +178,8 @@ export class VoiceController {
 
     if (enabled) {
       this.setState({
+        interactionMode: 'voice',
         handsFree: true,
-        armed: true,
         mode: 'vad',
         pttActive: false
       });
@@ -190,7 +187,6 @@ export class VoiceController {
     } else {
       this.setState({
         handsFree: false,
-        armed: true, // Keep armed for PTT mode
         active: false,
         mode: 'ptt'
       });
@@ -268,20 +264,19 @@ export class VoiceController {
     return this.state.interactionMode === 'text';
   }
 
-  transitionToVoice(options?: { armed?: boolean; handsFree?: boolean }): void {
+  transitionToVoice(options?: { handsFree?: boolean }): void {
     this.setState({
       interactionMode: 'voice',
-      armed: options?.armed ?? false,
       handsFree: options?.handsFree ?? false
     });
     logger.info('Transitioned to voice mode', options);
   }
 
   transitionToText(): void {
-    if (this.state.armed) {
+    if (this.state.pttActive) {
       this.stopPTT();
     }
-    this.setState({ interactionMode: 'text' });
+    this.setState({ interactionMode: 'text', active: false });
     logger.info('Transitioned to text mode');
   }
 
@@ -308,7 +303,6 @@ export class VoiceController {
       mode: 'ptt',
       interactionMode: 'voice',
       active: false,
-      armed: false,
       handsFree: false,
       pttActive: false,
       vadActive: false,

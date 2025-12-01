@@ -178,8 +178,8 @@ export class TextChannelController {
       this.voiceController.transitionToText();
     }
 
-    // 2. Ensure voice is muted
-    if (this.voiceController && this.voiceController.getState().armed) {
+    // 2. Ensure voice is muted (stop PTT if active)
+    if (this.voiceController && this.voiceController.getState().pttActive) {
       console.log('[TextController] Muting voice channel');
       this.voiceController.stopPTT();
     }

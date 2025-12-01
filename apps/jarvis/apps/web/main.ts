@@ -121,7 +121,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Hold to talk
     const startTalking = () => {
       const state = voiceController.getState();
-      if (voiceController.isConnected() && state.armed && !state.handsFree) {
+      if (voiceController.isConnected() && voiceController.isVoiceMode() && !state.handsFree) {
         voiceController.startPTT();
       }
     };
@@ -156,7 +156,7 @@ document.addEventListener("DOMContentLoaded", async () => {
            return;
         }
         
-        if (voiceController.getState().armed) {
+        if (voiceController.isVoiceMode()) {
           voiceController.startPTT();
         }
       }
@@ -202,7 +202,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       handsFreeToggle!.setAttribute('aria-checked', enabled.toString());
       
       if (enabled && voiceController.isTextMode()) {
-        voiceController.transitionToVoice({ armed: false, handsFree: false });
+        voiceController.transitionToVoice({ handsFree: false });
       }
       voiceController.setHandsFree(enabled);
       uiEnhancements.showToast(enabled ? 'Hands-free enabled' : 'Hands-free disabled', 'info');

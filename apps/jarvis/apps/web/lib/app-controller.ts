@@ -117,8 +117,8 @@ export class AppController {
       uiController.updateButtonState(VoiceButtonState.READY);
       this.connecting = false;
 
-      // Arm PTT for ready state - always set this after connection
-      voiceController.transitionToVoice({ armed: true, handsFree: false });
+      // Set voice mode ready state after connection
+      voiceController.transitionToVoice({ handsFree: false });
 
       // Feedback
       feedbackSystem.playConnectChime();

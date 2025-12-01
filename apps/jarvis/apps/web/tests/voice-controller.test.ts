@@ -39,7 +39,6 @@ describe('VoiceController', () => {
         mode: 'ptt',
         interactionMode: 'voice',
         active: false,
-        armed: false,
         handsFree: false,
         transcript: '',
         finalTranscript: '',
@@ -53,7 +52,7 @@ describe('VoiceController', () => {
     it('should activate on PTT press with session', async () => {
       controller.setSession(mockSession);
       listener.mockClear(); // Clear initial state event
-      
+
       controller.startPTT();
 
       expect(listener).toHaveBeenCalledWith(
@@ -61,23 +60,24 @@ describe('VoiceController', () => {
           type: 'stateChange',
           state: expect.objectContaining({
             active: true,
-            armed: true,
             pttActive: true,
-            mode: 'ptt'
+            mode: 'ptt',
+            interactionMode: 'voice'
           })
         })
       );
     });
 
-    it('should still arm even without session (for testing)', () => {
+    it('should activate even without session (for testing)', () => {
       controller.startPTT();
 
-      expect(controller.getState().armed).toBe(true);
+      expect(controller.getState().pttActive).toBe(true);
+      expect(controller.getState().active).toBe(true);
       // Should trigger state change
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
            type: 'stateChange',
-           state: expect.objectContaining({ armed: true })
+           state: expect.objectContaining({ pttActive: true })
         })
       );
     });
@@ -86,7 +86,7 @@ describe('VoiceController', () => {
       controller.setSession(mockSession);
       controller.startPTT();
       listener.mockClear();
-      
+
       controller.stopPTT();
 
       expect(listener).toHaveBeenCalledWith(
@@ -94,7 +94,6 @@ describe('VoiceController', () => {
           type: 'stateChange',
           state: expect.objectContaining({
             active: false,
-            armed: false,
             pttActive: false
           })
         })
@@ -180,7 +179,7 @@ describe('VoiceController', () => {
     it('should enable hands-free mode', () => {
       controller.setSession(mockSession);
       listener.mockClear();
-      
+
       controller.setHandsFree(true);
 
       expect(listener).toHaveBeenCalledWith(
@@ -188,8 +187,8 @@ describe('VoiceController', () => {
           type: 'stateChange',
           state: expect.objectContaining({
             handsFree: true,
-            armed: true,
-            mode: 'vad'
+            mode: 'vad',
+            interactionMode: 'voice'
           })
         })
       );
@@ -216,7 +215,7 @@ describe('VoiceController', () => {
       controller.setSession(mockSession);
       controller.setHandsFree(true);
       listener.mockClear();
-      
+
       controller.setHandsFree(false);
 
       expect(listener).toHaveBeenCalledWith(
@@ -224,7 +223,7 @@ describe('VoiceController', () => {
            type: 'stateChange',
            state: expect.objectContaining({
              handsFree: false,
-             armed: false,
+             active: false,
              mode: 'ptt'
            })
          })
@@ -292,14 +291,14 @@ describe('VoiceController', () => {
   describe('Session Management', () => {
     it('should handle session connection', () => {
       controller.setSession(mockSession);
-      expect(controller.getState().armed).toBe(false);
+      expect(controller.isConnected()).toBe(true);
     });
 
     it('should reset state on session disconnect', () => {
       controller.setSession(mockSession);
       controller.startPTT();
       listener.mockClear();
-      
+
       controller.setSession(null);
 
       expect(listener).toHaveBeenCalledWith(
@@ -307,7 +306,7 @@ describe('VoiceController', () => {
           type: 'stateChange',
           state: expect.objectContaining({
             active: false,
-            armed: false
+            pttActive: false
           })
         })
       );
@@ -355,7 +354,6 @@ describe('VoiceController', () => {
         mode: 'ptt',
         interactionMode: 'voice',
         active: false,
-        armed: false,
         handsFree: false,
         transcript: '',
         finalTranscript: '',
@@ -388,7 +386,7 @@ describe('VoiceController', () => {
 
       const state = controller.getState();
       expect(state.pttActive).toBe(false);
-      expect(state.armed).toBe(false);
+      expect(state.active).toBe(false);
     });
 
     it('should handle mode switching', () => {

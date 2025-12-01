@@ -32,13 +32,13 @@ test.describe('Voice Modes E2E', () => {
       const vc = (window as any).voiceController;
       return {
         isConnected: vc.isConnected(),
-        armed: vc.getState().armed,
+        interactionMode: vc.getState().interactionMode,
         handsFree: vc.getState().handsFree
       };
     });
 
     expect(state.isConnected).toBe(true);
-    expect(state.armed).toBe(true);
+    expect(state.interactionMode).toBe('voice');
     expect(state.handsFree).toBe(false);
   });
 
@@ -76,7 +76,7 @@ test.describe('Voice Modes E2E', () => {
     await pttBtn.dispatchEvent('mouseup');
     await page.waitForTimeout(100);
 
-    // Check PTT is inactive but armed for next press
+    // Check PTT is inactive but ready for next press
     const afterRelease = await page.evaluate(() => {
       const vc = (window as any).voiceController;
       const ac = (window as any).audioController;
@@ -85,14 +85,14 @@ test.describe('Voice Modes E2E', () => {
       return {
         pttActive: vc.getState().pttActive,
         active: vc.getState().active,
-        armed: vc.getState().armed,
+        interactionMode: vc.getState().interactionMode,
         micEnabled: track?.enabled
       };
     });
 
     expect(afterRelease.pttActive).toBe(false);
     expect(afterRelease.active).toBe(false);
-    expect(afterRelease.armed).toBe(true); // Should stay armed
+    expect(afterRelease.interactionMode).toBe('voice'); // Should stay in voice mode
     expect(afterRelease.micEnabled).toBe(false);
   });
 
@@ -114,12 +114,12 @@ test.describe('Voice Modes E2E', () => {
         const vc = (window as any).voiceController;
         return {
           pttActive: vc.getState().pttActive,
-          armed: vc.getState().armed
+          active: vc.getState().active
         };
       });
 
       expect(pressing.pttActive).toBe(true);
-      expect(pressing.armed).toBe(true);
+      expect(pressing.active).toBe(true);
 
       // Release
       await pttBtn.dispatchEvent('mouseup');
@@ -129,12 +129,12 @@ test.describe('Voice Modes E2E', () => {
         const vc = (window as any).voiceController;
         return {
           pttActive: vc.getState().pttActive,
-          armed: vc.getState().armed
+          interactionMode: vc.getState().interactionMode
         };
       });
 
       expect(released.pttActive).toBe(false);
-      expect(released.armed).toBe(true); // Should stay armed
+      expect(released.interactionMode).toBe('voice'); // Should stay in voice mode
     }
   });
 
@@ -158,7 +158,7 @@ test.describe('Voice Modes E2E', () => {
 
       return {
         handsFree: vc.getState().handsFree,
-        armed: vc.getState().armed,
+        interactionMode: vc.getState().interactionMode,
         mode: vc.getState().mode,
         micEnabled: track?.enabled,
         toggleState: document.getElementById('handsFreeToggle')?.getAttribute('aria-checked')
@@ -166,7 +166,7 @@ test.describe('Voice Modes E2E', () => {
     });
 
     expect(afterToggle.handsFree).toBe(true);
-    expect(afterToggle.armed).toBe(true);
+    expect(afterToggle.interactionMode).toBe('voice');
     expect(afterToggle.mode).toBe('vad');
     expect(afterToggle.micEnabled).toBe(true); // Mic should be on
     expect(afterToggle.toggleState).toBe('true');
@@ -301,7 +301,7 @@ test.describe('Voice Modes E2E', () => {
 
     expect(state.handsFree).toBe(false);
     expect(state.mode).toBe('ptt');
-    expect(state.armed).toBe(true); // Should be armed for PTT
+    expect(state.interactionMode).toBe('voice'); // Should be in voice mode for PTT
     expect(state.micEnabled).toBe(false); // Mic should be off in PTT mode
   });
 

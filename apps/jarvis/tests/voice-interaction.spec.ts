@@ -65,11 +65,11 @@ test.describe('Voice Interaction Flow', () => {
       return document.getElementById('pttBtn')?.classList.contains('ready');
     }, { timeout: 10000 });
 
-    // Check voiceController armed state
-    const isArmed = await page.evaluate(() => {
-      return (window as any).voiceController?.getState().armed;
+    // Check voiceController is in voice mode
+    const isVoiceMode = await page.evaluate(() => {
+      return (window as any).voiceController?.getState().interactionMode === 'voice';
     });
-    expect(isArmed).toBe(true);
+    expect(isVoiceMode).toBe(true);
 
     // Press and hold button
     await pttBtn.dispatchEvent('mousedown');
