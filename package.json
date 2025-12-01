@@ -8,9 +8,7 @@
     "apps/jarvis/apps/*",
     "apps/jarvis/packages/*",
     "apps/jarvis/packages/data/*",
-    "apps/zerg/frontend-web",
-    "prerender",
-    "packages/*"
+    "apps/zerg/frontend-web"
   ],
   "scripts": {
     "dev": "make dev",
