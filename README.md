@@ -1,12 +1,18 @@
-# Zerg
+<p align="center">
+  <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="200" />
+</p>
 
-**Visual AI workflow automation with real-time streaming.**
+<h1 align="center">Zerg</h1>
+
+<p align="center">
+  <strong>Visual AI workflow automation with real-time streaming.</strong>
+</p>
 
 Zerg combines chat-based AI agents, a visual workflow canvas, and per-token LLM streaming into a unified platform. Build automations where every visual node maps directly to runtime execution—not config files, not YAML, but a live canvas.
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -36,7 +42,7 @@ Zerg combines chat-based AI agents, a visual workflow canvas, and per-token LLM 
 
 ---
 
-## Key Features
+## ✨ Key Features
 
 ### Visual Workflow Canvas
 Drag-and-drop workflow builder with four node types:
@@ -89,7 +95,7 @@ One platform, multiple interfaces.
 
 ---
 
-## Technical Highlights
+## ⚙️ Technical Highlights
 
 **LangGraph Agent Execution**
 - Functional ReAct agents compiled to async runnables
@@ -113,7 +119,7 @@ One platform, multiple interfaces.
 
 ---
 
-## Stack
+## 🛠️ Stack
 
 | Layer | Technology |
 |-------|------------|
@@ -127,7 +133,7 @@ One platform, multiple interfaces.
 
 ---
 
-## Monorepo Structure
+## 📁 Monorepo Structure
 
 ```
 apps/
