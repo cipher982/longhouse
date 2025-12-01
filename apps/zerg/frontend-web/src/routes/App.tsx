@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useRoutes } from "react-router-dom";
 import Layout from "../components/Layout";
+import LandingPage from "../pages/LandingPage";
 import DashboardPage from "../pages/DashboardPage";
 import ChatPage from "../pages/ChatPage";
 import CanvasPage from "../pages/CanvasPage";
@@ -12,6 +13,17 @@ import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
+
+// Authenticated app wrapper - only wraps routes that need auth
+function AuthenticatedApp({ children }: { children: React.ReactNode }) {
+  return (
+    <AuthGuard clientId={config.googleClientId}>
+      <ShelfProvider>
+        <Layout>{children}</Layout>
+      </ShelfProvider>
+    </AuthGuard>
+  );
+}
 
 export default function App() {
   // Performance monitoring
@@ -26,69 +38,86 @@ export default function App() {
   }, []);
 
   const routes = useRoutes([
+    // Landing page - NO AuthGuard (public)
+    {
+      path: "/",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      )
+    },
+    // Authenticated routes
     {
       path: "/dashboard",
       element: (
-        <ErrorBoundary>
-          <DashboardPage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <DashboardPage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
     {
       path: "/canvas",
       element: (
-        <ErrorBoundary>
-          <CanvasPage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <CanvasPage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
     {
       path: "/agent/:agentId/thread/:threadId?",
       element: (
-        <ErrorBoundary>
-          <ChatPage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <ChatPage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
     {
       path: "/profile",
       element: (
-        <ErrorBoundary>
-          <ProfilePage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <ProfilePage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
     {
       path: "/settings/integrations",
       element: (
-        <ErrorBoundary>
-          <IntegrationsPage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <IntegrationsPage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
     {
       path: "/admin",
       element: (
-        <ErrorBoundary>
-          <AdminPage />
-        </ErrorBoundary>
+        <AuthenticatedApp>
+          <ErrorBoundary>
+            <AdminPage />
+          </ErrorBoundary>
+        </AuthenticatedApp>
       )
     },
+    // Fallback - redirect to landing for unknown routes
     {
       path: "*",
       element: (
         <ErrorBoundary>
-          <DashboardPage />
+          <LandingPage />
         </ErrorBoundary>
       )
     },
   ]);
 
-  return (
-    <AuthGuard clientId={config.googleClientId}>
-      <ShelfProvider>
-        <Layout>{routes}</Layout>
-      </ShelfProvider>
-    </AuthGuard>
-  );
+  return routes;
 }
