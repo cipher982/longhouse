@@ -74,7 +74,8 @@ export default function PricingPage() {
 
             <h3>Questions?</h3>
             <p>
-              Email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
+              Join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
+              email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
             </p>
           </div>
         </div>

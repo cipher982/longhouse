@@ -99,8 +99,8 @@ export default function SecurityPage() {
           <div className="security-contact">
             <h3>Questions?</h3>
             <p>
-              For security questions, email{" "}
-              <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
+              For security questions, join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
+              email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
             </p>
             <p>
               For privacy questions, see our <Link to="/privacy">Privacy Policy</Link>.
