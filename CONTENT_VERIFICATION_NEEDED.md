@@ -49,7 +49,7 @@ The info pages have been stripped of unverified claims. Most pages now contain o
 - [x] `swarmlet@drose.io` - Updated all pages to use this
 
 ### Discord
-- [ ] Need a public invite link (discord.gg/XXXX) to add Discord contact option
+- [x] `https://discord.gg/h2CWBUrj` - Added to all contact sections
 
 ### GitHub URL
 - Currently links to `https://github.com/cipher982/zerg`

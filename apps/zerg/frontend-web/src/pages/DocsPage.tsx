@@ -114,7 +114,8 @@ export default function DocsPage() {
           <h2>Need Help?</h2>
           <p>
             <MessageCircleIcon width={16} height={16} style={{ verticalAlign: 'middle', marginRight: '8px' }} />
-            Questions? Email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a> or
+            Questions? Join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a>,
+            email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>, or
             open an issue on <a href="https://github.com/cipher982/zerg" target="_blank" rel="noopener noreferrer">GitHub</a>.
           </p>
         </section>

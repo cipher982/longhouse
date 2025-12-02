@@ -49,6 +49,7 @@ export function FooterCTA() {
               <Link to="/security">Security</Link>
               <Link to="/privacy">Privacy</Link>
               <a href="mailto:swarmlet@drose.io">Contact</a>
+              <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a>
             </div>
           </nav>
         </div>
