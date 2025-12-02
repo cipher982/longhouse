@@ -74,7 +74,7 @@ export default function PricingPage() {
 
             <h3>Questions?</h3>
             <p>
-              Email <a href="mailto:hello@swarmlet.com">hello@swarmlet.com</a>
+              Email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
             </p>
           </div>
         </div>
