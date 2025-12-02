@@ -21,8 +21,8 @@ export function NerdSection() {
     },
     {
       icon: <BrainIcon width={32} height={32} />,
-      title: "Bring your own LLM keys",
-      description: "Tune cost/latency to your needs",
+      title: "Powered by GPT-4",
+      description: "OpenAI models for reliable AI",
     },
     {
       icon: <BarChartIcon width={32} height={32} />,
