@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import "../styles/info-pages.css";
@@ -64,6 +65,10 @@ const changelog: ChangelogEntry[] = [
 
 export default function ChangelogPage() {
   const currentYear = new Date().getFullYear();
+
+  useEffect(() => {
+    document.title = "Changelog - Swarmlet";
+  }, []);
 
   return (
     <div className="info-page">

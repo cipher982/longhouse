@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import "../styles/info-pages.css";
@@ -5,6 +6,10 @@ import "../styles/info-pages.css";
 export default function PrivacyPage() {
   const currentYear = new Date().getFullYear();
   const lastUpdated = "December 2, 2024";
+
+  useEffect(() => {
+    document.title = "Privacy Policy - Swarmlet";
+  }, []);
 
   return (
     <div className="info-page">
