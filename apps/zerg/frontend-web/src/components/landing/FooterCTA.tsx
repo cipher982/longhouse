@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
 
 export function FooterCTA() {
@@ -35,18 +36,18 @@ export function FooterCTA() {
               <h4>Product</h4>
               <a href="#scenarios">Features</a>
               <a href="#integrations">Integrations</a>
-              <a href="#pricing">Pricing</a>
+              <Link to="/pricing">Pricing</Link>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Resources</h4>
-              <a href="/docs" target="_blank" rel="noopener noreferrer">Documentation</a>
-              <a href="/changelog" target="_blank" rel="noopener noreferrer">Changelog</a>
+              <Link to="/docs">Documentation</Link>
+              <Link to="/changelog">Changelog</Link>
               <a href="https://github.com/swarmlet" target="_blank" rel="noopener noreferrer">GitHub</a>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Company</h4>
-              <a href="/security">Security</a>
-              <a href="/privacy">Privacy</a>
+              <Link to="/security">Security</Link>
+              <Link to="/privacy">Privacy</Link>
               <a href="mailto:hello@swarmlet.ai">Contact</a>
             </div>
           </nav>

@@ -794,6 +794,32 @@
   font-size: var(--font-size-lg);
 }
 
+.landing-trust-icon-svg {
+  color: var(--color-brand-primary);
+  flex-shrink: 0;
+}
+
+.landing-trust-badges-link {
+  display: block;
+  text-decoration: none;
+  transition: transform var(--motion-duration-fast);
+}
+
+.landing-trust-badges-link:hover {
+  transform: translateY(-2px);
+}
+
+.landing-trust-badges-link:hover .landing-trust-badge {
+  border-color: var(--color-brand-primary);
+}
+
+.landing-trust-link-text {
+  margin-top: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-brand-primary);
+  text-align: center;
+}
+
 /* --------------------------------------------------------
    FOOTER
    -------------------------------------------------------- */
