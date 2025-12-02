@@ -38,7 +38,7 @@ export default function PricingPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Pricing</h1>
         <p className="info-page-subtitle">
-          Free during beta. Bring your own API keys.
+          Free during beta.
         </p>
 
         <div className="pricing-tiers">
@@ -55,7 +55,7 @@ export default function PricingPage() {
               <li>Create agents and workflows</li>
               <li>Visual workflow builder</li>
               <li>Available integrations</li>
-              <li>Bring your own LLM keys</li>
+              <li>Powered by OpenAI</li>
             </ul>
             <button className="btn-primary pricing-tier-cta" onClick={handleGetStarted}>
               Get Started Free
@@ -69,13 +69,7 @@ export default function PricingPage() {
           <div className="docs-section">
             <h3>Why is it free?</h3>
             <p>
-              We're in beta. You bring your own LLM API keys, so our costs are minimal.
-            </p>
-
-            <h3>Do I need my own API keys?</h3>
-            <p>
-              Yes. You provide your own OpenAI, Anthropic, or other LLM API keys.
-              This gives you control over your AI spend.
+              We're in beta and want early users to help shape the product.
             </p>
 
             <h3>Questions?</h3>

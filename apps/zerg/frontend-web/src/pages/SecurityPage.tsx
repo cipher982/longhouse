@@ -53,8 +53,8 @@ export default function SecurityPage() {
             <div className="security-highlight-icon">
               <KeyIcon width={24} height={24} />
             </div>
-            <h3>Your API Keys</h3>
-            <p>Bring your own LLM credentials</p>
+            <h3>Secure Credentials</h3>
+            <p>Integration credentials encrypted</p>
           </div>
           <div className="security-highlight">
             <div className="security-highlight-icon">
@@ -72,10 +72,10 @@ export default function SecurityPage() {
             You can revoke access anytime from your Google account settings.
           </p>
 
-          <h2>Your API Keys</h2>
+          <h2>Integration Credentials</h2>
           <p>
-            You bring your own LLM API keys (OpenAI, Anthropic, etc.). Your keys are stored encrypted
-            and are only used to make API calls on your behalf. You can delete them from your settings at any time.
+            When you connect integrations (Slack, Discord, GitHub, etc.), your credentials are stored
+            encrypted and only used to connect to those services on your behalf.
           </p>
 
           <h2>Your Controls</h2>

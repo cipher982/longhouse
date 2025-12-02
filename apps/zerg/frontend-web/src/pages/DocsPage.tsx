@@ -60,9 +60,9 @@ export default function DocsPage() {
             Click "Start Free" on the homepage and sign in with your Google account.
           </p>
 
-          <h3>2. Add Your LLM Key</h3>
+          <h3>2. Explore the Dashboard</h3>
           <p>
-            Swarmlet uses your own API keys. Go to Settings and add your OpenAI or Anthropic API key.
+            Once signed in, you'll land on the Dashboard where you can see and manage your agents.
           </p>
 
           <h3>3. Create an Agent</h3>

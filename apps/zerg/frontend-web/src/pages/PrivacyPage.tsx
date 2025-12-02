@@ -48,9 +48,9 @@ export default function PrivacyPage() {
             This data is associated with your account.
           </p>
 
-          <h3>API Keys</h3>
+          <h3>Integration Credentials</h3>
           <p>
-            When you add LLM API keys, they are stored encrypted and only used to make API calls on your behalf.
+            When you connect integrations, your credentials are stored encrypted.
           </p>
 
           <h2>What We Don't Do</h2>
@@ -64,7 +64,7 @@ export default function PrivacyPage() {
           <ul>
             <li><strong>Access</strong> your data through the dashboard</li>
             <li><strong>Delete</strong> your account and data from settings</li>
-            <li><strong>Revoke</strong> API keys and integrations at any time</li>
+            <li><strong>Revoke</strong> integrations at any time</li>
           </ul>
 
           <h2>Cookies</h2>

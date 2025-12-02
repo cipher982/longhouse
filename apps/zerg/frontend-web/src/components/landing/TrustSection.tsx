@@ -25,8 +25,8 @@ const faqs: FAQ[] = [
     answer: "No. Your conversations and data are never used to train any AI models. Your data is yours alone."
   },
   {
-    question: "What LLMs do you support?",
-    answer: "We support OpenAI (GPT-4, GPT-3.5), Anthropic (Claude), Google (Gemini), and more. You can bring your own API keys for full control over costs."
+    question: "What LLM do you use?",
+    answer: "Swarmlet currently uses OpenAI models (GPT-4, GPT-3.5) for AI capabilities."
   }
 ];
 
