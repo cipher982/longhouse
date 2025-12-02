@@ -2,6 +2,11 @@ import { useEffect } from "react";
 import { useRoutes, Outlet } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
+import PricingPage from "../pages/PricingPage";
+import DocsPage from "../pages/DocsPage";
+import ChangelogPage from "../pages/ChangelogPage";
+import PrivacyPage from "../pages/PrivacyPage";
+import SecurityPage from "../pages/SecurityPage";
 import DashboardPage from "../pages/DashboardPage";
 import ChatPage from "../pages/ChatPage";
 import CanvasPage from "../pages/CanvasPage";
@@ -47,6 +52,47 @@ export default function App() {
       element: (
         <ErrorBoundary>
           <LandingPage />
+        </ErrorBoundary>
+      )
+    },
+    // Public info pages - NO AuthGuard
+    {
+      path: "/pricing",
+      element: (
+        <ErrorBoundary>
+          <PricingPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/docs",
+      element: (
+        <ErrorBoundary>
+          <DocsPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/changelog",
+      element: (
+        <ErrorBoundary>
+          <ChangelogPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/privacy",
+      element: (
+        <ErrorBoundary>
+          <PrivacyPage />
+        </ErrorBoundary>
+      )
+    },
+    {
+      path: "/security",
+      element: (
+        <ErrorBoundary>
+          <SecurityPage />
         </ErrorBoundary>
       )
     },
