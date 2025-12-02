@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useRoutes } from "react-router-dom";
+import { useRoutes, Outlet } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import DashboardPage from "../pages/DashboardPage";
@@ -14,12 +14,15 @@ import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
 
-// Authenticated app wrapper - only wraps routes that need auth
-function AuthenticatedApp({ children }: { children: React.ReactNode }) {
+// Authenticated app wrapper - wraps all authenticated routes with a single instance
+// This prevents remounting Layout/StatusFooter/WebSocket on navigation
+function AuthenticatedApp() {
   return (
     <AuthGuard clientId={config.googleClientId}>
       <ShelfProvider>
-        <Layout>{children}</Layout>
+        <Layout>
+          <Outlet />
+        </Layout>
       </ShelfProvider>
     </AuthGuard>
   );
@@ -47,66 +50,59 @@ export default function App() {
         </ErrorBoundary>
       )
     },
-    // Authenticated routes
+    // Authenticated routes - nested under a single AuthenticatedApp wrapper
     {
-      path: "/dashboard",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <DashboardPage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
-    },
-    {
-      path: "/canvas",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <CanvasPage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
-    },
-    {
-      path: "/agent/:agentId/thread/:threadId?",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <ChatPage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
-    },
-    {
-      path: "/profile",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <ProfilePage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
-    },
-    {
-      path: "/settings/integrations",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <IntegrationsPage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
-    },
-    {
-      path: "/admin",
-      element: (
-        <AuthenticatedApp>
-          <ErrorBoundary>
-            <AdminPage />
-          </ErrorBoundary>
-        </AuthenticatedApp>
-      )
+      element: <AuthenticatedApp />,
+      children: [
+        {
+          path: "/dashboard",
+          element: (
+            <ErrorBoundary>
+              <DashboardPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/canvas",
+          element: (
+            <ErrorBoundary>
+              <CanvasPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/agent/:agentId/thread/:threadId?",
+          element: (
+            <ErrorBoundary>
+              <ChatPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/profile",
+          element: (
+            <ErrorBoundary>
+              <ProfilePage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/settings/integrations",
+          element: (
+            <ErrorBoundary>
+              <IntegrationsPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/admin",
+          element: (
+            <ErrorBoundary>
+              <AdminPage />
+            </ErrorBoundary>
+          )
+        },
+      ]
     },
     // Fallback - redirect to landing for unknown routes
     {
