@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { LockIcon, ShieldIcon, TrashIcon, BanIcon } from "../icons";
 
 interface FAQ {
   question: string;
@@ -66,25 +68,28 @@ export function TrustSection() {
           ))}
         </div>
 
-        {/* Trust badges */}
-        <div className="landing-trust-badges">
-          <div className="landing-trust-badge">
-            <span className="landing-trust-icon">🔒</span>
-            <span>Encrypted at rest</span>
+        {/* Trust badges - linked to Security page */}
+        <Link to="/security" className="landing-trust-badges-link">
+          <div className="landing-trust-badges">
+            <div className="landing-trust-badge">
+              <LockIcon width={18} height={18} className="landing-trust-icon-svg" />
+              <span>Encrypted at rest</span>
+            </div>
+            <div className="landing-trust-badge">
+              <ShieldIcon width={18} height={18} className="landing-trust-icon-svg" />
+              <span>SOC 2 roadmap</span>
+            </div>
+            <div className="landing-trust-badge">
+              <TrashIcon width={18} height={18} className="landing-trust-icon-svg" />
+              <span>Full data deletion</span>
+            </div>
+            <div className="landing-trust-badge">
+              <BanIcon width={18} height={18} className="landing-trust-icon-svg" />
+              <span>No training on your data</span>
+            </div>
           </div>
-          <div className="landing-trust-badge">
-            <span className="landing-trust-icon">🛡️</span>
-            <span>SOC 2 roadmap</span>
-          </div>
-          <div className="landing-trust-badge">
-            <span className="landing-trust-icon">🗑️</span>
-            <span>Full data deletion</span>
-          </div>
-          <div className="landing-trust-badge">
-            <span className="landing-trust-icon">🚫</span>
-            <span>No training on your data</span>
-          </div>
-        </div>
+          <p className="landing-trust-link-text">Learn more about our security practices →</p>
+        </Link>
       </div>
     </section>
   );
