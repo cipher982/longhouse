@@ -1,17 +1,80 @@
+import {
+  SlackIcon,
+  GamepadIcon,
+  MailIcon,
+  MessageSquareIcon,
+  GithubIcon,
+  ClipboardListIcon,
+  ZapIcon,
+  FileTextIcon,
+  CalendarIcon,
+  HeartIcon,
+  HomeIcon,
+  PlugIcon,
+} from "../icons";
+
 export function IntegrationsSection() {
   const integrations = [
-    { name: "Slack", icon: "💬", category: "Notifications" },
-    { name: "Discord", icon: "🎮", category: "Notifications" },
-    { name: "Email", icon: "📧", category: "Notifications" },
-    { name: "SMS", icon: "📱", category: "Notifications" },
-    { name: "GitHub", icon: "🐙", category: "Development" },
-    { name: "Jira", icon: "📋", category: "Development" },
-    { name: "Linear", icon: "⚡", category: "Development" },
-    { name: "Notion", icon: "📝", category: "Productivity" },
-    { name: "Google Calendar", icon: "📅", category: "Productivity" },
-    { name: "Apple Health", icon: "❤️", category: "Health" },
-    { name: "Home Assistant", icon: "🏠", category: "Smart Home" },
-    { name: "Any MCP Server", icon: "🔌", category: "Custom" }
+    {
+      name: "Slack",
+      icon: <SlackIcon width={32} height={32} />,
+      category: "Notifications",
+    },
+    {
+      name: "Discord",
+      icon: <GamepadIcon width={32} height={32} />,
+      category: "Notifications",
+    },
+    {
+      name: "Email",
+      icon: <MailIcon width={32} height={32} />,
+      category: "Notifications",
+    },
+    {
+      name: "SMS",
+      icon: <MessageSquareIcon width={32} height={32} />,
+      category: "Notifications",
+    },
+    {
+      name: "GitHub",
+      icon: <GithubIcon width={32} height={32} />,
+      category: "Development",
+    },
+    {
+      name: "Jira",
+      icon: <ClipboardListIcon width={32} height={32} />,
+      category: "Development",
+    },
+    {
+      name: "Linear",
+      icon: <ZapIcon width={32} height={32} />,
+      category: "Development",
+    },
+    {
+      name: "Notion",
+      icon: <FileTextIcon width={32} height={32} />,
+      category: "Productivity",
+    },
+    {
+      name: "Google Calendar",
+      icon: <CalendarIcon width={32} height={32} />,
+      category: "Productivity",
+    },
+    {
+      name: "Apple Health",
+      icon: <HeartIcon width={32} height={32} />,
+      category: "Health",
+    },
+    {
+      name: "Home Assistant",
+      icon: <HomeIcon width={32} height={32} />,
+      category: "Smart Home",
+    },
+    {
+      name: "Any MCP Server",
+      icon: <PlugIcon width={32} height={32} />,
+      category: "Custom",
+    },
   ];
 
   return (

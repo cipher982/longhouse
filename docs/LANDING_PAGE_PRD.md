@@ -146,12 +146,12 @@ This positions us AGAINST:
 ### 2. PAS BLOCK (Problem → Agitate → Solution)
 
 **Problem (3 bullets):**
-- "Your health is in one app, your calendar in another, your chats in three more."
-- "You miss things because everything is shouting at you in different places."
-- "Automation tools make you feel like you're wiring a server, not living your life."
+- "**Digital Fragmentation.** Your health, calendar, and chats are scattered across a dozen apps."
+- "**Notification Overload.** You miss what matters because everything is shouting at once."
+- "**Complexity Fatigue.** Automation tools feel like wiring a server, not living your life."
 
 **Agitate:**
-> "Most 'AI platforms' are built for teams, dashboards, and managers. You just want your own stuff taken care of — without needing a project plan."
+> "Siri can't remember what you said five minutes ago. What if your assistant was actually… smart?"
 
 **Solution:**
 > "Swarmlet is a personal AI hub: plug in the tools you already use, and it watches your life signals — health, location, messages, home — to keep you organized automatically."
