@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { BookOpenIcon, ZapIcon, PuzzleIcon, CodeIcon, MessageCircleIcon, SettingsIcon } from "../components/icons";
@@ -5,6 +6,10 @@ import "../styles/info-pages.css";
 
 export default function DocsPage() {
   const currentYear = new Date().getFullYear();
+
+  useEffect(() => {
+    document.title = "Documentation - Swarmlet";
+  }, []);
 
   return (
     <div className="info-page">
@@ -117,11 +122,13 @@ export default function DocsPage() {
 
           <h3>Supported Integrations</h3>
           <ul>
-            <li><strong>Communication</strong> - Slack, Discord, Email (SMTP), SMS</li>
-            <li><strong>Productivity</strong> - Google Calendar, Notion, GitHub, Jira</li>
-            <li><strong>Smart Home</strong> - HomeAssistant, Webhooks</li>
-            <li><strong>Custom</strong> - REST APIs, Webhooks, MCP servers</li>
+            <li><strong>Notifications</strong> - Slack, Discord, Email (Resend), SMS (Twilio)</li>
+            <li><strong>Project Management</strong> - GitHub, Jira, Linear, Notion</li>
+            <li><strong>Custom</strong> - Webhooks, REST APIs, MCP servers</li>
           </ul>
+          <p>
+            <em>Coming soon: Google Calendar, Apple Health, Home Assistant</em>
+          </p>
 
           <h3>Adding an Integration</h3>
           <p>
