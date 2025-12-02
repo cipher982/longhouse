@@ -52,12 +52,10 @@ The info pages have been stripped of unverified claims. Most pages now contain o
 - [x] `https://discord.gg/h2CWBUrj` - Added to all contact sections
 
 ### GitHub URL
-- Currently links to `https://github.com/cipher982/zerg`
-- Is this the correct public repository?
+- [x] `https://github.com/cipher982/zerg` - Confirmed and updated everywhere
 
 ### Integration Credential Encryption
-- SecurityPage and PrivacyPage state that integration credentials are "stored encrypted"
-- Is this accurate? (Check backend credential storage implementation)
+- [x] Verified: Connector credentials use Fernet encryption (agent_connectors.py:170-200)
 
 ---
 

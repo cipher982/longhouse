@@ -14,7 +14,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "Where is my data stored?",
-    answer: "Your data is encrypted at rest and stored in a PostgreSQL database. We never sell or share your personal information with third parties."
+    answer: "Your data is stored in a PostgreSQL database. We never sell or share your personal information with third parties."
   },
   {
     question: "Can I delete my data?",
@@ -73,11 +73,11 @@ export function TrustSection() {
           <div className="landing-trust-badges">
             <div className="landing-trust-badge">
               <LockIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>Encrypted at rest</span>
+              <span>Credentials encrypted</span>
             </div>
             <div className="landing-trust-badge">
               <ShieldIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>SOC 2 roadmap</span>
+              <span>HTTPS everywhere</span>
             </div>
             <div className="landing-trust-badge">
               <TrashIcon width={18} height={18} className="landing-trust-icon-svg" />

@@ -42,7 +42,7 @@ export function FooterCTA() {
               <h4>Resources</h4>
               <Link to="/docs">Documentation</Link>
               <Link to="/changelog">Changelog</Link>
-              <a href="https://github.com/swarmlet" target="_blank" rel="noopener noreferrer">GitHub</a>
+              <a href="https://github.com/cipher982/zerg" target="_blank" rel="noopener noreferrer">GitHub</a>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Company</h4>
