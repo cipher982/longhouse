@@ -1,8 +1,5 @@
-import { useState } from "react";
-import config from "../../lib/config";
-
 interface Scenario {
-  icon: string;
+  image: string;
   title: string;
   description: string;
   steps: string[];
@@ -10,7 +7,7 @@ interface Scenario {
 
 const scenarios: Scenario[] = [
   {
-    icon: "🩺",
+    image: "/images/landing/scenario-health.png",
     title: "Daily Health & Focus Check",
     description: "Connect your watch/health app + calendar",
     steps: [
@@ -20,7 +17,7 @@ const scenarios: Scenario[] = [
     ]
   },
   {
-    icon: "📬",
+    image: "/images/landing/scenario-inbox.png",
     title: "Inbox + Chat Guardian",
     description: "Connect email, Slack, Discord",
     steps: [
@@ -30,7 +27,7 @@ const scenarios: Scenario[] = [
     ]
   },
   {
-    icon: "🏠",
+    image: "/images/landing/scenario-home.png",
     title: "Smart Home That Knows You",
     description: "Use location + time + calendar",
     steps: [
@@ -42,8 +39,6 @@ const scenarios: Scenario[] = [
 ];
 
 export function ScenariosSection() {
-  const [showLogin, setShowLogin] = useState(false);
-
   const handleStartFree = () => {
     // Scroll to top and trigger login
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -63,7 +58,9 @@ export function ScenariosSection() {
         <div className="landing-scenarios-grid">
           {scenarios.map((scenario, index) => (
             <div key={index} className="landing-scenario-card" style={{ animationDelay: `${index * 100}ms` }}>
-              <div className="landing-scenario-icon">{scenario.icon}</div>
+              <div className="landing-scenario-image">
+                <img src={scenario.image} alt={scenario.title} />
+              </div>
               <h3 className="landing-scenario-title">{scenario.title}</h3>
               <p className="landing-scenario-desc">{scenario.description}</p>
               <ul className="landing-scenario-steps">
