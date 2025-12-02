@@ -176,6 +176,19 @@
   transform: translateY(-2px);
 }
 
+/* Hero visual */
+.landing-hero-visual {
+  margin-top: var(--space-12);
+  max-width: 700px;
+  animation: fadeInUp 1s ease-out 0.3s backwards;
+}
+
+.landing-hero-image {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-xl);
+}
+
 /* --------------------------------------------------------
    LOGIN MODAL
    -------------------------------------------------------- */
@@ -395,10 +408,25 @@
   box-shadow: var(--shadow-lg), 0 0 24px rgba(99, 102, 241, 0.1);
 }
 
-.landing-scenario-icon {
-  font-size: 3rem;
+.landing-scenario-image {
+  width: 100%;
+  height: 200px;
   margin-bottom: var(--space-4);
-  display: block;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface-page);
+}
+
+.landing-scenario-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
+}
+
+.landing-scenario-card:hover .landing-scenario-image img {
+  transform: scale(1.05);
 }
 
 .landing-scenario-title {
@@ -571,6 +599,21 @@
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   margin: 0;
+}
+
+/* Canvas preview */
+.landing-nerd-canvas {
+  margin: var(--space-12) 0;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg), 0 0 48px rgba(99, 102, 241, 0.15);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.landing-nerd-canvas-image {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .landing-nerd-tech {

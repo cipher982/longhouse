@@ -58,6 +58,15 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
             See it in action ↓
           </button>
         </div>
+
+        {/* Hero visual - Connected AI brain */}
+        <div className="landing-hero-visual">
+          <img 
+            src="/images/landing/hero-orb.png" 
+            alt="AI brain connected to your apps - health, email, home, calendar, and more"
+            className="landing-hero-image"
+          />
+        </div>
       </div>
 
       {/* Login Modal */}
@@ -132,7 +141,6 @@ function GoogleSignInButtonWrapper() {
           window.google.accounts.id.renderButton(buttonDiv, {
             theme: 'filled_black',
             size: 'large',
-            width: 280,
           });
         }
       }
