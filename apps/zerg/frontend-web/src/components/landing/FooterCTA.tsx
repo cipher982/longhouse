@@ -48,7 +48,7 @@ export function FooterCTA() {
               <h4>Company</h4>
               <Link to="/security">Security</Link>
               <Link to="/privacy">Privacy</Link>
-              <a href="mailto:hello@swarmlet.com">Contact</a>
+              <a href="mailto:swarmlet@drose.io">Contact</a>
             </div>
           </nav>
         </div>

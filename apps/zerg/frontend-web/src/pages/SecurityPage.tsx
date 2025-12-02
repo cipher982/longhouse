@@ -91,7 +91,7 @@ export default function SecurityPage() {
             If you discover a security vulnerability, please report it to us:
           </p>
           <ul>
-            <li>Email: <a href="mailto:security@swarmlet.com">security@swarmlet.com</a></li>
+            <li>Email: <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a></li>
             <li>Include details and steps to reproduce</li>
             <li>Allow reasonable time for us to address it</li>
           </ul>
@@ -100,7 +100,7 @@ export default function SecurityPage() {
             <h3>Questions?</h3>
             <p>
               For security questions, email{" "}
-              <a href="mailto:security@swarmlet.com">security@swarmlet.com</a>
+              <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
             </p>
             <p>
               For privacy questions, see our <Link to="/privacy">Privacy Policy</Link>.

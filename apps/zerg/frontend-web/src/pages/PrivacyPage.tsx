@@ -81,7 +81,7 @@ export default function PrivacyPage() {
 
           <h2>Contact</h2>
           <p>
-            Questions? Email <a href="mailto:privacy@swarmlet.com">privacy@swarmlet.com</a>
+            Questions? Email <a href="mailto:swarmlet@drose.io">swarmlet@drose.io</a>
           </p>
         </div>
       </main>

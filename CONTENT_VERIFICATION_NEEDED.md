@@ -45,13 +45,11 @@ The info pages have been stripped of unverified claims. Most pages now contain o
 
 ## Remaining Items to Verify
 
-### Email Addresses
-Do these mailboxes exist and are they monitored?
-- [ ] `hello@swarmlet.com`
-- [ ] `security@swarmlet.com`
-- [ ] `privacy@swarmlet.com`
+### Email Address
+- [x] `swarmlet@drose.io` - Updated all pages to use this
 
-If not, update contact sections or set up the mailboxes.
+### Discord
+- [ ] Need a public invite link (discord.gg/XXXX) to add Discord contact option
 
 ### GitHub URL
 - Currently links to `https://github.com/cipher982/zerg`
