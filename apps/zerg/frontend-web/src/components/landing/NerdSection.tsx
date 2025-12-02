@@ -1,35 +1,44 @@
+import {
+  WrenchIcon,
+  PlugIcon,
+  BrainIcon,
+  BarChartIcon,
+  ZapIcon,
+  PaletteIcon,
+} from "../icons";
+
 export function NerdSection() {
   const features = [
     {
-      icon: "🔧",
+      icon: <WrenchIcon width={32} height={32} />,
       title: "Custom agents & workflows",
-      description: "Build without fighting YAML configs"
+      description: "Build without fighting YAML configs",
     },
     {
-      icon: "🔌",
+      icon: <PlugIcon width={32} height={32} />,
       title: "Connect anything",
-      description: "Webhooks, APIs, and MCP servers"
+      description: "Webhooks, APIs, and MCP servers",
     },
     {
-      icon: "🧠",
+      icon: <BrainIcon width={32} height={32} />,
       title: "Bring your own LLM keys",
-      description: "Tune cost/latency to your needs"
+      description: "Tune cost/latency to your needs",
     },
     {
-      icon: "📊",
+      icon: <BarChartIcon width={32} height={32} />,
       title: "Step-by-step logs",
-      description: "Inspect exactly what your agents did"
+      description: "Inspect exactly what your agents did",
     },
     {
-      icon: "⚡",
+      icon: <ZapIcon width={32} height={32} />,
       title: "Scheduled or triggered",
-      description: "Run on schedule or event-driven"
+      description: "Run on schedule or event-driven",
     },
     {
-      icon: "🎨",
+      icon: <PaletteIcon width={32} height={32} />,
       title: "Visual canvas",
-      description: "Drag-and-drop workflow builder"
-    }
+      description: "Drag-and-drop workflow builder",
+    },
   ];
 
   const techHighlights = [
