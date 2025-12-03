@@ -566,6 +566,14 @@ The result: Agents accurately represent what they can do NOW, guide users to ena
 | Agent runner integration | ✅ Done | `zerg/managers/agent_runner.py` - `run_thread()` |
 | Unit tests | ✅ Done | 53 tests in `tests/connectors/` and `tests/prompts/` |
 
+### P1 Items - ✅ COMPLETE
+
+| Item | Status | Implementation |
+|------|--------|----------------|
+| Standardized error envelope | ✅ Done | `zerg/tools/error_envelope.py` + all 9 connector tools updated |
+| Timestamps on messages | ✅ Done | `zerg/services/thread_service.py` - ISO 8601 prefix on messages |
+| Capability presentation protocol | ✅ Done | Included in P0 protocols |
+
 ### Key Files
 
 ```
@@ -574,30 +582,40 @@ apps/zerg/backend/zerg/
 │   └── status_builder.py      # build_connector_status(), build_agent_context()
 ├── prompts/
 │   └── connector_protocols.py # Static protocol definitions (XML blocks)
+├── tools/
+│   ├── error_envelope.py      # Standardized error/success response types
+│   └── builtin/               # All 9 connector tools updated with envelope
+├── services/
+│   └── thread_service.py      # Message timestamps added
 └── managers/
     └── agent_runner.py        # Integration point (protocol prepend + context injection)
 
 apps/zerg/backend/tests/
 ├── connectors/
 │   └── test_status_builder.py # 23 tests for status builder
-└── prompts/
-    └── test_connector_protocols.py # 30 tests for protocols
+├── prompts/
+│   └── test_connector_protocols.py # 30 tests for protocols
+└── tools/
+    └── test_error_envelope.py # 19 tests for error envelope
 ```
 
 ### Git Commits
 
+**P0 Commits:**
 1. `51d0618` - feat(connectors): add connector status builder for agent context
 2. `425a110` - feat(agents): inject connector status context into agent turns
 3. `018db82` - feat(prompts): add connector-aware protocol definitions
 4. `579ae26` - test(connectors): add tests for connector-aware agent context
 
-### P1 Items - Pending
-
-| Item | Status | Notes |
-|------|--------|-------|
-| Standardized error envelope | 📋 Pending | Need to update all tools to return `{ok, error_type, user_message}` |
-| Timestamps on messages | 📋 Pending | Add timestamp to conversation history messages |
-| Capability presentation protocol | ✅ Done | Included in P0 protocols |
+**P1 Commits:**
+5. `e400120` - feat(tools): add standardized error envelope module
+6. `de9ccb7` - feat(tools): standardize github tools to use error envelope
+7. `e277ee2` - feat(tools): standardize slack tools to use error envelope
+8. `a76bd77` - test(tools): add comprehensive tests for error envelope module
+9. `5e71a0e` - feat(tools): standardize discord/email/sms tools to use error envelope
+10. `31e1cc3` - feat(tools): standardize jira tools to use error envelope
+11. `f2b145d` - feat(tools): standardize linear/notion/imessage tools to use error envelope
+12. `f5599fd` - feat(agents): add timestamps to conversation history messages
 
 ### P2 Items - Future
 
