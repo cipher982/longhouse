@@ -189,6 +189,11 @@ def build_connector_status(
     Queries actual credential rows to check test_status field and determine
     if credentials are valid, expired, or untested.
 
+    IMPORTANT: We call db.expire_all() to ensure we see credentials that may
+    have been created in other transactions (e.g., OAuth completion in a
+    separate request). Without this, SQLAlchemy's session-level cache could
+    return stale "no credentials" results.
+
     Args:
         db: Database session
         owner_id: User ID who owns the credentials
@@ -222,6 +227,10 @@ def build_connector_status(
     """
     from zerg.models.models import AccountConnectorCredential
     from zerg.models.models import ConnectorCredential
+
+    # Expire cached objects to ensure we see fresh data from other transactions
+    # (e.g., OAuth credentials created in a separate request)
+    db.expire_all()
 
     # Build status for all connectors in registry
     status_dict: dict[str, Any] = {}
