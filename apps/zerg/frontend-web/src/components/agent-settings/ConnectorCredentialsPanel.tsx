@@ -5,7 +5,7 @@
  * and provides UI for configuring/testing/removing credentials.
  */
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, useCallback, type FormEvent } from "react";
 import {
   useAgentConnectors,
   useConfigureConnector,
@@ -16,16 +16,25 @@ import {
 import type { ConnectorStatus } from "../../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
 
+// Connectors that support OAuth flow instead of manual credential entry
+const OAUTH_CONNECTORS = ["github"] as const;
+type OAuthConnector = (typeof OAUTH_CONNECTORS)[number];
+
+function isOAuthConnector(type: string): type is OAuthConnector {
+  return OAUTH_CONNECTORS.includes(type as OAuthConnector);
+}
+
 type ConnectorCredentialsPanelProps = {
   agentId: number;
 };
 
 export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanelProps) {
-  const { data: connectors, isLoading } = useAgentConnectors(agentId);
+  const { data: connectors, isLoading, refetch } = useAgentConnectors(agentId);
   const configureConnector = useConfigureConnector(agentId);
   const deleteConnector = useDeleteConnector(agentId);
   const testConnector = useTestConnector(agentId);
   const testBeforeSave = useTestConnectorBeforeSave(agentId);
+  const [oauthPending, setOauthPending] = useState<string | null>(null);
 
   const [modal, setModal] = useState<ConfigModalState>({
     isOpen: false,
@@ -33,6 +42,67 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     credentials: {},
     displayName: "",
   });
+
+  // Handle OAuth popup result via postMessage
+  const handleOAuthMessage = useCallback(
+    (event: MessageEvent) => {
+      // Validate message structure
+      if (!event.data || typeof event.data !== "object") return;
+      const { success, provider, username, error } = event.data;
+
+      // Only handle OAuth results
+      if (provider !== oauthPending) return;
+
+      setOauthPending(null);
+
+      if (success) {
+        // Refresh connectors list to show new connection
+        refetch();
+      } else if (error) {
+        console.error(`OAuth connection failed: ${error}`);
+        alert(`Failed to connect ${provider}: ${error}`);
+      }
+    },
+    [oauthPending, refetch]
+  );
+
+  // Listen for OAuth popup messages
+  useEffect(() => {
+    window.addEventListener("message", handleOAuthMessage);
+    return () => window.removeEventListener("message", handleOAuthMessage);
+  }, [handleOAuthMessage]);
+
+  // Open OAuth popup for supported connectors
+  const startOAuthFlow = (connectorType: string) => {
+    setOauthPending(connectorType);
+
+    // Open popup centered on screen
+    const width = 600;
+    const height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+
+    const popup = window.open(
+      `/api/oauth/${connectorType}/authorize`,
+      `oauth-${connectorType}`,
+      `width=${width},height=${height},left=${left},top=${top},popup=1`
+    );
+
+    // Handle popup blocked or closed
+    if (!popup) {
+      setOauthPending(null);
+      alert("Popup blocked. Please allow popups for this site.");
+      return;
+    }
+
+    // Check if popup was closed without completing
+    const checkClosed = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkClosed);
+        setOauthPending(null);
+      }
+    }, 500);
+  };
 
   const openConfigModal = (connector: ConnectorStatus) => {
     const initialCreds: Record<string, string> = {};
@@ -142,9 +212,11 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
                 key={connector.type}
                 connector={connector}
                 onConfigure={() => openConfigModal(connector)}
+                onOAuthConnect={isOAuthConnector(connector.type) ? () => startOAuthFlow(connector.type) : undefined}
                 onTest={() => handleTest(connector)}
                 onDelete={() => handleDelete(connector)}
                 isTesting={testConnector.isPending}
+                isOAuthPending={oauthPending === connector.type}
               />
             ))}
           </div>
@@ -168,12 +240,22 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
 type ConnectorCardProps = {
   connector: ConnectorStatus;
   onConfigure: () => void;
+  onOAuthConnect?: () => void;
   onTest: () => void;
   onDelete: () => void;
   isTesting: boolean;
+  isOAuthPending?: boolean;
 };
 
-function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: ConnectorCardProps) {
+function ConnectorCard({
+  connector,
+  onConfigure,
+  onOAuthConnect,
+  onTest,
+  onDelete,
+  isTesting,
+  isOAuthPending,
+}: ConnectorCardProps) {
   const statusClass = connector.configured
     ? connector.test_status === "success"
       ? "status-success"
@@ -190,6 +272,9 @@ function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: 
       : "Untested"
     : "Not configured";
 
+  // Check if connected via OAuth (metadata will have connected_via: "oauth")
+  const connectedViaOAuth = connector.metadata?.connected_via === "oauth";
+
   return (
     <div className={`connector-card ${statusClass}`}>
       <div className="connector-card-header">
@@ -204,7 +289,7 @@ function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: 
       {connector.configured && connector.metadata && (
         <div className="connector-metadata">
           {Object.entries(connector.metadata)
-            .filter(([k]) => !["enabled", "from_email", "from_number"].includes(k))
+            .filter(([k]) => !["enabled", "from_email", "from_number", "connected_via"].includes(k))
             .slice(0, 2)
             .map(([key, value]) => (
               <span key={key} className="metadata-item">
@@ -217,9 +302,20 @@ function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: 
       <div className="connector-card-actions">
         {connector.configured ? (
           <>
-            <button type="button" className="btn-secondary" onClick={onConfigure}>
-              Edit
-            </button>
+            {connectedViaOAuth && onOAuthConnect ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={onOAuthConnect}
+                disabled={isOAuthPending}
+              >
+                {isOAuthPending ? "Connecting..." : "Reconnect"}
+              </button>
+            ) : (
+              <button type="button" className="btn-secondary" onClick={onConfigure}>
+                Edit
+              </button>
+            )}
             <button type="button" className="btn-tertiary" onClick={onTest} disabled={isTesting}>
               Test
             </button>
@@ -227,6 +323,15 @@ function ConnectorCard({ connector, onConfigure, onTest, onDelete, isTesting }: 
               Remove
             </button>
           </>
+        ) : onOAuthConnect ? (
+          <button
+            type="button"
+            className="btn-primary btn-oauth"
+            onClick={onOAuthConnect}
+            disabled={isOAuthPending}
+          >
+            {isOAuthPending ? "Connecting..." : `Connect ${connector.name}`}
+          </button>
         ) : (
           <button type="button" className="btn-primary" onClick={onConfigure}>
             Configure

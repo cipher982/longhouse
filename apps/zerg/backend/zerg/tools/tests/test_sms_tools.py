@@ -17,8 +17,8 @@ class TestSendSms:
             to_number="+15559876543",
             message="Test message"
         )
-        assert result["success"] is False
-        assert "Account SID" in result.get("error_message", result.get("error", ""))
+        assert result["ok"] is False
+        assert "Account SID" in result.get("user_message", "")
 
     def test_invalid_from_number(self):
         """Test that invalid from phone number is rejected."""
@@ -29,7 +29,7 @@ class TestSendSms:
             to_number="+15559876543",
             message="Test message"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_invalid_to_number(self):
         """Test that invalid to phone number is rejected."""
@@ -40,7 +40,7 @@ class TestSendSms:
             to_number="invalid",
             message="Test message"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_message(self):
         """Test that empty message is rejected."""
@@ -51,7 +51,7 @@ class TestSendSms:
             to_number="+15559876543",
             message=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_message_too_long(self):
         """Test that message over 1600 characters is rejected."""
@@ -63,7 +63,7 @@ class TestSendSms:
             to_number="+15559876543",
             message=long_message
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
     def test_successful_sms(self, mock_client):
@@ -86,8 +86,8 @@ class TestSendSms:
             message="Test message"
         )
 
-        assert result["success"] is True
-        assert result["message_sid"] == "SM123456"
+        assert result["ok"] is True
+        assert result["data"]["message_sid"] == "SM123456"
 
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
     def test_unauthorized_error(self, mock_client):
@@ -105,7 +105,7 @@ class TestSendSms:
             message="Test message"
         )
 
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
     def test_rate_limit(self, mock_client):
@@ -123,7 +123,7 @@ class TestSendSms:
             message="Test message"
         )
 
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
     def test_sms_with_callback(self, mock_client):
@@ -146,4 +146,4 @@ class TestSendSms:
             status_callback="https://example.com/callback"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True

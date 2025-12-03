@@ -29,28 +29,28 @@ class TestSendImessage:
     def test_requires_macos(self):
         with patch("zerg.tools.builtin.imessage_tools.platform.system", return_value="Linux"):
             result = send_imessage("+15551234567", "hello")
-            assert result["success"] is False
-            assert "macOS" in result["error_message"]
+            assert result["ok"] is False
+            assert "macOS" in result["user_message"]
 
     def test_validates_inputs(self, force_macos, monkeypatch):
         monkeypatch.setattr(imessage_tools.shutil, "which", lambda _: "/usr/bin/osascript")
         monkeypatch.setattr(imessage_tools.subprocess, "run", MagicMock())
 
         result = send_imessage("", "hi")
-        assert result["success"] is False
+        assert result["ok"] is False
 
         result = send_imessage("+15551234567", "")
-        assert result["success"] is False
+        assert result["ok"] is False
 
         long_text = "x" * (imessage_tools.MAX_MESSAGE_LENGTH + 1)
         result = send_imessage("+15551234567", long_text)
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_missing_osascript(self, force_macos, monkeypatch):
         monkeypatch.setattr(imessage_tools.shutil, "which", lambda _: None)
         result = send_imessage("+15551234567", "hello")
-        assert result["success"] is False
-        assert "osascript" in result["error_message"]
+        assert result["ok"] is False
+        assert "osascript" in result["user_message"]
 
     def test_successful_send(self, force_macos, monkeypatch):
         monkeypatch.setattr(imessage_tools.shutil, "which", lambda _: "/usr/bin/osascript")
@@ -60,9 +60,9 @@ class TestSendImessage:
 
         result = send_imessage("+15551234567", "hello world", chat_guid="iMessage;-;+15551234567")
 
-        assert result["success"] is True
-        assert result["recipient"] == "+15551234567"
-        assert result["chat_guid"] == "iMessage;-;+15551234567"
+        assert result["ok"] is True
+        assert result["data"]["recipient"] == "+15551234567"
+        assert result["data"]["chat_guid"] == "iMessage;-;+15551234567"
         mock_run.assert_called_once()
 
     def test_process_error(self, force_macos, monkeypatch):
@@ -71,8 +71,8 @@ class TestSendImessage:
         monkeypatch.setattr(imessage_tools.subprocess, "run", MagicMock(return_value=completed))
 
         result = send_imessage("+15551234567", "hello")
-        assert result["success"] is False
-        assert "failure" in result["error_message"]
+        assert result["ok"] is False
+        assert "failure" in result["user_message"]
 
     def test_timeout(self, force_macos, monkeypatch):
         monkeypatch.setattr(imessage_tools.shutil, "which", lambda _: "/usr/bin/osascript")
@@ -82,8 +82,8 @@ class TestSendImessage:
 
         monkeypatch.setattr(imessage_tools.subprocess, "run", _timeout)
         result = send_imessage("+15551234567", "hi", timeout_seconds=1.0)
-        assert result["success"] is False
-        assert "Timed out" in result["error_message"]
+        assert result["ok"] is False
+        assert "Timed out" in result["user_message"]
 
 
 class TestListImessageMessages:
@@ -171,35 +171,35 @@ class TestListImessageMessages:
         with patch("zerg.tools.builtin.imessage_tools.platform.system", return_value="Linux"):
             with patch("zerg.tools.builtin.imessage_tools.IMESSAGE_DB_PATH", db_path):
                 result = list_imessage_messages()
-                assert result["success"] is False
+                assert result["ok"] is False
 
     def test_reads_messages(self, force_macos, tmp_path, monkeypatch):
         db_path, inbound_id, from_me_id = self._create_temp_db(tmp_path)
         monkeypatch.setattr(imessage_tools, "IMESSAGE_DB_PATH", Path(db_path))
 
         result = list_imessage_messages(limit=5)
-        assert result["success"] is True
-        assert len(result["messages"]) == 1  # exclude outbound by default
-        assert result["messages"][0]["row_id"] == inbound_id
-        assert result["messages"][0]["text"] == "Inbound"
-        assert result["latest_row_id"] == inbound_id
+        assert result["ok"] is True
+        assert len(result["data"]["messages"]) == 1  # exclude outbound by default
+        assert result["data"]["messages"][0]["row_id"] == inbound_id
+        assert result["data"]["messages"][0]["text"] == "Inbound"
+        assert result["data"]["latest_row_id"] == inbound_id
 
         # Include outbound messages
         result_all = list_imessage_messages(include_outgoing=True, limit=5)
-        assert len(result_all["messages"]) == 2
+        assert len(result_all["data"]["messages"]) == 2
 
         # Filter by since_row_id
         result_since = list_imessage_messages(include_outgoing=True, since_row_id=from_me_id)
-        assert len(result_since["messages"]) == 1
-        assert result_since["messages"][0]["row_id"] > from_me_id
+        assert len(result_since["data"]["messages"]) == 1
+        assert result_since["data"]["messages"][0]["row_id"] > from_me_id
 
     def test_missing_database(self, force_macos, monkeypatch, tmp_path):
         missing_path = tmp_path / "missing.db"
         monkeypatch.setattr(imessage_tools, "IMESSAGE_DB_PATH", missing_path)
 
         result = list_imessage_messages()
-        assert result["success"] is False
-        assert "not found" in result["error_message"]
+        assert result["ok"] is False
+        assert "not found" in result["user_message"]
 
     def test_permission_error(self, force_macos, monkeypatch, tmp_path):
         db_path, *_ = self._create_temp_db(tmp_path)
@@ -211,6 +211,6 @@ class TestListImessageMessages:
         monkeypatch.setattr(imessage_tools.shutil, "copy2", _copy_fail)
 
         result = list_imessage_messages()
-        assert result["success"] is False
-        assert "Permission" in result["error_message"]
+        assert result["ok"] is False
+        assert "Permission" in result["user_message"]
 

@@ -15,13 +15,17 @@ import {
 } from "../hooks/useAccountConnectors";
 import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
+import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
+import { useOAuthFlow } from "../hooks/useOAuthFlow";
 
 export default function IntegrationsPage() {
-  const { data: connectors, isLoading, error } = useAccountConnectors();
+  const { data: connectors, isLoading, error, refetch } = useAccountConnectors();
   const configureConnector = useConfigureAccountConnector();
   const deleteConnector = useDeleteAccountConnector();
   const testConnector = useTestAccountConnector();
   const testBeforeSave = useTestAccountConnectorBeforeSave();
+
+  const { startOAuthFlow, oauthPending } = useOAuthFlow(refetch);
 
   const [modal, setModal] = useState<ConfigModalState>({
     isOpen: false,
@@ -134,13 +138,15 @@ export default function IntegrationsPage() {
               </p>
               <div className="connector-cards">
                 {notifications.map((connector) => (
-                  <IntegrationCard
+                  <ConnectorCard
                     key={connector.type}
                     connector={connector}
                     onConfigure={() => openConfigModal(connector)}
+                    onOAuthConnect={isOAuthConnector(connector.type) ? () => startOAuthFlow(connector.type) : undefined}
                     onTest={() => handleTest(connector)}
                     onDelete={() => handleDelete(connector)}
                     isTesting={testConnector.isPending}
+                    isOAuthPending={oauthPending === connector.type}
                   />
                 ))}
               </div>
@@ -153,13 +159,15 @@ export default function IntegrationsPage() {
               </p>
               <div className="connector-cards">
                 {projectManagement.map((connector) => (
-                  <IntegrationCard
+                  <ConnectorCard
                     key={connector.type}
                     connector={connector}
                     onConfigure={() => openConfigModal(connector)}
+                    onOAuthConnect={isOAuthConnector(connector.type) ? () => startOAuthFlow(connector.type) : undefined}
                     onTest={() => handleTest(connector)}
                     onDelete={() => handleDelete(connector)}
                     isTesting={testConnector.isPending}
+                    isOAuthPending={oauthPending === connector.type}
                   />
                 ))}
               </div>
@@ -181,76 +189,3 @@ export default function IntegrationsPage() {
     </div>
   );
 }
-
-type IntegrationCardProps = {
-  connector: AccountConnectorStatus;
-  onConfigure: () => void;
-  onTest: () => void;
-  onDelete: () => void;
-  isTesting: boolean;
-};
-
-function IntegrationCard({ connector, onConfigure, onTest, onDelete, isTesting }: IntegrationCardProps) {
-  const statusClass = connector.configured
-    ? connector.test_status === "success"
-      ? "status-success"
-      : connector.test_status === "failed"
-      ? "status-failed"
-      : "status-untested"
-    : "status-unconfigured";
-
-  const statusText = connector.configured
-    ? connector.test_status === "success"
-      ? "Connected"
-      : connector.test_status === "failed"
-      ? "Failed"
-      : "Untested"
-    : "Not configured";
-
-  return (
-    <div className={`connector-card ${statusClass}`}>
-      <div className="connector-card-header">
-        <span className="connector-name">{connector.name}</span>
-        <span className={`connector-status ${statusClass}`}>{statusText}</span>
-      </div>
-
-      {connector.configured && connector.display_name && (
-        <div className="connector-display-name">{connector.display_name}</div>
-      )}
-
-      {connector.configured && connector.metadata && (
-        <div className="connector-metadata">
-          {Object.entries(connector.metadata)
-            .filter(([k]) => !["enabled", "from_email", "from_number"].includes(k))
-            .slice(0, 2)
-            .map(([key, value]) => (
-              <span key={key} className="metadata-item">
-                {String(value)}
-              </span>
-            ))}
-        </div>
-      )}
-
-      <div className="connector-card-actions">
-        {connector.configured ? (
-          <>
-            <button type="button" className="btn-secondary" onClick={onConfigure}>
-              Edit
-            </button>
-            <button type="button" className="btn-tertiary" onClick={onTest} disabled={isTesting}>
-              Test
-            </button>
-            <button type="button" className="btn-danger" onClick={onDelete}>
-              Remove
-            </button>
-          </>
-        ) : (
-          <button type="button" className="btn-primary" onClick={onConfigure}>
-            Configure
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-

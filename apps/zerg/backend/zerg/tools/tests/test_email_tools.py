@@ -17,8 +17,8 @@ class TestSendEmail:
             subject="Test",
             text="Test message"
         )
-        assert result["success"] is False
-        assert "Invalid API key format" in result["error"]
+        assert result["ok"] is False
+        assert "Invalid API key format" in result["user_message"]
 
     def test_invalid_from_email(self):
         """Test that invalid from email is rejected."""
@@ -29,8 +29,8 @@ class TestSendEmail:
             subject="Test",
             text="Test message"
         )
-        assert result["success"] is False
-        assert "Invalid" in result["error"]
+        assert result["ok"] is False
+        assert "Invalid" in result["user_message"]
 
     def test_invalid_to_email(self):
         """Test that invalid to email is rejected."""
@@ -41,8 +41,8 @@ class TestSendEmail:
             subject="Test",
             text="Test message"
         )
-        assert result["success"] is False
-        assert "Invalid" in result["error"]
+        assert result["ok"] is False
+        assert "Invalid" in result["user_message"]
 
     def test_missing_content(self):
         """Test that either text or html is required."""
@@ -52,8 +52,8 @@ class TestSendEmail:
             to="recipient@example.com",
             subject="Test"
         )
-        assert result["success"] is False
-        assert "text or html" in result["error"].lower()
+        assert result["ok"] is False
+        assert "text or html" in result["user_message"].lower()
 
     @patch("zerg.tools.builtin.email_tools.httpx.Client")
     def test_successful_email(self, mock_client):
@@ -71,8 +71,8 @@ class TestSendEmail:
             text="Test message body"
         )
 
-        assert result["success"] is True
-        assert result["message_id"] == "msg_123"
+        assert result["ok"] is True
+        assert result["data"]["message_id"] == "msg_123"
 
     @patch("zerg.tools.builtin.email_tools.httpx.Client")
     def test_unauthorized_error(self, mock_client):
@@ -90,8 +90,8 @@ class TestSendEmail:
             text="Test message"
         )
 
-        assert result["success"] is False
-        assert "401" in result["error"]
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
 
     @patch("zerg.tools.builtin.email_tools.httpx.Client")
     def test_email_with_html(self, mock_client):
@@ -110,7 +110,7 @@ class TestSendEmail:
             html="<h1>Hello!</h1>"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
         # Verify the payload was constructed correctly
         call_args = mock_post.call_args
@@ -137,7 +137,7 @@ class TestSendEmail:
             bcc="bcc@example.com"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
     @patch("zerg.tools.builtin.email_tools.httpx.Client")
     def test_rate_limit(self, mock_client):
@@ -155,5 +155,5 @@ class TestSendEmail:
             text="Test message"
         )
 
-        assert result["success"] is False
-        assert "429" in result["error"] or "rate" in result["error"].lower()
+        assert result["ok"] is False
+        assert "429" in result["user_message"] or "rate" in result["user_message"].lower()
