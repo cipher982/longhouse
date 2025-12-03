@@ -5,19 +5,19 @@ that create structured status information for agent prompt injection.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from zerg.connectors.registry import ConnectorType
-from zerg.connectors.status_builder import (
-    build_agent_context,
-    build_connector_status,
-    get_capabilities_for_connector,
-    get_tools_for_connector,
-)
+from zerg.connectors.status_builder import build_agent_context
+from zerg.connectors.status_builder import build_connector_status
+from zerg.connectors.status_builder import get_capabilities_for_connector
+from zerg.connectors.status_builder import get_tools_for_connector
+from zerg.connectors.status_builder import get_unavailable_tools
 from zerg.models.models import User
 
 
@@ -190,7 +190,8 @@ def test_build_connector_status_with_configured(db_session: Session, test_user: 
 
 def test_build_connector_status_with_agent_id(db_session: Session, test_user: User, sample_agent):
     """Test build_connector_status with agent-level credential override."""
-    from zerg.models.models import AccountConnectorCredential, ConnectorCredential
+    from zerg.models.models import AccountConnectorCredential
+    from zerg.models.models import ConnectorCredential
 
     # Create account-level GitHub credential
     account_cred = AccountConnectorCredential(
@@ -413,3 +414,87 @@ def test_build_connector_status_untested_credentials(db_session: Session, test_u
     assert status["github"]["status"] == "connected"
     assert "tools" in status["github"]
     assert len(status["github"]["tools"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Tests for get_unavailable_tools
+# ---------------------------------------------------------------------------
+
+
+def test_get_unavailable_tools_no_connectors(db_session: Session, test_user: User):
+    """Test get_unavailable_tools returns all connector tools when nothing configured."""
+    unavailable = get_unavailable_tools(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # Should include tools from all connectors since none are configured
+    assert isinstance(unavailable, set)
+    assert len(unavailable) > 0
+
+    # Should include GitHub tools
+    assert "github_create_issue" in unavailable
+    assert "github_list_repositories" in unavailable
+
+    # Should include Slack tools
+    assert "send_slack_webhook" in unavailable
+
+    # Should include all connector tools
+    for connector_type in ConnectorType:
+        tools = get_tools_for_connector(connector_type)
+        for tool in tools:
+            assert tool in unavailable, f"Expected {tool} to be unavailable"
+
+
+def test_get_unavailable_tools_with_connected(db_session: Session, test_user: User):
+    """Test get_unavailable_tools excludes tools for connected connectors."""
+    from zerg.models.models import AccountConnectorCredential
+
+    # Configure GitHub as connected
+    github_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="valid_token",
+        test_status="success",
+    )
+    db_session.add(github_cred)
+    db_session.commit()
+
+    unavailable = get_unavailable_tools(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # GitHub tools should NOT be in unavailable (connector is connected)
+    assert "github_create_issue" not in unavailable
+    assert "github_list_repositories" not in unavailable
+
+    # But other tools should still be unavailable
+    assert "send_slack_webhook" in unavailable
+    assert "jira_create_issue" in unavailable
+
+
+def test_get_unavailable_tools_with_failed_credentials(db_session: Session, test_user: User):
+    """Test get_unavailable_tools includes tools for connectors with failed credentials."""
+    from zerg.models.models import AccountConnectorCredential
+
+    # Configure Slack with failed credentials
+    slack_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="slack",
+        encrypted_value="invalid_webhook",
+        test_status="failed",
+    )
+    db_session.add(slack_cred)
+    db_session.commit()
+
+    unavailable = get_unavailable_tools(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # Slack tools should be unavailable since credentials failed
+    assert "send_slack_webhook" in unavailable

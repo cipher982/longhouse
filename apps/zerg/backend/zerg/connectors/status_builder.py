@@ -148,6 +148,37 @@ def get_capabilities_for_connector(connector_type: ConnectorType) -> list[str]:
     return CONNECTOR_CAPABILITIES.get(connector_type, [])
 
 
+def get_unavailable_tools(
+    db: "Session",
+    owner_id: int,
+    agent_id: int | None = None,
+) -> set[str]:
+    """Return tool names that require disconnected connectors.
+
+    Queries connector status and returns all tools that should be
+    filtered out because their required connector is not connected.
+
+    Args:
+        db: Database session
+        owner_id: User ID who owns the credentials
+        agent_id: Optional agent ID for agent-level overrides
+
+    Returns:
+        Set of tool names to exclude from the agent's available tools
+    """
+    status = build_connector_status(db, owner_id, agent_id)
+    unavailable_tools: set[str] = set()
+
+    for connector_type in ConnectorType:
+        connector_status = status.get(connector_type.value, {})
+        # If not connected, exclude tools for this connector
+        if connector_status.get("status") != "connected":
+            tools = get_tools_for_connector(connector_type)
+            unavailable_tools.update(tools)
+
+    return unavailable_tools
+
+
 def build_connector_status(
     db: "Session",
     owner_id: int,
