@@ -6,7 +6,7 @@ that create structured status information for agent prompt injection.
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -120,166 +120,170 @@ def test_get_tools_for_connector_all_types(connector_type, expected_in_tools):
 
 def test_build_connector_status_no_connectors(db_session: Session, test_user: User):
     """Test build_connector_status returns all 'not_configured' when nothing is configured."""
-    # Mock the CredentialResolver to return empty set
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = []
-        mock_resolver_class.return_value = mock_resolver
+    # No credentials in database - all should be not_configured
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
 
-        status = build_connector_status(
-            db=db_session,
-            owner_id=test_user.id,
-            agent_id=None,
-        )
+    # Should have status for all connector types
+    assert len(status) == len(ConnectorType)
 
-        # Should have status for all connector types
-        assert len(status) == len(ConnectorType)
-
-        # All should be not_configured
-        for connector_type in ConnectorType:
-            connector_status = status[connector_type.value]
-            assert connector_status["status"] == "not_configured"
-            assert "setup_url" in connector_status
-            assert connector_status["setup_url"] == "/settings/integrations"
-            assert "would_enable" in connector_status
-            assert len(connector_status["would_enable"]) > 0
-            # Not_configured shouldn't have tools
-            assert "tools" not in connector_status
+    # All should be not_configured
+    for connector_type in ConnectorType:
+        connector_status = status[connector_type.value]
+        assert connector_status["status"] == "not_configured"
+        assert "setup_url" in connector_status
+        assert connector_status["setup_url"] == f"/settings/integrations/{connector_type.value}"
+        assert "would_enable" in connector_status
+        assert len(connector_status["would_enable"]) > 0
+        # Not_configured shouldn't have tools
+        assert "tools" not in connector_status
 
 
 def test_build_connector_status_with_configured(db_session: Session, test_user: User):
     """Test build_connector_status returns 'connected' for configured connectors."""
-    # Mock the CredentialResolver to return GitHub and Slack as configured
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = ["github", "slack"]
-        mock_resolver_class.return_value = mock_resolver
+    from zerg.models.models import AccountConnectorCredential
 
-        status = build_connector_status(
-            db=db_session,
-            owner_id=test_user.id,
-            agent_id=None,
-        )
+    # Create account-level credentials for GitHub and Slack with success test status
+    github_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="encrypted_token_data",
+        test_status="success",
+    )
+    slack_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="slack",
+        encrypted_value="encrypted_webhook_data",
+        test_status="success",
+    )
+    db_session.add(github_cred)
+    db_session.add(slack_cred)
+    db_session.commit()
 
-        # GitHub should be connected
-        assert status["github"]["status"] == "connected"
-        assert "tools" in status["github"]
-        assert len(status["github"]["tools"]) > 0
-        assert "github_create_issue" in status["github"]["tools"]
-        assert "would_enable" in status["github"]
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
 
-        # Slack should be connected
-        assert status["slack"]["status"] == "connected"
-        assert "tools" in status["slack"]
-        assert "send_slack_webhook" in status["slack"]["tools"]
-        assert "would_enable" in status["slack"]
+    # GitHub should be connected
+    assert status["github"]["status"] == "connected"
+    assert "tools" in status["github"]
+    assert len(status["github"]["tools"]) > 0
+    assert "github_create_issue" in status["github"]["tools"]
+    assert "would_enable" in status["github"]
 
-        # Discord should not be configured
-        assert status["discord"]["status"] == "not_configured"
-        assert "setup_url" in status["discord"]
-        assert "tools" not in status["discord"]
+    # Slack should be connected
+    assert status["slack"]["status"] == "connected"
+    assert "tools" in status["slack"]
+    assert "send_slack_webhook" in status["slack"]["tools"]
+    assert "would_enable" in status["slack"]
+
+    # Discord should not be configured
+    assert status["discord"]["status"] == "not_configured"
+    assert "setup_url" in status["discord"]
+    assert "tools" not in status["discord"]
 
 
-def test_build_connector_status_with_agent_id(db_session: Session, test_user: User):
-    """Test build_connector_status passes agent_id to resolver correctly."""
-    agent_id = 42
+def test_build_connector_status_with_agent_id(db_session: Session, test_user: User, sample_agent):
+    """Test build_connector_status with agent-level credential override."""
+    from zerg.models.models import AccountConnectorCredential, ConnectorCredential
 
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = ["github"]
-        mock_resolver_class.return_value = mock_resolver
+    # Create account-level GitHub credential
+    account_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="account_level_token",
+        test_status="success",
+    )
+    db_session.add(account_cred)
 
-        status = build_connector_status(
-            db=db_session,
-            owner_id=test_user.id,
-            agent_id=agent_id,
-        )
+    # Create agent-level override for the same connector
+    agent_cred = ConnectorCredential(
+        agent_id=sample_agent.id,
+        connector_type="github",
+        encrypted_value="agent_level_token",
+        test_status="success",
+    )
+    db_session.add(agent_cred)
+    db_session.commit()
 
-        # Verify resolver was instantiated with correct agent_id
-        mock_resolver_class.assert_called_once()
-        call_kwargs = mock_resolver_class.call_args[1]
-        assert call_kwargs["agent_id"] == agent_id
-        assert call_kwargs["owner_id"] == test_user.id
-        assert call_kwargs["db"] == db_session
+    # Query with agent_id should find the agent-level credential
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=sample_agent.id,
+    )
 
-        # Status should reflect configured connector
-        assert status["github"]["status"] == "connected"
+    # GitHub should be connected (agent-level credential takes precedence)
+    assert status["github"]["status"] == "connected"
+    assert "tools" in status["github"]
+    assert "github_create_issue" in status["github"]["tools"]
 
 
 def test_build_agent_context_format(db_session: Session, test_user: User):
     """Test build_agent_context returns properly formatted XML with JSON."""
-    # Mock the CredentialResolver
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = ["github", "slack"]
-        mock_resolver_class.return_value = mock_resolver
+    from zerg.models.models import AccountConnectorCredential
 
-        context = build_agent_context(
-            db=db_session,
-            owner_id=test_user.id,
-            agent_id=None,
-        )
+    # Create credentials for GitHub and Slack
+    github_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="encrypted_token",
+        test_status="success",
+    )
+    slack_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="slack",
+        encrypted_value="encrypted_webhook",
+        test_status="success",
+    )
+    db_session.add(github_cred)
+    db_session.add(slack_cred)
+    db_session.commit()
 
-        # Should be a string
-        assert isinstance(context, str)
+    context = build_agent_context(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
 
-        # Should contain current_time XML tag
-        assert "<current_time>" in context
-        assert "</current_time>" in context
+    # Should be a string
+    assert isinstance(context, str)
 
-        # Should contain connector_status XML tag with captured_at attribute
-        assert "<connector_status captured_at=" in context
-        assert "</connector_status>" in context
+    # Should contain current_time XML tag
+    assert "<current_time>" in context
+    assert "</current_time>" in context
 
-        # Should be valid JSON inside connector_status block
-        # Extract the JSON portion
-        start_idx = context.find('">') + 2
-        end_idx = context.find("</connector_status>")
-        json_str = context[start_idx:end_idx].strip()
+    # Should contain connector_status XML tag with captured_at attribute
+    assert "<connector_status captured_at=" in context
+    assert "</connector_status>" in context
 
-        # Parse JSON to verify it's valid
-        connector_data = json.loads(json_str)
-        assert isinstance(connector_data, dict)
-        assert "github" in connector_data
-        assert "slack" in connector_data
-        assert connector_data["github"]["status"] == "connected"
-        assert connector_data["slack"]["status"] == "connected"
+    # Should be valid JSON inside connector_status block
+    # Extract the JSON portion
+    start_idx = context.find('">') + 2
+    end_idx = context.find("</connector_status>")
+    json_str = context[start_idx:end_idx].strip()
+
+    # Parse JSON to verify it's valid
+    connector_data = json.loads(json_str)
+    assert isinstance(connector_data, dict)
+    assert "github" in connector_data
+    assert "slack" in connector_data
+    assert connector_data["github"]["status"] == "connected"
+    assert connector_data["slack"]["status"] == "connected"
 
 
 def test_build_agent_context_timestamp_format(db_session: Session, test_user: User):
     """Test build_agent_context uses correct ISO 8601 timestamp format with Z suffix."""
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = []
-        mock_resolver_class.return_value = mock_resolver
-
-        # Mock datetime to control timestamp
-        mock_time = datetime(2025, 1, 17, 15, 30, 45, tzinfo=timezone.utc)
-        with patch("zerg.connectors.status_builder.datetime") as mock_datetime:
-            mock_datetime.now.return_value = mock_time
-            mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
-
-            context = build_agent_context(
-                db=db_session,
-                owner_id=test_user.id,
-                agent_id=None,
-            )
-
-            # Should contain the exact timestamp we mocked
-            expected_timestamp = "2025-01-17T15:30:45Z"
-            assert expected_timestamp in context
-
-            # Should appear in both current_time and captured_at
-            assert f"<current_time>{expected_timestamp}</current_time>" in context
-            assert f'captured_at="{expected_timestamp}"' in context
-
-
-def test_build_agent_context_includes_all_connector_types(db_session: Session, test_user: User):
-    """Test build_agent_context includes status for all connector types."""
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        mock_resolver.get_all_configured.return_value = []
-        mock_resolver_class.return_value = mock_resolver
+    # Mock datetime to control timestamp
+    mock_time = datetime(2025, 1, 17, 15, 30, 45, tzinfo=timezone.utc)
+    with patch("zerg.connectors.status_builder.datetime") as mock_datetime:
+        mock_datetime.now.return_value = mock_time
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
         context = build_agent_context(
             db=db_session,
@@ -287,42 +291,125 @@ def test_build_agent_context_includes_all_connector_types(db_session: Session, t
             agent_id=None,
         )
 
-        # Extract and parse JSON
-        start_idx = context.find('">') + 2
-        end_idx = context.find("</connector_status>")
-        json_str = context[start_idx:end_idx].strip()
-        connector_data = json.loads(json_str)
+        # Should contain the exact timestamp we mocked
+        expected_timestamp = "2025-01-17T15:30:45Z"
+        assert expected_timestamp in context
 
-        # Should have all connector types
-        assert len(connector_data) == len(ConnectorType)
-        for connector_type in ConnectorType:
-            assert connector_type.value in connector_data
+        # Should appear in both current_time and captured_at
+        assert f"<current_time>{expected_timestamp}</current_time>" in context
+        assert f'captured_at="{expected_timestamp}"' in context
+
+
+def test_build_agent_context_includes_all_connector_types(db_session: Session, test_user: User):
+    """Test build_agent_context includes status for all connector types."""
+    # No credentials configured - all should be included but not_configured
+    context = build_agent_context(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # Extract and parse JSON
+    start_idx = context.find('">') + 2
+    end_idx = context.find("</connector_status>")
+    json_str = context[start_idx:end_idx].strip()
+    connector_data = json.loads(json_str)
+
+    # Should have all connector types
+    assert len(connector_data) == len(ConnectorType)
+    for connector_type in ConnectorType:
+        assert connector_type.value in connector_data
 
 
 def test_build_connector_status_mixed_connectors(db_session: Session, test_user: User):
     """Test build_connector_status with mix of configured and not configured."""
-    with patch("zerg.connectors.status_builder.CredentialResolver") as mock_resolver_class:
-        mock_resolver = MagicMock()
-        # Configure some but not all
-        mock_resolver.get_all_configured.return_value = ["github", "jira", "notion"]
-        mock_resolver_class.return_value = mock_resolver
+    from zerg.models.models import AccountConnectorCredential
 
-        status = build_connector_status(
-            db=db_session,
+    # Configure some but not all connectors
+    configured_types = ["github", "jira", "notion"]
+    for connector_type in configured_types:
+        cred = AccountConnectorCredential(
             owner_id=test_user.id,
-            agent_id=None,
+            connector_type=connector_type,
+            encrypted_value=f"encrypted_{connector_type}_data",
+            test_status="success",
         )
+        db_session.add(cred)
+    db_session.commit()
 
-        # Configured ones should be connected
-        configured = ["github", "jira", "notion"]
-        for connector in configured:
-            assert status[connector]["status"] == "connected"
-            assert "tools" in status[connector]
-            assert len(status[connector]["tools"]) > 0
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
 
-        # Not configured ones should have not_configured status
-        not_configured = [ct.value for ct in ConnectorType if ct.value not in configured]
-        for connector in not_configured:
-            assert status[connector]["status"] == "not_configured"
-            assert "setup_url" in status[connector]
-            assert "tools" not in status[connector]
+    # Configured ones should be connected
+    for connector in configured_types:
+        assert status[connector]["status"] == "connected"
+        assert "tools" in status[connector]
+        assert len(status[connector]["tools"]) > 0
+
+    # Not configured ones should have not_configured status
+    not_configured = [ct.value for ct in ConnectorType if ct.value not in configured_types]
+    for connector in not_configured:
+        assert status[connector]["status"] == "not_configured"
+        assert "setup_url" in status[connector]
+        assert "tools" not in status[connector]
+
+
+def test_build_connector_status_invalid_credentials(db_session: Session, test_user: User):
+    """Test build_connector_status with failed test_status shows invalid_credentials."""
+    from zerg.models.models import AccountConnectorCredential
+
+    # Create a credential with failed test_status
+    failed_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="invalid_token",
+        test_status="failed",
+        connector_metadata={"error": "Invalid token or expired credentials"},
+    )
+    db_session.add(failed_cred)
+    db_session.commit()
+
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # GitHub should show as invalid_credentials
+    assert status["github"]["status"] == "invalid_credentials"
+    assert "setup_url" in status["github"]
+    assert status["github"]["setup_url"] == "/settings/integrations/github"
+    assert "error" in status["github"]
+    assert status["github"]["error"] == "Invalid token or expired credentials"
+    assert "would_enable" in status["github"]
+    # Invalid credentials shouldn't show tools
+    assert "tools" not in status["github"]
+
+
+def test_build_connector_status_untested_credentials(db_session: Session, test_user: User):
+    """Test build_connector_status with untested credentials shows as connected."""
+    from zerg.models.models import AccountConnectorCredential
+
+    # Create a credential with untested status (freshly saved, not yet tested)
+    untested_cred = AccountConnectorCredential(
+        owner_id=test_user.id,
+        connector_type="github",
+        encrypted_value="untested_token",
+        test_status="untested",
+    )
+    db_session.add(untested_cred)
+    db_session.commit()
+
+    status = build_connector_status(
+        db=db_session,
+        owner_id=test_user.id,
+        agent_id=None,
+    )
+
+    # Untested credentials should be treated as connected (optimistic)
+    assert status["github"]["status"] == "connected"
+    assert "tools" in status["github"]
+    assert len(status["github"]["tools"]) > 0
