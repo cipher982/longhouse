@@ -9,6 +9,12 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,30 +108,26 @@ def send_discord_webhook(
 
         # Validate webhook URL format
         if not resolved_webhook_url or not resolved_webhook_url.startswith("https://discord.com/api/webhooks/"):
-            return {
-                "success": False,
-                "status_code": 0,
-                "error": "Discord webhook URL not configured or invalid. Either provide webhook_url parameter or configure Discord in Agent Settings -> Connectors.",
-            }
+            return connector_not_configured_error("discord", "Discord")
 
         # Validate that we have at least content or embeds
         if not content and not embeds:
-            return {
-                "success": False,
-                "status_code": 0,
-                "error": "Must provide either 'content' or 'embeds' (or both)",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Must provide either 'content' or 'embeds' (or both)",
+                connector="discord",
+            )
 
         # Build the payload
         payload = {}
 
         if content:
             if len(content) > 2000:
-                return {
-                    "success": False,
-                    "status_code": 0,
-                    "error": "Content exceeds 2000 character limit",
-                }
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message="Content exceeds 2000 character limit",
+                    connector="discord",
+                )
             payload["content"] = content
 
         if username:
@@ -136,42 +138,42 @@ def send_discord_webhook(
 
         if embeds:
             if not isinstance(embeds, list):
-                return {
-                    "success": False,
-                    "status_code": 0,
-                    "error": "Embeds must be a list",
-                }
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message="Embeds must be a list",
+                    connector="discord",
+                )
 
             if len(embeds) > 10:
-                return {
-                    "success": False,
-                    "status_code": 0,
-                    "error": "Maximum of 10 embeds allowed per message",
-                }
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message="Maximum of 10 embeds allowed per message",
+                    connector="discord",
+                )
 
             # Basic validation of embed structure
             for idx, embed in enumerate(embeds):
                 if not isinstance(embed, dict):
-                    return {
-                        "success": False,
-                        "status_code": 0,
-                        "error": f"Embed {idx} must be a dictionary",
-                    }
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message=f"Embed {idx} must be a dictionary",
+                        connector="discord",
+                    )
 
                 # Validate common length limits
                 if "title" in embed and len(embed["title"]) > 256:
-                    return {
-                        "success": False,
-                        "status_code": 0,
-                        "error": f"Embed {idx} title exceeds 256 character limit",
-                    }
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message=f"Embed {idx} title exceeds 256 character limit",
+                        connector="discord",
+                    )
 
                 if "description" in embed and len(embed["description"]) > 4096:
-                    return {
-                        "success": False,
-                        "status_code": 0,
-                        "error": f"Embed {idx} description exceeds 4096 character limit",
-                    }
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message=f"Embed {idx} description exceeds 4096 character limit",
+                        connector="discord",
+                    )
 
             payload["embeds"] = embeds
 
@@ -193,10 +195,7 @@ def send_discord_webhook(
         # Discord webhooks return 204 No Content on success
         if response.status_code == 204:
             logger.info(f"Discord webhook message sent successfully")
-            return {
-                "success": True,
-                "status_code": 204,
-            }
+            return tool_success({"status_code": 204})
 
         # Handle rate limiting (429 Too Many Requests)
         if response.status_code == 429:
@@ -204,18 +203,32 @@ def send_discord_webhook(
                 rate_limit_data = response.json()
                 retry_after = rate_limit_data.get("retry_after", 0)
                 logger.warning(f"Discord webhook rate limited. Retry after {retry_after}s")
-                return {
-                    "success": False,
-                    "status_code": 429,
-                    "error": "Rate limit exceeded",
-                    "rate_limit_retry_after": retry_after,
-                }
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message=f"Rate limit exceeded. Retry after {retry_after} seconds",
+                    connector="discord",
+                )
             except json.JSONDecodeError:
-                return {
-                    "success": False,
-                    "status_code": 429,
-                    "error": "Rate limit exceeded (could not parse retry time)",
-                }
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message="Rate limit exceeded (could not parse retry time)",
+                    connector="discord",
+                )
+
+        # Handle authentication errors (invalid webhook)
+        if response.status_code in [401, 403, 404]:
+            try:
+                error_data = response.json()
+                error_message = error_data.get("message", response.text)
+            except json.JSONDecodeError:
+                error_message = response.text
+
+            logger.error(f"Discord webhook invalid: {response.status_code} - {error_message}")
+            return tool_error(
+                error_type=ErrorType.INVALID_CREDENTIALS,
+                user_message=f"Invalid or disabled webhook URL: {error_message}",
+                connector="discord",
+            )
 
         # Handle other error responses
         try:
@@ -225,33 +238,34 @@ def send_discord_webhook(
             error_message = response.text
 
         logger.error(f"Discord webhook failed: {response.status_code} - {error_message}")
-        return {
-            "success": False,
-            "status_code": response.status_code,
-            "error": f"Discord API error: {error_message}",
-        }
+        error_type = ErrorType.VALIDATION_ERROR if response.status_code == 400 else ErrorType.EXECUTION_ERROR
+        return tool_error(
+            error_type=error_type,
+            user_message=f"Discord API error: {error_message}",
+            connector="discord",
+        )
 
     except httpx.TimeoutException:
         logger.error(f"Discord webhook timeout for URL: {resolved_webhook_url}")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": "Request timed out after 30 seconds",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="Request timed out after 30 seconds",
+            connector="discord",
+        )
     except httpx.RequestError as e:
         logger.error(f"Discord webhook request error: {e}")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": f"Request failed: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="discord",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error in send_discord_webhook")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": f"Unexpected error: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="discord",
+        )
 
 
 TOOLS: List[StructuredTool] = [

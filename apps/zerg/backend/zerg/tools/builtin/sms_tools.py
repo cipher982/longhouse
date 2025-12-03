@@ -11,6 +11,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,71 +95,74 @@ def send_sms(
 
         # Validate required credentials
         if not resolved_account_sid:
-            return {"success": False, "error": "Twilio Account SID not configured. Either provide account_sid parameter or configure SMS in Agent Settings -> Connectors."}
+            return connector_not_configured_error("sms", "SMS (Twilio)")
         if not resolved_auth_token:
-            return {"success": False, "error": "Twilio Auth Token not configured. Either provide auth_token parameter or configure SMS in Agent Settings -> Connectors."}
+            return tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="Twilio Auth Token not configured. Set it up in Settings → Integrations → SMS.",
+                connector="sms",
+                setup_url="/settings/integrations",
+            )
         if not resolved_from_number:
-            return {"success": False, "error": "From phone number not configured. Either provide from_number parameter or configure SMS in Agent Settings -> Connectors."}
+            return tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="From phone number not configured. Set it up in Settings → Integrations → SMS.",
+                connector="sms",
+                setup_url="/settings/integrations",
+            )
 
         # Validate inputs
         if not resolved_account_sid or not resolved_account_sid.startswith("AC") or len(resolved_account_sid) != 34:
-            return {
-                "success": False,
-                "error_message": "Invalid Account SID format. Must start with 'AC' and be 34 characters long",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Invalid Account SID format. Must start with 'AC' and be 34 characters long",
+                connector="sms",
+            )
 
         if not resolved_auth_token or len(resolved_auth_token) != 32:
-            return {
-                "success": False,
-                "error_message": "Invalid Auth Token format. Must be 32 characters long",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Invalid Auth Token format. Must be 32 characters long",
+                connector="sms",
+            )
 
         # Validate phone numbers (E.164 format)
         if not resolved_from_number or not resolved_from_number.startswith("+") or not resolved_from_number[1:].isdigit():
-            return {
-                "success": False,
-                "error_message": f"Invalid from_number format. Must be E.164 format (e.g., +14155552671). Got: {resolved_from_number}",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Invalid from_number format. Must be E.164 format (e.g., +14155552671). Got: {resolved_from_number}",
+                connector="sms",
+            )
 
         if not to_number or not to_number.startswith("+") or not to_number[1:].isdigit():
-            return {
-                "success": False,
-                "error_message": f"Invalid to_number format. Must be E.164 format (e.g., +14155552671). Got: {to_number}",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Invalid to_number format. Must be E.164 format (e.g., +14155552671). Got: {to_number}",
+                connector="sms",
+            )
 
         # Validate message
         if not message:
-            return {
-                "success": False,
-                "error_message": "Message body cannot be empty",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Message body cannot be empty",
+                connector="sms",
+            )
 
         if len(message) > 1600:
-            return {
-                "success": False,
-                "error_message": f"Message too long ({len(message)} characters). Maximum is 1600 characters",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Message too long ({len(message)} characters). Maximum is 1600 characters",
+                connector="sms",
+            )
 
         # Validate status callback if provided
         if status_callback and not (status_callback.startswith("http://") or status_callback.startswith("https://")):
-            return {
-                "success": False,
-                "error_message": "Status callback URL must start with http:// or https://",
-                "from_number": resolved_from_number,
-                "to_number": to_number,
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Status callback URL must start with http:// or https://",
+                connector="sms",
+            )
 
         # Build Twilio API URL
         api_url = f"https://api.twilio.com/2010-04-01/Accounts/{resolved_account_sid}/Messages.json"
@@ -190,8 +200,7 @@ def send_sms(
         if response.status_code == 201:
             # Success - message was queued
             response_data = response.json()
-            return {
-                "success": True,
+            return tool_success({
                 "message_sid": response_data.get("sid"),
                 "status": response_data.get("status"),
                 "from_number": response_data.get("from"),
@@ -200,7 +209,7 @@ def send_sms(
                 "segments": response_data.get("num_segments", "unknown"),
                 "price": response_data.get("price"),
                 "price_unit": response_data.get("price_unit"),
-            }
+            })
         else:
             # Error response from Twilio
             try:
@@ -214,55 +223,64 @@ def send_sms(
                     f"Status: {response.status_code}. More info: {more_info}"
                 )
 
-                result = {
-                    "success": False,
-                    "error_code": error_code,
-                    "error_message": error_message,
-                    "status_code": response.status_code,
-                    "from_number": resolved_from_number,
-                    "to_number": to_number,
-                }
-
-                if more_info:
-                    result["more_info"] = more_info
-
-                return result
+                # Map status codes to error types
+                if response.status_code == 401:
+                    return invalid_credentials_error("sms", "SMS (Twilio)")
+                elif response.status_code == 429:
+                    return tool_error(
+                        error_type=ErrorType.RATE_LIMITED,
+                        user_message=error_message,
+                        connector="sms",
+                    )
+                elif response.status_code == 403:
+                    return tool_error(
+                        error_type=ErrorType.PERMISSION_DENIED,
+                        user_message=error_message,
+                        connector="sms",
+                    )
+                elif response.status_code == 400:
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message=error_message,
+                        connector="sms",
+                    )
+                else:
+                    return tool_error(
+                        error_type=ErrorType.EXECUTION_ERROR,
+                        user_message=error_message,
+                        connector="sms",
+                    )
 
             except Exception:
                 # Could not parse error response
                 logger.error(f"Twilio API returned status {response.status_code}: {response.text[:500]}")
-                return {
-                    "success": False,
-                    "error_message": f"Twilio API error (status {response.status_code})",
-                    "status_code": response.status_code,
-                    "from_number": resolved_from_number,
-                    "to_number": to_number,
-                }
+                return tool_error(
+                    error_type=ErrorType.EXECUTION_ERROR,
+                    user_message=f"Twilio API error (status {response.status_code})",
+                    connector="sms",
+                )
 
     except httpx.TimeoutException:
         logger.error(f"Timeout sending SMS to {to_number}")
-        return {
-            "success": False,
-            "error_message": "Request timed out after 30 seconds",
-            "from_number": resolved_from_number,
-            "to_number": to_number,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="Request timed out after 30 seconds",
+            connector="sms",
+        )
     except httpx.RequestError as e:
         logger.error(f"Request error sending SMS to {to_number}: {e}")
-        return {
-            "success": False,
-            "error_message": f"Request failed: {str(e)}",
-            "from_number": resolved_from_number,
-            "to_number": to_number,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="sms",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error sending SMS to {to_number}")
-        return {
-            "success": False,
-            "error_message": f"Unexpected error: {str(e)}",
-            "from_number": resolved_from_number,
-            "to_number": to_number,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="sms",
+        )
 
 
 TOOLS = [
