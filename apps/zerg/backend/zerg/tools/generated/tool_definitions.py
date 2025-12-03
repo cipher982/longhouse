@@ -20,7 +20,10 @@ class ToolName(str, Enum):
     SEND_SLACK_WEBHOOK = "send_slack_webhook"
     SEND_EMAIL = "send_email"
     SEND_SMS = "send_sms"
+    # Connector meta-tools
+    REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
     # Project management tools
+    GITHUB_LIST_REPOSITORIES = "github_list_repositories"
     GITHUB_CREATE_ISSUE = "github_create_issue"
     GITHUB_LIST_ISSUES = "github_list_issues"
     GITHUB_GET_ISSUE = "github_get_issue"
@@ -58,6 +61,7 @@ class ServerName(str, Enum):
     DATETIME = "datetime"
     UUID = "uuid"
     CONTAINER = "container"
+    CONNECTOR = "connector"
     DISCORD = "discord"
     SLACK = "slack"
     EMAIL = "email"
@@ -77,12 +81,15 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
+    # Connector meta-tools
+    ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
     # Notification tools
     ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
     ToolName.SEND_EMAIL: ServerName.EMAIL,
     ToolName.SEND_SMS: ServerName.SMS,
     # GitHub tools
+    ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
     ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
     ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
     ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
