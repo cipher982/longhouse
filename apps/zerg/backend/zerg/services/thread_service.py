@@ -45,29 +45,46 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
     The mapping is fairly direct except for *assistant* rows that contain
     pending tool calls (``tool_calls`` JSON).  Those become *AIMessage*
     instances that include the *tool_calls* attribute.
+
+    Messages are timestamped using the sent_at field to enable temporal
+    awareness as specified in the connector-aware agents PRD (P1.2).
     """
 
     role = msg_row.role
 
+    # Format timestamp for temporal awareness (ISO 8601 with Z suffix)
+    # Use sent_at field if available, otherwise skip timestamp
+    timestamp_prefix = ""
+    if hasattr(msg_row, 'sent_at') and msg_row.sent_at:
+        # Format as ISO 8601 with Z suffix (UTC)
+        ts_str = msg_row.sent_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp_prefix = f"[{ts_str}] "
+
+    # Prepend timestamp to content for user and assistant messages
+    # System and tool messages don't need timestamps (system is static, tools are immediate)
+    content = msg_row.content
+    if role in ("user", "assistant"):
+        content = f"{timestamp_prefix}{content}"
+
     if role == "system":
-        return SystemMessage(content=msg_row.content)
+        return SystemMessage(content=content)
     if role == "user":
-        return HumanMessage(content=msg_row.content)
+        return HumanMessage(content=content)
     if role == "assistant":
         # Assistant messages may or may not include tool calls.
         if msg_row.tool_calls:
-            return AIMessage(content=msg_row.content, tool_calls=msg_row.tool_calls)  # type: ignore[arg-type]
-        return AIMessage(content=msg_row.content)
+            return AIMessage(content=content, tool_calls=msg_row.tool_calls)  # type: ignore[arg-type]
+        return AIMessage(content=content)
     if role == "tool":
         return ToolMessage(
-            content=msg_row.content,
+            content=content,
             tool_call_id=msg_row.tool_call_id or "",  # tool_call_id required by pydantic schema
             name=msg_row.name or "tool",
         )
 
     # Fallback – treat as generic AI message to avoid crashing; log for devs
     logger.warning("Unknown message role '%s' encountered – defaulting to AIMessage", role)
-    return AIMessage(content=msg_row.content)
+    return AIMessage(content=content)
 
 
 # ==============================================================================
