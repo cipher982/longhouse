@@ -23,6 +23,12 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +74,11 @@ end run
 def _require_macos() -> Optional[Dict[str, Any]]:
     """Return an error payload if the host is not macOS."""
     if platform.system() != "Darwin":
-        return {
-            "success": False,
-            "error_message": "iMessage tools require macOS with the Messages app installed.",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="iMessage tools require macOS with the Messages app installed.",
+            connector="imessage"
+        )
     return None
 
 
@@ -136,22 +143,32 @@ def send_imessage(
         return env_error
 
     if not recipient or not recipient.strip():
-        return {"success": False, "error_message": "Recipient (phone or email) is required."}
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Recipient (phone or email) is required.",
+            connector="imessage"
+        )
 
     if not message or not message.strip():
-        return {"success": False, "error_message": "Message cannot be empty."}
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Message cannot be empty.",
+            connector="imessage"
+        )
 
     if len(message) > MAX_MESSAGE_LENGTH:
-        return {
-            "success": False,
-            "error_message": f"Message too long ({len(message)} chars). Max is {MAX_MESSAGE_LENGTH}.",
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message=f"Message too long ({len(message)} chars). Max is {MAX_MESSAGE_LENGTH}.",
+            connector="imessage"
+        )
 
     if shutil.which("osascript") is None:
-        return {
-            "success": False,
-            "error_message": "osascript command not found. Enable AppleScript on macOS.",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="osascript command not found. Enable AppleScript on macOS.",
+            connector="imessage"
+        )
 
     normalized_recipient = recipient.strip()
     script_args = ["osascript", "-", normalized_recipient, message]
@@ -168,31 +185,39 @@ def send_imessage(
         )
     except subprocess.TimeoutExpired:
         logger.error("Timed out sending iMessage to %s", normalized_recipient)
-        return {"success": False, "error_message": f"Timed out after {timeout_seconds} seconds."}
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Timed out after {timeout_seconds} seconds.",
+            connector="imessage"
+        )
     except FileNotFoundError:
-        return {
-            "success": False,
-            "error_message": "osascript binary is unavailable. iMessage send requires macOS.",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="osascript binary is unavailable. iMessage send requires macOS.",
+            connector="imessage"
+        )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error running osascript")
-        return {"success": False, "error_message": f"Unexpected error: {exc}"}
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {exc}",
+            connector="imessage"
+        )
 
     if completed.returncode != 0:
         stderr = (completed.stderr or "").strip()
-        return {
-            "success": False,
-            "error_message": stderr or "Messages app rejected the request.",
-            "return_code": completed.returncode,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=stderr or "Messages app rejected the request.",
+            connector="imessage"
+        )
 
-    return {
-        "success": True,
+    return tool_success({
         "recipient": normalized_recipient,
         "chat_guid": chat_guid,
         "status": "sent",
         "stdout": (completed.stdout or "").strip() or None,
-    }
+    })
 
 
 def list_imessage_messages(
@@ -219,15 +244,20 @@ def list_imessage_messages(
         return env_error
 
     if limit <= 0:
-        return {"success": False, "error_message": "limit must be greater than zero."}
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="limit must be greater than zero.",
+            connector="imessage"
+        )
     limit = min(limit, MAX_QUERY_LIMIT)
 
     db_path = IMESSAGE_DB_PATH
     if not db_path.exists():
-        return {
-            "success": False,
-            "error_message": f"Messages database not found at {db_path}. Grant Full Disk Access.",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Messages database not found at {db_path}. Grant Full Disk Access.",
+            connector="imessage"
+        )
 
     temp_path: Optional[Path] = None
     try:
@@ -304,23 +334,27 @@ def list_imessage_messages(
             )
 
         latest_row_id = messages[0]["row_id"] if messages else since_row_id
-        return {
-            "success": True,
+        return tool_success({
             "messages": messages,
             "limit": limit,
             "include_outgoing": include_outgoing,
             "latest_row_id": latest_row_id,
-        }
+        })
 
     except PermissionError:
         logger.exception("Missing permissions to copy %s", db_path)
-        return {
-            "success": False,
-            "error_message": "Permission denied copying chat.db. Grant Full Disk Access.",
-        }
+        return tool_error(
+            error_type=ErrorType.PERMISSION_DENIED,
+            user_message="Permission denied copying chat.db. Grant Full Disk Access.",
+            connector="imessage"
+        )
     except sqlite3.Error as exc:
         logger.exception("Failed to query iMessage database")
-        return {"success": False, "error_message": f"SQLite error: {exc}"}
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"SQLite error: {exc}",
+            connector="imessage"
+        )
     finally:
         try:
             if 'conn' in locals():

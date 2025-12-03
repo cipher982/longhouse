@@ -25,6 +25,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +53,7 @@ def _resolve_linear_api_key(api_key: Optional[str] = None) -> tuple[Optional[str
                 resolved_api_key = creds.get("api_key")
 
     if not resolved_api_key:
-        return None, {
-            "success": False,
-            "error": "Linear API key not configured. Either provide api_key parameter or configure Linear in Agent Settings -> Connectors."
-        }
+        return None, connector_not_configured_error("linear", "Linear")
     return resolved_api_key, None
 
 
@@ -72,10 +76,11 @@ def _make_linear_request(
     """
     try:
         if not api_key or not isinstance(api_key, str):
-            return {
-                "success": False,
-                "error": "Invalid or missing Linear API key"
-            }
+            return tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="Invalid or missing Linear API key",
+                connector="linear"
+            )
 
         headers = {
             "Authorization": api_key,  # Personal API keys don't use Bearer prefix
@@ -100,76 +105,70 @@ def _make_linear_request(
 
         # Check for authentication errors
         if response.status_code == 401:
-            return {
-                "success": False,
-                "error": "Linear authentication failed. Check your API key.",
-                "status_code": 401
-            }
+            return invalid_credentials_error("linear", "Linear")
 
         # Check for rate limit
         if response.status_code == 403:
             rate_limit_remaining = response.headers.get("x-ratelimit-requests-remaining", "unknown")
             if rate_limit_remaining == "0":
                 reset_time = response.headers.get("x-ratelimit-requests-reset", "unknown")
-                return {
-                    "success": False,
-                    "error": f"Linear API rate limit exceeded. Resets at: {reset_time}",
-                    "status_code": 403
-                }
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message=f"Linear API rate limit exceeded. Resets at: {reset_time}",
+                    connector="linear"
+                )
 
         # Parse GraphQL response
         try:
             response_data = response.json()
         except json.JSONDecodeError:
-            return {
-                "success": False,
-                "error": "Failed to parse Linear API response",
-                "status_code": response.status_code
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Failed to parse Linear API response",
+                connector="linear"
+            )
 
         # Check for GraphQL errors
         if "errors" in response_data and response_data["errors"]:
             errors = response_data["errors"]
             error_messages = [err.get("message", str(err)) for err in errors]
-            return {
-                "success": False,
-                "error": "; ".join(error_messages),
-                "status_code": response.status_code,
-                "graphql_errors": errors
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="; ".join(error_messages),
+                connector="linear"
+            )
 
         # Check for success
         if 200 <= response.status_code < 300:
-            return {
-                "success": True,
-                "data": response_data.get("data", {}),
-                "status_code": response.status_code
-            }
+            return tool_success(response_data.get("data", {}))
         else:
-            return {
-                "success": False,
-                "error": f"Request failed with status {response.status_code}",
-                "status_code": response.status_code
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=f"Request failed with status {response.status_code}",
+                connector="linear"
+            )
 
     except httpx.TimeoutException:
         logger.error(f"Linear API timeout")
-        return {
-            "success": False,
-            "error": f"Request timed out after {timeout} seconds"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request timed out after {timeout} seconds",
+            connector="linear"
+        )
     except httpx.RequestError as e:
         logger.error(f"Linear API request error: {e}")
-        return {
-            "success": False,
-            "error": f"Request failed: {str(e)}"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="linear"
+        )
     except Exception as e:
         logger.exception(f"Unexpected error in Linear API request")
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="linear"
+        )
 
 
 def linear_create_issue(
@@ -215,22 +214,25 @@ def linear_create_issue(
         return error
 
     if not title or not title.strip():
-        return {
-            "success": False,
-            "error": "Issue title is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue title is required and cannot be empty",
+            connector="linear"
+        )
 
     if not team_id or not team_id.strip():
-        return {
-            "success": False,
-            "error": "Team ID is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Team ID is required and cannot be empty",
+            connector="linear"
+        )
 
     if priority is not None and (not isinstance(priority, int) or priority < 0 or priority > 4):
-        return {
-            "success": False,
-            "error": "Priority must be an integer between 0 (None) and 4 (Low)"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Priority must be an integer between 0 (None) and 4 (Low)",
+            connector="linear"
+        )
 
     mutation = """
     mutation IssueCreate($input: IssueCreateInput!) {
@@ -281,11 +283,11 @@ def linear_create_issue(
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issue_create = result["data"].get("issueCreate", {})
         if issue_create.get("success"):
             issue_data = issue_create.get("issue", {})
-            result["data"] = {
+            return tool_success({
                 "id": issue_data.get("id"),
                 "identifier": issue_data.get("identifier"),
                 "title": issue_data.get("title"),
@@ -294,12 +296,13 @@ def linear_create_issue(
                 "state": issue_data.get("state", {}).get("name"),
                 "team": issue_data.get("team", {}).get("key"),
                 "created_at": issue_data.get("createdAt")
-            }
+            })
         else:
-            return {
-                "success": False,
-                "error": "Issue creation failed"
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Issue creation failed",
+                connector="linear"
+            )
 
     return result
 
@@ -339,10 +342,11 @@ def linear_list_issues(
         return error
 
     if first < 1 or first > 250:
-        return {
-            "success": False,
-            "error": "first must be between 1 and 250"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="first must be between 1 and 250",
+            connector="linear"
+        )
 
     query = """
     query Issues($filter: IssueFilter, $first: Int) {
@@ -393,32 +397,36 @@ def linear_list_issues(
     result = _make_linear_request(resolved_api_key, query, variables)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         raw_data = result["data"]
         issues_data = raw_data.get("issues", {}).get("nodes", [])
         page_info = raw_data.get("issues", {}).get("pageInfo", {})
 
-        result["data"] = [
-            {
-                "id": issue.get("id"),
-                "identifier": issue.get("identifier"),
-                "title": issue.get("title"),
-                "priority": issue.get("priority"),
-                "state": issue.get("state", {}).get("name"),
-                "assignee": issue.get("assignee", {}).get("name") if issue.get("assignee") else None,
-                "team": issue.get("team", {}).get("key"),
-                "url": issue.get("url"),
-                "created_at": issue.get("createdAt"),
-                "updated_at": issue.get("updatedAt")
-            }
-            for issue in issues_data
-        ]
-        result["count"] = len(result["data"])
+        response_data = {
+            "issues": [
+                {
+                    "id": issue.get("id"),
+                    "identifier": issue.get("identifier"),
+                    "title": issue.get("title"),
+                    "priority": issue.get("priority"),
+                    "state": issue.get("state", {}).get("name"),
+                    "assignee": issue.get("assignee", {}).get("name") if issue.get("assignee") else None,
+                    "team": issue.get("team", {}).get("key"),
+                    "url": issue.get("url"),
+                    "created_at": issue.get("createdAt"),
+                    "updated_at": issue.get("updatedAt")
+                }
+                for issue in issues_data
+            ],
+            "count": len(issues_data)
+        }
 
         # Include pagination info
         if page_info.get("hasNextPage"):
-            result["has_next_page"] = True
-            result["end_cursor"] = page_info.get("endCursor")
+            response_data["has_next_page"] = True
+            response_data["end_cursor"] = page_info.get("endCursor")
+
+        return tool_success(response_data)
 
     return result
 
@@ -451,10 +459,11 @@ def linear_get_issue(
         return error
 
     if not issue_id or not issue_id.strip():
-        return {
-            "success": False,
-            "error": "Issue ID is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue ID is required and cannot be empty",
+            connector="linear"
+        )
 
     query = """
     query Issue($id: String!) {
@@ -504,10 +513,10 @@ def linear_get_issue(
     result = _make_linear_request(resolved_api_key, query, variables)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issue_data = result["data"].get("issue", {})
         if issue_data:
-            result["data"] = {
+            return tool_success({
                 "id": issue_data.get("id"),
                 "identifier": issue_data.get("identifier"),
                 "title": issue_data.get("title"),
@@ -529,12 +538,13 @@ def linear_get_issue(
                 "url": issue_data.get("url"),
                 "created_at": issue_data.get("createdAt"),
                 "updated_at": issue_data.get("updatedAt")
-            }
+            })
         else:
-            return {
-                "success": False,
-                "error": "Issue not found"
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Issue not found",
+                connector="linear"
+            )
 
     return result
 
@@ -577,23 +587,26 @@ def linear_update_issue(
         return error
 
     if not issue_id or not issue_id.strip():
-        return {
-            "success": False,
-            "error": "Issue ID is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue ID is required and cannot be empty",
+            connector="linear"
+        )
 
     if priority is not None and (not isinstance(priority, int) or priority < 0 or priority > 4):
-        return {
-            "success": False,
-            "error": "Priority must be an integer between 0 (None) and 4 (Low)"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Priority must be an integer between 0 (None) and 4 (Low)",
+            connector="linear"
+        )
 
     # At least one field must be provided
     if not any([title, description, state_id, priority is not None]):
-        return {
-            "success": False,
-            "error": "At least one field to update must be provided (title, description, state_id, or priority)"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="At least one field to update must be provided (title, description, state_id, or priority)",
+            connector="linear"
+        )
 
     mutation = """
     mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
@@ -633,11 +646,11 @@ def linear_update_issue(
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issue_update = result["data"].get("issueUpdate", {})
         if issue_update.get("success"):
             issue_data = issue_update.get("issue", {})
-            result["data"] = {
+            return tool_success({
                 "id": issue_data.get("id"),
                 "identifier": issue_data.get("identifier"),
                 "title": issue_data.get("title"),
@@ -645,12 +658,13 @@ def linear_update_issue(
                 "priority": issue_data.get("priority"),
                 "state": issue_data.get("state", {}).get("name"),
                 "updated_at": issue_data.get("updatedAt")
-            }
+            })
         else:
-            return {
-                "success": False,
-                "error": "Issue update failed"
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Issue update failed",
+                connector="linear"
+            )
 
     return result
 
@@ -686,16 +700,18 @@ def linear_add_comment(
         return error
 
     if not body or not body.strip():
-        return {
-            "success": False,
-            "error": "Comment body is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Comment body is required and cannot be empty",
+            connector="linear"
+        )
 
     if not issue_id or not issue_id.strip():
-        return {
-            "success": False,
-            "error": "Issue ID is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue ID is required and cannot be empty",
+            connector="linear"
+        )
 
     mutation = """
     mutation CommentCreate($input: CommentCreateInput!) {
@@ -729,23 +745,24 @@ def linear_add_comment(
     result = _make_linear_request(resolved_api_key, mutation, variables)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         comment_create = result["data"].get("commentCreate", {})
         if comment_create.get("success"):
             comment_data = comment_create.get("comment", {})
-            result["data"] = {
+            return tool_success({
                 "id": comment_data.get("id"),
                 "body": comment_data.get("body"),
                 "author": comment_data.get("user", {}).get("name"),
                 "issue_identifier": comment_data.get("issue", {}).get("identifier"),
                 "url": comment_data.get("url"),
                 "created_at": comment_data.get("createdAt")
-            }
+            })
         else:
-            return {
-                "success": False,
-                "error": "Comment creation failed"
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Comment creation failed",
+                connector="linear"
+            )
 
     return result
 
@@ -790,18 +807,20 @@ def linear_list_teams(
     result = _make_linear_request(resolved_api_key, query)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         teams_data = result["data"].get("teams", {}).get("nodes", [])
-        result["data"] = [
-            {
-                "id": team.get("id"),
-                "name": team.get("name"),
-                "key": team.get("key"),
-                "description": team.get("description")
-            }
-            for team in teams_data
-        ]
-        result["count"] = len(result["data"])
+        return tool_success({
+            "teams": [
+                {
+                    "id": team.get("id"),
+                    "name": team.get("name"),
+                    "key": team.get("key"),
+                    "description": team.get("description")
+                }
+                for team in teams_data
+            ],
+            "count": len(teams_data)
+        })
 
     return result
 

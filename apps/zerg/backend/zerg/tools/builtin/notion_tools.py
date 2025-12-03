@@ -21,6 +21,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +50,7 @@ def _resolve_notion_api_key(api_key: Optional[str] = None) -> tuple[Optional[str
                 resolved_api_key = creds.get("api_key")
 
     if not resolved_api_key:
-        return None, {
-            "success": False,
-            "error": "Notion API key not configured. Either provide api_key parameter or configure Notion in Agent Settings -> Connectors."
-        }
+        return None, connector_not_configured_error("notion", "Notion")
     return resolved_api_key, None
 
 
@@ -74,11 +78,11 @@ def _make_notion_request(
         - status_code: HTTP status code
     """
     if not api_key:
-        return {
-            "success": False,
-            "error": "API key is required",
-            "status_code": 0,
-        }
+        return tool_error(
+            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+            user_message="API key is required",
+            connector="notion"
+        )
 
     url = f"{NOTION_API_BASE}{endpoint}"
     headers = {
@@ -99,57 +103,69 @@ def _make_notion_request(
 
         # Handle successful responses
         if response.status_code in [200, 201]:
-            return {
-                "success": True,
-                "data": response.json(),
-                "status_code": response.status_code,
-            }
+            return tool_success(response.json())
 
         # Handle error responses
         error_data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         error_message = error_data.get("message", response.text)
         error_code = error_data.get("code", "unknown")
 
-        # Provide helpful error messages
+        # Map status codes to error types
         if response.status_code == 401:
-            error_message = f"Authentication failed: {error_message}. Check your API key."
+            return invalid_credentials_error("notion", "Notion")
         elif response.status_code == 404:
-            error_message = f"Resource not found: {error_message}. Verify the page/database ID and that your integration has access."
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=f"Resource not found: {error_message}. Verify the page/database ID and that your integration has access.",
+                connector="notion"
+            )
         elif response.status_code == 429:
-            error_message = f"Rate limit exceeded: {error_message}. Notion API limit is ~3 requests/second."
+            return tool_error(
+                error_type=ErrorType.RATE_LIMITED,
+                user_message=f"Rate limit exceeded: {error_message}. Notion API limit is ~3 requests/second.",
+                connector="notion"
+            )
         elif response.status_code == 400:
-            error_message = f"Invalid request: {error_message}"
-
-        logger.warning(f"Notion API error {response.status_code} ({error_code}): {error_message}")
-
-        return {
-            "success": False,
-            "error": error_message,
-            "error_code": error_code,
-            "status_code": response.status_code,
-        }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Invalid request: {error_message}",
+                connector="notion"
+            )
+        elif response.status_code == 403:
+            return tool_error(
+                error_type=ErrorType.PERMISSION_DENIED,
+                user_message=f"Permission denied: {error_message}",
+                connector="notion"
+            )
+        else:
+            logger.warning(f"Notion API error {response.status_code} ({error_code}): {error_message}")
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=error_message,
+                connector="notion"
+            )
 
     except httpx.TimeoutException:
         logger.error(f"Notion API timeout for {endpoint}")
-        return {
-            "success": False,
-            "error": f"Request timed out after {timeout} seconds",
-            "status_code": 0,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request timed out after {timeout} seconds",
+            connector="notion"
+        )
     except httpx.RequestError as e:
         logger.error(f"Notion API request error for {endpoint}: {e}")
-        return {
-            "success": False,
-            "error": f"Request failed: {str(e)}",
-            "status_code": 0,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="notion"
+        )
     except Exception as e:
         logger.exception(f"Unexpected error in Notion API request to {endpoint}")
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}",
-            "status_code": 0,
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="notion"
+        )
 
 
 def notion_create_page(
@@ -247,20 +263,15 @@ def notion_create_page(
     # Make API request
     result = _make_notion_request(resolved_api_key, "/pages", method="POST", data=request_body)
 
-    if result["success"]:
+    if result.get("ok"):
         page_data = result["data"]
-        return {
-            "success": True,
+        return tool_success({
             "page_id": page_data["id"],
             "url": page_data.get("url", ""),
             "created_time": page_data.get("created_time", ""),
-        }
+        })
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 def notion_get_page(page_id: str, api_key: Optional[str] = None) -> Dict[str, Any]:
@@ -292,17 +303,10 @@ def notion_get_page(page_id: str, api_key: Optional[str] = None) -> Dict[str, An
 
     result = _make_notion_request(resolved_api_key, f"/pages/{page_id}", method="GET")
 
-    if result["success"]:
-        return {
-            "success": True,
-            "page": result["data"],
-        }
+    if result.get("ok"):
+        return tool_success({"page": result["data"]})
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 def notion_update_page(
@@ -353,24 +357,18 @@ def notion_update_page(
         request_body["archived"] = archived
 
     if not request_body:
-        return {
-            "success": False,
-            "error": "Must provide either properties or archived parameter",
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Must provide either properties or archived parameter",
+            connector="notion"
+        )
 
     result = _make_notion_request(resolved_api_key, f"/pages/{page_id}", method="PATCH", data=request_body)
 
-    if result["success"]:
-        return {
-            "success": True,
-            "page": result["data"],
-        }
+    if result.get("ok"):
+        return tool_success({"page": result["data"]})
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 def notion_search(
@@ -417,28 +415,24 @@ def notion_search(
 
     if filter_type:
         if filter_type not in ["page", "database"]:
-            return {
-                "success": False,
-                "error": "filter_type must be 'page' or 'database'",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="filter_type must be 'page' or 'database'",
+                connector="notion"
+            )
         request_body["filter"] = {"value": filter_type, "property": "object"}
 
     result = _make_notion_request(resolved_api_key, "/search", method="POST", data=request_body)
 
-    if result["success"]:
+    if result.get("ok"):
         data = result["data"]
-        return {
-            "success": True,
+        return tool_success({
             "results": data.get("results", []),
             "has_more": data.get("has_more", False),
             "next_cursor": data.get("next_cursor"),
-        }
+        })
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 def notion_query_database(
@@ -500,20 +494,15 @@ def notion_query_database(
         resolved_api_key, f"/databases/{database_id}/query", method="POST", data=request_body
     )
 
-    if result["success"]:
+    if result.get("ok"):
         data = result["data"]
-        return {
-            "success": True,
+        return tool_success({
             "results": data.get("results", []),
             "has_more": data.get("has_more", False),
             "next_cursor": data.get("next_cursor"),
-        }
+        })
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 def notion_append_blocks(
@@ -577,27 +566,23 @@ def notion_append_blocks(
         return error
 
     if not blocks:
-        return {
-            "success": False,
-            "error": "No blocks provided to append",
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="No blocks provided to append",
+            connector="notion"
+        )
 
     request_body = {"children": blocks}
 
     result = _make_notion_request(resolved_api_key, f"/blocks/{page_id}/children", method="PATCH", data=request_body)
 
-    if result["success"]:
+    if result.get("ok"):
         data = result["data"]
-        return {
-            "success": True,
+        return tool_success({
             "blocks": data.get("results", []),
-        }
+        })
     else:
-        return {
-            "success": False,
-            "error": result.get("error", "Unknown error"),
-            "status_code": result.get("status_code", 0),
-        }
+        return result
 
 
 # Register tools with LangChain
