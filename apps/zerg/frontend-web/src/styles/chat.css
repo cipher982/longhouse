@@ -301,6 +301,7 @@
     color: var(--color-text-secondary);
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -439,6 +440,18 @@
     border-radius: var(--radius-sm);
     font-family: var(--font-family-mono);
     font-size: 0.9em;
+}
+
+/* Links in messages */
+.message-content a {
+    color: var(--color-brand-secondary);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--motion-duration-fast) ease;
+}
+
+.message-content a:hover {
+    border-bottom-color: var(--color-brand-secondary);
 }
 
 /* Code Blocks */
