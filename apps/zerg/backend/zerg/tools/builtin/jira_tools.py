@@ -186,11 +186,24 @@ def jira_create_issue(
             return error
 
         # Validate required fields
-        if not all([project_key, issue_type, summary]):
-            return {
-                "success": False,
-                "error": "Missing required fields: project_key, issue_type, summary",
-            }
+        if not project_key:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Project key is required to create a Jira issue.",
+                connector="jira"
+            )
+        if not issue_type:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Issue type is required to create a Jira issue.",
+                connector="jira"
+            )
+        if not summary:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Summary is required to create a Jira issue.",
+                connector="jira"
+            )
 
         # Build payload
         payload = {
@@ -611,11 +624,18 @@ def jira_transition_issue(
             return error
 
         # Validate required fields
-        if not all([issue_key, transition_id]):
-            return {
-                "success": False,
-                "error": "Missing required fields: issue_key, transition_id",
-            }
+        if not issue_key:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Issue key is required to transition a Jira issue.",
+                connector="jira"
+            )
+        if not transition_id:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                "Transition ID is required to transition a Jira issue.",
+                connector="jira"
+            )
 
         # Build payload
         payload = {"transition": {"id": str(transition_id)}}
