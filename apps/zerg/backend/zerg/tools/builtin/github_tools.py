@@ -26,6 +26,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +54,7 @@ def _resolve_github_token(token: Optional[str] = None) -> tuple[Optional[str], O
                 resolved_token = creds.get("token")
 
     if not resolved_token:
-        return None, {
-            "success": False,
-            "error": "GitHub token not configured. Either provide token parameter or configure GitHub in Agent Settings -> Connectors."
-        }
+        return None, connector_not_configured_error("github", "GitHub")
     return resolved_token, None
 
 
@@ -73,14 +77,15 @@ def _make_github_request(
         timeout: Request timeout in seconds
 
     Returns:
-        Dictionary with success status, data, and any error messages
+        Dictionary with ok status, data, and any error messages using error envelope
     """
     try:
         if not token or not isinstance(token, str):
-            return {
-                "success": False,
-                "error": "Invalid or missing GitHub token"
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Invalid or missing GitHub token",
+                connector="github",
+            )
 
         url = f"{GITHUB_API_BASE}{endpoint}"
         headers = {
@@ -106,27 +111,23 @@ def _make_github_request(
             rate_limit_remaining = response.headers.get("x-ratelimit-remaining", "unknown")
             if rate_limit_remaining == "0":
                 reset_time = response.headers.get("x-ratelimit-reset", "unknown")
-                return {
-                    "success": False,
-                    "error": f"GitHub API rate limit exceeded. Resets at: {reset_time}",
-                    "status_code": 403
-                }
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message=f"GitHub API rate limit exceeded. Resets at: {reset_time}",
+                    connector="github",
+                )
 
         # Check for authentication errors
         if response.status_code == 401:
-            return {
-                "success": False,
-                "error": "GitHub authentication failed. Check your Personal Access Token.",
-                "status_code": 401
-            }
+            return invalid_credentials_error("github", "GitHub")
 
         # Check for not found
         if response.status_code == 404:
-            return {
-                "success": False,
-                "error": "Resource not found. Check repository owner, name, and issue/PR number.",
-                "status_code": 404
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message="Resource not found. Check repository owner, name, and issue/PR number.",
+                connector="github",
+            )
 
         # Parse response
         try:
@@ -136,37 +137,97 @@ def _make_github_request(
 
         # Check for success
         if 200 <= response.status_code < 300:
-            return {
-                "success": True,
-                "data": response_data,
-                "status_code": response.status_code
-            }
+            return tool_success(response_data)
         else:
             error_msg = response_data.get("message", str(response_data)) if isinstance(response_data, dict) else str(response_data)
-            return {
-                "success": False,
-                "error": error_msg,
-                "status_code": response.status_code
-            }
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=error_msg,
+                connector="github",
+            )
 
     except httpx.TimeoutException:
         logger.error(f"GitHub API timeout for {method} {endpoint}")
-        return {
-            "success": False,
-            "error": f"Request timed out after {timeout} seconds"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request timed out after {timeout} seconds",
+            connector="github",
+        )
     except httpx.RequestError as e:
         logger.error(f"GitHub API request error for {method} {endpoint}: {e}")
-        return {
-            "success": False,
-            "error": f"Request failed: {str(e)}"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="github",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error in GitHub API request: {method} {endpoint}")
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}"
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="github",
+        )
+
+
+def github_list_repositories(
+    token: Optional[str] = None,
+    visibility: str = "all",
+    sort: str = "updated",
+    per_page: int = 30,
+) -> Dict[str, Any]:
+    """List repositories for the authenticated user.
+
+    Args:
+        token: GitHub Personal Access Token (optional if configured in agent)
+        visibility: Filter by visibility - 'all', 'public', or 'private' (default: 'all')
+        sort: Sort order - 'created', 'updated', 'pushed', or 'full_name' (default: 'updated')
+        per_page: Number of results per page, max 100 (default: 30)
+
+    Returns:
+        Dictionary containing:
+        - ok (bool): Whether the request succeeded
+        - data (dict): Repository data with repositories list and count
+        - error_type (str): Error type if failed
+        - user_message (str): Error message if failed
+    """
+    resolved_token, error = _resolve_github_token(token)
+    if error:
+        return error
+
+    params = {
+        "visibility": visibility,
+        "sort": sort,
+        "per_page": min(per_page, 100),
+    }
+
+    result = _make_github_request(
+        token=resolved_token,
+        method="GET",
+        endpoint="/user/repos",
+        params=params,
+    )
+
+    if not result.get("ok"):
+        return result
+
+    # Format the response
+    repos = result.get("data", [])
+    formatted_repos = []
+    for repo in repos:
+        formatted_repos.append({
+            "name": repo.get("full_name"),
+            "description": repo.get("description"),
+            "url": repo.get("html_url"),
+            "private": repo.get("private"),
+            "language": repo.get("language"),
+            "stars": repo.get("stargazers_count"),
+            "updated_at": repo.get("updated_at"),
+        })
+
+    return tool_success({
+        "repositories": formatted_repos,
+        "count": len(formatted_repos),
+    })
 
 
 def github_create_issue(
@@ -210,10 +271,11 @@ def github_create_issue(
         return error
 
     if not title or not title.strip():
-        return {
-            "success": False,
-            "error": "Issue title is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue title is required and cannot be empty",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/issues"
     payload = {"title": title.strip()}
@@ -228,15 +290,15 @@ def github_create_issue(
     result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issue_data = result["data"]
-        result["data"] = {
+        return tool_success({
             "number": issue_data.get("number"),
             "title": issue_data.get("title"),
             "state": issue_data.get("state"),
             "html_url": issue_data.get("html_url"),
             "created_at": issue_data.get("created_at")
-        }
+        })
 
     return result
 
@@ -280,16 +342,18 @@ def github_list_issues(
         return error
 
     if state not in ["open", "closed", "all"]:
-        return {
-            "success": False,
-            "error": "State must be 'open', 'closed', or 'all'"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="State must be 'open', 'closed', or 'all'",
+            connector="github",
+        )
 
     if per_page < 1 or per_page > 100:
-        return {
-            "success": False,
-            "error": "per_page must be between 1 and 100"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="per_page must be between 1 and 100",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/issues"
     params = {
@@ -303,10 +367,10 @@ def github_list_issues(
     result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issues_data = result["data"]
         if isinstance(issues_data, list):
-            result["data"] = [
+            formatted_issues = [
                 {
                     "number": issue.get("number"),
                     "title": issue.get("title"),
@@ -317,7 +381,10 @@ def github_list_issues(
                 }
                 for issue in issues_data
             ]
-            result["count"] = len(result["data"])
+            return tool_success({
+                "issues": formatted_issues,
+                "count": len(formatted_issues)
+            })
 
     return result
 
@@ -355,18 +422,19 @@ def github_get_issue(
         return error
 
     if not isinstance(issue_number, int) or issue_number < 1:
-        return {
-            "success": False,
-            "error": "Issue number must be a positive integer"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue number must be a positive integer",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/issues/{issue_number}"
     result = _make_github_request(resolved_token, "GET", endpoint)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         issue_data = result["data"]
-        result["data"] = {
+        return tool_success({
             "number": issue_data.get("number"),
             "title": issue_data.get("title"),
             "body": issue_data.get("body"),
@@ -375,7 +443,7 @@ def github_get_issue(
             "labels": [label.get("name") for label in issue_data.get("labels", [])],
             "created_at": issue_data.get("created_at"),
             "updated_at": issue_data.get("updated_at")
-        }
+        })
 
     return result
 
@@ -416,16 +484,18 @@ def github_add_comment(
         return error
 
     if not body or not body.strip():
-        return {
-            "success": False,
-            "error": "Comment body is required and cannot be empty"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Comment body is required and cannot be empty",
+            connector="github",
+        )
 
     if not isinstance(issue_number, int) or issue_number < 1:
-        return {
-            "success": False,
-            "error": "Issue number must be a positive integer"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Issue number must be a positive integer",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/issues/{issue_number}/comments"
     payload = {"body": body.strip()}
@@ -433,14 +503,14 @@ def github_add_comment(
     result = _make_github_request(resolved_token, "POST", endpoint, data=payload)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         comment_data = result["data"]
-        result["data"] = {
+        return tool_success({
             "id": comment_data.get("id"),
             "body": comment_data.get("body"),
             "html_url": comment_data.get("html_url"),
             "created_at": comment_data.get("created_at")
-        }
+        })
 
     return result
 
@@ -481,16 +551,18 @@ def github_list_pull_requests(
         return error
 
     if state not in ["open", "closed", "all"]:
-        return {
-            "success": False,
-            "error": "State must be 'open', 'closed', or 'all'"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="State must be 'open', 'closed', or 'all'",
+            connector="github",
+        )
 
     if per_page < 1 or per_page > 100:
-        return {
-            "success": False,
-            "error": "per_page must be between 1 and 100"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="per_page must be between 1 and 100",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/pulls"
     params = {
@@ -501,10 +573,10 @@ def github_list_pull_requests(
     result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         prs_data = result["data"]
         if isinstance(prs_data, list):
-            result["data"] = [
+            formatted_prs = [
                 {
                     "number": pr.get("number"),
                     "title": pr.get("title"),
@@ -516,7 +588,10 @@ def github_list_pull_requests(
                 }
                 for pr in prs_data
             ]
-            result["count"] = len(result["data"])
+            return tool_success({
+                "pull_requests": formatted_prs,
+                "count": len(formatted_prs)
+            })
 
     return result
 
@@ -554,18 +629,19 @@ def github_get_pull_request(
         return error
 
     if not isinstance(pr_number, int) or pr_number < 1:
-        return {
-            "success": False,
-            "error": "PR number must be a positive integer"
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="PR number must be a positive integer",
+            connector="github",
+        )
 
     endpoint = f"/repos/{owner}/{repo}/pulls/{pr_number}"
     result = _make_github_request(resolved_token, "GET", endpoint)
 
     # Simplify response for agent consumption
-    if result.get("success") and "data" in result:
+    if result.get("ok") and "data" in result:
         pr_data = result["data"]
-        result["data"] = {
+        return tool_success({
             "number": pr_data.get("number"),
             "title": pr_data.get("title"),
             "body": pr_data.get("body"),
@@ -577,13 +653,18 @@ def github_get_pull_request(
             "merged": pr_data.get("merged"),
             "created_at": pr_data.get("created_at"),
             "updated_at": pr_data.get("updated_at")
-        }
+        })
 
     return result
 
 
 # Register tools with LangChain
 TOOLS: List[StructuredTool] = [
+    StructuredTool.from_function(
+        func=github_list_repositories,
+        name="github_list_repositories",
+        description="List all repositories for the authenticated user. Shows repo name, description, URL, language, and stars. Token can be provided or configured in Agent Settings -> Connectors.",
+    ),
     StructuredTool.from_function(
         func=github_create_issue,
         name="github_create_issue",
