@@ -8,6 +8,12 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,26 +90,22 @@ def send_slack_webhook(
 
     # Validate inputs
     if not resolved_webhook_url or not resolved_webhook_url.strip():
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": "Slack webhook URL not configured. Either provide webhook_url parameter or configure Slack in Agent Settings -> Connectors.",
-        }
+        return connector_not_configured_error("slack", "Slack")
 
     if not text or not text.strip():
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": "text cannot be empty",
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="text cannot be empty",
+            connector="slack",
+        )
 
     # Validate webhook URL format
     if not resolved_webhook_url.startswith("https://hooks.slack.com/"):
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": "Invalid webhook URL format. Must start with 'https://hooks.slack.com/'",
-        }
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message="Invalid webhook URL format. Must start with 'https://hooks.slack.com/'",
+            connector="slack",
+        )
 
     # Build the payload
     payload = {
@@ -115,21 +117,21 @@ def send_slack_webhook(
     # Validate and add blocks if provided
     if blocks is not None:
         if not isinstance(blocks, list):
-            return {
-                "success": False,
-                "status_code": 0,
-                "error": "blocks must be a list",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="blocks must be a list",
+                connector="slack",
+            )
         payload["blocks"] = blocks
 
     # Validate and add attachments if provided
     if attachments is not None:
         if not isinstance(attachments, list):
-            return {
-                "success": False,
-                "status_code": 0,
-                "error": "attachments must be a list",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="attachments must be a list",
+                connector="slack",
+            )
         payload["attachments"] = attachments
 
     # Send the webhook request
@@ -147,11 +149,10 @@ def send_slack_webhook(
 
         # Check for success
         if response.status_code == 200:
-            return {
-                "success": True,
+            return tool_success({
                 "status_code": response.status_code,
                 "response": response.text,
-            }
+            })
 
         # Handle error responses
         error_messages = {
@@ -165,44 +166,49 @@ def send_slack_webhook(
         }
 
         error_detail = error_messages.get(response.status_code, "Unknown error")
-        result = {
-            "success": False,
-            "status_code": response.status_code,
-            "error": f"{error_detail}",
-            "response": response.text[:200] if response.text else "",
-        }
+        user_message = error_detail
 
         # Add retry-after header if present (for 429 errors)
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             if retry_after:
-                result["retry_after_seconds"] = retry_after
-                result["error"] += f" (retry after {retry_after} seconds)"
+                user_message += f" (retry after {retry_after} seconds)"
+            logger.warning(f"Slack webhook rate limited: {user_message}")
+            return tool_error(
+                error_type=ErrorType.RATE_LIMITED,
+                user_message=user_message,
+                connector="slack",
+            )
 
-        logger.warning(f"Slack webhook request failed: {result['error']}")
-        return result
+        logger.warning(f"Slack webhook request failed: {user_message}")
+        error_type = ErrorType.INVALID_CREDENTIALS if response.status_code in [403, 404] else ErrorType.EXECUTION_ERROR
+        return tool_error(
+            error_type=error_type,
+            user_message=user_message,
+            connector="slack",
+        )
 
     except httpx.TimeoutException:
         logger.error("Slack webhook timeout")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": "Request timed out after 10 seconds",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="Request timed out after 10 seconds",
+            connector="slack",
+        )
     except httpx.RequestError as e:
         logger.error(f"Slack webhook request error: {e}")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": f"Request failed: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="slack",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error sending Slack webhook: {e}")
-        return {
-            "success": False,
-            "status_code": 0,
-            "error": f"Unexpected error: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="slack",
+        )
 
 
 TOOLS: List[StructuredTool] = [
