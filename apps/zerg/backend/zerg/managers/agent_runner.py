@@ -40,6 +40,9 @@ from zerg.connectors.resolver import CredentialResolver
 
 # Connector status injection for agent context awareness
 from zerg.connectors.status_builder import build_agent_context
+
+# Static connector protocols for system prompt
+from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.crud import crud
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import Thread as ThreadModel
@@ -115,6 +118,30 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         original_msgs = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
         original_msg_count = len(original_msgs)  # Track count BEFORE injection
         logger.info(f"[AgentRunner] Retrieved {original_msg_count} original messages from thread")
+
+        # ------------------------------------------------------------------
+        # Prepend connector protocols to system message
+        # Per PRD: Static protocols are part of system prompt (cacheable)
+        # They define HOW to interpret the dynamic connector_status injected per-turn
+        # ------------------------------------------------------------------
+        if original_msgs and hasattr(original_msgs[0], 'type') and original_msgs[0].type == 'system':
+            from langchain_core.messages import SystemMessage
+            protocols = get_connector_protocols()
+            original_system_content = original_msgs[0].content
+            # Prepend protocols to system message
+            enhanced_system_message = SystemMessage(
+                content=f"{protocols}\n\n{original_system_content}"
+            )
+            original_msgs = [enhanced_system_message] + original_msgs[1:]
+            logger.debug(
+                "[AgentRunner] Prepended connector protocols to system message for agent %s",
+                self.agent.id,
+            )
+        else:
+            logger.warning(
+                "[AgentRunner] No system message found in thread %s, skipping protocol injection",
+                thread.id,
+            )
 
         # ------------------------------------------------------------------
         # Inject connector status context into messages
