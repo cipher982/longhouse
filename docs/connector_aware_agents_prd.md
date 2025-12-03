@@ -617,6 +617,13 @@ apps/zerg/backend/tests/
 11. `f2b145d` - feat(tools): standardize linear/notion/imessage tools to use error envelope
 12. `f5599fd` - feat(agents): add timestamps to conversation history messages
 
+**Bug Fix Commits:**
+13. `4f1edbd` - fix(connectors): check credential test_status in status_builder
+14. `37c45fb` - fix(tools): complete jira_tools error envelope migration
+15. `128e8b1` - fix(tests): update tool tests for new error envelope contract
+16. `8c30c59` - fix(tests): update ThreadService tests for timestamp prefix
+17. `15e7ede` - fix(tests): update status_builder tests for direct DB queries
+
 ### P2 Items - Future
 
 | Item | Status | Notes |
