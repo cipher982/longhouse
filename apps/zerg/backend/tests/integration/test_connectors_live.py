@@ -12,7 +12,6 @@ WARNING: These tests make REAL API calls and may:
 Only run these when you intentionally want to test the full integration.
 """
 
-import pytest
 
 
 class TestDiscordIntegration:
@@ -99,7 +98,7 @@ class TestEmailIntegration:
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
-        assert "message_id" in result
+        assert "message_id" in result["data"]
 
     def test_send_html_email(self, resend_api_key, resend_from_email, resend_to_email):
         """Test sending an HTML email."""
@@ -135,7 +134,7 @@ class TestSmsIntegration:
         )
 
         assert result["ok"] is True, f"Failed: {result.get('error_message', result.get('user_message'))}"
-        assert "message_sid" in result
+        assert "message_sid" in result["data"]
 
 
 class TestGitHubIntegration:
@@ -159,7 +158,8 @@ class TestGitHubIntegration:
 
     def test_create_and_close_issue(self, github_token, github_test_repo):
         """Test creating and then closing an issue."""
-        from zerg.tools.builtin.github_tools import github_create_issue, github_add_comment
+        from zerg.tools.builtin.github_tools import github_add_comment
+        from zerg.tools.builtin.github_tools import github_create_issue
 
         owner, repo = github_test_repo.split("/")
 
@@ -173,7 +173,7 @@ class TestGitHubIntegration:
             labels=["test", "automated"]
         )
 
-        assert create_result["success"] is True, f"Create failed: {create_result.get('user_message')}"
+        assert create_result["ok"] is True, f"Create failed: {create_result.get('user_message')}"
 
         # Add a comment
         issue_number = create_result["data"]["number"]
@@ -185,7 +185,7 @@ class TestGitHubIntegration:
             body="🤖 Automated comment from integration test"
         )
 
-        assert comment_result["success"] is True, f"Comment failed: {comment_result.get('user_message')}"
+        assert comment_result["ok"] is True, f"Comment failed: {comment_result.get('user_message')}"
 
 
 class TestJiraIntegration:
