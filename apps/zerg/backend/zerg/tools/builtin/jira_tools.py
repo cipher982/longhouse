@@ -24,6 +24,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +54,21 @@ def _resolve_jira_credentials(domain: Optional[str] = None, email: Optional[str]
                 resolved_api_token = resolved_api_token or creds.get("api_token")
 
     if not resolved_domain:
-        return None, None, None, {"success": False, "error": "Jira domain not configured. Configure Jira in Agent Settings -> Connectors."}
+        return None, None, None, connector_not_configured_error("jira", "Jira")
     if not resolved_email:
-        return None, None, None, {"success": False, "error": "Jira email not configured. Configure Jira in Agent Settings -> Connectors."}
+        return None, None, None, tool_error(
+            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+            user_message="Jira email not configured. Set it up in Settings → Integrations → Jira.",
+            connector="jira",
+            setup_url="/settings/integrations",
+        )
     if not resolved_api_token:
-        return None, None, None, {"success": False, "error": "Jira API token not configured. Configure Jira in Agent Settings -> Connectors."}
+        return None, None, None, tool_error(
+            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+            user_message="Jira API token not configured. Set it up in Settings → Integrations → Jira.",
+            connector="jira",
+            setup_url="/settings/integrations",
+        )
 
     return resolved_domain, resolved_email, resolved_api_token, None
 
@@ -193,7 +210,7 @@ def jira_create_issue(
 
         if labels:
             if not isinstance(labels, list):
-                return {"success": False, "error": "Labels must be a list of strings"}
+                return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Labels must be a list of strings", connector="jira")
             payload["fields"]["labels"] = labels
 
         if assignee:
@@ -221,25 +238,22 @@ def jira_create_issue(
             issue_url = f"https://{domain_clean}/browse/{issue_key}"
 
             logger.info(f"Created Jira issue: {issue_key}")
-            return {
-                "success": True,
-                "issue_key": issue_key,
+            return tool_success({"issue_key": issue_key,
                 "issue_id": issue_id,
-                "url": issue_url,
-            }
+                "url": issue_url,})
 
         # Handle errors
         return _handle_jira_error(response, "create issue")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_create_issue")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def jira_list_issues(
@@ -298,7 +312,7 @@ def jira_list_issues(
 
         # Validate required fields
         if not project_key:
-            return {"success": False, "error": "Missing required field: project_key"}
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required field: project_key", connector="jira")
 
         # Build JQL query
         if jql:
@@ -347,25 +361,22 @@ def jira_list_issues(
                 issues.append(issue_info)
 
             logger.info(f"Listed {len(issues)} Jira issues from project {project_key}")
-            return {
-                "success": True,
-                "total": total,
+            return tool_success({"total": total,
                 "returned": len(issues),
-                "issues": issues,
-            }
+                "issues": issues,})
 
         # Handle errors
         return _handle_jira_error(response, "list issues")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_list_issues")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def jira_get_issue(
@@ -411,7 +422,7 @@ def jira_get_issue(
 
         # Validate required fields
         if not issue_key:
-            return {"success": False, "error": "Missing required field: issue_key"}
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required field: issue_key", connector="jira")
 
         # Build URL
         url = _build_jira_url(domain, f"/issue/{issue_key}")
@@ -464,20 +475,20 @@ def jira_get_issue(
             }
 
             logger.info(f"Retrieved Jira issue: {issue_key}")
-            return {"success": True, "issue": issue}
+            return tool_success({"issue": issue})
 
         # Handle errors
         return _handle_jira_error(response, "get issue")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_get_issue")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def jira_add_comment(
@@ -519,7 +530,7 @@ def jira_add_comment(
 
         # Validate required fields
         if not all([issue_key, body]):
-            return {"success": False, "error": "Missing required fields: issue_key, body"}
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required fields: issue_key, body", connector="jira")
 
         # Build payload with ADF format
         payload = {"body": _text_to_adf(body)}
@@ -544,20 +555,20 @@ def jira_add_comment(
             comment_id = data.get("id")
 
             logger.info(f"Added comment to Jira issue {issue_key}")
-            return {"success": True, "comment_id": comment_id}
+            return tool_success({"comment_id": comment_id})
 
         # Handle errors
         return _handle_jira_error(response, "add comment")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_add_comment")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def jira_transition_issue(
@@ -626,20 +637,20 @@ def jira_transition_issue(
         # Handle success (204 No Content)
         if response.status_code == 204:
             logger.info(f"Transitioned Jira issue {issue_key} with transition ID {transition_id}")
-            return {"success": True}
+            return tool_success({})
 
         # Handle errors
         return _handle_jira_error(response, "transition issue")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_transition_issue")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def jira_update_issue(
@@ -680,10 +691,10 @@ def jira_update_issue(
 
         # Validate required fields
         if not all([issue_key, fields]):
-            return {"success": False, "error": "Missing required fields: issue_key, fields"}
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required fields: issue_key, fields", connector="jira")
 
         if not isinstance(fields, dict):
-            return {"success": False, "error": "Fields must be a dictionary"}
+            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Fields must be a dictionary", connector="jira")
 
         # Build payload
         payload = {"fields": fields}
@@ -705,20 +716,20 @@ def jira_update_issue(
         # Handle success (204 No Content)
         if response.status_code == 204:
             logger.info(f"Updated Jira issue {issue_key}")
-            return {"success": True}
+            return tool_success({})
 
         # Handle errors
         return _handle_jira_error(response, "update issue")
 
     except httpx.TimeoutException:
         logger.error(f"Jira API timeout for domain: {domain}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message="Request timed out after 30 seconds", connector="jira")
     except httpx.RequestError as e:
         logger.error(f"Jira API request error: {e}")
-        return {"success": False, "error": f"Request failed: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="jira")
     except Exception as e:
         logger.exception("Unexpected error in jira_update_issue")
-        return {"success": False, "error": f"Unexpected error: {str(e)}"}
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="jira")
 
 
 def _handle_jira_error(response: httpx.Response, operation: str) -> Dict[str, Any]:
@@ -729,7 +740,7 @@ def _handle_jira_error(response: httpx.Response, operation: str) -> Dict[str, An
         operation: Description of the operation that failed
 
     Returns:
-        Dictionary with success=False and error details
+        Dictionary with error envelope format
     """
     status_code = response.status_code
 
@@ -748,37 +759,48 @@ def _handle_jira_error(response: httpx.Response, operation: str) -> Dict[str, An
     except json.JSONDecodeError:
         error_msg = response.text
 
-    # Map common status codes to helpful messages
+    # Map common status codes to error types
     if status_code == 401:
-        friendly_msg = "Authentication failed - check email and API token"
+        return invalid_credentials_error("jira", "Jira")
     elif status_code == 403:
-        friendly_msg = "Permission denied - check user permissions for this operation"
+        return tool_error(
+            error_type=ErrorType.PERMISSION_DENIED,
+            user_message=f"Permission denied: {error_msg}",
+            connector="jira",
+        )
     elif status_code == 404:
-        friendly_msg = "Resource not found - check project key, issue key, or field names"
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Resource not found: {error_msg}",
+            connector="jira",
+        )
     elif status_code == 429:
-        # Try to get retry-after from headers
         retry_after = response.headers.get("Retry-After", "unknown")
-        friendly_msg = f"Rate limit exceeded - retry after {retry_after} seconds"
         logger.warning(f"Jira rate limit hit during {operation}")
-        return {
-            "success": False,
-            "status_code": status_code,
-            "error": friendly_msg,
-            "rate_limit_retry_after": retry_after,
-            "details": error_msg,
-        }
+        return tool_error(
+            error_type=ErrorType.RATE_LIMITED,
+            user_message=f"Rate limit exceeded. Retry after {retry_after} seconds",
+            connector="jira",
+        )
     elif status_code >= 500:
-        friendly_msg = "Jira server error - try again later"
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Jira server error: {error_msg}",
+            connector="jira",
+        )
+    elif status_code == 400:
+        return tool_error(
+            error_type=ErrorType.VALIDATION_ERROR,
+            user_message=error_msg,
+            connector="jira",
+        )
     else:
-        friendly_msg = f"HTTP {status_code} error"
-
-    logger.error(f"Jira API error during {operation}: {status_code} - {error_msg}")
-    return {
-        "success": False,
-        "status_code": status_code,
-        "error": friendly_msg,
-        "details": error_msg,
-    }
+        logger.error(f"Jira API error during {operation}: {status_code} - {error_msg}")
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=error_msg,
+            connector="jira",
+        )
 
 
 # Export tools for registration
