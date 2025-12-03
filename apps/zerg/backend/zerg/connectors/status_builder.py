@@ -4,7 +4,8 @@ This module provides functions to query connector configuration and build
 structured status information for agent context injection.
 
 The status builder:
-- Uses CredentialResolver to check which connectors are configured
+- Queries credential tables to check which connectors are configured
+- Checks test_status field to determine credential validity
 - Enriches with metadata from the connector registry
 - Returns structured status for all connectors (connected, not_configured, invalid_credentials)
 - Builds XML-formatted context strings for agent prompts
@@ -12,14 +13,15 @@ The status builder:
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from datetime import timezone
+from typing import TYPE_CHECKING
+from typing import Any
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-from zerg.connectors.registry import CONNECTOR_REGISTRY, ConnectorType
-from zerg.connectors.resolver import CredentialResolver
+from zerg.connectors.registry import ConnectorType
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +189,8 @@ def build_connector_status(
         - "not_configured": No credentials stored
         - "invalid_credentials": test_status == "failed"
     """
-    from zerg.models.models import AccountConnectorCredential, ConnectorCredential
+    from zerg.models.models import AccountConnectorCredential
+    from zerg.models.models import ConnectorCredential
 
     # Build status for all connectors in registry
     status_dict: dict[str, Any] = {}
@@ -199,7 +202,6 @@ def build_connector_status(
         # 1. Agent-level override (if agent_id provided)
         # 2. Account-level credential
         cred_row = None
-        source = None
 
         if agent_id is not None:
             # Check agent-level override first
@@ -211,8 +213,6 @@ def build_connector_status(
                 )
                 .first()
             )
-            if cred_row:
-                source = "agent"
 
         # Fallback to account-level if no agent override
         if cred_row is None:
@@ -224,8 +224,6 @@ def build_connector_status(
                 )
                 .first()
             )
-            if cred_row:
-                source = "account"
 
         # Determine status based on credential row
         if cred_row is None:
