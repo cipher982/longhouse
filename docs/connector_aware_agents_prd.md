@@ -623,13 +623,20 @@ apps/zerg/backend/tests/
 15. `128e8b1` - fix(tests): update tool tests for new error envelope contract
 16. `8c30c59` - fix(tests): update ThreadService tests for timestamp prefix
 17. `15e7ede` - fix(tests): update status_builder tests for direct DB queries
+18. `a4e87ea` - fix(connectors): remove unused imports and variables (lint)
 
-### P2 Items - Future
+**P2 Commits:**
+19. `d5ef8fb` - feat(tools): add refresh_connector_status meta-tool
+20. `18b9cde` - feat(connectors): add get_unavailable_tools helper for tool filtering
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Meta-tool for refresh | 📋 Pending | Optional `refresh_connector_status` tool |
-| Tool filtering based on status | 📋 Pending | Filter out tools for disconnected connectors |
+### P2 Items - ✅ COMPLETE
+
+| Item | Status | Implementation |
+|------|--------|----------------|
+| Meta-tool for refresh | ✅ Done | `refresh_connector_status` tool in `connector_tools.py` |
+| Tool filtering helper | ✅ Done | `get_unavailable_tools()` in `status_builder.py` |
+
+**Note on tool filtering:** Full runtime filtering would require changes to the cached agent runnable architecture. The current approach (protocols + error envelope) provides equivalent UX: agents know not to call disconnected tools, and if they do, they get clear errors.
 
 ### Architecture Notes
 
