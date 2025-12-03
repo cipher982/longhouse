@@ -1,14 +1,11 @@
 """Tests for error envelope module."""
 
-import pytest
 
-from zerg.tools.error_envelope import (
-    ErrorType,
-    tool_error,
-    tool_success,
-    connector_not_configured_error,
-    invalid_credentials_error,
-)
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import connector_not_configured_error
+from zerg.tools.error_envelope import invalid_credentials_error
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 
 class TestErrorType:

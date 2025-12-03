@@ -1,6 +1,7 @@
 """Agent configuration endpoints."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
+from fastapi import Depends
 from pydantic import BaseModel
 
 from zerg.config import get_settings

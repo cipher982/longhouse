@@ -9,7 +9,6 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 
-from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -34,11 +33,9 @@ from zerg.generated.ws_messages import UserUpdateData
 from zerg.websocket.manager import topic_manager
 
 # Import simple subscription helpers
-from zerg.websocket.subscription_helpers import (
-    send_subscribe_ack,
-    send_subscribe_error,
-    subscribe_and_send_state,
-)
+from zerg.websocket.subscription_helpers import send_subscribe_ack
+from zerg.websocket.subscription_helpers import send_subscribe_error
+from zerg.websocket.subscription_helpers import subscribe_and_send_state
 
 logger = logging.getLogger(__name__)
 

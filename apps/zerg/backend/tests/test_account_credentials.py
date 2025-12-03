@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 from zerg.connectors.registry import ConnectorType
 from zerg.connectors.resolver import CredentialResolver
-from zerg.models.models import AccountConnectorCredential, ConnectorCredential
+from zerg.models.models import AccountConnectorCredential
+from zerg.models.models import ConnectorCredential
 from zerg.utils.crypto import encrypt
 
 

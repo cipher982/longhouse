@@ -1,7 +1,8 @@
 """Tests for Slack webhook tools."""
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+from unittest.mock import patch
+
 from zerg.tools.builtin.slack_tools import send_slack_webhook
 
 

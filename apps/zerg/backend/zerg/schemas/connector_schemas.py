@@ -7,10 +7,12 @@ API endpoints used to configure credentials for built-in connector tools.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 
 # ---------------------------------------------------------------------------
 # Credential Field Definition (used in connector metadata)

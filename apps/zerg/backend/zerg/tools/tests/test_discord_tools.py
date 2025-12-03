@@ -1,7 +1,8 @@
 """Tests for Discord webhook tools."""
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+from unittest.mock import patch
+
 from zerg.tools.builtin.discord_tools import send_discord_webhook
 
 

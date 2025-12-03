@@ -10,18 +10,24 @@ import json
 import logging
 import secrets
 from datetime import datetime
-from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Query
+from fastapi import Request
+from fastapi import status
+from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.models.models import AccountConnectorCredential, User
+from zerg.models.models import AccountConnectorCredential
+from zerg.models.models import User
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)

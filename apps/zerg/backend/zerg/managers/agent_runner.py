@@ -40,13 +40,13 @@ from zerg.connectors.resolver import CredentialResolver
 
 # Connector status injection for agent context awareness
 from zerg.connectors.status_builder import build_agent_context
-
-# Static connector protocols for system prompt
-from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.crud import crud
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
+
+# Static connector protocols for system prompt
+from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.services.thread_service import ThreadService
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # Per PRD: Static protocols are part of system prompt (cacheable)
         # They define HOW to interpret the dynamic connector_status injected per-turn
         # ------------------------------------------------------------------
-        if original_msgs and hasattr(original_msgs[0], 'type') and original_msgs[0].type == 'system':
+        if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
             from langchain_core.messages import SystemMessage
             protocols = get_connector_protocols()
             original_system_content = original_msgs[0].content
@@ -158,7 +158,8 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             )
             # Inject as user message + assistant acknowledgment
             # This pattern ensures the LLM treats it as established context
-            from langchain_core.messages import HumanMessage, AIMessage as LCAIMessage
+            from langchain_core.messages import AIMessage as LCAIMessage
+            from langchain_core.messages import HumanMessage
 
             context_injection = [
                 HumanMessage(content=context_text),
@@ -166,7 +167,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             ]
 
             # Insert after system message (index 0) if it exists
-            if original_msgs and hasattr(original_msgs[0], 'type') and original_msgs[0].type == 'system':
+            if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
                 original_msgs = [original_msgs[0]] + context_injection + original_msgs[1:]
             else:
                 # No system message, prepend context

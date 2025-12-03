@@ -5,17 +5,14 @@ agent system prompt to define how the agent should interpret dynamic
 connector status.
 """
 
-import re
 
 import pytest
 
-from zerg.prompts.connector_protocols import (
-    CAPABILITY_PROTOCOL,
-    CONNECTOR_PROTOCOL,
-    ERROR_HANDLING_PROTOCOL,
-    TEMPORAL_AWARENESS_PROTOCOL,
-    get_connector_protocols,
-)
+from zerg.prompts.connector_protocols import CAPABILITY_PROTOCOL
+from zerg.prompts.connector_protocols import CONNECTOR_PROTOCOL
+from zerg.prompts.connector_protocols import ERROR_HANDLING_PROTOCOL
+from zerg.prompts.connector_protocols import TEMPORAL_AWARENESS_PROTOCOL
+from zerg.prompts.connector_protocols import get_connector_protocols
 
 
 def test_get_connector_protocols_contains_all_sections():

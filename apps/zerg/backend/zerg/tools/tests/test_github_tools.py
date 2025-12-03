@@ -1,15 +1,14 @@
 """Tests for GitHub tools."""
 
-import pytest
-from unittest.mock import Mock, patch
-from zerg.tools.builtin.github_tools import (
-    github_create_issue,
-    github_list_issues,
-    github_get_issue,
-    github_add_comment,
-    github_list_pull_requests,
-    github_get_pull_request,
-)
+from unittest.mock import Mock
+from unittest.mock import patch
+
+from zerg.tools.builtin.github_tools import github_add_comment
+from zerg.tools.builtin.github_tools import github_create_issue
+from zerg.tools.builtin.github_tools import github_get_issue
+from zerg.tools.builtin.github_tools import github_get_pull_request
+from zerg.tools.builtin.github_tools import github_list_issues
+from zerg.tools.builtin.github_tools import github_list_pull_requests
 
 
 class TestGitHubCreateIssue:

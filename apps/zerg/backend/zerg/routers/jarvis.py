@@ -11,11 +11,20 @@ Provides endpoints for Jarvis (voice/text UI) to interact with Zerg backend:
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from typing import List
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import Response
+from fastapi import status
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -206,7 +215,8 @@ def get_current_jarvis_user(
     This is the unified authentication path for all Jarvis endpoints.
     Clients must call /api/jarvis/auth to receive the session cookie.
     """
-    from zerg.dependencies.auth import AUTH_DISABLED, _get_strategy
+    from zerg.dependencies.auth import AUTH_DISABLED
+    from zerg.dependencies.auth import _get_strategy
 
     # Cookie-based authentication - the unified production path
     cookie_token = request.cookies.get(JARVIS_SESSION_COOKIE)

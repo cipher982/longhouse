@@ -1,15 +1,14 @@
 """Tests for Jira tools."""
 
-import pytest
-from unittest.mock import Mock, patch
-from zerg.tools.builtin.jira_tools import (
-    jira_create_issue,
-    jira_list_issues,
-    jira_get_issue,
-    jira_add_comment,
-    jira_transition_issue,
-    jira_update_issue,
-)
+from unittest.mock import Mock
+from unittest.mock import patch
+
+from zerg.tools.builtin.jira_tools import jira_add_comment
+from zerg.tools.builtin.jira_tools import jira_create_issue
+from zerg.tools.builtin.jira_tools import jira_get_issue
+from zerg.tools.builtin.jira_tools import jira_list_issues
+from zerg.tools.builtin.jira_tools import jira_transition_issue
+from zerg.tools.builtin.jira_tools import jira_update_issue
 
 
 class TestJiraCreateIssue:

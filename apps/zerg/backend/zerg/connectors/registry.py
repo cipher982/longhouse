@@ -9,7 +9,8 @@ that contains metadata for each built-in connector tool including:
 """
 
 from enum import Enum
-from typing import List, TypedDict
+from typing import List
+from typing import TypedDict
 
 
 class ConnectorType(str, Enum):

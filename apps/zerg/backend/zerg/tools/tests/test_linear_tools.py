@@ -1,15 +1,14 @@
 """Tests for Linear tools."""
 
-import pytest
-from unittest.mock import Mock, patch
-from zerg.tools.builtin.linear_tools import (
-    linear_create_issue,
-    linear_list_issues,
-    linear_get_issue,
-    linear_update_issue,
-    linear_add_comment,
-    linear_list_teams,
-)
+from unittest.mock import Mock
+from unittest.mock import patch
+
+from zerg.tools.builtin.linear_tools import linear_add_comment
+from zerg.tools.builtin.linear_tools import linear_create_issue
+from zerg.tools.builtin.linear_tools import linear_get_issue
+from zerg.tools.builtin.linear_tools import linear_list_issues
+from zerg.tools.builtin.linear_tools import linear_list_teams
+from zerg.tools.builtin.linear_tools import linear_update_issue
 
 
 class TestLinearCreateIssue:

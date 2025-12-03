@@ -9,7 +9,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from zerg.generated.ws_messages import Envelope, SubscribeAckData, SubscribeErrorData
+from zerg.generated.ws_messages import Envelope
+from zerg.generated.ws_messages import SubscribeAckData
+from zerg.generated.ws_messages import SubscribeErrorData
 from zerg.websocket.manager import topic_manager
 
 logger = logging.getLogger(__name__)

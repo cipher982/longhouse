@@ -2,14 +2,18 @@
 
 import sqlite3
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from zerg.tools.builtin import imessage_tools
-from zerg.tools.builtin.imessage_tools import list_imessage_messages, send_imessage
+from zerg.tools.builtin.imessage_tools import list_imessage_messages
+from zerg.tools.builtin.imessage_tools import send_imessage
 
 
 @pytest.fixture

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Literal
 
 from zerg.connectors.registry import ConnectorType
 from zerg.utils.crypto import decrypt
@@ -192,7 +194,8 @@ class CredentialResolver:
         Returns:
             True if a credential exists for this connector type
         """
-        from zerg.models.models import ConnectorCredential, AccountConnectorCredential
+        from zerg.models.models import AccountConnectorCredential
+        from zerg.models.models import ConnectorCredential
 
         type_str = connector_type.value if isinstance(connector_type, ConnectorType) else connector_type
 
@@ -235,7 +238,8 @@ class CredentialResolver:
         Returns:
             List of unique connector type strings that have credentials configured
         """
-        from zerg.models.models import ConnectorCredential, AccountConnectorCredential
+        from zerg.models.models import AccountConnectorCredential
+        from zerg.models.models import ConnectorCredential
 
         # Get agent-level credentials
         agent_creds = (

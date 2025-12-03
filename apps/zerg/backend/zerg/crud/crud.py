@@ -2,7 +2,6 @@
 # Keep stdlib ``datetime`` for type annotations; runtime *now()* comes from
 # ``utc_now``.
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone as dt_timezone
 
 # Standard library typing helpers
