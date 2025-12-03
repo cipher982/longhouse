@@ -153,8 +153,8 @@ def build_connector_status(
 ) -> dict[str, Any]:
     """Build connector status dict for all connectors.
 
-    Uses the credential resolver to determine which connectors are configured,
-    then enriches with metadata from the connector registry.
+    Queries actual credential rows to check test_status field and determine
+    if credentials are valid, expired, or untested.
 
     Args:
         db: Database session
@@ -171,29 +171,23 @@ def build_connector_status(
             },
             "slack": {
                 "status": "not_configured",
-                "setup_url": "/settings/integrations",
+                "setup_url": "/settings/integrations/slack",
                 "would_enable": ["Send messages to channels", ...]
             },
-            ...
+            "jira": {
+                "status": "invalid_credentials",
+                "error": "OAuth token expired",
+                "setup_url": "/settings/integrations/jira",
+                "would_enable": ["Create tickets", ...]
+            }
         }
 
     Status values:
-        - "connected": Credentials configured (test_status == "success" or untested but present)
+        - "connected": Credentials valid (test_status == "success" or "untested")
         - "not_configured": No credentials stored
         - "invalid_credentials": test_status == "failed"
     """
-    # Create resolver to check configured connectors
-    # For now, we use agent_id if provided, otherwise just owner_id
-    # The resolver will handle the fallback logic
-    effective_agent_id = agent_id or 0  # Use dummy agent_id if none provided
-    resolver = CredentialResolver(
-        agent_id=effective_agent_id,
-        db=db,
-        owner_id=owner_id,
-    )
-
-    # Get all configured connector types
-    configured_types = resolver.get_all_configured()
+    from zerg.models.models import AccountConnectorCredential, ConnectorCredential
 
     # Build status for all connectors in registry
     status_dict: dict[str, Any] = {}
@@ -201,30 +195,75 @@ def build_connector_status(
     for connector_type in ConnectorType:
         connector_type_str = connector_type.value
 
-        # Check if configured
-        if connector_type_str in configured_types:
-            # Connector is configured - need to determine if credentials are valid
-            # For now, we treat any configured connector as "connected"
-            # TODO: Check test_status field from database models once we query them
-            # This would require fetching the actual credential records
+        # Query credential rows in resolution order:
+        # 1. Agent-level override (if agent_id provided)
+        # 2. Account-level credential
+        cred_row = None
+        source = None
+
+        if agent_id is not None:
+            # Check agent-level override first
+            cred_row = (
+                db.query(ConnectorCredential)
+                .filter(
+                    ConnectorCredential.agent_id == agent_id,
+                    ConnectorCredential.connector_type == connector_type_str,
+                )
+                .first()
+            )
+            if cred_row:
+                source = "agent"
+
+        # Fallback to account-level if no agent override
+        if cred_row is None:
+            cred_row = (
+                db.query(AccountConnectorCredential)
+                .filter(
+                    AccountConnectorCredential.owner_id == owner_id,
+                    AccountConnectorCredential.connector_type == connector_type_str,
+                )
+                .first()
+            )
+            if cred_row:
+                source = "account"
+
+        # Determine status based on credential row
+        if cred_row is None:
+            # No credential configured
             status_dict[connector_type_str] = {
-                "status": "connected",
-                "tools": get_tools_for_connector(connector_type),
+                "status": "not_configured",
+                "setup_url": f"/settings/integrations/{connector_type_str}",
                 "would_enable": get_capabilities_for_connector(connector_type),
             }
         else:
-            # Not configured
-            status_dict[connector_type_str] = {
-                "status": "not_configured",
-                "setup_url": "/settings/integrations",
-                "would_enable": get_capabilities_for_connector(connector_type),
-            }
+            # Credential exists - check test_status
+            test_status = cred_row.test_status
+
+            if test_status == "failed":
+                # Invalid credentials
+                connector_info = {
+                    "status": "invalid_credentials",
+                    "setup_url": f"/settings/integrations/{connector_type_str}",
+                    "would_enable": get_capabilities_for_connector(connector_type),
+                }
+                # Include error message if available from connector_metadata
+                if hasattr(cred_row, "connector_metadata") and cred_row.connector_metadata:
+                    error_msg = cred_row.connector_metadata.get("error")
+                    if error_msg:
+                        connector_info["error"] = error_msg
+                status_dict[connector_type_str] = connector_info
+            else:
+                # test_status is "success" or "untested" - treat as connected
+                status_dict[connector_type_str] = {
+                    "status": "connected",
+                    "tools": get_tools_for_connector(connector_type),
+                    "would_enable": get_capabilities_for_connector(connector_type),
+                }
 
     logger.debug(
-        "Built connector status for owner_id=%d agent_id=%s: %d configured",
+        "Built connector status for owner_id=%d agent_id=%s",
         owner_id,
         agent_id,
-        len(configured_types),
     )
 
     return status_dict
