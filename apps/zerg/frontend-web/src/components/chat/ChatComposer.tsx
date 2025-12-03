@@ -1,6 +1,7 @@
-import { type FormEvent } from "react";
+import { type FormEvent, useRef, useEffect } from "react";
 import clsx from "clsx";
 import { Workflow } from "../../services/api";
+import { WrenchIcon, FileTextIcon } from "../icons";
 
 interface ChatComposerProps {
   draft: string;
@@ -38,58 +39,77 @@ export function ChatComposer({
   messagesCount,
   onExportChat,
 }: ChatComposerProps) {
-  return (
-    <>
-      {/* Chat Tools Bar */}
-      <div className="chat-tools">
-        <button
-          type="button"
-          className="tool-btn"
-          onClick={onToggleWorkflowPanel}
-          title="Execute Workflow"
-        >
-          🔧 Workflows
-        </button>
-        <button
-          type="button"
-          className="tool-btn"
-          onClick={onExportChat}
-          disabled={messagesCount === 0}
-          title="Export Chat History"
-        >
-          📄 Export
-        </button>
-      </div>
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-      <form className="chat-input-area" onSubmit={onSend}>
-        <input
-          type="text"
-          value={draft}
-          onChange={(evt) => onDraftChange(evt.target.value)}
-          placeholder={effectiveThreadId ? "Type your message..." : "Select a thread to start chatting"}
-          className="chat-input"
-          data-testid="chat-input"
-          disabled={!effectiveThreadId}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend(e as FormEvent);
-            }
-          }}
-        />
-        <button
-          type="submit"
-          className={clsx("send-button", { disabled: !effectiveThreadId })}
-          disabled={isSending || !draft.trim() || !effectiveThreadId}
-          data-testid="send-message-btn"
-        >
-          {isSending ? "Sending…" : "Send"}
-        </button>
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [draft]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      // Submit form
+      onSend(e as any);
+    }
+  };
+
+  return (
+    <div className="chat-composer-container">
+      <form className="chat-input-form" onSubmit={onSend}>
+        <div className="chat-input-tools-left">
+          <button
+            type="button"
+            className="icon-tool-btn"
+            onClick={onToggleWorkflowPanel}
+            title="Execute Workflow"
+          >
+            <WrenchIcon width={18} height={18} />
+          </button>
+          <button
+            type="button"
+            className="icon-tool-btn"
+            onClick={onExportChat}
+            disabled={messagesCount === 0}
+            title="Export Chat History"
+          >
+            <FileTextIcon width={18} height={18} />
+          </button>
+        </div>
+
+        <div className="chat-input-main">
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(evt) => onDraftChange(evt.target.value)}
+            placeholder={effectiveThreadId ? "Type a message..." : "Select a thread to start chatting"}
+            className="chat-input-field"
+            data-testid="chat-input"
+            disabled={!effectiveThreadId}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+          <button
+            type="submit"
+            className={clsx("chat-send-btn", { disabled: !effectiveThreadId })}
+            disabled={isSending || !draft.trim() || !effectiveThreadId}
+            data-testid="send-message-btn"
+            title="Send Message"
+          >
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+             </svg>
+          </button>
+        </div>
       </form>
 
       {/* Workflow Execution Panel */}
       {showWorkflowPanel && (
-        <div className="workflow-panel">
+        <div className="workflow-panel-popover">
           <div className="workflow-panel-header">
             <h4>Execute Workflow</h4>
             <button
@@ -138,6 +158,6 @@ export function ChatComposer({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
