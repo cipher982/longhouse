@@ -29,7 +29,7 @@ export function ToolMessage({ message }: ToolMessageProps) {
         <span className="tool-status-indicator">
            {isProcessing ? "Running..." : "Completed"}
         </span>
-        <div className={clsx("chevron", { "open": isOpen })}>▼</div>
+        <div className={clsx("chevron", { "open": isOpen })}>▶</div>
       </div>
       
       {isOpen && (
