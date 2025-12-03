@@ -13,6 +13,13 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
+from zerg.tools.error_envelope import (
+    tool_error,
+    tool_success,
+    connector_not_configured_error,
+    invalid_credentials_error,
+    ErrorType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,41 +129,64 @@ def send_email(
 
         # Validate required credentials
         if not resolved_api_key:
-            return {"success": False, "error": "Email API key not configured. Either provide api_key parameter or configure Email in Agent Settings -> Connectors."}
+            return connector_not_configured_error("email", "Email (Resend)")
         if not resolved_from_email:
-            return {"success": False, "error": "From email not configured. Either provide from_email parameter or configure Email in Agent Settings -> Connectors."}
+            return tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="From email not configured. Set it up in Settings → Integrations → Email.",
+                connector="email",
+                setup_url="/settings/integrations",
+            )
 
         # Validate API key format
         if not resolved_api_key.startswith("re_"):
             logger.error("Invalid API key format")
-            return {
-                "success": False,
-                "error": "Invalid API key format. Resend API keys start with 're_'",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Invalid API key format. Resend API keys start with 're_'",
+                connector="email",
+            )
 
         if not to:
-            return {"success": False, "error": "to is required"}
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="to is required",
+                connector="email",
+            )
 
         if not subject:
-            return {"success": False, "error": "subject is required"}
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="subject is required",
+                connector="email",
+            )
 
         if not text and not html:
-            return {
-                "success": False,
-                "error": "Either text or html content is required",
-            }
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Either text or html content is required",
+                connector="email",
+            )
 
         # Validate from_email
         if not _validate_email(resolved_from_email):
             logger.error(f"Invalid from_email: {resolved_from_email}")
-            return {"success": False, "error": f"Invalid from_email: {resolved_from_email}"}
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Invalid from_email: {resolved_from_email}",
+                connector="email",
+            )
 
         # Validate to addresses
         try:
             to_list = _validate_email_list(to)
         except ValueError as e:
             logger.error(f"Invalid to addresses: {e}")
-            return {"success": False, "error": str(e)}
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=str(e),
+                connector="email",
+            )
 
         # Build request payload
         payload = {
@@ -175,7 +205,11 @@ def send_email(
         if reply_to:
             if not _validate_email(reply_to):
                 logger.error(f"Invalid reply_to: {reply_to}")
-                return {"success": False, "error": f"Invalid reply_to: {reply_to}"}
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message=f"Invalid reply_to: {reply_to}",
+                    connector="email",
+                )
             payload["reply_to"] = reply_to
 
         if cc:
@@ -183,21 +217,30 @@ def send_email(
                 payload["cc"] = _validate_email_list(cc)
             except ValueError as e:
                 logger.error(f"Invalid CC addresses: {e}")
-                return {"success": False, "error": f"CC validation: {str(e)}"}
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message=f"CC validation: {str(e)}",
+                    connector="email",
+                )
 
         if bcc:
             try:
                 payload["bcc"] = _validate_email_list(bcc)
             except ValueError as e:
                 logger.error(f"Invalid BCC addresses: {e}")
-                return {"success": False, "error": f"BCC validation: {str(e)}"}
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message=f"BCC validation: {str(e)}",
+                    connector="email",
+                )
 
         if attachments:
             if not isinstance(attachments, list):
-                return {
-                    "success": False,
-                    "error": "attachments must be a list of dicts",
-                }
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message="attachments must be a list of dicts",
+                    connector="email",
+                )
             payload["attachments"] = attachments
 
         # Prepare headers
@@ -222,10 +265,7 @@ def send_email(
             response_data = response.json()
             message_id = response_data.get("id", "unknown")
             logger.info(f"Email sent successfully: {message_id}")
-            return {
-                "success": True,
-                "message_id": message_id,
-            }
+            return tool_success({"message_id": message_id})
         else:
             # Parse error response
             try:
@@ -236,39 +276,55 @@ def send_email(
 
             logger.error(f"Resend API error ({response.status_code}): {error_message}")
 
-            # Provide helpful error messages for common issues
+            # Map status codes to error types
             if response.status_code == 401:
-                error_message = "Invalid API key. Check your Resend API key."
+                return invalid_credentials_error("email", "Email (Resend)")
             elif response.status_code == 403:
-                error_message = "Access forbidden. Verify your domain is verified in Resend."
+                return tool_error(
+                    error_type=ErrorType.PERMISSION_DENIED,
+                    user_message="Access forbidden. Verify your domain is verified in Resend.",
+                    connector="email",
+                )
             elif response.status_code == 422:
-                error_message = f"Validation error: {error_message}"
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message=f"Validation error: {error_message}",
+                    connector="email",
+                )
             elif response.status_code == 429:
-                error_message = "Rate limit exceeded. Slow down requests or upgrade plan."
-
-            return {
-                "success": False,
-                "error": f"Resend API error ({response.status_code}): {error_message}",
-            }
+                return tool_error(
+                    error_type=ErrorType.RATE_LIMITED,
+                    user_message="Rate limit exceeded. Slow down requests or upgrade plan.",
+                    connector="email",
+                )
+            else:
+                return tool_error(
+                    error_type=ErrorType.EXECUTION_ERROR,
+                    user_message=f"Resend API error ({response.status_code}): {error_message}",
+                    connector="email",
+                )
 
     except httpx.TimeoutException:
         logger.error(f"Timeout sending email to {to}")
-        return {
-            "success": False,
-            "error": "Request timed out after 30 seconds",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message="Request timed out after 30 seconds",
+            connector="email",
+        )
     except httpx.RequestError as e:
         logger.error(f"Request error sending email: {e}")
-        return {
-            "success": False,
-            "error": f"Request failed: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Request failed: {str(e)}",
+            connector="email",
+        )
     except Exception as e:
         logger.exception("Unexpected error sending email")
-        return {
-            "success": False,
-            "error": f"Unexpected error: {str(e)}",
-        }
+        return tool_error(
+            error_type=ErrorType.EXECUTION_ERROR,
+            user_message=f"Unexpected error: {str(e)}",
+            connector="email",
+        )
 
 
 TOOLS: List[StructuredTool] = [
