@@ -11,8 +11,8 @@ No silent skipping - if you run these, you need the creds.
 import os
 from pathlib import Path
 
-import pytest
 import dotenv
+import pytest
 
 # Load .env from repo root
 _REPO_ROOT = Path(__file__).resolve().parents[5]  # integration -> tests -> backend -> zerg -> apps -> repo_root

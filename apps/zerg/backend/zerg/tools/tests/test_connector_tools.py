@@ -1,7 +1,7 @@
 """Tests for connector meta-tools."""
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 from zerg.tools.builtin.connector_tools import refresh_connector_status
 

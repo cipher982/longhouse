@@ -7,7 +7,10 @@ into our standardized WebSocket event envelopes for real-time workflow visualiza
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 from zerg.events import EventType
 
@@ -40,7 +43,7 @@ class LangGraphMapper:
 
             # The tuple is (stream_mode_name, data), not (node_id, update)
             # Extract the actual updates dict from the second element
-            if mode_name == 'updates' and isinstance(updates_dict, dict):
+            if mode_name == "updates" and isinstance(updates_dict, dict):
                 # Process each node update in the dict
                 for node_id, state_update in updates_dict.items():
                     # Skip special keys

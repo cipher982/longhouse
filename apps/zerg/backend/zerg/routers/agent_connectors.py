@@ -17,23 +17,30 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Path
+from fastapi import Response
+from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg.connectors.registry import CONNECTOR_REGISTRY, ConnectorType, get_required_fields
+from zerg.connectors.registry import CONNECTOR_REGISTRY
+from zerg.connectors.registry import ConnectorType
+from zerg.connectors.registry import get_required_fields
 from zerg.connectors.testers import test_connector
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.models.models import Agent, ConnectorCredential
-from zerg.schemas.connector_schemas import (
-    ConnectorConfigureRequest,
-    ConnectorStatusResponse,
-    ConnectorSuccessResponse,
-    ConnectorTestRequest,
-    ConnectorTestResponse,
-    CredentialFieldSchema,
-)
-from zerg.utils.crypto import decrypt, encrypt
+from zerg.models.models import Agent
+from zerg.models.models import ConnectorCredential
+from zerg.schemas.connector_schemas import ConnectorConfigureRequest
+from zerg.schemas.connector_schemas import ConnectorStatusResponse
+from zerg.schemas.connector_schemas import ConnectorSuccessResponse
+from zerg.schemas.connector_schemas import ConnectorTestRequest
+from zerg.schemas.connector_schemas import ConnectorTestResponse
+from zerg.schemas.connector_schemas import CredentialFieldSchema
+from zerg.utils.crypto import decrypt
+from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +270,7 @@ def test_configured_connector(
     # Decrypt credentials
     try:
         decrypted = json.loads(decrypt(cred.encrypted_value))
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to decrypt credentials for agent %d connector %s", agent_id, connector_type)
         raise HTTPException(status_code=500, detail="Failed to decrypt credentials")
 

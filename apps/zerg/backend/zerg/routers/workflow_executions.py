@@ -13,7 +13,8 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
-from zerg.schemas.workflow import ExecutionStatusResponse, ExecutionLogsResponse
+from zerg.schemas.workflow import ExecutionLogsResponse
+from zerg.schemas.workflow import ExecutionStatusResponse
 from zerg.services.workflow_engine import workflow_engine
 from zerg.services.workflow_scheduler import workflow_scheduler
 from zerg.utils.time import utc_now_naive
@@ -80,8 +81,8 @@ async def start_workflow_execution(
     # Create execution record and start in background (truly non-blocking)
     try:
         from zerg.models.models import WorkflowExecution
-        from zerg.utils.time import utc_now_naive
         from zerg.services.execution_state import ExecutionStateMachine
+        from zerg.utils.time import utc_now_naive
 
         # Create execution record in WAITING state
         execution = WorkflowExecution(

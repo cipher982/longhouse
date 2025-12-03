@@ -239,6 +239,7 @@ def check_layer_5_agent_runner() -> dict:
         print("  Creating mock Agent object...")
 
         from datetime import datetime
+
         from zerg.models.models import Agent as AgentModel
 
         # Create a minimal agent for testing
@@ -297,9 +298,10 @@ def check_layer_6_llm_creation() -> dict:
 
     try:
         from datetime import datetime
-        from zerg.models.models import Agent as AgentModel
+
         from zerg.agents_def.zerg_react_agent import _make_llm
         from zerg.config import get_settings
+        from zerg.models.models import Agent as AgentModel
 
         # Create mock agent
         mock_agent = AgentModel(
@@ -413,7 +415,7 @@ def generate_summary(results: dict) -> None:
     # Layer 1
     layer1 = results.get("layer1", {})
     raw_value = layer1.get("raw_value")
-    print(f"\n  Layer 1 (OS Environment):")
+    print("\n  Layer 1 (OS Environment):")
     print(f"    Raw value: {repr(raw_value)}")
     print(f"    Status: {'✓ SET' if raw_value else '✗ NOT SET'}")
 
@@ -421,7 +423,7 @@ def generate_summary(results: dict) -> None:
     layer2 = results.get("layer2", {})
     before = layer2.get("before")
     after = layer2.get("after")
-    print(f"\n  Layer 2 (dotenv Loading):")
+    print("\n  Layer 2 (dotenv Loading):")
     print(f"    Before load: {repr(before)}")
     print(f"    After load:  {repr(after)}")
     print(f"    Status: {'✓ LOADED' if layer2.get('changed') else '- UNCHANGED'}")
@@ -429,7 +431,7 @@ def generate_summary(results: dict) -> None:
     # Layer 3
     layer3 = results.get("layer3", {})
     if "error" not in layer3:
-        print(f"\n  Layer 3 (Settings Object):")
+        print("\n  Layer 3 (Settings Object):")
         print(f"    Default:  {layer3.get('default')}")
         print(f"    Property: {layer3.get('property')}")
         print(f"    Status: {'✓ CONSISTENT' if layer3.get('match') else '✗ MISMATCH'}")
@@ -437,7 +439,7 @@ def generate_summary(results: dict) -> None:
     # Layer 4
     layer4 = results.get("layer4", {})
     if "error" not in layer4:
-        print(f"\n  Layer 4 (Constants Module):")
+        print("\n  Layer 4 (Constants Module):")
         print(f"    Constant:         {layer4.get('constant')}")
         print(f"    Current settings: {layer4.get('current_settings')}")
         print(f"    Status: {'✓ CONSISTENT' if layer4.get('match') else '✗ MISMATCH'}")
@@ -445,7 +447,7 @@ def generate_summary(results: dict) -> None:
     # Layer 5
     layer5 = results.get("layer5", {})
     if "error" not in layer5:
-        print(f"\n  Layer 5 (AgentRunner):")
+        print("\n  Layer 5 (AgentRunner):")
         print(f"    enable_token_stream: {layer5.get('enable_token_stream')}")
         print(f"    Settings value:      {layer5.get('settings_value')}")
         print(f"    Status: {'✓ CONSISTENT' if layer5.get('match') else '✗ MISMATCH'}")
@@ -453,7 +455,7 @@ def generate_summary(results: dict) -> None:
     # Layer 6
     layer6 = results.get("layer6", {})
     if "error" not in layer6 and layer6.get("llm_created"):
-        print(f"\n  Layer 6 (LLM Creation):")
+        print("\n  Layer 6 (LLM Creation):")
         print(f"    LLM created:      {layer6.get('llm_created')}")
         print(f"    Streaming attr:   {layer6.get('has_streaming_attr')}")
         print(f"    Streaming value:  {layer6.get('streaming_value')}")

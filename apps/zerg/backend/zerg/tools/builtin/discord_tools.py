@@ -2,19 +2,20 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 import httpx
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.tools.error_envelope import (
-    tool_error,
-    tool_success,
-    connector_not_configured_error,
-    ErrorType,
-)
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import connector_not_configured_error
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +195,7 @@ def send_discord_webhook(
 
         # Discord webhooks return 204 No Content on success
         if response.status_code == 204:
-            logger.info(f"Discord webhook message sent successfully")
+            logger.info("Discord webhook message sent successfully")
             return tool_success({"status_code": 204})
 
         # Handle rate limiting (429 Too Many Requests)
@@ -260,7 +261,7 @@ def send_discord_webhook(
             connector="discord",
         )
     except Exception as e:
-        logger.exception(f"Unexpected error in send_discord_webhook")
+        logger.exception("Unexpected error in send_discord_webhook")
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Unexpected error: {str(e)}",

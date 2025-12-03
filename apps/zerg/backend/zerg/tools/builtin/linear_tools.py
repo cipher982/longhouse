@@ -18,20 +18,21 @@ How to get API Key:
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 import httpx
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.tools.error_envelope import (
-    tool_error,
-    tool_success,
-    connector_not_configured_error,
-    invalid_credentials_error,
-    ErrorType,
-)
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import connector_not_configured_error
+from zerg.tools.error_envelope import invalid_credentials_error
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,7 @@ def _make_linear_request(
             )
 
     except httpx.TimeoutException:
-        logger.error(f"Linear API timeout")
+        logger.error("Linear API timeout")
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Request timed out after {timeout} seconds",
@@ -163,7 +164,7 @@ def _make_linear_request(
             connector="linear"
         )
     except Exception as e:
-        logger.exception(f"Unexpected error in Linear API request")
+        logger.exception("Unexpected error in Linear API request")
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Unexpected error: {str(e)}",

@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.models.models import User as UserModel
-from zerg.schemas.ops import OpsSummary, TimeSeriesResponse, TopAgentsResponse
+from zerg.schemas.ops import OpsSummary
+from zerg.schemas.ops import TimeSeriesResponse
+from zerg.schemas.ops import TopAgentsResponse
 from zerg.services.ops_service import get_summary as svc_get_summary
 from zerg.services.ops_service import get_timeseries as svc_get_timeseries
 from zerg.services.ops_service import get_top_agents as svc_get_top_agents

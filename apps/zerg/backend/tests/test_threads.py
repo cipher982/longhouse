@@ -240,7 +240,10 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
     
     This ensures deterministic ordering regardless of timestamp precision issues.
     """
-    from datetime import datetime, timedelta, UTC
+    from datetime import UTC
+    from datetime import datetime
+    from datetime import timedelta
+
     from zerg.models.models import ThreadMessage
     
     # Create messages with intentionally out-of-order timestamps

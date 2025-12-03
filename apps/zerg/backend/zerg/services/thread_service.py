@@ -55,7 +55,7 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
     # Format timestamp for temporal awareness (ISO 8601 with Z suffix)
     # Use sent_at field if available, otherwise skip timestamp
     timestamp_prefix = ""
-    if hasattr(msg_row, 'sent_at') and msg_row.sent_at:
+    if hasattr(msg_row, "sent_at") and msg_row.sent_at:
         # Format as ISO 8601 with Z suffix (UTC)
         ts_str = msg_row.sent_at.strftime("%Y-%m-%dT%H:%M:%SZ")
         timestamp_prefix = f"[{ts_str}] "

@@ -16,13 +16,13 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
-# DB/CRUD helpers
-from zerg.crud import crud
-from zerg.database import get_db
-
 # New higher-level ThreadService façade
 # Auth dependency
 from zerg.callbacks.token_stream import set_current_user_id
+
+# DB/CRUD helpers
+from zerg.crud import crud
+from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.generated.ws_messages import AssistantIdData
 from zerg.generated.ws_messages import Envelope

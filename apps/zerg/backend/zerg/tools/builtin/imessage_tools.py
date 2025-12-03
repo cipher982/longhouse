@@ -15,20 +15,22 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.tools.error_envelope import (
-    tool_error,
-    tool_success,
-    connector_not_configured_error,
-    ErrorType,
-)
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +359,7 @@ def list_imessage_messages(
         )
     finally:
         try:
-            if 'conn' in locals():
+            if "conn" in locals():
                 conn.close()
         finally:
             if temp_path:

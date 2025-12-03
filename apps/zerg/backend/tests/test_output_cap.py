@@ -1,9 +1,8 @@
-from importlib import reload
 
 
 def test_max_output_tokens_is_passed_to_chat_openai(monkeypatch):
-    import zerg.config
     import zerg.agents_def.zerg_react_agent as zr
+    import zerg.config
 
     # Prevent load_dotenv from overwriting our env vars from .env file
     monkeypatch.setattr(zerg.config, "load_dotenv", lambda *args, **kwargs: None)

@@ -12,7 +12,7 @@ from zerg.models.models import Agent
 from zerg.services.thread_service import ThreadService
 
 # Regex pattern for ISO 8601 timestamp prefix: [YYYY-MM-DDTHH:MM:SSZ]
-TIMESTAMP_PATTERN = r'^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] '
+TIMESTAMP_PATTERN = r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] "
 
 
 def _create_test_agent(db_session):
@@ -110,7 +110,7 @@ def test_timestamp_format_in_messages(db_session):
     assert isinstance(user_msg, HumanMessage)
 
     # Verify timestamp format matches ISO 8601: [YYYY-MM-DDTHH:MM:SSZ]
-    match = re.match(r'^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$', user_msg.content)
+    match = re.match(r"^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$", user_msg.content)
     assert match is not None, f"User message should have ISO 8601 timestamp prefix, got: {user_msg.content}"
 
     year, month, day, hour, minute, second, content = match.groups()
@@ -119,7 +119,7 @@ def test_timestamp_format_in_messages(db_session):
     # Verify assistant message also has timestamp
     assistant_msg = history[2]
     assert isinstance(assistant_msg, AIMessage)
-    match = re.match(r'^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$', assistant_msg.content)
+    match = re.match(r"^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$", assistant_msg.content)
     assert match is not None, f"Assistant message should have ISO 8601 timestamp prefix, got: {assistant_msg.content}"
 
     _, _, _, _, _, _, content = match.groups()

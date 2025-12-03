@@ -249,7 +249,7 @@ class WorkflowEngine:
         started_envelope = LangGraphMapper.create_execution_started_envelope(execution.id)
         logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: About to publish EXECUTION_STARTED for execution_id={execution.id}")
         await publish_event(EventType.EXECUTION_STARTED, started_envelope)
-        logger.info(f"🚀🚀🚀 WORKFLOW_ENGINE: Published EXECUTION_STARTED successfully")
+        logger.info("🚀🚀🚀 WORKFLOW_ENGINE: Published EXECUTION_STARTED successfully")
 
         try:
             # Stream execution for real-time updates with granular node state events
@@ -279,7 +279,7 @@ class WorkflowEngine:
             )
             logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
 
-        except Exception as e:
+        except Exception:
             # Log error but don't publish EXECUTION_FINISHED here - let outer handler do it once
             logger.exception(f"[WorkflowEngine] Graph execution failed – execution_id={execution.id}")
             raise  # Re-raise to trigger state machine handling and single EXECUTION_FINISHED event

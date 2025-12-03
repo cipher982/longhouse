@@ -1,15 +1,14 @@
 """Tests for Notion tools."""
 
-import pytest
-from unittest.mock import Mock, patch
-from zerg.tools.builtin.notion_tools import (
-    notion_create_page,
-    notion_get_page,
-    notion_update_page,
-    notion_search,
-    notion_query_database,
-    notion_append_blocks,
-)
+from unittest.mock import Mock
+from unittest.mock import patch
+
+from zerg.tools.builtin.notion_tools import notion_append_blocks
+from zerg.tools.builtin.notion_tools import notion_create_page
+from zerg.tools.builtin.notion_tools import notion_get_page
+from zerg.tools.builtin.notion_tools import notion_query_database
+from zerg.tools.builtin.notion_tools import notion_search
+from zerg.tools.builtin.notion_tools import notion_update_page
 
 
 class TestNotionCreatePage:

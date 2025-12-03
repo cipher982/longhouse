@@ -1,6 +1,7 @@
 """Pydantic models for ops endpoints to ensure proper OpenAPI schema generation."""
 
-from typing import Any, Dict, List, Optional
+from typing import List
+from typing import Optional
 
 from pydantic import BaseModel
 

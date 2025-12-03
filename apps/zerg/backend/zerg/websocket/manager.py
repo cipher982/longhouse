@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 import time
+from datetime import datetime
 from typing import Any
 from typing import Dict
 from typing import Set
@@ -616,7 +616,7 @@ class TopicConnectionManager:
 
     async def _handle_execution_started(self, data: Dict[str, Any]) -> None:
         """Broadcast execution started event."""
-        print(f"🔥🔥🔥 _handle_execution_started CALLED", flush=True)
+        print("🔥🔥🔥 _handle_execution_started CALLED", flush=True)
         execution_id = data["execution_id"]
         topic = f"workflow_execution:{execution_id}"
 
@@ -632,7 +632,7 @@ class TopicConnectionManager:
 
     async def _handle_node_state_event(self, data: Dict[str, Any]) -> None:
         """Broadcast per-node state changes during workflow execution."""
-        print(f"🔥🔥🔥 _handle_node_state_event CALLED", flush=True)
+        print("🔥🔥🔥 _handle_node_state_event CALLED", flush=True)
 
         execution_id = data["execution_id"]
         topic = f"workflow_execution:{execution_id}"
@@ -646,7 +646,7 @@ class TopicConnectionManager:
         # Use envelope format
         envelope = Envelope.create(message_type="node_state", topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
-        print(f"✅ node_state broadcast complete", flush=True)
+        print("✅ node_state broadcast complete", flush=True)
 
     async def _handle_workflow_progress(self, data: Dict[str, Any]) -> None:
         """Broadcast workflow progress updates."""
@@ -680,7 +680,7 @@ class TopicConnectionManager:
         # Use envelope format
         envelope = Envelope.create(message_type="execution_finished", topic=topic, data=serialized_data)
         await self.broadcast_to_topic(topic, envelope.model_dump())
-        logger.info(f"✅ Broadcast complete for execution_finished")
+        logger.info("✅ Broadcast complete for execution_finished")
 
     # ------------------------------------------------------------------
     # Node log streaming

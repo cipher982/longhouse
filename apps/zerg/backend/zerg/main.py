@@ -43,10 +43,12 @@ from zerg.constants import API_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
+from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
+from zerg.routers.agent_config import router as agent_config_router
+from zerg.routers.agent_connectors import router as agent_connectors_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
-from zerg.routers.oauth import router as oauth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
@@ -55,15 +57,13 @@ from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
+from zerg.routers.oauth import router as oauth_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.system import router as system_router
 from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
-from zerg.routers.account_connectors import router as account_connectors_router
-from zerg.routers.agent_config import router as agent_config_router
-from zerg.routers.agent_connectors import router as agent_connectors_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.websocket import router as websocket_router
@@ -80,9 +80,10 @@ from zerg.routers.workflows import router as workflows_router
 # friction-free we skip service start-up when the environment variable
 # ``TESTING`` is truthy (set automatically by `backend/tests/conftest.py`).
 from zerg.services.ops_events import ops_events_bridge  # noqa: E402
+from zerg.services.scheduler_service import scheduler_service  # noqa: E402
+
 # Import topic_manager at module level so event subscriptions register in worker process
 from zerg.websocket.manager import topic_manager  # noqa: E402, F401
-from zerg.services.scheduler_service import scheduler_service  # noqa: E402
 
 _log_level_name = _settings.log_level.upper()
 try:

@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Dict
 
 from langchain_core.tools import StructuredTool
+
 from zerg.config import get_settings
 
 
@@ -29,7 +30,8 @@ def _container_exec(command: str, timeout_secs: int = 20) -> str:
     """
 
     try:  # Import lazily to avoid docker dependency at import time
-        from zerg.services.container_runner import ContainerRunner, ContainerRunnerConfig
+        from zerg.services.container_runner import ContainerRunner
+        from zerg.services.container_runner import ContainerRunnerConfig
     except Exception as exc:  # pragma: no cover
         return f"Error: container runner unavailable ({exc})"
 
