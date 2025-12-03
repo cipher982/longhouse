@@ -22,7 +22,7 @@ class TestLinearCreateIssue:
             team_id="team_123",
             title="Test Issue"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_team_id(self):
         """Test that empty team ID is rejected."""
@@ -31,7 +31,7 @@ class TestLinearCreateIssue:
             team_id="",
             title="Test Issue"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_title(self):
         """Test that empty title is rejected."""
@@ -40,7 +40,7 @@ class TestLinearCreateIssue:
             team_id="team_123",
             title=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.linear_tools.httpx.Client")
     def test_successful_issue_creation(self, mock_client):
@@ -69,7 +69,7 @@ class TestLinearCreateIssue:
             description="Test description"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["identifier"] == "ENG-42"
 
     @patch("zerg.tools.builtin.linear_tools.httpx.Client")
@@ -86,8 +86,8 @@ class TestLinearCreateIssue:
             title="Test Issue"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 401
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
 
 
 class TestLinearListIssues:
@@ -114,7 +114,7 @@ class TestLinearListIssues:
             api_key="lin_api_test"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert len(result["data"]) == 2
 
 
@@ -143,7 +143,7 @@ class TestLinearGetIssue:
             issue_id="issue_123"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["identifier"] == "ENG-42"
 
     def test_empty_issue_id(self):
@@ -152,7 +152,7 @@ class TestLinearGetIssue:
             api_key="lin_api_test",
             issue_id=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
 
 class TestLinearUpdateIssue:
@@ -182,7 +182,7 @@ class TestLinearUpdateIssue:
             title="Updated Title"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestLinearAddComment:
@@ -195,7 +195,7 @@ class TestLinearAddComment:
             issue_id="issue_123",
             body=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.linear_tools.httpx.Client")
     def test_successful_comment(self, mock_client):
@@ -221,7 +221,7 @@ class TestLinearAddComment:
             body="Test comment"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestLinearListTeams:
@@ -248,5 +248,5 @@ class TestLinearListTeams:
             api_key="lin_api_test"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert len(result["data"]) == 2

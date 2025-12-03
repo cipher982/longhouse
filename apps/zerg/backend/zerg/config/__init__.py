@@ -51,6 +51,8 @@ class Settings:  # noqa: D401 – simple data container
     jwt_secret: str
     google_client_id: Any
     google_client_secret: Any
+    github_client_id: Any
+    github_client_secret: Any
     trigger_signing_secret: Any
 
     # Database ---------------------------------------------------------
@@ -177,6 +179,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         jwt_secret=os.getenv("JWT_SECRET", "dev-secret"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        github_client_id=os.getenv("GITHUB_CLIENT_ID"),
+        github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         trigger_signing_secret=os.getenv("TRIGGER_SIGNING_SECRET"),
         database_url=os.getenv("DATABASE_URL", ""),
         fernet_secret=os.getenv("FERNET_SECRET"),

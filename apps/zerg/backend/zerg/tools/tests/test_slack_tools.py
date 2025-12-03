@@ -14,8 +14,9 @@ class TestSendSlackWebhook:
             webhook_url="",
             text="Test message"
         )
-        assert result["success"] is False
-        assert "error" in result
+        assert result["ok"] is False
+        assert "error_type" in result
+        assert "user_message" in result
 
     def test_invalid_webhook_url_wrong_format(self):
         """Test that non-Slack URLs are rejected."""
@@ -23,8 +24,9 @@ class TestSendSlackWebhook:
             webhook_url="https://example.com/webhook",
             text="Test message"
         )
-        assert result["success"] is False
-        assert "error" in result
+        assert result["ok"] is False
+        assert "error_type" in result
+        assert "user_message" in result
 
     def test_empty_text_without_blocks(self):
         """Test that empty text without blocks is rejected."""
@@ -32,7 +34,7 @@ class TestSendSlackWebhook:
             webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
             text=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.slack_tools.httpx.Client")
     def test_successful_message(self, mock_client):
@@ -47,8 +49,8 @@ class TestSendSlackWebhook:
             text="Test message"
         )
 
-        assert result["success"] is True
-        assert result["status_code"] == 200
+        assert result["ok"] is True
+        assert result["data"]["status_code"] == 200
 
     @patch("zerg.tools.builtin.slack_tools.httpx.Client")
     def test_rate_limit_response(self, mock_client):
@@ -64,8 +66,8 @@ class TestSendSlackWebhook:
             text="Test message"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 429
+        assert result["ok"] is False
+        assert result["error_type"] == "rate_limited"
 
     @patch("zerg.tools.builtin.slack_tools.httpx.Client")
     def test_message_with_blocks(self, mock_client):
@@ -89,7 +91,7 @@ class TestSendSlackWebhook:
             blocks=blocks
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
         # Verify the payload was constructed correctly
         call_args = mock_post.call_args
@@ -111,8 +113,8 @@ class TestSendSlackWebhook:
             text="Test message"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 404
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
 
     @patch("zerg.tools.builtin.slack_tools.httpx.Client")
     def test_invalid_payload(self, mock_client):
@@ -127,5 +129,5 @@ class TestSendSlackWebhook:
             text="Test message"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 400
+        assert result["ok"] is False
+        assert result["error_type"] == "execution_error"

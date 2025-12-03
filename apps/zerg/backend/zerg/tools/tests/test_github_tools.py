@@ -23,8 +23,8 @@ class TestGitHubCreateIssue:
             repo="hello-world",
             title="Test Issue"
         )
-        assert result["success"] is False
-        assert "Invalid or missing GitHub token" in result["error"]
+        assert result["ok"] is False
+        assert result["error_type"] == "connector_not_configured"
 
     def test_empty_title(self):
         """Test that empty title is rejected."""
@@ -34,8 +34,8 @@ class TestGitHubCreateIssue:
             repo="hello-world",
             title=""
         )
-        assert result["success"] is False
-        assert "title is required" in result["error"]
+        assert result["ok"] is False
+        assert "title is required" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_issue_creation(self, mock_client):
@@ -61,7 +61,7 @@ class TestGitHubCreateIssue:
             assignees=["octocat"]
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["number"] == 42
         assert result["data"]["title"] == "Test Issue"
         assert result["data"]["state"] == "open"
@@ -85,9 +85,9 @@ class TestGitHubCreateIssue:
             title="Test Issue"
         )
 
-        assert result["success"] is False
-        assert "rate limit exceeded" in result["error"]
-        assert result["status_code"] == 403
+        assert result["ok"] is False
+        assert result["error_type"] == "rate_limited"
+        assert "rate limit exceeded" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_authentication_error(self, mock_client):
@@ -104,9 +104,9 @@ class TestGitHubCreateIssue:
             title="Test Issue"
         )
 
-        assert result["success"] is False
-        assert "authentication failed" in result["error"]
-        assert result["status_code"] == 401
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
+        assert "credentials have expired" in result["user_message"].lower() or "reconnect" in result["user_message"].lower()
 
 
 class TestGitHubListIssues:
@@ -120,8 +120,8 @@ class TestGitHubListIssues:
             repo="hello-world",
             state="invalid"
         )
-        assert result["success"] is False
-        assert "State must be" in result["error"]
+        assert result["ok"] is False
+        assert "State must be" in result["user_message"]
 
     def test_invalid_per_page(self):
         """Test that invalid per_page values are rejected."""
@@ -131,8 +131,8 @@ class TestGitHubListIssues:
             repo="hello-world",
             per_page=101
         )
-        assert result["success"] is False
-        assert "per_page must be between" in result["error"]
+        assert result["ok"] is False
+        assert "per_page must be between" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_list_issues(self, mock_client):
@@ -166,11 +166,11 @@ class TestGitHubListIssues:
             state="open"
         )
 
-        assert result["success"] is True
-        assert result["count"] == 2
-        assert len(result["data"]) == 2
-        assert result["data"][0]["number"] == 1
-        assert result["data"][0]["labels"] == ["bug"]
+        assert result["ok"] is True
+        assert result["data"]["count"] == 2
+        assert len(result["data"]["issues"]) == 2
+        assert result["data"]["issues"][0]["number"] == 1
+        assert result["data"]["issues"][0]["labels"] == ["bug"]
 
 
 class TestGitHubGetIssue:
@@ -184,8 +184,8 @@ class TestGitHubGetIssue:
             repo="hello-world",
             issue_number=-1
         )
-        assert result["success"] is False
-        assert "positive integer" in result["error"]
+        assert result["ok"] is False
+        assert "positive integer" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_get_issue(self, mock_client):
@@ -211,7 +211,7 @@ class TestGitHubGetIssue:
             issue_number=42
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["number"] == 42
         assert result["data"]["title"] == "Test Issue"
         assert result["data"]["body"] == "This is the issue body"
@@ -233,9 +233,9 @@ class TestGitHubGetIssue:
             issue_number=999
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 404
-        assert "not found" in result["error"]
+        assert result["ok"] is False
+        assert result["error_type"] == "execution_error"
+        assert "not found" in result["user_message"]
 
 
 class TestGitHubAddComment:
@@ -250,8 +250,8 @@ class TestGitHubAddComment:
             issue_number=42,
             body=""
         )
-        assert result["success"] is False
-        assert "body is required" in result["error"]
+        assert result["ok"] is False
+        assert "body is required" in result["user_message"]
 
     def test_invalid_issue_number(self):
         """Test that invalid issue numbers are rejected."""
@@ -262,8 +262,8 @@ class TestGitHubAddComment:
             issue_number=0,
             body="Test comment"
         )
-        assert result["success"] is False
-        assert "positive integer" in result["error"]
+        assert result["ok"] is False
+        assert "positive integer" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_add_comment(self, mock_client):
@@ -286,7 +286,7 @@ class TestGitHubAddComment:
             body="Test comment"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["id"] == 12345
         assert result["data"]["body"] == "Test comment"
 
@@ -302,8 +302,8 @@ class TestGitHubListPullRequests:
             repo="hello-world",
             state="invalid"
         )
-        assert result["success"] is False
-        assert "State must be" in result["error"]
+        assert result["ok"] is False
+        assert "State must be" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_list_prs(self, mock_client):
@@ -330,11 +330,11 @@ class TestGitHubListPullRequests:
             state="open"
         )
 
-        assert result["success"] is True
-        assert result["count"] == 1
-        assert result["data"][0]["number"] == 10
-        assert result["data"][0]["head"] == "feature-branch"
-        assert result["data"][0]["base"] == "main"
+        assert result["ok"] is True
+        assert result["data"]["count"] == 1
+        assert result["data"]["pull_requests"][0]["number"] == 10
+        assert result["data"]["pull_requests"][0]["head"] == "feature-branch"
+        assert result["data"]["pull_requests"][0]["base"] == "main"
 
 
 class TestGitHubGetPullRequest:
@@ -348,8 +348,8 @@ class TestGitHubGetPullRequest:
             repo="hello-world",
             pr_number=-1
         )
-        assert result["success"] is False
-        assert "positive integer" in result["error"]
+        assert result["ok"] is False
+        assert "positive integer" in result["user_message"]
 
     @patch("zerg.tools.builtin.github_tools.httpx.Client")
     def test_successful_get_pr(self, mock_client):
@@ -378,7 +378,7 @@ class TestGitHubGetPullRequest:
             pr_number=10
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
         assert result["data"]["number"] == 10
         assert result["data"]["title"] == "Add feature"
         assert result["data"]["head"] == "feature-branch"

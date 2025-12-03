@@ -27,8 +27,8 @@ class TestDiscordIntegration:
             content="🧪 Integration test - simple message"
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
-        assert result["status_code"] == 204
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
+        assert result["data"]["status_code"] == 204
 
     def test_send_embed_message(self, discord_webhook_url):
         """Test sending an embed message to Discord."""
@@ -47,7 +47,7 @@ class TestDiscordIntegration:
             }]
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
 
 class TestSlackIntegration:
@@ -62,7 +62,7 @@ class TestSlackIntegration:
             text="🧪 Integration test - simple message"
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
     def test_send_block_message(self, slack_webhook_url):
         """Test sending a Block Kit message to Slack."""
@@ -80,7 +80,7 @@ class TestSlackIntegration:
             }]
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
 
 class TestEmailIntegration:
@@ -98,7 +98,7 @@ class TestEmailIntegration:
             text="This is an automated integration test email."
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
         assert "message_id" in result
 
     def test_send_html_email(self, resend_api_key, resend_from_email, resend_to_email):
@@ -113,7 +113,7 @@ class TestEmailIntegration:
             html="<h1>Integration Test</h1><p>This is an automated test.</p>"
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
 
 class TestSmsIntegration:
@@ -134,7 +134,7 @@ class TestSmsIntegration:
             message="🧪 Zerg integration test"
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error_message', result.get('error'))}"
+        assert result["ok"] is True, f"Failed: {result.get('error_message', result.get('user_message'))}"
         assert "message_sid" in result
 
 
@@ -154,7 +154,7 @@ class TestGitHubIntegration:
             per_page=5
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
         assert "data" in result
 
     def test_create_and_close_issue(self, github_token, github_test_repo):
@@ -173,7 +173,7 @@ class TestGitHubIntegration:
             labels=["test", "automated"]
         )
 
-        assert create_result["success"] is True, f"Create failed: {create_result.get('error')}"
+        assert create_result["success"] is True, f"Create failed: {create_result.get('user_message')}"
 
         # Add a comment
         issue_number = create_result["data"]["number"]
@@ -185,7 +185,7 @@ class TestGitHubIntegration:
             body="🤖 Automated comment from integration test"
         )
 
-        assert comment_result["success"] is True, f"Comment failed: {comment_result.get('error')}"
+        assert comment_result["success"] is True, f"Comment failed: {comment_result.get('user_message')}"
 
 
 class TestJiraIntegration:
@@ -203,7 +203,7 @@ class TestJiraIntegration:
             max_results=5
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
 
 class TestLinearIntegration:
@@ -215,7 +215,7 @@ class TestLinearIntegration:
 
         result = linear_list_teams(api_key=linear_api_key)
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
         assert "data" in result
 
     def test_list_issues(self, linear_api_key):
@@ -227,7 +227,7 @@ class TestLinearIntegration:
             first=5
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
 
 class TestNotionIntegration:
@@ -242,7 +242,7 @@ class TestNotionIntegration:
             query="test"
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
     def test_get_page(self, notion_api_key, notion_test_page_id):
         """Test getting a Notion page."""
@@ -253,4 +253,4 @@ class TestNotionIntegration:
             page_id=notion_test_page_id
         )
 
-        assert result["success"] is True, f"Failed: {result.get('error')}"
+        assert result["ok"] is True, f"Failed: {result.get('user_message')}"

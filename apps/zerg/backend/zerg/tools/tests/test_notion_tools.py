@@ -22,7 +22,7 @@ class TestNotionCreatePage:
             parent_id="page_123",
             title="Test Page"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_parent_id(self):
         """Test that empty parent ID is rejected."""
@@ -31,7 +31,7 @@ class TestNotionCreatePage:
             parent_id="",
             title="Test Page"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_title(self):
         """Test that empty title is rejected."""
@@ -40,7 +40,7 @@ class TestNotionCreatePage:
             parent_id="page_123",
             title=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_successful_page_creation(self, mock_client):
@@ -60,8 +60,8 @@ class TestNotionCreatePage:
             title="Test Page"
         )
 
-        assert result["success"] is True
-        assert result["page_id"] == "page_456"
+        assert result["ok"] is True
+        assert result["data"]["page_id"] == "page_456"
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_unauthorized_error(self, mock_client):
@@ -77,8 +77,8 @@ class TestNotionCreatePage:
             title="Test Page"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 401
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
 
 
 class TestNotionGetPage:
@@ -90,7 +90,7 @@ class TestNotionGetPage:
             api_key="secret_test",
             page_id=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_successful_get(self, mock_client):
@@ -110,8 +110,8 @@ class TestNotionGetPage:
             page_id="page_123"
         )
 
-        assert result["success"] is True
-        assert result["page"]["id"] == "page_123"
+        assert result["ok"] is True
+        assert result["data"]["page"]["id"] == "page_123"
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_page_not_found(self, mock_client):
@@ -126,8 +126,8 @@ class TestNotionGetPage:
             page_id="page_999"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 404
+        assert result["ok"] is False
+        assert result["error_type"] == "execution_error"
 
 
 class TestNotionUpdatePage:
@@ -150,7 +150,7 @@ class TestNotionUpdatePage:
             properties={"Status": {"select": {"name": "Done"}}}
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_archive_page(self, mock_client):
@@ -166,7 +166,7 @@ class TestNotionUpdatePage:
             archived=True
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestNotionSearch:
@@ -191,8 +191,8 @@ class TestNotionSearch:
             query="test"
         )
 
-        assert result["success"] is True
-        assert len(result["results"]) == 2
+        assert result["ok"] is True
+        assert len(result["data"]["results"]) == 2
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_search_with_filter(self, mock_client):
@@ -208,7 +208,7 @@ class TestNotionSearch:
             filter_type="database"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestNotionQueryDatabase:
@@ -220,7 +220,7 @@ class TestNotionQueryDatabase:
             api_key="secret_test",
             database_id=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_successful_query(self, mock_client):
@@ -241,8 +241,8 @@ class TestNotionQueryDatabase:
             database_id="db_123"
         )
 
-        assert result["success"] is True
-        assert len(result["results"]) == 2
+        assert result["ok"] is True
+        assert len(result["data"]["results"]) == 2
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_query_with_sorts(self, mock_client):
@@ -258,7 +258,7 @@ class TestNotionQueryDatabase:
             sorts=[{"property": "Created", "direction": "descending"}]
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestNotionAppendBlocks:
@@ -271,7 +271,7 @@ class TestNotionAppendBlocks:
             page_id="page_123",
             blocks=[]
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
     def test_successful_append(self, mock_client):
@@ -289,4 +289,4 @@ class TestNotionAppendBlocks:
             blocks=[{"type": "paragraph", "paragraph": {"text": [{"type": "text", "text": {"content": "Test"}}]}}]
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True

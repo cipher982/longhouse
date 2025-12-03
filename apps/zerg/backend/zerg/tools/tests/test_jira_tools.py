@@ -25,7 +25,7 @@ class TestJiraCreateIssue:
             issue_type="Task",
             summary="Test Issue"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_email(self):
         """Test that empty email is rejected."""
@@ -37,7 +37,7 @@ class TestJiraCreateIssue:
             issue_type="Task",
             summary="Test Issue"
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     def test_empty_summary(self):
         """Test that empty summary is rejected."""
@@ -49,7 +49,7 @@ class TestJiraCreateIssue:
             issue_type="Task",
             summary=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_successful_issue_creation(self, mock_client):
@@ -73,8 +73,8 @@ class TestJiraCreateIssue:
             description="Test description"
         )
 
-        assert result["success"] is True
-        assert result["issue_key"] == "TEST-123"
+        assert result["ok"] is True
+        assert result["data"]["issue_key"] == "TEST-123"
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_unauthorized_error(self, mock_client):
@@ -94,8 +94,8 @@ class TestJiraCreateIssue:
             summary="Test Issue"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 401
+        assert result["ok"] is False
+        assert result["error_type"] == "invalid_credentials"
 
 
 class TestJiraListIssues:
@@ -122,8 +122,8 @@ class TestJiraListIssues:
             project_key="TEST"
         )
 
-        assert result["success"] is True
-        assert result["total"] == 2
+        assert result["ok"] is True
+        assert result["data"]["total"] == 2
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_list_with_jql(self, mock_client):
@@ -142,7 +142,7 @@ class TestJiraListIssues:
             jql="status = 'In Progress'"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
 
 class TestJiraGetIssue:
@@ -172,8 +172,8 @@ class TestJiraGetIssue:
             issue_key="TEST-123"
         )
 
-        assert result["success"] is True
-        assert result["issue"]["key"] == "TEST-123"
+        assert result["ok"] is True
+        assert result["data"]["issue"]["key"] == "TEST-123"
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_issue_not_found(self, mock_client):
@@ -191,8 +191,8 @@ class TestJiraGetIssue:
             issue_key="TEST-999"
         )
 
-        assert result["success"] is False
-        assert result["status_code"] == 404
+        assert result["ok"] is False
+        assert result["error_type"] == "execution_error"
 
 
 class TestJiraAddComment:
@@ -207,7 +207,7 @@ class TestJiraAddComment:
             issue_key="TEST-123",
             body=""
         )
-        assert result["success"] is False
+        assert result["ok"] is False
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_successful_comment(self, mock_client):
@@ -225,8 +225,8 @@ class TestJiraAddComment:
             body="This is a test comment"
         )
 
-        assert result["success"] is True
-        assert result["comment_id"] == "comment_123"
+        assert result["ok"] is True
+        assert result["data"]["comment_id"] == "comment_123"
 
 
 class TestJiraTransitionIssue:
@@ -247,7 +247,7 @@ class TestJiraTransitionIssue:
             transition_id="21"
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True
 
     @patch("zerg.tools.builtin.jira_tools.httpx.Client")
     def test_invalid_transition(self, mock_client):
@@ -265,7 +265,7 @@ class TestJiraTransitionIssue:
             transition_id="999"
         )
 
-        assert result["success"] is False
+        assert result["ok"] is False
 
 
 class TestJiraUpdateIssue:
@@ -286,4 +286,4 @@ class TestJiraUpdateIssue:
             fields={"summary": "Updated Summary"}
         )
 
-        assert result["success"] is True
+        assert result["ok"] is True

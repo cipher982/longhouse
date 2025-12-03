@@ -46,6 +46,7 @@ from zerg.database import initialize_database
 from zerg.routers.admin import router as admin_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
+from zerg.routers.oauth import router as oauth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
@@ -339,6 +340,7 @@ app.include_router(runs_router, prefix=f"{API_PREFIX}")
 app.include_router(workflows_router, prefix=f"{API_PREFIX}")
 app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
 app.include_router(auth_router, prefix=f"{API_PREFIX}")
+app.include_router(oauth_router, prefix=f"{API_PREFIX}")  # OAuth for third-party connectors
 app.include_router(users_router, prefix=f"{API_PREFIX}")
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
