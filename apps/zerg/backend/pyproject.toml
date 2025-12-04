@@ -34,6 +34,7 @@ dependencies = [
     "jsonschema>=4.23.0",
     "sse-starlette>=1.6.5",
     "langgraph-checkpoint-sqlite>=2.0.10",
+    "langgraph-checkpoint-postgres>=2.0.0",
     "simpleeval>=1.0.3",
     "psycopg2-binary>=2.9.0",
     "google-auth>=2.40.3",
