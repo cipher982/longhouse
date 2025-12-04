@@ -1,11 +1,39 @@
 """Tests for the SupervisorService - manages supervisor agent and thread lifecycle."""
 
+import tempfile
+
 import pytest
 
+from zerg.connectors.context import set_credential_resolver
+from zerg.connectors.resolver import CredentialResolver
+from zerg.models.models import AgentRun
+from zerg.models.enums import RunStatus
+from zerg.services.supervisor_context import (
+    get_supervisor_run_id,
+    set_supervisor_run_id,
+    reset_supervisor_run_id,
+)
 from zerg.services.supervisor_service import (
     SupervisorService,
     SUPERVISOR_THREAD_TYPE,
 )
+
+
+@pytest.fixture
+def temp_artifact_path(monkeypatch):
+    """Create temporary artifact store path and set environment variable."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
+        yield tmpdir
+
+
+@pytest.fixture
+def credential_context(db_session, test_user):
+    """Set up credential resolver context for tools."""
+    resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
+    token = set_credential_resolver(resolver)
+    yield resolver
+    set_credential_resolver(None)
 
 
 class TestSupervisorService:
@@ -120,3 +148,105 @@ class TestSupervisorService:
         # Verify agent was created
         agent = service.get_or_create_supervisor_agent(test_user.id)
         assert thread.agent_id == agent.id
+
+
+class TestSupervisorContext:
+    """Tests for supervisor context (run_id threading)."""
+
+    def test_supervisor_context_default_is_none(self):
+        """Test that supervisor context defaults to None."""
+        assert get_supervisor_run_id() is None
+
+    def test_supervisor_context_set_and_get(self):
+        """Test setting and getting supervisor run_id."""
+        token = set_supervisor_run_id(123)
+        try:
+            assert get_supervisor_run_id() == 123
+        finally:
+            reset_supervisor_run_id(token)
+
+        # After reset, should be back to default
+        assert get_supervisor_run_id() is None
+
+    def test_supervisor_context_reset_restores_previous(self):
+        """Test that reset restores previous value."""
+        # Set first value
+        token1 = set_supervisor_run_id(100)
+        assert get_supervisor_run_id() == 100
+
+        # Set second value
+        token2 = set_supervisor_run_id(200)
+        assert get_supervisor_run_id() == 200
+
+        # Reset second - should restore first
+        reset_supervisor_run_id(token2)
+        assert get_supervisor_run_id() == 100
+
+        # Reset first - should restore None
+        reset_supervisor_run_id(token1)
+        assert get_supervisor_run_id() is None
+
+
+class TestWorkerSupervisorCorrelation:
+    """Tests for worker-supervisor correlation via run_id."""
+
+    def test_spawn_worker_stores_supervisor_run_id(
+        self, db_session, test_user, credential_context, temp_artifact_path
+    ):
+        """Test that spawn_worker stores supervisor_run_id from context."""
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.models.models import WorkerJob
+        from tests.conftest import TEST_WORKER_MODEL
+
+        # Create a real supervisor agent and run for FK constraint
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Create a run
+        from zerg.models.enums import RunTrigger
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Set supervisor context with real run_id
+        token = set_supervisor_run_id(run.id)
+        try:
+            result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
+            assert "queued successfully" in result
+
+            # Find the created job
+            job = db_session.query(WorkerJob).filter(
+                WorkerJob.task == "Test task"
+            ).first()
+            assert job is not None
+            assert job.supervisor_run_id == run.id
+        finally:
+            reset_supervisor_run_id(token)
+
+    def test_spawn_worker_without_context_has_null_supervisor_run_id(
+        self, db_session, test_user, credential_context, temp_artifact_path
+    ):
+        """Test that spawn_worker without context sets supervisor_run_id to None."""
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
+        from zerg.models.models import WorkerJob
+        from tests.conftest import TEST_WORKER_MODEL
+
+        # Ensure no supervisor context
+        assert get_supervisor_run_id() is None
+
+        result = spawn_worker(task="Standalone task", model=TEST_WORKER_MODEL)
+        assert "queued successfully" in result
+
+        # Find the created job
+        job = db_session.query(WorkerJob).filter(
+            WorkerJob.task == "Standalone task"
+        ).first()
+        assert job is not None
+        assert job.supervisor_run_id is None

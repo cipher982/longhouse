@@ -511,11 +511,13 @@ async def jarvis_supervisor(
     # Create run record (marks as running)
     from zerg.models.enums import RunStatus
 
+    from zerg.models.enums import RunTrigger
+
     run = AgentRun(
         agent_id=agent.id,
         thread_id=thread.id,
         status=RunStatus.RUNNING,
-        trigger_type="jarvis",
+        trigger=RunTrigger.API,
     )
     db.add(run)
     db.commit()
