@@ -701,6 +701,9 @@ class WorkerJob(Base):
     # Job ownership and security
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
+    # Supervisor correlation - links worker to supervisor run for SSE event streaming
+    supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True, index=True)
+
     # Job specification
     task = Column(Text, nullable=False)
     model = Column(String(100), nullable=False, default="gpt-5-mini")

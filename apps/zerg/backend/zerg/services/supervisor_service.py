@@ -165,13 +165,14 @@ class SupervisorService:
         self,
         owner_id: int,
         task: str,
+        run_id: int | None = None,
         timeout: int = 60,
     ) -> SupervisorRunResult:
         """Run the supervisor agent with a task.
 
         This method:
         1. Gets or creates the supervisor thread for the user
-        2. Creates a new run record
+        2. Uses existing run record OR creates a new one
         3. Adds the task as a user message
         4. Runs the supervisor agent
         5. Returns the result
@@ -179,6 +180,7 @@ class SupervisorService:
         Args:
             owner_id: User ID
             task: The task/question from the user
+            run_id: Optional existing run ID (avoids duplicate run creation)
             timeout: Maximum execution time in seconds
 
         Returns:
@@ -190,16 +192,24 @@ class SupervisorService:
         agent = self.get_or_create_supervisor_agent(owner_id)
         thread = self.get_or_create_supervisor_thread(owner_id, agent)
 
-        # Create run record
-        run = AgentRun(
-            agent_id=agent.id,
-            thread_id=thread.id,
-            status=RunStatus.RUNNING,
-            trigger_type="jarvis",
-        )
-        self.db.add(run)
-        self.db.commit()
-        self.db.refresh(run)
+        # Use existing run or create new one
+        if run_id:
+            run = self.db.query(AgentRun).filter(AgentRun.id == run_id).first()
+            if not run:
+                raise ValueError(f"Run {run_id} not found")
+            logger.info(f"Using existing supervisor run {run.id}")
+        else:
+            # Create run record (fallback for direct calls)
+            run = AgentRun(
+                agent_id=agent.id,
+                thread_id=thread.id,
+                status=RunStatus.RUNNING,
+                trigger_type="jarvis",
+            )
+            self.db.add(run)
+            self.db.commit()
+            self.db.refresh(run)
+            logger.info(f"Created new supervisor run {run.id}")
 
         logger.info(
             f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}..."
@@ -237,6 +247,13 @@ class SupervisorService:
                 },
             )
 
+            # Set supervisor run context so spawn_worker can correlate workers
+            from zerg.services.supervisor_context import (
+                set_supervisor_run_id,
+                reset_supervisor_run_id,
+            )
+            _supervisor_ctx_token = set_supervisor_run_id(run.id)
+
             # Run the agent with timeout
             runner = AgentRunner(agent)
             try:
@@ -246,6 +263,9 @@ class SupervisorService:
                 )
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Supervisor execution timed out after {timeout}s")
+            finally:
+                # Always reset context even on timeout
+                reset_supervisor_run_id(_supervisor_ctx_token)
 
             # Extract final result (last assistant message)
             result_text = None

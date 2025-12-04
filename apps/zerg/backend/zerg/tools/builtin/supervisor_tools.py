@@ -46,6 +46,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
     from zerg.crud import crud
     from zerg.events import EventType, event_bus
     from zerg.models.models import WorkerJob
+    from zerg.services.supervisor_context import get_supervisor_run_id
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -55,6 +56,9 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
     db = resolver.db
     owner_id = resolver.owner_id
 
+    # Get supervisor run_id from context (for SSE event correlation)
+    supervisor_run_id = get_supervisor_run_id()
+
     # Use default worker model if not specified
     worker_model = model or DEFAULT_WORKER_MODEL_ID
 
@@ -62,6 +66,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
     try:
         worker_job = WorkerJob(
             owner_id=owner_id,
+            supervisor_run_id=supervisor_run_id,  # Correlate with supervisor run
             task=task,
             model=worker_model,
             status="queued"
@@ -71,6 +76,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
         db.refresh(worker_job)
 
         # Emit WORKER_SPAWNED event for SSE streaming
+        # Include supervisor_run_id so SSE filter can pass it through
         await event_bus.publish(
             EventType.WORKER_SPAWNED,
             {
@@ -78,6 +84,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
                 "task": task[:100],
                 "model": worker_model,
                 "owner_id": owner_id,
+                "run_id": supervisor_run_id,  # For SSE correlation
             },
         )
 
