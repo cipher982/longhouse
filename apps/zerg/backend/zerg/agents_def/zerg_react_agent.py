@@ -15,7 +15,6 @@ from langchain_core.messages import ToolMessage
 
 # External dependencies
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.func import entrypoint
 from langgraph.graph.message import add_messages
 
@@ -129,8 +128,16 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # NOTE: DO NOT create llm_with_tools here - it must be created at invocation time
     # to respect the enable_token_stream flag which can change at runtime
 
-    # Create a simple memory saver for persistence
-    checkpointer = MemorySaver()
+    # ------------------------------------------------------------------
+    # CHECKPOINTER SELECTION – Production vs Test/Dev
+    # ------------------------------------------------------------------
+    # Use PostgresSaver for production (durable checkpoints that survive restarts)
+    # Use MemorySaver for SQLite/tests (fast in-memory checkpoints)
+    # The factory inspects the database URL and returns the appropriate implementation.
+    # ------------------------------------------------------------------
+    from zerg.services.checkpointer import get_checkpointer
+
+    checkpointer = get_checkpointer()
 
     # --- Define Tasks ---
     # ------------------------------------------------------------------
@@ -282,11 +289,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # ------------------------------------------------------------------
 
     def _agent_executor_sync(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None, enable_token_stream: bool = False):
-        """Blocking wrapper that delegates to the async implementation."""
+        """Blocking wrapper that delegates to the async implementation using shared runner."""
 
-        import asyncio
+        from zerg.utils.async_runner import run_in_shared_loop
 
-        return asyncio.run(_agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream))
+        return run_in_shared_loop(_agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream))
 
     # ------------------------------------------------------------------
     # Expose BOTH sync & async entrypoints to LangGraph

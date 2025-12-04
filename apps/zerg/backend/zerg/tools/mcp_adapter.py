@@ -25,7 +25,6 @@ See `docs/mcp_integration_requirements.md` for the end-to-end design.
 import asyncio
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 from typing import Callable
@@ -353,28 +352,12 @@ class MCPManager:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
                 cls._instance._adapters: Dict[Tuple[str, str], MCPToolAdapter] = {}
-                cls._instance._loop: Optional[asyncio.AbstractEventLoop] = None
-                cls._instance._thread: Optional[threading.Thread] = None
-                cls._instance._executor = ThreadPoolExecutor(max_workers=1)
         return cls._instance
 
-    def _ensure_event_loop(self):
-        """Ensure we have a running event loop for MCP operations."""
-        if self._loop is None or not self._loop.is_running():
-            self._loop = asyncio.new_event_loop()
-
-            def run_loop():
-                asyncio.set_event_loop(self._loop)
-                self._loop.run_forever()
-
-            self._thread = threading.Thread(target=run_loop, daemon=True)
-            self._thread.start()
-
     def run_in_loop(self, coro):
-        """Run a coroutine in the MCP event loop."""
-        self._ensure_event_loop()
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result()
+        """Run a coroutine using the shared async runner."""
+        from zerg.utils.async_runner import run_in_shared_loop
+        return run_in_shared_loop(coro)
 
     def _is_encrypted_token(self, token: str) -> bool:
         """Check if a token appears to be encrypted (Fernet format)."""
@@ -511,12 +494,6 @@ class MCPManager:
         except ImportError:  # pragma: no cover – missing optional file
             return {}
 
-    def __del__(self):
-        """Cleanup when the manager is destroyed."""
-        if hasattr(self, "_loop") and self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-        if hasattr(self, "_executor"):
-            self._executor.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------

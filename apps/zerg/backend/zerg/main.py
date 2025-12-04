@@ -162,6 +162,10 @@ async def lifespan(app: FastAPI):
             if recovery_result["recovered_agents"]:
                 logger.info(f"Recovered {len(recovery_result['recovered_agents'])} stuck agents during startup")
 
+        # Start shared async runner
+        from zerg.utils.async_runner import get_shared_runner
+        get_shared_runner().start()
+
         # Start core background services
         if not _settings.testing:
             await scheduler_service.start()
@@ -171,6 +175,10 @@ async def lifespan(app: FastAPI):
             from zerg.services.watch_renewal_service import watch_renewal_service
 
             await watch_renewal_service.start()
+
+            # Start worker job processor (uses singleton)
+            from zerg.services.worker_job_processor import worker_job_processor
+            await worker_job_processor.start()
 
         logger.info("Background services initialised (scheduler + email triggers + watch renewal + websocket)")
     except Exception as e:
@@ -189,6 +197,14 @@ async def lifespan(app: FastAPI):
             from zerg.services.watch_renewal_service import watch_renewal_service
 
             await watch_renewal_service.stop()
+
+            # Stop worker job processor (uses singleton)
+            from zerg.services.worker_job_processor import worker_job_processor
+            await worker_job_processor.stop()
+
+        # Stop shared async runner
+        from zerg.utils.async_runner import get_shared_runner
+        get_shared_runner().stop()
 
         # Shutdown websocket manager
         from zerg.websocket.manager import topic_manager

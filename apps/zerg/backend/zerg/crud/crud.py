@@ -27,6 +27,7 @@ from zerg.models.models import Connector
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.models.models import Trigger
+from zerg.models.models import WorkerJob
 
 # Added for authentication
 # NOTE: For return type hints we avoid the newer *PEP 604* union syntax
