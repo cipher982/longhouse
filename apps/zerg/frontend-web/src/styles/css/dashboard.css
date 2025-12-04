@@ -64,49 +64,43 @@
 
 .agents-table {
   width: 100%;
-  border-collapse: separate;
+  border-collapse: collapse;
   border-spacing: 0;
   color: var(--color-text-primary);
   margin-top: var(--space-4);
+  font-size: 13px;
 }
 
 .agents-table th,
 .agents-table td {
-  padding: var(--space-3) var(--space-4);
+  padding: 8px 12px;
   text-align: left;
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-snug);
+  line-height: 1.4;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .agents-table th {
-  font-weight: 500;
-  font-size: var(--font-size-xs);
+  font-weight: 600;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-muted);
-  border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-surface-secondary);
   position: sticky;
   top: 0;
   z-index: 1;
-}
-
-.agents-table th:first-child {
-  border-radius: var(--radius-lg) 0 0 0;
-}
-
-.agents-table th:last-child {
-  border-radius: 0 var(--radius-lg) 0 0;
+  height: 32px;
 }
 
 .agents-table td {
   color: var(--color-text-primary);
-  border-bottom: 1px solid var(--color-border-muted);
+  vertical-align: middle;
 }
 
 .agents-table tr.agent-row {
   cursor: pointer;
-  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  transition: background-color 0.1s ease;
+  height: 48px;
 }
 
 .agents-table tr.agent-row:hover {
@@ -115,14 +109,6 @@
 
 .agents-table tr.agent-row:last-child td {
   border-bottom: none;
-}
-
-.agents-table tr.agent-row:last-child td:first-child {
-  border-radius: 0 0 0 var(--radius-lg);
-}
-
-.agents-table tr.agent-row:last-child td:last-child {
-  border-radius: 0 0 var(--radius-lg) 0;
 }
 
 .owner-cell { text-align: center; vertical-align: middle; }
@@ -391,9 +377,11 @@
 .agents-table th.actions-header {
   position: sticky;
   right: 0;
-  background: var(--color-surface-card);
-  box-shadow: -2px 0 5px rgba(0,0,0,0.2);
-  min-width: var(--actions-column-width);
+  background: var(--color-surface-secondary);
+  box-shadow: -1px 0 0 var(--color-border-subtle);
+  width: 140px;
+  text-align: right;
+  padding-right: 16px;
   z-index: 2;
 }
 
@@ -402,46 +390,37 @@
   text-align: right;
   position: sticky;
   right: 0;
-  background: var(--dark-lighter);
-  box-shadow: -2px 0 5px rgba(0,0,0,0.2);
-  min-width: var(--actions-column-width);
+  background: inherit;
+  box-shadow: -1px 0 0 var(--color-border-subtle);
+  width: 140px;
   vertical-align: middle;
+  padding-right: 16px;
 }
 
-.actions-cell-inner { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--spacing-xs); }
-
-/* Generic card + action rows reused across dashboard */
-.card {
-  padding: var(--spacing-sm);
-  border: 1px solid var(--color-border-subtle);
-  margin-top: var(--spacing-sm);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-card);
+.actions-cell-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
-
-.actions-row { display: flex; gap: 8px; margin-top: var(--spacing-sm); }
-
-/* -------------------------------------------------------------
-   Action buttons inside the Agents table
-   ------------------------------------------------------------- */
 
 .action-btn {
   background: transparent;
   border: 1px solid transparent;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  border-radius: var(--radius-md);
+  border-radius: 4px;
   color: var(--color-text-secondary);
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition: all 0.1s ease;
 }
 
 .action-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .action-btn:hover {
