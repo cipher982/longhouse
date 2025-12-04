@@ -73,21 +73,37 @@
 #canvas-input-panel {
   display: flex;
   align-items: center;
-  padding: var(--spacing-md);
-  background: var(--dark-card);
+  padding: 8px 16px;
+  background: rgba(39, 39, 42, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-border-subtle);
   z-index: 5;
   gap: var(--spacing-sm);
   flex-shrink: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 
 /* Chat / command input within panel */
 #user-input {
-  width: 300px;
-  padding: 8px;
-  margin-right: 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid #ccc;
+  flex: 1;
+  max-width: 400px;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-surface-overlay);
+  color: var(--text);
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+#user-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: var(--color-surface-elevated);
 }
 
 #send-button { background-color: var(--success); }
@@ -107,10 +123,12 @@
 #clear-button { background-color: var(--error); }
 
 #model-select {
-  padding: 8px;
-  margin-left: 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid #ccc;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-surface-overlay);
+  color: var(--text);
+  font-size: 13px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,8 +139,8 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  height: 40px;
-  background: var(--dark-card);
+  height: 48px;
+  background: rgba(24, 24, 27, 0.9);
   border-bottom: 1px solid var(--color-border-subtle);
   padding: 0 var(--spacing-md);
   overflow-x: auto;
@@ -137,14 +155,14 @@
   margin: 0;
   padding: 0;
   align-items: center;
-  gap: var(--spacing-xs);
+  gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
 }
 
 .workflow-tab-list .tab {
-  padding: var(--spacing-sm) var(--spacing-md);
-  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
   font-size: 13px;
@@ -152,9 +170,9 @@
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
-  transition: all var(--transition-fast);
+  transition: all 0.1s ease;
   white-space: nowrap;
-  min-height: 28px;
+  min-height: 32px;
   display: flex;
   align-items: center;
 }
@@ -165,9 +183,10 @@
 }
 
 .workflow-tab-list .tab.active {
-  background: var(--bg-button);
+  background: var(--color-surface-elevated);
   color: var(--text);
-  border-color: var(--color-border-subtle);
+  border-color: var(--color-border-muted);
+  box-shadow: var(--shadow-sm);
 }
 
 .workflow-tab-list .plus-tab {
@@ -179,7 +198,7 @@
 }
 
 .workflow-tab-list .plus-tab:hover {
-  background: rgba(100, 255, 218, 0.1);
+  background: rgba(99, 102, 241, 0.1);
   color: var(--primary);
 }
 
@@ -192,36 +211,33 @@ body.space-pan #node-canvas {
 .toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   margin-left: auto;
 }
 
 .toolbar-btn {
   background: transparent;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 4px;
-  padding: 0 6px;
-  font: 500 15px/1 system-ui, sans-serif;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.1s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  min-width: 28px;
-  position: relative;
+  height: 32px;
+  min-width: 32px;
 }
 
 .toolbar-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-surface-overlay);
   color: var(--text);
-  border-color: rgba(100, 255, 218, 0.3);
-  transform: translateY(-1px);
+  border-color: var(--color-border-muted);
 }
 
 .toolbar-btn:active {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-surface-elevated);
   transform: translateY(0);
 }
 
