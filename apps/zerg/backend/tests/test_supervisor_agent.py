@@ -208,7 +208,7 @@ class TestSupervisorDelegation:
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = read_worker_result(worker_id="test-worker-123")
+        result = read_worker_result(job_id="999")
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 

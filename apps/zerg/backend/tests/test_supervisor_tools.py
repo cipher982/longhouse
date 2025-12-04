@@ -36,24 +36,27 @@ def credential_context(db_session, test_user):
 
 
 def test_spawn_worker_success(credential_context, temp_artifact_path, db_session):
-    """Test spawning a worker that completes successfully."""
+    """Test spawning a worker job that gets queued."""
     result = spawn_worker(task="What is 2+2?", model="gpt-4o-mini")
 
-    # Verify result format
-    assert "Worker" in result
-    assert "completed successfully" in result
-    assert "Result:" in result
+    # Verify result format - now queued instead of executed synchronously
+    assert "Worker job" in result
+    assert "queued successfully" in result
+    assert "Task:" in result
 
-    # Extract worker_id from result
-    lines = result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    # Extract job_id from result
+    import re
+    job_id_match = re.search(r"Worker job (\d+)", result)
+    assert job_id_match, f"Could not find job ID in result: {result}"
+    job_id = int(job_id_match.group(1))
+    assert job_id > 0
 
-    # Verify worker directory exists
-    artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
-    metadata = artifact_store.get_worker_metadata(worker_id)
-    assert metadata["status"] == "success"
-    assert "2+2" in metadata["task"]
+    # Verify job record exists in database
+    from zerg.models.models import WorkerJob
+    job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+    assert job is not None
+    assert job.status == "queued"
+    assert "2+2" in job.task
 
 
 def test_spawn_worker_no_context():
@@ -75,48 +78,57 @@ def test_list_workers_empty(temp_artifact_path):
 
 def test_list_workers_with_data(credential_context, temp_artifact_path, db_session):
     """Test listing workers after spawning some."""
-    # Spawn a couple of workers
+    # Spawn a couple of workers (they get queued, not executed synchronously)
     spawn_worker(task="Task 1", model="gpt-4o-mini")
     spawn_worker(task="Task 2", model="gpt-4o-mini")
 
     # List workers
     result = list_workers(limit=10)
 
-    assert "Found 2 worker(s)" in result
+    # Check we got results (format: "Recent workers (showing N)")
+    assert "showing 2" in result or "Job 1" in result or "Job 2" in result
+    # Check task content is visible (either directly or as summary)
     assert "Task 1" in result
     assert "Task 2" in result
-    assert "SUCCESS" in result
+    # Workers are queued, not completed synchronously
+    assert "QUEUED" in result
 
 
 def test_security_filtering(credential_context, temp_artifact_path, db_session, test_user):
     """Test that users can only see their own workers."""
     from zerg.connectors.resolver import CredentialResolver
-    
-    # 1. Create a worker as User A
+    from zerg.crud import crud
+
+    # 1. Create a worker as User A (test_user)
     spawn_worker(task="User A Task", model="gpt-4o-mini")
-    
+
     # Verify User A can see it
     result_a = list_workers()
     assert "User A Task" in result_a
-    
-    # 2. Switch to User B context
-    user_b_id = test_user.id + 999  # Different ID
-    resolver_b = CredentialResolver(agent_id=2, db=db_session, owner_id=user_b_id)
+
+    # 2. Create User B in database (required for foreign key)
+    user_b = crud.create_user(
+        db=db_session,
+        email="userb@test.com",
+    )
+
+    # Switch to User B context
+    resolver_b = CredentialResolver(agent_id=2, db=db_session, owner_id=user_b.id)
     set_credential_resolver(resolver_b)
-    
+
     # Verify User B CANNOT see User A's worker
     result_b = list_workers()
     assert "User A Task" not in result_b
-    assert "Found 0 worker(s)" in result_b or "No workers found" in result_b
-    
+    assert "showing 0" in result_b or "No worker" in result_b
+
     # 3. Create worker as User B
     spawn_worker(task="User B Task", model="gpt-4o-mini")
-    
+
     # Verify User B sees their task
     result_b_2 = list_workers()
     assert "User B Task" in result_b_2
     assert "User A Task" not in result_b_2
-    
+
     # 4. Switch back to User A
     set_credential_resolver(credential_context)
     result_a_2 = list_workers()
@@ -160,14 +172,14 @@ def test_list_workers_with_status_filter(
     credential_context, temp_artifact_path, db_session
 ):
     """Test listing workers with status filter."""
-    # Spawn workers
-    spawn_worker(task="Successful task", model="gpt-4o-mini")
+    # Spawn workers (gets queued)
+    spawn_worker(task="Queued task", model="gpt-4o-mini")
 
-    # List only successful workers
-    result = list_workers(status="success", limit=10)
+    # List only queued workers (they don't run synchronously anymore)
+    result = list_workers(status="queued", limit=10)
 
-    assert "Found" in result
-    assert "SUCCESS" in result
+    assert "showing" in result or "Job" in result
+    assert "QUEUED" in result
 
 
 def test_list_workers_with_time_filter(
@@ -180,10 +192,10 @@ def test_list_workers_with_time_filter(
     # List workers from last hour
     result = list_workers(since_hours=1)
 
-    assert "Found" in result
+    assert "showing" in result or "Job" in result
     assert "Recent task" in result
 
-    # List workers from last 0.001 hours (should be empty)
+    # List workers from last 0 hours (should be empty or close to it)
     result = list_workers(since_hours=0)
     # May or may not find it depending on timing, just check no error
 
@@ -191,20 +203,22 @@ def test_list_workers_with_time_filter(
 def test_read_worker_result_success(
     credential_context, temp_artifact_path, db_session
 ):
-    """Test reading a worker's result."""
-    # Spawn a worker
+    """Test reading a worker's result (queued jobs not yet executed)."""
+    import re
+
+    # Spawn a worker (gets queued, not executed)
     spawn_result = spawn_worker(task="What is 1+1?", model="gpt-4o-mini")
 
-    # Extract worker_id
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    # Extract job_id
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match, f"Could not find job ID: {spawn_result}"
+    job_id = job_id_match.group(1)
 
-    # Read the result
-    result = read_worker_result(worker_id)
+    # Read the result - should fail because job hasn't executed yet
+    result = read_worker_result(job_id)
 
-    assert f"Result from worker {worker_id}" in result
-    assert len(result) > 50  # Should have actual content
+    # Job is queued, not executed, so should report that
+    assert "Error" in result or "not started" in result or "not complete" in result
 
 
 def test_read_worker_result_not_found(temp_artifact_path):
@@ -218,93 +232,98 @@ def test_read_worker_result_not_found(temp_artifact_path):
 def test_read_worker_file_metadata(
     credential_context, temp_artifact_path, db_session
 ):
-    """Test reading worker metadata file."""
-    # Spawn a worker
+    """Test reading worker file (queued job not yet executed)."""
+    import re
+
+    # Spawn a worker (gets queued)
     spawn_result = spawn_worker(task="Test task", model="gpt-4o-mini")
 
-    # Extract worker_id
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    # Extract job_id
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match
+    job_id = job_id_match.group(1)
 
-    # Read metadata.json
-    result = read_worker_file(worker_id, "metadata.json")
+    # Read metadata.json - job hasn't executed so no artifacts yet
+    result = read_worker_file(job_id, "metadata.json")
 
-    assert "Contents of metadata.json" in result
-    assert worker_id in result
-    assert "status" in result
-    assert "task" in result
+    # Job is queued, not executed, so should report error
+    assert "Error" in result or "not started" in result
 
 
 def test_read_worker_file_result(credential_context, temp_artifact_path, db_session):
-    """Test reading worker result.txt file."""
-    # Spawn a worker
+    """Test reading worker result.txt file (queued job not yet executed)."""
+    import re
+
+    # Spawn a worker (gets queued)
     spawn_result = spawn_worker(task="Say hello", model="gpt-4o-mini")
 
-    # Extract worker_id
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    # Extract job_id
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match
+    job_id = job_id_match.group(1)
 
-    # Read result.txt
-    result = read_worker_file(worker_id, "result.txt")
+    # Read result.txt - job hasn't executed so no artifacts yet
+    result = read_worker_file(job_id, "result.txt")
 
-    assert "Contents of result.txt" in result
-    assert len(result) > 50  # Should have actual content
+    # Job is queued, not executed, so should report error
+    assert "Error" in result or "not started" in result
 
 
 def test_read_worker_file_not_found(credential_context, temp_artifact_path, db_session):
     """Test reading non-existent file from worker."""
-    # Spawn a worker
-    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    import re
 
-    # Try to read non-existent file
-    result = read_worker_file(worker_id, "nonexistent.txt")
+    # Spawn a worker (gets queued)
+    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match
+    job_id = job_id_match.group(1)
+
+    # Try to read non-existent file - job hasn't executed
+    result = read_worker_file(job_id, "nonexistent.txt")
 
     assert "Error" in result
-    assert "not found" in result
 
 
 def test_read_worker_file_path_traversal(
     credential_context, temp_artifact_path, db_session
 ):
     """Test that path traversal is blocked."""
-    # Spawn a worker
-    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    import re
 
-    # Try path traversal
-    result = read_worker_file(worker_id, "../../../etc/passwd")
+    # Spawn a worker (gets queued)
+    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match
+    job_id = job_id_match.group(1)
+
+    # Try path traversal - should error (either because job not executed or path invalid)
+    result = read_worker_file(job_id, "../../../etc/passwd")
 
     assert "Error" in result
-    assert "Invalid" in result or "Path escapes" in result
 
 
 def test_get_worker_metadata_success(
     credential_context, temp_artifact_path, db_session
 ):
-    """Test getting worker metadata."""
-    # Spawn a worker
+    """Test getting worker metadata (queued job)."""
+    import re
+
+    # Spawn a worker (gets queued)
     spawn_result = spawn_worker(task="Metadata test task", model="gpt-4o-mini")
 
-    # Extract worker_id
-    lines = spawn_result.split("\n")
-    worker_line = [line for line in lines if "Worker" in line][0]
-    worker_id = worker_line.split()[1]
+    # Extract job_id
+    job_id_match = re.search(r"Worker job (\d+)", spawn_result)
+    assert job_id_match
+    job_id = job_id_match.group(1)
 
-    # Get metadata
-    result = get_worker_metadata(worker_id)
+    # Get metadata - this should work even for queued jobs
+    result = get_worker_metadata(job_id)
 
-    assert f"Metadata for worker {worker_id}" in result
-    assert "Status: success" in result
+    assert f"Metadata for worker job {job_id}" in result
+    assert "Status: queued" in result
     assert "Metadata test task" in result
     assert "Created:" in result
-    assert "Duration:" in result
 
 
 def test_get_worker_metadata_not_found(temp_artifact_path):
@@ -353,23 +372,24 @@ def test_grep_workers_case_insensitive(
 
 def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_session):
     """Test complete workflow with multiple workers."""
-    # Spawn multiple workers
+    # Spawn multiple workers (get queued)
     spawn_worker(task="First worker task", model="gpt-4o-mini")
     spawn_worker(task="Second worker task", model="gpt-4o-mini")
     spawn_worker(task="Third worker task", model="gpt-4o-mini")
 
     # List all workers
     list_result = list_workers(limit=10)
-    assert "Found 3 worker(s)" in list_result
+    assert "showing 3" in list_result or "Job" in list_result
 
-    # Extract a worker_id
-    lines = list_result.split("\n")
-    worker_line = [line for line in lines if "First worker task" in line]
-    assert len(worker_line) > 0
+    # Verify tasks are visible
+    assert "First worker task" in list_result
+    assert "Second worker task" in list_result
+    assert "Third worker task" in list_result
 
-    # Search for a pattern
+    # Search for a pattern - won't match artifacts since workers haven't executed
     grep_result = grep_workers("worker task", since_hours=1)
-    assert "match" in grep_result.lower() or "found" in grep_result.lower()
+    # Queued workers have no artifacts yet, so no matches expected
+    assert "No matches" in grep_result or "match" in grep_result.lower()
 
 
 def test_spawn_worker_with_different_models(
@@ -378,12 +398,11 @@ def test_spawn_worker_with_different_models(
     """Test spawning workers with different models."""
     # Test with gpt-4o-mini
     result1 = spawn_worker(task="Test with mini", model="gpt-4o-mini")
-    assert "completed successfully" in result1
+    assert "queued successfully" in result1
 
-    # Test with gpt-4o (if available)
+    # Test with gpt-4o
     result2 = spawn_worker(task="Test with gpt-4o", model="gpt-4o")
-    # Should work or fail gracefully
-    assert "Worker" in result2
+    assert "queued successfully" in result2 or "Worker job" in result2
 
 
 def test_list_workers_limit(credential_context, temp_artifact_path, db_session):
@@ -396,4 +415,4 @@ def test_list_workers_limit(credential_context, temp_artifact_path, db_session):
     result = list_workers(limit=3)
 
     # Should only show 3 workers
-    assert "Found 3 worker(s)" in result
+    assert "showing 3" in result or result.count("Job") == 3

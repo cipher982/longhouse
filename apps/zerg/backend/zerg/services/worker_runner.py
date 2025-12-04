@@ -17,6 +17,8 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 
+from openai import AsyncOpenAI
+
 from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import ToolMessage
@@ -43,7 +45,9 @@ class WorkerResult:
     status
         Final status: "success", "failed", "timeout"
     result
-        Natural language result from the agent
+        Natural language result from the agent (full text)
+    summary
+        Compressed summary (~150 chars) for context efficiency
     error
         Error message if status is "failed"
     duration_ms
@@ -53,6 +57,7 @@ class WorkerResult:
     worker_id: str
     status: str
     result: str
+    summary: str = ""
     error: str | None = None
     duration_ms: int = 0
 
@@ -184,8 +189,13 @@ class WorkerRunner:
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            # Mark worker complete
+            # Mark worker complete (system status - BEFORE summary extraction)
             self.artifact_store.complete_worker(worker_id, status="success")
+
+            # Extract summary (post-completion, safe to fail)
+            result_for_summary = result_text or "(No result generated)"
+            summary, summary_meta = await self._extract_summary(task, result_for_summary)
+            self.artifact_store.update_summary(worker_id, summary, summary_meta)
 
             # Clean up temporary agent if created
             if temp_agent:
@@ -198,6 +208,7 @@ class WorkerRunner:
                 worker_id=worker_id,
                 status="success",
                 result=result_text or "",
+                summary=summary,
                 duration_ms=duration_ms,
             )
 
@@ -370,6 +381,71 @@ class WorkerRunner:
                     return content.strip()
 
         return None
+
+    async def _extract_summary(
+        self, task: str, result: str
+    ) -> tuple[str, dict[str, Any]]:
+        """Extract compressed summary for context efficiency.
+
+        Uses LLM to generate a concise summary focusing on outcomes.
+        Falls back to truncation if LLM fails.
+
+        Parameters
+        ----------
+        task
+            Original task description
+        result
+            Full result text from the worker
+
+        Returns
+        -------
+        tuple[str, dict]
+            (summary, summary_meta) tuple
+        """
+        SUMMARY_VERSION = 1
+        MAX_CHARS = 150
+
+        try:
+            # LLM extraction
+            prompt = f"""Task: {task}
+Result: {result[:1000]}
+
+Provide a {MAX_CHARS}-character summary focusing on outcomes, not actions.
+Be factual and concise. Do NOT add status judgments.
+
+Example: "Backup completed 157GB in 17s, no errors found"
+"""
+            client = AsyncOpenAI()
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=50,
+                ),
+                timeout=5.0,
+            )
+
+            summary = response.choices[0].message.content.strip()
+            if len(summary) > MAX_CHARS:
+                summary = summary[: MAX_CHARS - 3] + "..."
+
+            return summary, {
+                "version": SUMMARY_VERSION,
+                "model": "gpt-4o-mini",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+        except Exception as e:
+            # Fallback: truncation
+            logger.warning(f"Summary extraction failed: {e}")
+            summary = result[: MAX_CHARS - 3] + "..." if len(result) > MAX_CHARS else result
+
+            return summary, {
+                "version": SUMMARY_VERSION,
+                "model": "truncation-fallback",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(e),
+            }
 
 
 __all__ = ["WorkerRunner", "WorkerResult"]
