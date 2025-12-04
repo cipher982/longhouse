@@ -24,7 +24,7 @@ from zerg.services.worker_artifact_store import WorkerArtifactStore
 logger = logging.getLogger(__name__)
 
 
-def spawn_worker(task: str, model: str = "gpt-4o-mini") -> str:
+async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
     """Spawn a worker agent to execute a task.
 
     The worker runs independently, persists all outputs to disk, and returns
@@ -36,15 +36,14 @@ def spawn_worker(task: str, model: str = "gpt-4o-mini") -> str:
         model: LLM model for the worker (default: gpt-4o-mini)
 
     Returns:
-        A summary containing the worker_id and the worker's result
+        A summary indicating the job has been queued
 
     Example:
         spawn_worker("Check disk usage on cube server via SSH")
         spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-4o")
     """
-    # Lazy import to avoid circular dependency
-    from zerg.services.worker_runner import WorkerRunner
-    from zerg.utils.async_utils import run_async_safely
+    from zerg.crud import crud
+    from zerg.models.models import WorkerJob
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -54,42 +53,121 @@ def spawn_worker(task: str, model: str = "gpt-4o-mini") -> str:
     db = resolver.db
     owner_id = resolver.owner_id
 
-    # Create runner and store
-    artifact_store = WorkerArtifactStore()
-    runner = WorkerRunner(artifact_store=artifact_store)
-
-    # Run worker (safely handling async context)
+    # Create worker job record
     try:
-        # Use run_async_safely to handle both sync and async contexts
-        result = run_async_safely(
-            runner.run_worker(
-                db=db,
-                task=task,
-                agent=None,  # Create temporary agent
-                agent_config={
-                    "model": model,
-                    "owner_id": owner_id,
-                },
-            )
+        worker_job = WorkerJob(
+            owner_id=owner_id,
+            task=task,
+            model=model,
+            status="queued"
+        )
+        db.add(worker_job)
+        db.commit()
+        db.refresh(worker_job)
+
+        return (
+            f"Worker job {worker_job.id} queued successfully.\n\n"
+            f"Task: {task}\n"
+            f"Model: {model}\n\n"
+            f"The worker will execute in the background. Use get_worker_metadata({worker_job.id}) "
+            f"to check status and read_worker_result('{worker_job.id}') to get results when complete."
         )
 
-        if result.status == "success":
-            return (
-                f"Worker {result.worker_id} completed successfully.\n\n"
-                f"Task: {task}\n"
-                f"Duration: {result.duration_ms}ms\n\n"
-                f"Result:\n{result.result}"
-            )
-        else:
-            return (
-                f"Worker {result.worker_id} failed.\n\n"
-                f"Task: {task}\n"
-                f"Error: {result.error}"
+    except Exception as e:
+        logger.exception(f"Failed to queue worker job for task: {task}")
+        db.rollback()
+        return f"Error queuing worker job: {e}"
+
+
+def spawn_worker(task: str, model: str = "gpt-4o-mini") -> str:
+    """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(spawn_worker_async(task, model))
+
+
+async def list_workers_async(
+    limit: int = 20,
+    status: str | None = None,
+    since_hours: int | None = None,
+) -> str:
+    """List recent worker jobs.
+
+    Args:
+        limit: Maximum number of jobs to return (default: 20)
+        status: Filter by status ("queued", "running", "success", "failed", or None for all)
+        since_hours: Only show jobs from the last N hours
+
+    Returns:
+        Formatted list of worker jobs with their IDs, tasks, status, and timestamps
+    """
+    from zerg.crud import crud
+
+    # Get owner_id from context for security filtering
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot list workers - no credential context available"
+
+    db = resolver.db
+
+    try:
+        # Query worker jobs with filtering
+        query = db.query(crud.WorkerJob).filter(crud.WorkerJob.owner_id == resolver.owner_id)
+
+        if status:
+            query = query.filter(crud.WorkerJob.status == status)
+
+        if since_hours is not None:
+            since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+            query = query.filter(crud.WorkerJob.created_at >= since)
+
+        jobs = query.order_by(crud.WorkerJob.created_at.desc()).limit(limit).all()
+
+        if not jobs:
+            return "No worker jobs found matching criteria."
+
+        # Format output
+        lines = [f"Found {len(jobs)} worker job(s):\n"]
+        for job in jobs:
+            job_id = job.id
+            task = job.task
+            job_status = job.status
+            created_at = job.created_at.isoformat() if job.created_at else "N/A"
+            started_at = job.started_at.isoformat() if job.started_at else "N/A"
+            finished_at = job.finished_at.isoformat() if job.finished_at else "N/A"
+
+            # Calculate duration if job is finished
+            duration_str = "N/A"
+            if job.started_at and job.finished_at:
+                duration = (job.finished_at - job.started_at).total_seconds() * 1000
+                duration_str = f"{int(duration)}ms"
+            elif job.started_at and job.status == "running":
+                duration = (datetime.now(timezone.utc) - job.started_at).total_seconds() * 1000
+                duration_str = f"{int(duration)}ms (running)"
+
+            # Truncate task for display
+            task_display = task[:60] + "..." if len(task) > 60 else task
+
+            lines.append(
+                f"\n[{job_status.upper()}] Job {job_id}\n"
+                f"  Task: {task_display}\n"
+                f"  Created: {created_at}\n"
+                f"  Started: {started_at}\n"
+                f"  Finished: {finished_at}\n"
+                f"  Duration: {duration_str}"
             )
 
+            if job.worker_id:
+                lines.append(f"  Worker ID: {job.worker_id}")
+
+            if job.error and job.status == "failed":
+                error_preview = job.error[:100] + "..." if len(job.error) > 100 else job.error
+                lines.append(f"  Error: {error_preview}")
+
+        return "\n".join(lines)
+
     except Exception as e:
-        logger.exception(f"Failed to spawn worker for task: {task}")
-        return f"Error spawning worker: {e}"
+        logger.exception("Failed to list worker jobs")
+        return f"Error listing worker jobs: {e}"
 
 
 def list_workers(
@@ -97,105 +175,77 @@ def list_workers(
     status: str | None = None,
     since_hours: int | None = None,
 ) -> str:
-    """List recent worker executions.
+    """Sync wrapper for list_workers_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(list_workers_async(limit, status, since_hours))
+
+
+async def read_worker_result_async(job_id: str) -> str:
+    """Read the final result from a completed worker job.
 
     Args:
-        limit: Maximum number of workers to return (default: 20)
-        status: Filter by status ("success", "failed", or None for all)
-        since_hours: Only show workers from the last N hours
-
-    Returns:
-        Formatted list of workers with their IDs, tasks, status, and timestamps
-    """
-    # Get owner_id from context for security filtering
-    resolver = get_credential_resolver()
-    if not resolver:
-        return "Error: Cannot list workers - no credential context available"
-
-    artifact_store = WorkerArtifactStore()
-
-    # Calculate since timestamp if specified
-    since = None
-    if since_hours is not None:
-        since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-
-    try:
-        workers = artifact_store.list_workers(
-            limit=limit,
-            status=status,
-            since=since,
-            owner_id=resolver.owner_id,
-        )
-
-        if not workers:
-            return "No workers found matching criteria."
-
-        # Format output
-        lines = [f"Found {len(workers)} worker(s):\n"]
-        for worker in workers:
-            worker_id = worker.get("worker_id", "unknown")
-            task = worker.get("task", "")
-            worker_status = worker.get("status", "unknown")
-            created_at = worker.get("created_at", "")
-            duration_ms = worker.get("duration_ms")
-
-            # Truncate task for display
-            task_display = task[:60] + "..." if len(task) > 60 else task
-
-            duration_str = f"{duration_ms}ms" if duration_ms else "N/A"
-
-            lines.append(
-                f"\n[{worker_status.upper()}] {worker_id}\n"
-                f"  Task: {task_display}\n"
-                f"  Created: {created_at}\n"
-                f"  Duration: {duration_str}"
-            )
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        logger.exception("Failed to list workers")
-        return f"Error listing workers: {e}"
-
-
-def read_worker_result(worker_id: str) -> str:
-    """Read the final result from a completed worker.
-
-    Args:
-        worker_id: The worker ID (e.g., "2024-12-03T14-32-00_disk-check")
+        job_id: The worker job ID (integer as string)
 
     Returns:
         The worker's natural language result
     """
+    from zerg.crud import crud
+
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
         return "Error: Cannot read worker result - no credential context available"
 
-    artifact_store = WorkerArtifactStore()
+    db = resolver.db
 
     try:
-        # Verify access by checking metadata first
-        artifact_store.get_worker_metadata(worker_id, owner_id=resolver.owner_id)
-        
-        result = artifact_store.get_worker_result(worker_id)
-        return f"Result from worker {worker_id}:\n\n{result}"
+        # Parse job ID
+        job_id_int = int(job_id)
+
+        # Get job record
+        job = db.query(crud.WorkerJob).filter(
+            crud.WorkerJob.id == job_id_int,
+            crud.WorkerJob.owner_id == resolver.owner_id
+        ).first()
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if not job.worker_id:
+            return f"Error: Worker job {job_id} has not started execution yet"
+
+        if job.status not in ["success", "failed"]:
+            return f"Error: Worker job {job_id} is not complete (status: {job.status})"
+
+        # Get result from artifacts
+        artifact_store = WorkerArtifactStore()
+        result = artifact_store.get_worker_result(job.worker_id)
+        return f"Result from worker job {job_id} (worker {job.worker_id}):\n\n{result}"
+
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
     except PermissionError:
-        return f"Error: Access denied to worker {worker_id}"
+        return f"Error: Access denied to worker job {job_id}"
     except FileNotFoundError:
-        return f"Error: Worker {worker_id} not found or has no result yet"
+        return f"Error: Worker job {job_id} not found or has no result yet"
     except Exception as e:
-        logger.exception(f"Failed to read worker result: {worker_id}")
+        logger.exception(f"Failed to read worker result: {job_id}")
         return f"Error reading worker result: {e}"
 
 
-def read_worker_file(worker_id: str, file_path: str) -> str:
-    """Read a specific file from a worker's artifacts.
+def read_worker_result(job_id: str) -> str:
+    """Sync wrapper for read_worker_result_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(read_worker_result_async(job_id))
+
+
+async def read_worker_file_async(job_id: str, file_path: str) -> str:
+    """Read a specific file from a worker job's artifacts.
 
     Use this to drill into worker details like tool outputs or full conversation.
 
     Args:
-        worker_id: The worker ID
+        job_id: The worker job ID (integer as string)
         file_path: Relative path within worker directory (e.g., "tool_calls/001_ssh_exec.txt")
 
     Returns:
@@ -207,103 +257,131 @@ def read_worker_file(worker_id: str, file_path: str) -> str:
         - "thread.jsonl" - Full conversation history
         - "tool_calls/*.txt" - Individual tool outputs
     """
+    from zerg.crud import crud
+
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
         return "Error: Cannot read worker file - no credential context available"
 
-    artifact_store = WorkerArtifactStore()
+    db = resolver.db
 
     try:
+        # Parse job ID
+        job_id_int = int(job_id)
+
+        # Get job record
+        job = db.query(crud.WorkerJob).filter(
+            crud.WorkerJob.id == job_id_int,
+            crud.WorkerJob.owner_id == resolver.owner_id
+        ).first()
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if not job.worker_id:
+            return f"Error: Worker job {job_id} has not started execution yet"
+
+        # Read file from artifacts
+        artifact_store = WorkerArtifactStore()
         # Verify access by checking metadata first
-        artifact_store.get_worker_metadata(worker_id, owner_id=resolver.owner_id)
-        
-        content = artifact_store.read_worker_file(worker_id, file_path)
-        return f"Contents of {file_path} from worker {worker_id}:\n\n{content}"
+        artifact_store.get_worker_metadata(job.worker_id, owner_id=resolver.owner_id)
+
+        content = artifact_store.read_worker_file(job.worker_id, file_path)
+        return f"Contents of {file_path} from worker job {job_id} (worker {job.worker_id}):\n\n{content}"
+
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
     except PermissionError:
-        return f"Error: Access denied to worker {worker_id}"
+        return f"Error: Access denied to worker job {job_id}"
     except FileNotFoundError:
-        return f"Error: File {file_path} not found in worker {worker_id}"
+        return f"Error: File {file_path} not found in worker job {job_id}"
     except ValueError as e:
         return f"Error: Invalid file path - {e}"
     except Exception as e:
-        logger.exception(f"Failed to read worker file: {worker_id}/{file_path}")
+        logger.exception(f"Failed to read worker file: {job_id}/{file_path}")
         return f"Error reading worker file: {e}"
 
 
-def grep_workers(pattern: str, since_hours: int = 24) -> str:
-    """Search across worker artifacts for a pattern.
+def read_worker_file(job_id: str, file_path: str) -> str:
+    """Sync wrapper for read_worker_file_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(read_worker_file_async(job_id, file_path))
+
+
+async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
+    """Search across worker job artifacts for a pattern.
 
     Args:
         pattern: Text pattern to search for (case-insensitive)
-        since_hours: Only search workers from the last N hours (default: 24)
+        since_hours: Only search jobs from the last N hours (default: 24)
 
     Returns:
-        Matches with worker IDs and context
+        Matches with job IDs and context
     """
+    from zerg.crud import crud
+
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
         return "Error: Cannot grep workers - no credential context available"
 
+    db = resolver.db
     artifact_store = WorkerArtifactStore()
 
     try:
-        # Use case-insensitive regex
-        import re
-
-        case_insensitive_pattern = f"(?i){re.escape(pattern)}"
-
-        # Search across all text files
-        matches = artifact_store.search_workers(
-            pattern=case_insensitive_pattern,
-            file_glob="**/*.txt",
+        # Get completed jobs with worker_ids
+        query = db.query(crud.WorkerJob).filter(
+            crud.WorkerJob.owner_id == resolver.owner_id,
+            crud.WorkerJob.worker_id.isnot(None),
+            crud.WorkerJob.status.in_(["success", "failed"])
         )
 
-        # Filter by time AND owner
-        filtered_matches = []
-        
-        # Calculate cutoff time
-        cutoff_iso = None
         if since_hours:
             cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-            cutoff_iso = cutoff.isoformat()
+            query = query.filter(crud.WorkerJob.created_at >= cutoff)
 
-        owner_id = resolver.owner_id
-        
-        for m in matches:
-            metadata = m.get("metadata", {})
-            
-            # Filter by time if specified
-            if cutoff_iso and metadata.get("created_at", "") < cutoff_iso:
-                continue
-                
-            # Filter by owner
-            worker_owner = metadata.get("config", {}).get("owner_id")
-            if worker_owner is not None and worker_owner != owner_id:
-                continue
-                
-            filtered_matches.append(m)
-        
-        matches = filtered_matches
+        jobs = query.all()
 
-        if not matches:
+        # Use case-insensitive regex
+        import re
+        case_insensitive_pattern = f"(?i){re.escape(pattern)}"
+
+        # Search across artifacts for each job
+        all_matches = []
+        for job in jobs:
+            try:
+                matches = artifact_store.search_workers(
+                    pattern=case_insensitive_pattern,
+                    file_glob="**/*.txt",
+                    worker_ids=[job.worker_id]  # Only search this worker
+                )
+                # Add job_id to each match
+                for match in matches:
+                    match["job_id"] = job.id
+                all_matches.extend(matches)
+            except Exception as e:
+                logger.warning(f"Failed to search worker {job.worker_id}: {e}")
+                continue
+
+        if not all_matches:
             return f"No matches found for pattern '{pattern}' in last {since_hours} hours"
 
         # Format results
-        lines = [f"Found {len(matches)} match(es) for '{pattern}':\n"]
-        for match in matches[:50]:  # Limit to 50 matches
+        lines = [f"Found {len(all_matches)} match(es) for '{pattern}':\n"]
+        for match in all_matches[:50]:  # Limit to 50 matches
+            job_id = match.get("job_id", "unknown")
             worker_id = match.get("worker_id", "unknown")
             file_name = match.get("file", "unknown")
             line_num = match.get("line", 0)
             content = match.get("content", "")
 
             lines.append(
-                f"\n{worker_id}/{file_name}:{line_num}\n" f"  {content[:200]}"
+                f"\nJob {job_id} (worker {worker_id})/{file_name}:{line_num}\n" f"  {content[:200]}"
             )
 
-        if len(matches) > 50:
-            lines.append(f"\n... and {len(matches) - 50} more matches (truncated)")
+        if len(all_matches) > 50:
+            lines.append(f"\n... and {len(all_matches) - 50} more matches (truncated)")
 
         return "\n".join(lines)
 
@@ -312,98 +390,128 @@ def grep_workers(pattern: str, since_hours: int = 24) -> str:
         return f"Error searching workers: {e}"
 
 
-def get_worker_metadata(worker_id: str) -> str:
-    """Get detailed metadata about a worker execution.
+def grep_workers(pattern: str, since_hours: int = 24) -> str:
+    """Sync wrapper for grep_workers_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(grep_workers_async(pattern, since_hours))
+
+
+async def get_worker_metadata_async(job_id: str) -> str:
+    """Get detailed metadata about a worker job execution.
 
     Args:
-        worker_id: The worker ID
+        job_id: The worker job ID (integer as string)
 
     Returns:
         Formatted metadata including task, status, timestamps, duration, config
     """
+    from zerg.crud import crud
+
     # Get owner_id from context for security filtering
     resolver = get_credential_resolver()
     if not resolver:
         return "Error: Cannot get worker metadata - no credential context available"
 
-    artifact_store = WorkerArtifactStore()
+    db = resolver.db
 
     try:
-        metadata = artifact_store.get_worker_metadata(worker_id, owner_id=resolver.owner_id)
+        # Parse job ID
+        job_id_int = int(job_id)
+
+        # Get job record
+        job = db.query(crud.WorkerJob).filter(
+            crud.WorkerJob.id == job_id_int,
+            crud.WorkerJob.owner_id == resolver.owner_id
+        ).first()
+
+        if not job:
+            return f"Error: Worker job {job_id} not found"
 
         # Format nicely
         lines = [
-            f"Metadata for worker {worker_id}:\n",
-            f"Status: {metadata.get('status', 'unknown')}",
-            f"Task: {metadata.get('task', '')}",
+            f"Metadata for worker job {job_id}:\n",
+            f"Status: {job.status}",
+            f"Task: {job.task}",
+            f"Model: {job.model}",
             f"\nTimestamps:",
-            f"  Created: {metadata.get('created_at', 'N/A')}",
-            f"  Started: {metadata.get('started_at', 'N/A')}",
-            f"  Finished: {metadata.get('finished_at', 'N/A')}",
-            f"  Duration: {metadata.get('duration_ms', 'N/A')}ms",
+            f"  Created: {job.created_at.isoformat() if job.created_at else 'N/A'}",
+            f"  Started: {job.started_at.isoformat() if job.started_at else 'N/A'}",
+            f"  Finished: {job.finished_at.isoformat() if job.finished_at else 'N/A'}",
         ]
 
-        # Add config if present
-        if metadata.get("config"):
-            lines.append(f"\nConfiguration:")
-            for key, value in metadata["config"].items():
-                lines.append(f"  {key}: {value}")
+        # Calculate duration
+        duration_str = "N/A"
+        if job.started_at and job.finished_at:
+            duration = (job.finished_at - job.started_at).total_seconds() * 1000
+            duration_str = f"{int(duration)}ms"
+        elif job.started_at and job.status == "running":
+            duration = (datetime.now(timezone.utc) - job.started_at).total_seconds() * 1000
+            duration_str = f"{int(duration)}ms (running)"
+
+        lines.append(f"  Duration: {duration_str}")
+
+        if job.worker_id:
+            lines.append(f"\nWorker ID: {job.worker_id}")
 
         # Add error if present
-        if metadata.get("error"):
-            lines.append(f"\nError: {metadata['error']}")
+        if job.error:
+            lines.append(f"\nError: {job.error}")
 
         return "\n".join(lines)
 
-    except PermissionError:
-        return f"Error: Access denied to worker {worker_id}"
-    except FileNotFoundError:
-        return f"Error: Worker {worker_id} not found"
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
     except Exception as e:
-        logger.exception(f"Failed to get worker metadata: {worker_id}")
+        logger.exception(f"Failed to get worker metadata: {job_id}")
         return f"Error getting worker metadata: {e}"
+
+
+def get_worker_metadata(job_id: str) -> str:
+    """Sync wrapper for get_worker_metadata_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+    return run_async_safely(get_worker_metadata_async(job_id))
 
 
 # Export tools list for registration
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
-        func=spawn_worker,
+        coroutine=spawn_worker_async,
         name="spawn_worker",
         description="Spawn a worker agent to execute a task independently. "
         "The worker persists all outputs and returns a natural language result. "
         "Use for delegation, parallel work, or tasks that might generate verbose output.",
     ),
     StructuredTool.from_function(
-        func=list_workers,
+        coroutine=list_workers_async,
         name="list_workers",
         description="List recent worker executions with optional filters for status and time range. "
         "Returns worker IDs, tasks, status, and timestamps.",
     ),
     StructuredTool.from_function(
-        func=read_worker_result,
+        coroutine=read_worker_result_async,
         name="read_worker_result",
-        description="Read the final result from a completed worker. "
-        "Returns the natural language result text.",
+        description="Read the final result from a completed worker job. "
+        "Provide the job ID (integer) to get the natural language result text.",
     ),
     StructuredTool.from_function(
-        func=read_worker_file,
+        coroutine=read_worker_file_async,
         name="read_worker_file",
-        description="Read a specific file from a worker's artifacts. "
-        "Use to drill into worker details like tool outputs (tool_calls/*.txt), "
-        "conversation history (thread.jsonl), or metadata (metadata.json).",
+        description="Read a specific file from a worker job's artifacts. "
+        "Provide the job ID (integer) and file path to drill into worker details like "
+        "tool outputs (tool_calls/*.txt), conversation history (thread.jsonl), or metadata (metadata.json).",
     ),
     StructuredTool.from_function(
-        func=grep_workers,
+        coroutine=grep_workers_async,
         name="grep_workers",
-        description="Search across worker artifacts for a text pattern. "
-        "Performs case-insensitive search and returns matches with context. "
-        "Useful for finding workers that encountered specific errors or outputs.",
+        description="Search across completed worker job artifacts for a text pattern. "
+        "Performs case-insensitive search and returns matches with job IDs and context. "
+        "Useful for finding jobs that encountered specific errors or outputs.",
     ),
     StructuredTool.from_function(
-        func=get_worker_metadata,
+        coroutine=get_worker_metadata_async,
         name="get_worker_metadata",
-        description="Get detailed metadata about a worker execution including "
+        description="Get detailed metadata about a worker job execution including "
         "task, status, timestamps, duration, and configuration. "
-        "Use to inspect worker details without reading full artifacts.",
+        "Provide the job ID (integer) to inspect job details.",
     ),
 ]

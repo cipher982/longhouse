@@ -680,3 +680,43 @@ class AccountConnectorCredential(Base):
 
     # Relationships
     owner = relationship("User", backref="account_connector_credentials")
+
+
+# ---------------------------------------------------------------------------
+# Worker Jobs – Background task execution for supervisor agents
+# ---------------------------------------------------------------------------
+
+
+class WorkerJob(Base):
+    """Background job for executing worker agent tasks.
+
+    Worker jobs allow supervisor agents to delegate long-running tasks
+    to background workers without blocking the supervisor's execution flow.
+    """
+
+    __tablename__ = "worker_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Job ownership and security
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Job specification
+    task = Column(Text, nullable=False)
+    model = Column(String(100), nullable=False, default="gpt-4o-mini")
+
+    # Execution state
+    status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed
+    worker_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
+
+    # Error handling
+    error = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    owner = relationship("User", backref="worker_jobs")
