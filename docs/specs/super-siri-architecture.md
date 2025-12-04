@@ -824,3 +824,69 @@ Key sections:
 ---
 
 *End of Specification*
+
+---
+
+## Addendum (Dec 2025): Phase 2 Clarifications
+
+These notes remove ambiguity for Jarvis → Supervisor integration and worker execution.
+
+### A. Supervisor Endpoint Contract
+- **Endpoint:** `POST /api/jarvis/supervisor`
+- **Auth:** Jarvis session cookie (from `/api/jarvis/auth`); resolves to `owner_id`.
+- **Request body:**
+  ```json
+  {
+    "task": "Investigate slow API responses",
+    "context": {
+      "conversation_id": "jarvis-session-123",
+      "previous_messages": [...]
+    },
+    "preferences": {
+      "verbosity": "concise",
+      "notify_on_complete": true
+    }
+  }
+  ```
+- **Behavior:** Idempotently find or create the long-lived supervisor thread for the user, attach a new Run, and stream progress over SSE.
+- **Response:** `{ "run_id": int, "thread_id": int, "status": "running", "stream_url": "/api/jarvis/supervisor/events?run_id=..." }`
+
+### B. SSE Events for Supervisor + Workers
+Event names/payloads for `GET /api/jarvis/supervisor/events`:
+- `supervisor_started`: `{run_id, thread_id, task}`
+- `supervisor_thinking`: `{message}`
+- `worker_spawned`: `{worker_id, task, model}`
+- `worker_started`: `{worker_id}`
+- `worker_complete`: `{worker_id, status}` (status = success|failed|timeout)
+- `worker_summary_ready`: `{worker_id, summary}`
+- `supervisor_complete`: `{run_id, result}`
+- `error`: `{run_id, message, details?}`
+- `heartbeat`: `{timestamp}` every 30s
+
+### C. Intent Routing Rules (Jarvis → quick vs supervisor)
+- Inputs: user utterance, optional history, latency budget.
+- Quick mode if: single-fact/question, no external tools needed, expected <5s.
+- Supervisor mode if: investigation, multi-step, or tools/files/SSH/HTTP needed.
+- Surface to user: “I’ll escalate this to the supervisor for a deeper check…”
+- Fallback: if intent uncertain, default to supervisor (keeps context clean).
+
+### D. Supervisor Thread Lifecycle (“One Brain”)
+- Key: **one supervisor thread per user**, long-lived, never recreated unless missing.
+- Idempotency: thread lookup keyed by owner_id; create if absent.
+- Each `POST /api/jarvis/supervisor` → new Run attached to that thread.
+- On restart: re-hydrate the thread from DB; do not create a new one.
+- Summarize old content when needed (future Phase 4), but keep thread identity stable.
+
+### E. Ownership / Tenancy Defaults
+- `owner_id` **required** on worker creation; reject missing owner_id in production paths.
+- `list_workers`, `read_worker_result`, `read_worker_file`, `search_workers` must default-filter by owner_id; no owner → no data.
+- SSE streams emit only events scoped to the authenticated owner.
+
+### F. Worker Job Processor
+- Must start at app boot; poll interval 5s; max concurrency 5 (configurable).
+- Emits worker events (`worker_spawned/started/complete/summary_ready/error`) onto the supervisor SSE stream when applicable.
+
+### G. Timeouts and Error Semantics
+- Supervisor run timeout default: 60s (configurable); emits `error` with partial results if any.
+- Worker timeout default: 300s; statuses are system-determined (`success|failed|timeout`), never taken from LLM.
+- On timeout/failure, supervisor may synthesize partial results and suggest next steps; summaries are best-effort and can fall back to truncation.
