@@ -529,7 +529,10 @@ class WorkerArtifactStore:
         return filtered[:limit]
 
     def search_workers(
-        self, pattern: str, file_glob: str = "*.txt"
+        self,
+        pattern: str,
+        file_glob: str = "*.txt",
+        worker_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Search across worker artifacts using regex pattern.
 
@@ -539,6 +542,8 @@ class WorkerArtifactStore:
             Regex pattern to search for
         file_glob
             File glob pattern (e.g., "*.txt", "tool_calls/*.txt")
+        worker_ids
+            Optional list of worker_ids to restrict the search scope
 
         Returns
         -------
@@ -562,6 +567,11 @@ class WorkerArtifactStore:
 
         # Get all workers
         workers = self.list_workers(limit=1000)  # Reasonable upper bound
+
+        # Restrict search scope if worker_ids provided
+        if worker_ids:
+            allowed_ids = set(worker_ids)
+            workers = [w for w in workers if w.get("worker_id") in allowed_ids]
 
         for worker in workers:
             worker_id = worker["worker_id"]
