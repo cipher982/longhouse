@@ -16,6 +16,7 @@ from zerg.crud import crud
 from zerg.models.enums import AgentStatus
 from zerg.prompts.supervisor_prompt import get_supervisor_prompt
 from zerg.services.worker_runner import WorkerResult
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 class TestSupervisorConfiguration:
@@ -32,13 +33,13 @@ class TestSupervisorConfiguration:
             name="Test Supervisor",
             system_instructions=supervisor_prompt,
             task_instructions="Help the user accomplish their goals.",
-            model="gpt-4o",
+            model=TEST_MODEL,
             config={"is_supervisor": True, "temperature": 0.7},
         )
 
         assert agent is not None
         assert agent.name == "Test Supervisor"
-        assert agent.model == "gpt-4o"
+        assert agent.model == TEST_MODEL
         assert agent.owner_id == test_user.id
         assert agent.status == AgentStatus.IDLE
         assert agent.config.get("is_supervisor") is True
@@ -67,7 +68,7 @@ class TestSupervisorConfiguration:
             name="Tool Test Supervisor",
             system_instructions=get_supervisor_prompt(),
             task_instructions="Test",
-            model="gpt-4o",
+            model=TEST_MODEL,
         )
 
         # Update with allowed tools
@@ -109,7 +110,7 @@ class TestSupervisorConfiguration:
             name="No Schedule Supervisor",
             system_instructions=get_supervisor_prompt(),
             task_instructions="Test",
-            model="gpt-4o",
+            model=TEST_MODEL,
             schedule=None,
         )
 
@@ -133,7 +134,7 @@ class TestSupervisorDelegation:
             name="Integration Test Supervisor",
             system_instructions=get_supervisor_prompt(),
             task_instructions="Test delegation",
-            model="gpt-4o",
+            model=TEST_MODEL,
         )
 
         # Mock the LLM response for worker
@@ -163,7 +164,7 @@ class TestSupervisorDelegation:
                 task="Test task for integration",
                 agent=None,
                 agent_config={
-                    "model": "gpt-4o-mini",
+                    "model": TEST_WORKER_MODEL,
                     "owner_id": test_user.id,
                 },
             )
@@ -186,7 +187,7 @@ class TestSupervisorDelegation:
 
         # Without context, should return error
         set_credential_resolver(None)
-        result = spawn_worker(task="Test task", model="gpt-4o-mini")
+        result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
         assert "Error" in result or "error" in result.lower()
         assert "credential context" in result.lower() or "context" in result.lower()
 
@@ -231,7 +232,7 @@ class TestSupervisorEndToEnd:
             name="E2E Test Supervisor",
             system_instructions=get_supervisor_prompt(),
             task_instructions="Coordinate tasks",
-            model="gpt-4o",
+            model=TEST_MODEL,
             config={"is_supervisor": True},
         )
 
@@ -267,7 +268,7 @@ class TestSupervisorEndToEnd:
                 task="Check disk usage on all production servers",
                 agent=None,
                 agent_config={
-                    "model": "gpt-4o-mini",
+                    "model": TEST_WORKER_MODEL,
                     "owner_id": test_user.id,
                 },
             )
@@ -340,7 +341,7 @@ class TestSupervisorFromScript:
                 # Verify agent was created
                 assert agent is not None
                 assert agent.name == "Script Test Supervisor"
-                assert agent.model == "gpt-4o"
+                assert agent.model == TEST_MODEL
                 assert agent.owner_id == test_user.id
                 assert agent.config.get("is_supervisor") is True
                 assert agent.allowed_tools is not None
@@ -357,7 +358,7 @@ class TestSupervisorFromScript:
             name="Update Test Supervisor",
             system_instructions="Old prompt",
             task_instructions="Old task",
-            model="gpt-4o-mini",
+            model=TEST_WORKER_MODEL,
         )
 
         # Run seed script
@@ -367,6 +368,6 @@ class TestSupervisorFromScript:
 
                 # Verify agent was updated
                 assert agent.id == initial.id  # Same agent
-                assert agent.model == "gpt-4o"  # Updated to supervisor model
+                assert agent.model == TEST_MODEL  # Updated to supervisor model
                 assert "spawn_worker" in agent.system_instructions  # Updated prompt
                 assert agent.config.get("is_supervisor") is True  # Updated config

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.models import Agent
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ async def test_create_agent_event(client: TestClient, event_tracker):
         "name": "Event Test Agent",
         "system_instructions": "Test system instructions",
         "task_instructions": "Test task instructions",
-        "model": "gpt-5.1-chat-latest",
+        "model": TEST_MODEL,
     }
 
     response = client.post("/api/agents", json=agent_data)

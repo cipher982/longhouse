@@ -4,6 +4,7 @@ import pytest
 
 from zerg.crud import crud
 from zerg.main import app
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _mk_user(db_session, email: str, role: str = "USER"):
@@ -23,7 +24,7 @@ def _mk_agent_thread(db, owner_id: int):
         name="a",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )
@@ -59,7 +60,7 @@ async def test_non_owner_cannot_create_thread_for_others_agent(client, db_sessio
         name="x",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )
@@ -106,7 +107,7 @@ async def test_non_owner_cannot_run_agent_task(client, db_session):
         name="x",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )

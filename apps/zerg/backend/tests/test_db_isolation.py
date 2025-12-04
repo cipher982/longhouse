@@ -13,6 +13,7 @@ from zerg.crud import crud as _crud
 
 # Import the SQLAlchemy Agent model, not the Pydantic schema
 from zerg.models.models import Agent
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.mark.db_isolation
@@ -35,7 +36,7 @@ def test_api_db_isolation(client: TestClient, db_session: Session):
         name="DB Isolation Test Agent",
         system_instructions="System instructions for isolation test",
         task_instructions="Task instructions for isolation test",
-        model="gpt-5.1-chat-latest",
+        model=TEST_MODEL,
         status="idle",
     )
     db_session.add(direct_agent)

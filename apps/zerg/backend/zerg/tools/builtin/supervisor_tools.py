@@ -19,12 +19,13 @@ from typing import List
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
 
-async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
+async def spawn_worker_async(task: str, model: str | None = None) -> str:
     """Spawn a worker agent to execute a task.
 
     The worker runs independently, persists all outputs to disk, and returns
@@ -33,14 +34,14 @@ async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
 
     Args:
         task: Natural language description of what the worker should do
-        model: LLM model for the worker (default: gpt-4o-mini)
+        model: LLM model for the worker (default: gpt-5-mini)
 
     Returns:
         A summary indicating the job has been queued
 
     Example:
         spawn_worker("Check disk usage on cube server via SSH")
-        spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-4o")
+        spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-5.1-2025-11-13")
     """
     from zerg.crud import crud
     from zerg.models.models import WorkerJob
@@ -53,12 +54,15 @@ async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
     db = resolver.db
     owner_id = resolver.owner_id
 
+    # Use default worker model if not specified
+    worker_model = model or DEFAULT_WORKER_MODEL_ID
+
     # Create worker job record
     try:
         worker_job = WorkerJob(
             owner_id=owner_id,
             task=task,
-            model=model,
+            model=worker_model,
             status="queued"
         )
         db.add(worker_job)
@@ -68,7 +72,7 @@ async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
         return (
             f"Worker job {worker_job.id} queued successfully.\n\n"
             f"Task: {task}\n"
-            f"Model: {model}\n\n"
+            f"Model: {worker_model}\n\n"
             f"The worker will execute in the background. Use get_worker_metadata({worker_job.id}) "
             f"to check status and read_worker_result('{worker_job.id}') to get results when complete."
         )
@@ -79,7 +83,7 @@ async def spawn_worker_async(task: str, model: str = "gpt-4o-mini") -> str:
         return f"Error queuing worker job: {e}"
 
 
-def spawn_worker(task: str, model: str = "gpt-4o-mini") -> str:
+def spawn_worker(task: str, model: str | None = None) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
     return run_async_safely(spawn_worker_async(task, model))

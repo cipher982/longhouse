@@ -23,6 +23,7 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.models.enums import AgentStatus
 from zerg.models.models import Agent
+from zerg.models_config import DEFAULT_MODEL_ID
 from zerg.prompts.supervisor_prompt import get_supervisor_prompt
 
 
@@ -116,7 +117,7 @@ Be helpful, concise, and transparent about what you're doing."""
         # Update existing agent
         existing.system_instructions = system_prompt
         existing.task_instructions = task_instructions
-        existing.model = "gpt-4o"  # Supervisor should be smart
+        existing.model = DEFAULT_MODEL_ID  # Supervisor should be smart
         existing.config = supervisor_config
         existing.allowed_tools = supervisor_tools
         existing.status = AgentStatus.IDLE
@@ -137,7 +138,7 @@ Be helpful, concise, and transparent about what you're doing."""
             name=name,
             system_instructions=system_prompt,
             task_instructions=task_instructions,
-            model="gpt-4o",  # Supervisor should be smart
+            model=DEFAULT_MODEL_ID,  # Supervisor should be smart
             config=supervisor_config,
             allowed_tools=supervisor_tools,
             status=AgentStatus.IDLE,

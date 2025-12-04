@@ -4,6 +4,7 @@ import pytest
 
 from zerg.crud import crud
 from zerg.main import app
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 class _UsageStub:
@@ -43,7 +44,7 @@ class _UsageStub:
 @pytest.mark.asyncio
 async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatch):
     # Ensure allowed model
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
     # Clear AgentRunner runnable cache and patch ChatOpenAI used by agent definition to our usage stub
     import zerg.agents_def.zerg_react_agent as zr
     import zerg.managers.agent_runner as ar
@@ -61,7 +62,7 @@ async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatc
         name="a",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )
@@ -123,7 +124,7 @@ async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch)
         name="a2",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )

@@ -8,6 +8,7 @@ from zerg.models.models import AgentMessage
 from zerg.schemas.schemas import AgentCreate
 from zerg.schemas.schemas import AgentUpdate
 from zerg.schemas.schemas import MessageCreate
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def test_agent_model(db_session: Session):
@@ -21,7 +22,7 @@ def test_agent_model(db_session: Session):
         name="Test Agent",
         system_instructions="This is a test system instruction",
         task_instructions="This is a test task instruction",
-        model="gpt-5.1-chat-latest",
+        model=TEST_MODEL,
         status="idle",
         schedule=None,
         config={"key": "value"},
@@ -35,7 +36,7 @@ def test_agent_model(db_session: Session):
     assert agent.name == "Test Agent"
     assert agent.system_instructions == "This is a test system instruction"
     assert agent.task_instructions == "This is a test task instruction"
-    assert agent.model == "gpt-5.1-chat-latest"
+    assert agent.model == TEST_MODEL
     assert agent.status == "idle"
     assert agent.schedule is None
     assert agent.config == {"key": "value"}
@@ -101,7 +102,7 @@ def test_agent_schema_validation():
         "name": "Schema Test Agent",
         "system_instructions": "Test system instructions",
         "task_instructions": "Test task instructions",
-        "model": "gpt-5.1-chat-latest",
+        "model": TEST_MODEL,
         "schedule": "0 0 * * *",  # Daily at midnight
         "config": {"test_key": "test_value"},
     }

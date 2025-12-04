@@ -32,6 +32,7 @@ import uuid
 from typing import List
 
 import pytest
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 # ``hypothesis`` is optional – auto-skip when missing.
 try:
@@ -109,7 +110,7 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
         name="FuzzAgent",
         system_instructions="",
         task_instructions="",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
     )
 
     thread = crud.create_thread(

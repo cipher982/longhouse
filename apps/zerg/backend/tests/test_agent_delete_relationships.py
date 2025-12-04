@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from zerg.events import EventType
 from zerg.events import event_bus
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
@@ -41,7 +42,7 @@ async def test_delete_agent_with_relationships(client: TestClient):
         "name": "Agent With Threads",
         "system_instructions": "sys",
         "task_instructions": "task",
-        "model": "gpt-5.1-chat-latest",
+        "model": TEST_MODEL,
     }
 
     resp = client.post("/api/agents", json=agent_payload)

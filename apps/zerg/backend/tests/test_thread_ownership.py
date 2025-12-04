@@ -2,6 +2,7 @@ import contextlib
 
 from zerg.crud import crud
 from zerg.main import app
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _user(db_session, email: str, role: str):
@@ -21,7 +22,7 @@ def test_read_thread_ownership_enforced(client, db_session):
         name="owning-agent",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )

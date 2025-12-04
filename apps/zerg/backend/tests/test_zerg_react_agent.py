@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture()
@@ -23,7 +24,7 @@ def agent_row(db_session):
         name="unit-bot",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
     )
     db_session.add(row)
     db_session.commit()

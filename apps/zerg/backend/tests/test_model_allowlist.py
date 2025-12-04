@@ -4,6 +4,7 @@ import pytest
 
 from zerg.crud import crud
 from zerg.main import app
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _make_admin_user(db_session):
@@ -19,7 +20,7 @@ def _make_admin_user(db_session):
 @pytest.mark.asyncio
 async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_user, monkeypatch):
     # Restrict non-admins to a cheap model
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
 
     # Attempt to create agent with a disallowed model
     from zerg.dependencies.auth import get_current_user
@@ -32,7 +33,7 @@ async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_
                 "name": "NA agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-5.1-chat-latest",  # not in allowlist
+                "model": TEST_MODEL,  # not in allowlist
                 "schedule": None,
                 "config": {},
             },
@@ -46,7 +47,7 @@ async def test_non_admin_create_agent_disallowed_model(client, db_session, _dev_
 
 @pytest.mark.asyncio
 async def test_non_admin_create_agent_allowed_model(client, db_session, _dev_user, monkeypatch):
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
 
     from zerg.dependencies.auth import get_current_user
 
@@ -58,7 +59,7 @@ async def test_non_admin_create_agent_allowed_model(client, db_session, _dev_use
                 "name": "OK agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-4o-mini",
+                "model": TEST_WORKER_MODEL,
                 "schedule": None,
                 "config": {},
             },
@@ -68,13 +69,13 @@ async def test_non_admin_create_agent_allowed_model(client, db_session, _dev_use
             del app.dependency_overrides[get_current_user]
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["model"] == "gpt-4o-mini"
+    assert data["model"] == TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
 async def test_admin_bypasses_model_allowlist(client, db_session, monkeypatch):
     # Restrict allowlist, but override current_user to ADMIN
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
     admin = _make_admin_user(db_session)
 
     from zerg.dependencies.auth import get_current_user
@@ -87,7 +88,7 @@ async def test_admin_bypasses_model_allowlist(client, db_session, monkeypatch):
                 "name": "Admin agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-5.1-chat-latest",  # disallowed for non-admins
+                "model": TEST_MODEL,  # disallowed for non-admins
                 "schedule": None,
                 "config": {},
             },
@@ -98,12 +99,12 @@ async def test_admin_bypasses_model_allowlist(client, db_session, monkeypatch):
             del app.dependency_overrides[get_current_user]
 
     assert resp.status_code == 201, resp.text
-    assert resp.json()["model"] == "gpt-5.1-chat-latest"
+    assert resp.json()["model"] == TEST_MODEL
 
 
 @pytest.mark.asyncio
 async def test_models_endpoint_filtered_for_non_admin(client, db_session, _dev_user, monkeypatch):
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
     from zerg.dependencies.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: _dev_user
@@ -114,12 +115,12 @@ async def test_models_endpoint_filtered_for_non_admin(client, db_session, _dev_u
             del app.dependency_overrides[get_current_user]
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
-    assert ids == {"gpt-4o-mini"}
+    assert ids == {TEST_WORKER_MODEL}
 
 
 @pytest.mark.asyncio
 async def test_models_endpoint_admin_sees_all(client, db_session, monkeypatch):
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
     admin = _make_admin_user(db_session)
 
     from zerg.dependencies.auth import get_current_user
@@ -134,12 +135,12 @@ async def test_models_endpoint_admin_sees_all(client, db_session, monkeypatch):
     assert resp.status_code == 200
     ids = {m["id"] for m in resp.json()}
     # Registry includes more than the single allowed id
-    assert "gpt-4o-mini" in ids and len(ids) > 1
+    assert TEST_WORKER_MODEL in ids and len(ids) > 1
 
 
 @pytest.mark.asyncio
 async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_user, monkeypatch):
-    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", "gpt-4o-mini")
+    monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
     # Ensure current user is non-admin dev user
     from zerg.dependencies.auth import get_current_user
 
@@ -152,7 +153,7 @@ async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_
                 "name": "Agent",
                 "system_instructions": "sys",
                 "task_instructions": "task",
-                "model": "gpt-4o-mini",
+                "model": TEST_WORKER_MODEL,
                 "schedule": None,
                 "config": {},
             },
@@ -164,7 +165,7 @@ async def test_non_admin_update_agent_disallowed_model(client, db_session, _dev_
         resp2 = client.put(
             f"/api/agents/{aid}",
             json={
-                "model": "gpt-5.1-chat-latest",
+                "model": TEST_MODEL,
             },
         )
         assert resp2.status_code == 422, resp2.text

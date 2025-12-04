@@ -7,6 +7,7 @@ import pytest
 
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
@@ -23,7 +24,7 @@ async def test_full_worker_lifecycle(db_session, test_user):
             db=db_session,
             task=task,
             agent=None,  # Create temporary agent
-            agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+            agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
         )
 
         # 2. Verify worker completed successfully
@@ -99,7 +100,7 @@ async def test_multiple_workers(db_session, test_user):
                 db=db_session,
                 task=task,
                 agent=None,
-                agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+                agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
             )
             assert result.status == "success"
             worker_ids.append(result.worker_id)
@@ -142,7 +143,7 @@ async def test_worker_with_error(db_session, test_user):
                 db=db_session,
                 task="This will fail",
                 agent=None,
-                agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+                agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
             )
 
             # Verify error captured
@@ -178,7 +179,7 @@ async def test_supervisor_can_read_worker_results(db_session, test_user):
                 db=db_session,
                 task=task,
                 agent=None,
-                agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+                agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
             )
             if result.status == "success":
                 completed_workers.append(result.worker_id)
@@ -215,14 +216,14 @@ async def test_worker_isolation(db_session, test_user):
             db=db_session,
             task="Task A: Count to 5",
             agent=None,
-            agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+            agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
         )
 
         result2 = await worker_runner.run_worker(
             db=db_session,
             task="Task B: Count to 10",
             agent=None,
-            agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+            agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
         )
 
         # Verify workers have different IDs
