@@ -164,7 +164,12 @@ class WorkerArtifactStore:
 
         self._write_index(index)
 
-    def create_worker(self, task: str, config: dict[str, Any] | None = None) -> str:
+    def create_worker(
+        self,
+        task: str,
+        config: dict[str, Any] | None = None,
+        owner_id: int | None = None,
+    ) -> str:
         """Create a new worker directory structure.
 
         Parameters
@@ -173,6 +178,8 @@ class WorkerArtifactStore:
             Task description for the worker
         config
             Optional configuration dict (e.g., model, tools, timeout)
+        owner_id
+            Optional ID of the user who owns this worker (for security filtering)
 
         Returns
         -------
@@ -196,11 +203,17 @@ class WorkerArtifactStore:
         tool_calls_dir = worker_dir / "tool_calls"
         tool_calls_dir.mkdir(exist_ok=True)
 
+        # Initialize config
+        worker_config = config or {}
+        # Store owner_id in config if provided
+        if owner_id is not None:
+            worker_config["owner_id"] = owner_id
+
         # Initialize metadata
         metadata = {
             "worker_id": worker_id,
             "task": task,
-            "config": config or {},
+            "config": worker_config,
             "status": "created",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": None,
@@ -360,13 +373,15 @@ class WorkerArtifactStore:
 
         logger.info(f"Started worker: {worker_id}")
 
-    def get_worker_metadata(self, worker_id: str) -> dict[str, Any]:
+    def get_worker_metadata(self, worker_id: str, owner_id: int | None = None) -> dict[str, Any]:
         """Read worker metadata.
 
         Parameters
         ----------
         worker_id
             Unique worker identifier
+        owner_id
+            Optional owner ID to enforce access control
 
         Returns
         -------
@@ -377,12 +392,23 @@ class WorkerArtifactStore:
         ------
         FileNotFoundError
             If worker does not exist
+        PermissionError
+            If worker belongs to a different owner
         """
         worker_dir = self._get_worker_dir(worker_id)
         metadata_path = worker_dir / "metadata.json"
 
         with open(metadata_path, "r") as f:
-            return json.load(f)
+            metadata = json.load(f)
+
+        # Check ownership if owner_id provided
+        if owner_id is not None:
+            worker_owner = metadata.get("config", {}).get("owner_id")
+            # Only enforce if worker has an owner set
+            if worker_owner is not None and worker_owner != owner_id:
+                raise PermissionError(f"Access denied to worker {worker_id}")
+
+        return metadata
 
     def get_worker_result(self, worker_id: str) -> str:
         """Read worker result.
@@ -449,6 +475,7 @@ class WorkerArtifactStore:
         limit: int = 50,
         status: str | None = None,
         since: datetime | None = None,
+        owner_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """List workers with optional filters.
 
@@ -460,6 +487,8 @@ class WorkerArtifactStore:
             Filter by status ("success", "failed", "running", etc.)
         since
             Filter workers created after this timestamp
+        owner_id
+            Filter by owner ID (for security)
 
         Returns
         -------
@@ -470,6 +499,17 @@ class WorkerArtifactStore:
 
         # Apply filters
         filtered = index
+        if owner_id is not None:
+            # Filter by owner_id in config
+            # Note: older workers might not have owner_id, they are effectively "public" or "orphan"
+            # For strict security, we might want to exclude them, but for now we filter only if they have an ID
+            # that doesn't match.
+            filtered = [
+                w
+                for w in filtered
+                if w.get("config", {}).get("owner_id") == owner_id
+            ]
+
         if status:
             filtered = [w for w in filtered if w.get("status") == status]
         if since:
