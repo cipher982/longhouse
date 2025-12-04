@@ -33,7 +33,7 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.models import AgentRun
+from zerg.models.models import Agent, AgentRun
 from zerg.services.task_runner import execute_agent_task
 
 logger = logging.getLogger(__name__)
@@ -537,10 +537,11 @@ async def jarvis_supervisor(
         try:
             with db_session() as bg_db:
                 service = SupervisorService(bg_db)
-                # Run supervisor - events are emitted via event_bus
+                # Run supervisor - pass run_id to avoid duplicate run creation
                 await service.run_supervisor(
                     owner_id=owner_id,
                     task=task,
+                    run_id=run_id,  # Use the run created in the endpoint
                     timeout=60,
                 )
         except Exception as e:
@@ -662,6 +663,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
 @router.get("/supervisor/events")
 async def jarvis_supervisor_events(
     run_id: int,
+    db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> EventSourceResponse:
     """SSE stream for supervisor run progress.
@@ -681,11 +683,31 @@ async def jarvis_supervisor_events(
 
     Args:
         run_id: The supervisor run ID to track
+        db: Database session
         current_user: Authenticated user
 
     Returns:
         EventSourceResponse streaming supervisor events
+
+    Raises:
+        HTTPException 404: If run not found or doesn't belong to user
     """
+    # Validate run exists and belongs to user
+    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",
+        )
+
+    # Check ownership via the run's agent
+    agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
+    if not agent or agent.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",  # Don't reveal existence to other users
+        )
+
     return EventSourceResponse(
         _supervisor_event_generator(run_id, current_user.id)
     )

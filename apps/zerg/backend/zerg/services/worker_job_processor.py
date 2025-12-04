@@ -108,9 +108,10 @@ class WorkerJobProcessor:
                 logger.debug(f"Job {job_id} already being processed (status: {job.status})")
                 return
 
-            # Capture owner_id for event emission
+            # Capture fields for event emission
             owner_id = job.owner_id
             task = job.task
+            supervisor_run_id = job.supervisor_run_id  # For SSE correlation
 
             try:
                 # Update job status to running
@@ -120,13 +121,14 @@ class WorkerJobProcessor:
 
                 logger.info(f"Starting worker job {job.id} for task: {job.task[:50]}...")
 
-                # Emit WORKER_STARTED event
+                # Emit WORKER_STARTED event (include run_id for SSE correlation)
                 await event_bus.publish(
                     EventType.WORKER_STARTED,
                     {
                         "job_id": job.id,
                         "task": task[:100],
                         "owner_id": owner_id,
+                        "run_id": supervisor_run_id,  # For SSE correlation
                     },
                 )
 
@@ -159,7 +161,7 @@ class WorkerJobProcessor:
 
                 db.commit()
 
-                # Emit WORKER_COMPLETE event
+                # Emit WORKER_COMPLETE event (include run_id for SSE correlation)
                 await event_bus.publish(
                     EventType.WORKER_COMPLETE,
                     {
@@ -168,6 +170,7 @@ class WorkerJobProcessor:
                         "status": result.status,
                         "duration_ms": result.duration_ms,
                         "owner_id": owner_id,
+                        "run_id": supervisor_run_id,  # For SSE correlation
                     },
                 )
 
@@ -180,6 +183,7 @@ class WorkerJobProcessor:
                             "worker_id": result.worker_id,
                             "summary": result.summary,
                             "owner_id": owner_id,
+                            "run_id": supervisor_run_id,  # For SSE correlation
                         },
                     )
 
@@ -193,7 +197,7 @@ class WorkerJobProcessor:
                     job.finished_at = datetime.now(timezone.utc)
                     db.commit()
 
-                    # Emit error event
+                    # Emit error event (include run_id for SSE correlation)
                     await event_bus.publish(
                         EventType.WORKER_COMPLETE,
                         {
@@ -201,6 +205,7 @@ class WorkerJobProcessor:
                             "status": "failed",
                             "error": str(e),
                             "owner_id": owner_id,
+                            "run_id": supervisor_run_id,  # For SSE correlation
                         },
                     )
                 except Exception as commit_error:
