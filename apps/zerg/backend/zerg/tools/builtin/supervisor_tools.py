@@ -90,7 +90,12 @@ async def list_workers_async(
     status: str | None = None,
     since_hours: int | None = None,
 ) -> str:
-    """List recent worker jobs.
+    """List recent worker jobs with SUMMARIES ONLY.
+
+    Returns compressed summaries for scanning. To get full details,
+    call read_worker_result(job_id).
+
+    This prevents context overflow when scanning 50+ workers.
 
     Args:
         limit: Maximum number of jobs to return (default: 20)
@@ -98,7 +103,7 @@ async def list_workers_async(
         since_hours: Only show jobs from the last N hours
 
     Returns:
-        Formatted list of worker jobs with their IDs, tasks, status, and timestamps
+        Formatted list of worker jobs with summaries (not full results)
     """
     from zerg.crud import crud
 
@@ -125,44 +130,33 @@ async def list_workers_async(
         if not jobs:
             return "No worker jobs found matching criteria."
 
-        # Format output
-        lines = [f"Found {len(jobs)} worker job(s):\n"]
+        # Get artifact store for summary lookup
+        artifact_store = WorkerArtifactStore()
+
+        # Format output - compact with summaries
+        lines = [f"Recent workers (showing {len(jobs)}):\n"]
         for job in jobs:
             job_id = job.id
-            task = job.task
             job_status = job.status
-            created_at = job.created_at.isoformat() if job.created_at else "N/A"
-            started_at = job.started_at.isoformat() if job.started_at else "N/A"
-            finished_at = job.finished_at.isoformat() if job.finished_at else "N/A"
 
-            # Calculate duration if job is finished
-            duration_str = "N/A"
-            if job.started_at and job.finished_at:
-                duration = (job.finished_at - job.started_at).total_seconds() * 1000
-                duration_str = f"{int(duration)}ms"
-            elif job.started_at and job.status == "running":
-                duration = (datetime.now(timezone.utc) - job.started_at).total_seconds() * 1000
-                duration_str = f"{int(duration)}ms (running)"
+            # Get summary from artifact store if available, else truncate task
+            summary = None
+            if job.worker_id and job.status in ["success", "failed"]:
+                try:
+                    metadata = artifact_store.get_worker_metadata(job.worker_id)
+                    summary = metadata.get("summary")
+                except Exception:
+                    pass  # Fall back to task truncation
 
-            # Truncate task for display
-            task_display = task[:60] + "..." if len(task) > 60 else task
+            if not summary:
+                # Fallback: truncate task for display
+                summary = job.task[:150] + "..." if len(job.task) > 150 else job.task
 
-            lines.append(
-                f"\n[{job_status.upper()}] Job {job_id}\n"
-                f"  Task: {task_display}\n"
-                f"  Created: {created_at}\n"
-                f"  Started: {started_at}\n"
-                f"  Finished: {finished_at}\n"
-                f"  Duration: {duration_str}"
-            )
+            # Compact format with summary
+            lines.append(f"- Job {job_id} [{job_status.upper()}]")
+            lines.append(f"  {summary}\n")
 
-            if job.worker_id:
-                lines.append(f"  Worker ID: {job.worker_id}")
-
-            if job.error and job.status == "failed":
-                error_preview = job.error[:100] + "..." if len(job.error) > 100 else job.error
-                lines.append(f"  Error: {error_preview}")
-
+        lines.append("Use read_worker_result(job_id) for full details.")
         return "\n".join(lines)
 
     except Exception as e:
@@ -484,8 +478,10 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         coroutine=list_workers_async,
         name="list_workers",
-        description="List recent worker executions with optional filters for status and time range. "
-        "Returns worker IDs, tasks, status, and timestamps.",
+        description="List recent worker jobs with SUMMARIES ONLY. "
+        "Returns compressed summaries for quick scanning. "
+        "Use read_worker_result(job_id) to get full details. "
+        "This prevents context overflow when scanning 50+ workers.",
     ),
     StructuredTool.from_function(
         coroutine=read_worker_result_async,

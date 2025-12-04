@@ -45,7 +45,9 @@ def supervisor_agent(db_session, test_user):
 async def test_supervisor_spawns_worker_via_tool(
     supervisor_agent, db_session, test_user, temp_artifact_path
 ):
-    """Test that a supervisor agent can use spawn_worker tool."""
+    """Test that a supervisor agent can use spawn_worker tool (queues job)."""
+    from zerg.models.models import WorkerJob
+
     # Create a thread for the supervisor
     thread = ThreadService.create_thread_with_system_message(
         db_session,
@@ -91,15 +93,16 @@ async def test_supervisor_spawns_worker_via_tool(
         assert tool_calls_found, "Supervisor should have called tools"
         assert spawn_worker_called, "Supervisor should have called spawn_worker"
 
-        # Verify a worker was actually created
-        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
-        workers = artifact_store.list_workers(limit=10)
-        assert len(workers) >= 1, "At least one worker should have been spawned"
+        # Verify a worker JOB was queued (not executed synchronously)
+        jobs = db_session.query(WorkerJob).filter(
+            WorkerJob.owner_id == test_user.id
+        ).all()
+        assert len(jobs) >= 1, "At least one worker job should have been queued"
 
-        # Verify the worker completed
-        worker = workers[0]
-        assert worker["status"] == "success", "Worker should complete successfully"
-        assert "calculate" in worker["task"].lower() or "10" in worker["task"]
+        # Verify job is queued
+        job = jobs[0]
+        assert job.status == "queued", "Worker job should be queued"
+        assert "calculate" in job.task.lower() or "10" in job.task
 
     finally:
         set_credential_resolver(None)
@@ -110,18 +113,19 @@ async def test_supervisor_can_list_workers(
     supervisor_agent, db_session, test_user, temp_artifact_path
 ):
     """Test that a supervisor can use list_workers tool."""
-    # First spawn a worker manually
-    from zerg.services.worker_runner import WorkerRunner
+    from zerg.models.models import WorkerJob
+    from datetime import datetime, timezone
 
-    artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
-    runner = WorkerRunner(artifact_store=artifact_store)
-
-    await runner.run_worker(
-        db=db_session,
+    # Create a WorkerJob record (simulating a queued job)
+    worker_job = WorkerJob(
+        owner_id=test_user.id,
         task="Test task for listing",
-        agent=None,
-        agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+        model="gpt-4o-mini",
+        status="queued",
+        created_at=datetime.now(timezone.utc),
     )
+    db_session.add(worker_job)
+    db_session.commit()
 
     # Create a thread for the supervisor
     thread = ThreadService.create_thread_with_system_message(
@@ -179,9 +183,11 @@ async def test_supervisor_reads_worker_result(
     supervisor_agent, db_session, test_user, temp_artifact_path
 ):
     """Test that a supervisor can read worker results."""
-    # First spawn a worker
+    from zerg.models.models import WorkerJob
     from zerg.services.worker_runner import WorkerRunner
+    from datetime import datetime, timezone
 
+    # First spawn a worker directly via WorkerRunner (creates artifacts)
     artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
     runner = WorkerRunner(artifact_store=artifact_store)
 
@@ -194,6 +200,23 @@ async def test_supervisor_reads_worker_result(
 
     worker_id = result.worker_id
 
+    # Create a WorkerJob record linking to this worker (so tools can find it)
+    worker_job = WorkerJob(
+        owner_id=test_user.id,
+        task="Calculate 5 * 8",
+        model="gpt-4o-mini",
+        status="success",
+        worker_id=worker_id,
+        created_at=datetime.now(timezone.utc),
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+    db_session.add(worker_job)
+    db_session.commit()
+    db_session.refresh(worker_job)
+
+    job_id = worker_job.id
+
     # Create a thread for the supervisor
     thread = ThreadService.create_thread_with_system_message(
         db_session,
@@ -203,12 +226,12 @@ async def test_supervisor_reads_worker_result(
         active=False,
     )
 
-    # Add user message asking supervisor to read the worker result
+    # Add user message asking supervisor to read the worker result (using job_id)
     crud.create_thread_message(
         db=db_session,
         thread_id=thread.id,
         role="user",
-        content=f"Read the result from worker {worker_id}",
+        content=f"Read the result from worker job {job_id}",
         processed=False,
     )
 

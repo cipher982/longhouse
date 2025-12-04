@@ -4,6 +4,12 @@ This service manages the filesystem structure for worker artifacts, enabling
 workers to persist all outputs (tool calls, messages, results) to disk for
 later retrieval by supervisor agents.
 
+INVARIANTS:
+- result.txt is canonical. Never delete or auto-truncate.
+- metadata.json contains derived views (summaries, extracted fields).
+- Derived data MUST be recomputable from canonical artifacts.
+- System decisions (status) never depend on LLM-generated summaries.
+
 Directory structure:
     /data/swarmlet/workers/
     ├── index.json                    # Master index of all workers
@@ -586,6 +592,66 @@ class WorkerArtifactStore:
                     continue
 
         return matches
+
+    def _update_index_entry(self, worker_id: str, updates: dict[str, Any]) -> None:
+        """Update specific fields on an existing index entry.
+
+        Parameters
+        ----------
+        worker_id
+            Unique worker identifier
+        updates
+            Dictionary of fields to update (merged into existing entry)
+        """
+        index = self._read_index()
+
+        for entry in index:
+            if entry.get("worker_id") == worker_id:
+                entry.update(updates)
+                break
+
+        self._write_index(index)
+
+    def update_summary(
+        self, worker_id: str, summary: str, summary_meta: dict[str, Any]
+    ) -> None:
+        """Update worker metadata with extracted summary.
+
+        Called after worker completes. Safe to fail - summary is derived data.
+
+        Parameters
+        ----------
+        worker_id
+            Unique worker identifier
+        summary
+            Compressed summary text (typically ~150 chars)
+        summary_meta
+            Metadata about summary generation (version, model, timestamp)
+        """
+        worker_dir = self._get_worker_dir(worker_id)
+        metadata_path = worker_dir / "metadata.json"
+
+        try:
+            # Read current metadata
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            # Add summary fields
+            metadata["summary"] = summary
+            metadata["summary_meta"] = summary_meta
+
+            # Write updated metadata
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            # Update index with summary for efficient listing
+            self._update_index_entry(worker_id, {"summary": summary})
+
+            logger.debug(f"Updated summary for worker: {worker_id}")
+
+        except Exception as e:
+            # Summary update failure is non-fatal - log and continue
+            logger.warning(f"Failed to update summary for worker {worker_id}: {e}")
 
 
 __all__ = ["WorkerArtifactStore"]
