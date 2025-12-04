@@ -44,6 +44,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
         spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-5.1-2025-11-13")
     """
     from zerg.crud import crud
+    from zerg.events import EventType, event_bus
     from zerg.models.models import WorkerJob
 
     # Get database session from credential resolver context
@@ -68,6 +69,17 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
         db.add(worker_job)
         db.commit()
         db.refresh(worker_job)
+
+        # Emit WORKER_SPAWNED event for SSE streaming
+        await event_bus.publish(
+            EventType.WORKER_SPAWNED,
+            {
+                "job_id": worker_job.id,
+                "task": task[:100],
+                "model": worker_model,
+                "owner_id": owner_id,
+            },
+        )
 
         return (
             f"Worker job {worker_job.id} queued successfully.\n\n"

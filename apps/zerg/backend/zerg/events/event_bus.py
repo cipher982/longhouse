@@ -49,6 +49,15 @@ class EventType(str, Enum):
     # Ops dashboard events
     BUDGET_DENIED = "budget_denied"
 
+    # Supervisor/Worker events (Super Siri architecture)
+    SUPERVISOR_STARTED = "supervisor_started"
+    SUPERVISOR_THINKING = "supervisor_thinking"
+    SUPERVISOR_COMPLETE = "supervisor_complete"
+    WORKER_SPAWNED = "worker_spawned"
+    WORKER_STARTED = "worker_started"
+    WORKER_COMPLETE = "worker_complete"
+    WORKER_SUMMARY_READY = "worker_summary_ready"
+
 
 class EventBus:
     """Central event bus for publishing and subscribing to events."""
