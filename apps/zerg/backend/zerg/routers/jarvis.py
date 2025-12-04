@@ -100,6 +100,29 @@ class JarvisDispatchResponse(BaseModel):
     agent_name: str = Field(..., description="Name of agent being executed")
 
 
+class JarvisSupervisorRequest(BaseModel):
+    """Request to dispatch a task to the supervisor agent."""
+
+    task: str = Field(..., description="Natural language task for the supervisor")
+    context: Optional[dict] = Field(
+        None,
+        description="Optional context including conversation_id and previous_messages",
+    )
+    preferences: Optional[dict] = Field(
+        None,
+        description="Optional preferences like verbosity and notify_on_complete",
+    )
+
+
+class JarvisSupervisorResponse(BaseModel):
+    """Response from supervisor dispatch."""
+
+    run_id: int = Field(..., description="Supervisor run ID for tracking")
+    thread_id: int = Field(..., description="Supervisor thread ID (long-lived)")
+    status: str = Field(..., description="Initial run status")
+    stream_url: str = Field(..., description="SSE stream URL for progress updates")
+
+
 # ---------------------------------------------------------------------------
 # Authentication Endpoint
 # ---------------------------------------------------------------------------
@@ -434,7 +457,242 @@ async def jarvis_dispatch(
 
 
 # ---------------------------------------------------------------------------
-# SSE Events Endpoint
+# Supervisor Endpoint (Super Siri Architecture)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/supervisor", response_model=JarvisSupervisorResponse)
+async def jarvis_supervisor(
+    request: JarvisSupervisorRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> JarvisSupervisorResponse:
+    """Dispatch a task to the supervisor agent.
+
+    The supervisor is the "one brain" that coordinates workers and maintains
+    long-term context. Each user has a single supervisor thread that persists
+    across sessions.
+
+    This endpoint:
+    1. Finds or creates the user's supervisor thread (idempotent)
+    2. Creates a new run attached to that thread
+    3. Kicks off supervisor execution in the background
+    4. Returns immediately with run_id and stream_url
+
+    Args:
+        request: Task and optional context/preferences
+        background_tasks: FastAPI background tasks
+        db: Database session
+        current_user: Authenticated user
+
+    Returns:
+        JarvisSupervisorResponse with run_id, thread_id, and stream_url
+
+    Example:
+        POST /api/jarvis/supervisor
+        {"task": "Check my server health"}
+
+        Response:
+        {
+            "run_id": 456,
+            "thread_id": 789,
+            "status": "running",
+            "stream_url": "/api/jarvis/supervisor/events?run_id=456"
+        }
+    """
+    from zerg.services.supervisor_service import SupervisorService
+
+    supervisor_service = SupervisorService(db)
+
+    # Get or create supervisor components (idempotent)
+    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+    thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+
+    # Create run record (marks as running)
+    from zerg.models.enums import RunStatus
+
+    run = AgentRun(
+        agent_id=agent.id,
+        thread_id=thread.id,
+        status=RunStatus.RUNNING,
+        trigger_type="jarvis",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    logger.info(
+        f"Jarvis supervisor: created run {run.id} for user {current_user.id}, "
+        f"task: {request.task[:50]}..."
+    )
+
+    # Start supervisor execution in background
+    # We use asyncio.create_task directly since we're in an async context
+    # and want the task to continue after the response is sent
+    async def run_supervisor_background(owner_id: int, task: str, run_id: int):
+        """Execute supervisor in background."""
+        from zerg.database import db_session
+        from zerg.services.supervisor_service import SupervisorService
+
+        try:
+            with db_session() as bg_db:
+                service = SupervisorService(bg_db)
+                # Run supervisor - events are emitted via event_bus
+                await service.run_supervisor(
+                    owner_id=owner_id,
+                    task=task,
+                    timeout=60,
+                )
+        except Exception as e:
+            logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
+
+    # Create background task - runs independently of the request
+    asyncio.create_task(
+        run_supervisor_background(current_user.id, request.task, run.id)
+    )
+
+    return JarvisSupervisorResponse(
+        run_id=run.id,
+        thread_id=thread.id,
+        status="running",
+        stream_url=f"/api/jarvis/supervisor/events?run_id={run.id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Supervisor SSE Events Endpoint
+# ---------------------------------------------------------------------------
+
+
+async def _supervisor_event_generator(run_id: int, owner_id: int):
+    """Generate SSE events for a specific supervisor run.
+
+    Subscribes to supervisor and worker events filtered by run_id/owner_id.
+
+    Args:
+        run_id: The supervisor run ID to track
+        owner_id: Owner ID for security filtering
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def event_handler(event):
+        """Filter and queue relevant events."""
+        # Security: only emit events for this owner
+        if event.get("owner_id") != owner_id:
+            return
+
+        # For supervisor events, filter by run_id
+        if "run_id" in event and event.get("run_id") != run_id:
+            return
+
+        await queue.put(event)
+
+    # Subscribe to supervisor/worker events
+    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+    event_bus.subscribe(EventType.ERROR, event_handler)
+
+    try:
+        # Send initial connection event
+        yield {
+            "event": "connected",
+            "data": json.dumps({
+                "message": "Supervisor SSE stream connected",
+                "run_id": run_id,
+            }),
+        }
+
+        # Stream events until supervisor completes or errors
+        complete = False
+        while not complete:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                # Determine event type
+                event_type = event.get("event_type") or event.get("type") or "event"
+
+                # Check for completion
+                if event_type in ("supervisor_complete", "error"):
+                    complete = True
+
+                # Format payload (remove internal fields)
+                payload = {
+                    k: v
+                    for k, v in event.items()
+                    if k not in {"event_type", "type", "owner_id"}
+                }
+
+                yield {
+                    "event": event_type,
+                    "data": json.dumps({
+                        "type": event_type,
+                        "payload": payload,
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                    }),
+                }
+
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps({
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                    }),
+                }
+
+    except asyncio.CancelledError:
+        logger.info(f"Supervisor SSE stream disconnected for run {run_id}")
+    finally:
+        # Unsubscribe from all events
+        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+        event_bus.unsubscribe(EventType.ERROR, event_handler)
+
+
+@router.get("/supervisor/events")
+async def jarvis_supervisor_events(
+    run_id: int,
+    current_user=Depends(get_current_jarvis_user),
+) -> EventSourceResponse:
+    """SSE stream for supervisor run progress.
+
+    Provides real-time updates for a specific supervisor run including:
+    - supervisor_started: Run has begun
+    - supervisor_thinking: Supervisor is analyzing
+    - worker_spawned: Worker job queued
+    - worker_started: Worker execution began
+    - worker_complete: Worker finished (success/failed)
+    - worker_summary_ready: Worker summary extracted
+    - supervisor_complete: Final result ready
+    - error: Something went wrong
+    - heartbeat: Keep-alive (every 30s)
+
+    The stream automatically closes when the supervisor completes or errors.
+
+    Args:
+        run_id: The supervisor run ID to track
+        current_user: Authenticated user
+
+    Returns:
+        EventSourceResponse streaming supervisor events
+    """
+    return EventSourceResponse(
+        _supervisor_event_generator(run_id, current_user.id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# SSE Events Endpoint (General)
 # ---------------------------------------------------------------------------
 
 

@@ -2,6 +2,12 @@
 
 This service manages the execution of worker jobs in the background.
 It polls for queued worker jobs and executes them using the WorkerRunner.
+
+Events emitted (for SSE streaming):
+- WORKER_SPAWNED: When a job is picked up for processing
+- WORKER_STARTED: When worker execution begins
+- WORKER_COMPLETE: When worker finishes (success/failed/timeout)
+- WORKER_SUMMARY_READY: When summary extraction completes
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from typing import Optional
 
 from zerg.crud import crud
 from zerg.database import db_session
+from zerg.events import EventType, event_bus
 from zerg.services.worker_runner import WorkerRunner
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 
@@ -101,6 +108,10 @@ class WorkerJobProcessor:
                 logger.debug(f"Job {job_id} already being processed (status: {job.status})")
                 return
 
+            # Capture owner_id for event emission
+            owner_id = job.owner_id
+            task = job.task
+
             try:
                 # Update job status to running
                 job.status = "running"
@@ -108,6 +119,16 @@ class WorkerJobProcessor:
                 db.commit()
 
                 logger.info(f"Starting worker job {job.id} for task: {job.task[:50]}...")
+
+                # Emit WORKER_STARTED event
+                await event_bus.publish(
+                    EventType.WORKER_STARTED,
+                    {
+                        "job_id": job.id,
+                        "task": task[:100],
+                        "owner_id": owner_id,
+                    },
+                )
 
                 # Create worker runner
                 artifact_store = WorkerArtifactStore()
@@ -138,6 +159,30 @@ class WorkerJobProcessor:
 
                 db.commit()
 
+                # Emit WORKER_COMPLETE event
+                await event_bus.publish(
+                    EventType.WORKER_COMPLETE,
+                    {
+                        "job_id": job.id,
+                        "worker_id": result.worker_id,
+                        "status": result.status,
+                        "duration_ms": result.duration_ms,
+                        "owner_id": owner_id,
+                    },
+                )
+
+                # Emit WORKER_SUMMARY_READY if we have a summary
+                if result.summary:
+                    await event_bus.publish(
+                        EventType.WORKER_SUMMARY_READY,
+                        {
+                            "job_id": job.id,
+                            "worker_id": result.worker_id,
+                            "summary": result.summary,
+                            "owner_id": owner_id,
+                        },
+                    )
+
             except Exception as e:
                 logger.exception(f"Failed to process worker job {job.id}")
 
@@ -147,6 +192,17 @@ class WorkerJobProcessor:
                     job.error = str(e)
                     job.finished_at = datetime.now(timezone.utc)
                     db.commit()
+
+                    # Emit error event
+                    await event_bus.publish(
+                        EventType.WORKER_COMPLETE,
+                        {
+                            "job_id": job.id,
+                            "status": "failed",
+                            "error": str(e),
+                            "owner_id": owner_id,
+                        },
+                    )
                 except Exception as commit_error:
                     logger.error(f"Failed to commit error state for job {job.id}: {commit_error}")
 

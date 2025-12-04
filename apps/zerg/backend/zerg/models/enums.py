@@ -43,6 +43,7 @@ class ThreadType(str, Enum):
     CHAT = "chat"
     SCHEDULED = "scheduled"
     MANUAL = "manual"
+    SUPER = "super"  # Supervisor thread (Super Siri architecture)
 
 
 # New Phase/Result enums for execution state architecture refactor
