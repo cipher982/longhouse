@@ -24,6 +24,7 @@ import time
 from fastapi.testclient import TestClient
 
 from zerg.crud import crud
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 # Use the client fixture from conftest.py, which properly sets up the test database
@@ -120,7 +121,7 @@ def _create_agent(client: TestClient) -> int:
             "name": "bot",
             "system_instructions": "sys",
             "task_instructions": "task",
-            "model": "gpt-4o-mini",
+            "model": TEST_WORKER_MODEL,
         },
     )
     resp.raise_for_status()

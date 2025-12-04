@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import crud
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.models import Agent as AgentModel
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.thread_service import ThreadService
 from zerg.services.thread_service import _db_to_langchain
 from zerg.services.worker_artifact_store import WorkerArtifactStore
@@ -279,7 +280,7 @@ class WorkerRunner:
             db=db,
             owner_id=owner_id,
             name=f"Worker: {task[:30]}",
-            model=config.get("model", "gpt-4o-mini"),
+            model=config.get("model", DEFAULT_WORKER_MODEL_ID),
             system_instructions=config.get(
                 "system_instructions",
                 "You are a helpful assistant executing a specific task. "
@@ -428,7 +429,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
             client = AsyncOpenAI()
             response = await asyncio.wait_for(
                 client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=DEFAULT_WORKER_MODEL_ID,
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=50,
                 ),
@@ -441,7 +442,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
 
             return summary, {
                 "version": SUMMARY_VERSION,
-                "model": "gpt-4o-mini",
+                "model": DEFAULT_WORKER_MODEL_ID,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
 

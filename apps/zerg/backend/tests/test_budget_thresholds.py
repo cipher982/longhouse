@@ -4,6 +4,7 @@ import pytest
 
 from zerg.crud import crud
 from zerg.main import app
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _ensure_user_role(db_session, email: str, role: str):
@@ -23,7 +24,7 @@ def _agent_and_thread(db_session, owner_id: int):
         name="budget-agent",
         system_instructions="sys",
         task_instructions="task",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config={},
     )

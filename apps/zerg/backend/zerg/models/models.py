@@ -703,7 +703,7 @@ class WorkerJob(Base):
 
     # Job specification
     task = Column(Text, nullable=False)
-    model = Column(String(100), nullable=False, default="gpt-4o-mini")
+    model = Column(String(100), nullable=False, default="gpt-5-mini")
 
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed

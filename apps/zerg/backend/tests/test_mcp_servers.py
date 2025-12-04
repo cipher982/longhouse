@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import crud
 from zerg.models.models import Agent
 from zerg.models.models import User
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -18,7 +19,7 @@ def test_agent(db: Session, test_user: User) -> Agent:
         name="Test Agent for MCP",
         system_instructions="You are a test agent",
         task_instructions="Test MCP functionality",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule=None,
         config=None,
     )
@@ -224,7 +225,7 @@ class TestMCPServers:
             name="Other Agent",
             system_instructions="Other agent",
             task_instructions="Other task",
-            model="gpt-4o-mini",
+            model=TEST_WORKER_MODEL,
             schedule=None,
             config=None,
         )

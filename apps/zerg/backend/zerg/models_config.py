@@ -36,14 +36,18 @@ class ModelConfig:
 
 
 # Define available models
-# NOTE: gpt-5.1-chat-latest is the default for all agent creation
 # Voice/realtime interfaces use dedicated realtime models (see jarvis context)
 AVAILABLE_MODELS = [
     ModelConfig(
-        id="gpt-5.1-chat-latest",
+        id="gpt-5.1-2025-11-13",
         display_name="gpt-5.1",
         provider=ModelProvider.OPENAI,
         is_default=True,
+    ),
+    ModelConfig(
+        id="gpt-5-mini",
+        display_name="gpt-5 mini",
+        provider=ModelProvider.OPENAI,
     ),
     ModelConfig(
         id="o3-mini-2025-01-31",
@@ -55,23 +59,16 @@ AVAILABLE_MODELS = [
         display_name="o1",
         provider=ModelProvider.OPENAI,
     ),
-    # Additional models for testing and legacy support
-    ModelConfig(
-        id="gpt-4o",
-        display_name="gpt-4o",
-        provider=ModelProvider.OPENAI,
-    ),
-    ModelConfig(
-        id="gpt-4o-mini",
-        display_name="gpt-4o-mini",
-        provider=ModelProvider.OPENAI,
-    ),
     ModelConfig(
         id="gpt-mock",
-        display_name="gpt-mock",
+        display_name="gpt-mock (testing)",
         provider=ModelProvider.OPENAI,
     ),
 ]
+
+# Centralized model constants - use these instead of hardcoding
+DEFAULT_MODEL_ID = "gpt-5.1-2025-11-13"
+DEFAULT_WORKER_MODEL_ID = "gpt-5-mini"  # Workers use lighter model by default
 
 # Create lookup dictionaries for quick access
 MODELS_BY_ID: Dict[str, ModelConfig] = {model.id: model for model in AVAILABLE_MODELS}

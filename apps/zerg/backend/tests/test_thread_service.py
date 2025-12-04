@@ -10,6 +10,7 @@ from langchain_core.messages import ToolMessage
 from zerg.crud import crud as _crud
 from zerg.models.models import Agent
 from zerg.services.thread_service import ThreadService
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 # Regex pattern for ISO 8601 timestamp prefix: [YYYY-MM-DDTHH:MM:SSZ]
 TIMESTAMP_PATTERN = r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] "
@@ -25,7 +26,7 @@ def _create_test_agent(db_session):
         name="TestAgent",
         system_instructions="You are helpful.",
         task_instructions="",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
     )
 
 

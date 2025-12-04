@@ -4,6 +4,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from zerg.models.models import Agent
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def test_read_agents_empty(client: TestClient):
@@ -32,7 +33,7 @@ def test_create_agent(client: TestClient):
     agent_data = {
         "system_instructions": "System instructions for new test agent",
         "task_instructions": "This is a new test agent",
-        "model": "gpt-5.1-chat-latest",
+        "model": TEST_MODEL,
     }
 
     response = client.post("/api/agents", json=agent_data)
@@ -60,7 +61,7 @@ def test_create_and_rename_agent(client: TestClient):
     agent_data = {
         "system_instructions": "System instructions",
         "task_instructions": "Task instructions",
-        "model": "gpt-5.1-chat-latest",
+        "model": TEST_MODEL,
     }
     response = client.post("/api/agents", json=agent_data)
     assert response.status_code == 201
@@ -102,7 +103,7 @@ def test_update_agent(client: TestClient, sample_agent: Agent):
         "name": "Updated Agent Name",
         "system_instructions": "Updated system instructions",
         "task_instructions": "Updated task instructions",
-        "model": "gpt-4o-mini",
+        "model": TEST_WORKER_MODEL,
         "status": "processing",
     }
 

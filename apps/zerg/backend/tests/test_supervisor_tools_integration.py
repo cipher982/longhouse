@@ -12,6 +12,7 @@ from zerg.services.thread_service import ThreadService
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.tools.registry import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def supervisor_agent(db_session, test_user):
         db=db_session,
         owner_id=test_user.id,
         name="Supervisor Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions=(
             "You are a supervisor agent. You can delegate tasks to worker agents "
             "using the spawn_worker tool. When given a task, spawn a worker to handle it."
@@ -120,7 +121,7 @@ async def test_supervisor_can_list_workers(
     worker_job = WorkerJob(
         owner_id=test_user.id,
         task="Test task for listing",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         status="queued",
         created_at=datetime.now(timezone.utc),
     )
@@ -195,7 +196,7 @@ async def test_supervisor_reads_worker_result(
         db=db_session,
         task="Calculate 5 * 8",
         agent=None,
-        agent_config={"model": "gpt-4o-mini", "owner_id": test_user.id},
+        agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
     )
 
     worker_id = result.worker_id
@@ -204,7 +205,7 @@ async def test_supervisor_reads_worker_result(
     worker_job = WorkerJob(
         owner_id=test_user.id,
         task="Calculate 5 * 8",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         status="success",
         worker_id=worker_id,
         created_at=datetime.now(timezone.utc),

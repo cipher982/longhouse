@@ -7,6 +7,7 @@ import pytest
 
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ async def test_run_worker_simple_task(worker_runner, temp_store, db_session, tes
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
         
@@ -84,7 +85,7 @@ async def test_run_worker_without_agent(worker_runner, temp_store, db_session, t
         db=db_session,
         task=task,
         agent=None,  # No agent provided
-        agent_config={"model": "gpt-4o-mini"},
+        agent_config={"model": TEST_WORKER_MODEL},
     )
 
     # Verify result
@@ -94,7 +95,7 @@ async def test_run_worker_without_agent(worker_runner, temp_store, db_session, t
     # Verify worker artifacts
     metadata = temp_store.get_worker_metadata(result.worker_id)
     assert metadata["status"] == "success"
-    assert metadata["config"]["model"] == "gpt-4o-mini"
+    assert metadata["config"]["model"] == TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
@@ -107,7 +108,7 @@ async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session,
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent with Tools",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant with access to tools.",
         task_instructions="",
         
@@ -152,7 +153,7 @@ async def test_run_worker_handles_errors(worker_runner, temp_store, db_session, 
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
         
@@ -192,7 +193,7 @@ async def test_worker_message_persistence(worker_runner, temp_store, db_session,
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
         
@@ -237,7 +238,7 @@ async def test_worker_result_extraction(worker_runner, temp_store, db_session, t
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant. Always end your response with 'DONE'.",
         task_instructions="",
         
@@ -275,7 +276,7 @@ async def test_worker_config_persistence(worker_runner, temp_store, db_session, 
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
         
@@ -284,7 +285,7 @@ async def test_worker_config_persistence(worker_runner, temp_store, db_session, 
     db_session.refresh(agent)
 
     config = {
-        "model": "gpt-4o-mini",
+        "model": TEST_WORKER_MODEL,
         "timeout": 300,
         "custom_param": "test_value",
     }
@@ -298,7 +299,7 @@ async def test_worker_config_persistence(worker_runner, temp_store, db_session, 
 
     # Verify config in metadata
     metadata = temp_store.get_worker_metadata(result.worker_id)
-    assert metadata["config"]["model"] == "gpt-4o-mini"
+    assert metadata["config"]["model"] == TEST_WORKER_MODEL
     assert metadata["config"]["timeout"] == 300
     assert metadata["config"]["custom_param"] == "test_value"
 
@@ -312,7 +313,7 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
         db=db_session,
         owner_id=test_user.id,
         name="Test Agent",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
         

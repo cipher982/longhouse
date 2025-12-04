@@ -9,6 +9,7 @@ from zerg.crud.crud import get_agent_messages
 from zerg.crud.crud import get_agents
 from zerg.crud.crud import update_agent
 from zerg.models.models import Agent
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 # Ensure we have at least one user – the sample_agent already uses _dev_user.
 
@@ -25,7 +26,7 @@ def test_get_agents(db_session: Session, sample_agent: Agent):
             name=f"Test Agent {i}",
             system_instructions=f"System instructions for agent {i}",
             task_instructions=f"Instructions for agent {i}",
-            model="gpt-5.1-chat-latest",
+            model=TEST_MODEL,
             status="idle",
         )
         db_session.add(agent)
@@ -73,7 +74,7 @@ def test_create_agent(db_session: Session):
         owner_id=owner.id,
         system_instructions="System instructions for testing",
         task_instructions="Testing CRUD operations",
-        model="gpt-4o-mini",
+        model=TEST_WORKER_MODEL,
         schedule="0 12 * * *",  # Noon every day
         config={"test": True},
     )
@@ -82,7 +83,7 @@ def test_create_agent(db_session: Session):
     assert agent.name == "New Agent"  # Auto-generated placeholder name
     assert agent.system_instructions == "System instructions for testing"
     assert agent.task_instructions == "Testing CRUD operations"
-    assert agent.model == "gpt-4o-mini"
+    assert agent.model == TEST_WORKER_MODEL
     assert agent.status == "idle"  # Default value
     assert agent.schedule == "0 12 * * *"
     assert agent.config == {"test": True}
@@ -98,14 +99,14 @@ def test_update_agent(db_session: Session, sample_agent: Agent):
     """Test updating an existing agent"""
     # Update some fields
     updated_agent = update_agent(
-        db_session, sample_agent.id, name="Updated CRUD Agent", status="processing", model="gpt-4o-mini"
+        db_session, sample_agent.id, name="Updated CRUD Agent", status="processing", model=TEST_WORKER_MODEL
     )
 
     assert updated_agent is not None
     assert updated_agent.id == sample_agent.id
     assert updated_agent.name == "Updated CRUD Agent"
     assert updated_agent.status == "processing"
-    assert updated_agent.model == "gpt-4o-mini"
+    assert updated_agent.model == TEST_WORKER_MODEL
     assert updated_agent.system_instructions == sample_agent.system_instructions  # Should be unchanged
     assert updated_agent.task_instructions == sample_agent.task_instructions  # Should be unchanged
 

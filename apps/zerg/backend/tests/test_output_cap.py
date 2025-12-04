@@ -1,4 +1,5 @@
 
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 def test_max_output_tokens_is_passed_to_chat_openai(monkeypatch):
     import zerg.agents_def.zerg_react_agent as zr
@@ -40,7 +41,7 @@ def test_max_output_tokens_is_passed_to_chat_openai(monkeypatch):
     # Minimal agent row stub
     class _Agent:
         id = 1
-        model = "gpt-4o-mini"
+        model = TEST_WORKER_MODEL
         updated_at = None
         config = {}
         allowed_tools = None

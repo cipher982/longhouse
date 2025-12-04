@@ -492,6 +492,28 @@ def test_session_factory(db_session):
 
 
 # ---------------------------------------------------------------------------
+# Model fixtures - centralized model constants for tests
+# ---------------------------------------------------------------------------
+from zerg.models_config import DEFAULT_MODEL_ID, DEFAULT_WORKER_MODEL_ID
+
+# Re-export as module-level constants for tests that need direct import
+TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.1-2025-11-13"
+TEST_WORKER_MODEL = DEFAULT_WORKER_MODEL_ID  # "gpt-5-mini"
+
+
+@pytest.fixture
+def test_model():
+    """Default model for test agents."""
+    return DEFAULT_MODEL_ID
+
+
+@pytest.fixture
+def test_worker_model():
+    """Default model for test workers (lighter weight)."""
+    return DEFAULT_WORKER_MODEL_ID
+
+
+# ---------------------------------------------------------------------------
 # Fixtures – generic user + agent helpers
 # ---------------------------------------------------------------------------
 
@@ -518,7 +540,7 @@ def sample_agent(db_session, _dev_user):
         name="Test Agent",
         system_instructions="System instructions for test agent",
         task_instructions="This is a test agent",
-        model="gpt-5.1-chat-latest",
+        model=DEFAULT_MODEL_ID,
         status="idle",
     )
     db_session.add(agent)

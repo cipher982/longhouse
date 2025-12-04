@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def test_create_worker(temp_store):
     """Test creating a worker directory structure."""
     worker_id = temp_store.create_worker(
         task="Check disk space on all servers",
-        config={"model": "gpt-4o", "timeout": 300},
+        config={"model": TEST_MODEL, "timeout": 300},
     )
 
     # Verify worker_id format
@@ -46,7 +47,7 @@ def test_create_worker(temp_store):
 
     assert metadata["worker_id"] == worker_id
     assert metadata["task"] == "Check disk space on all servers"
-    assert metadata["config"]["model"] == "gpt-4o"
+    assert metadata["config"]["model"] == TEST_MODEL
     assert metadata["status"] == "created"
     assert metadata["created_at"] is not None
     assert metadata["started_at"] is None
@@ -182,13 +183,13 @@ def test_complete_worker_with_error(temp_store):
 def test_get_worker_metadata(temp_store):
     """Test reading worker metadata."""
     worker_id = temp_store.create_worker(
-        "Test task", config={"model": "gpt-4o", "timeout": 300}
+        "Test task", config={"model": TEST_MODEL, "timeout": 300}
     )
 
     metadata = temp_store.get_worker_metadata(worker_id)
     assert metadata["worker_id"] == worker_id
     assert metadata["task"] == "Test task"
-    assert metadata["config"]["model"] == "gpt-4o"
+    assert metadata["config"]["model"] == TEST_MODEL
     assert metadata["status"] == "created"
 
 

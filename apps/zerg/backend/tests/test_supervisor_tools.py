@@ -16,6 +16,7 @@ from zerg.tools.builtin.supervisor_tools import (
     read_worker_result,
     spawn_worker,
 )
+from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def credential_context(db_session, test_user):
 
 def test_spawn_worker_success(credential_context, temp_artifact_path, db_session):
     """Test spawning a worker job that gets queued."""
-    result = spawn_worker(task="What is 2+2?", model="gpt-4o-mini")
+    result = spawn_worker(task="What is 2+2?", model=TEST_WORKER_MODEL)
 
     # Verify result format - now queued instead of executed synchronously
     assert "Worker job" in result
@@ -79,8 +80,8 @@ def test_list_workers_empty(temp_artifact_path):
 def test_list_workers_with_data(credential_context, temp_artifact_path, db_session):
     """Test listing workers after spawning some."""
     # Spawn a couple of workers (they get queued, not executed synchronously)
-    spawn_worker(task="Task 1", model="gpt-4o-mini")
-    spawn_worker(task="Task 2", model="gpt-4o-mini")
+    spawn_worker(task="Task 1", model=TEST_WORKER_MODEL)
+    spawn_worker(task="Task 2", model=TEST_WORKER_MODEL)
 
     # List workers
     result = list_workers(limit=10)
@@ -100,7 +101,7 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
     from zerg.crud import crud
 
     # 1. Create a worker as User A (test_user)
-    spawn_worker(task="User A Task", model="gpt-4o-mini")
+    spawn_worker(task="User A Task", model=TEST_WORKER_MODEL)
 
     # Verify User A can see it
     result_a = list_workers()
@@ -122,7 +123,7 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
     assert "showing 0" in result_b or "No worker" in result_b
 
     # 3. Create worker as User B
-    spawn_worker(task="User B Task", model="gpt-4o-mini")
+    spawn_worker(task="User B Task", model=TEST_WORKER_MODEL)
 
     # Verify User B sees their task
     result_b_2 = list_workers()
@@ -141,7 +142,7 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     from zerg.connectors.resolver import CredentialResolver
     
     # 1. Create worker as User A
-    res_spawn = spawn_worker(task="Secret Task", model="gpt-4o-mini")
+    res_spawn = spawn_worker(task="Secret Task", model=TEST_WORKER_MODEL)
     lines = res_spawn.split("\n")
     worker_line = [line for line in lines if "Worker" in line][0]
     worker_id = worker_line.split()[1]
@@ -173,7 +174,7 @@ def test_list_workers_with_status_filter(
 ):
     """Test listing workers with status filter."""
     # Spawn workers (gets queued)
-    spawn_worker(task="Queued task", model="gpt-4o-mini")
+    spawn_worker(task="Queued task", model=TEST_WORKER_MODEL)
 
     # List only queued workers (they don't run synchronously anymore)
     result = list_workers(status="queued", limit=10)
@@ -187,7 +188,7 @@ def test_list_workers_with_time_filter(
 ):
     """Test listing workers with time filter."""
     # Spawn a worker
-    spawn_worker(task="Recent task", model="gpt-4o-mini")
+    spawn_worker(task="Recent task", model=TEST_WORKER_MODEL)
 
     # List workers from last hour
     result = list_workers(since_hours=1)
@@ -207,7 +208,7 @@ def test_read_worker_result_success(
     import re
 
     # Spawn a worker (gets queued, not executed)
-    spawn_result = spawn_worker(task="What is 1+1?", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="What is 1+1?", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -236,7 +237,7 @@ def test_read_worker_file_metadata(
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test task", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -255,7 +256,7 @@ def test_read_worker_file_result(credential_context, temp_artifact_path, db_sess
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Say hello", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="Say hello", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -274,7 +275,7 @@ def test_read_worker_file_not_found(credential_context, temp_artifact_path, db_s
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
@@ -292,7 +293,7 @@ def test_read_worker_file_path_traversal(
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Test", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="Test", model=TEST_WORKER_MODEL)
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
     assert job_id_match
     job_id = job_id_match.group(1)
@@ -310,7 +311,7 @@ def test_get_worker_metadata_success(
     import re
 
     # Spawn a worker (gets queued)
-    spawn_result = spawn_worker(task="Metadata test task", model="gpt-4o-mini")
+    spawn_result = spawn_worker(task="Metadata test task", model=TEST_WORKER_MODEL)
 
     # Extract job_id
     job_id_match = re.search(r"Worker job (\d+)", spawn_result)
@@ -347,7 +348,7 @@ def test_grep_workers_with_matches(
 ):
     """Test grepping workers for a pattern."""
     # Spawn a worker with distinctive text
-    spawn_worker(task="Find the word UNICORN in this task", model="gpt-4o-mini")
+    spawn_worker(task="Find the word UNICORN in this task", model=TEST_WORKER_MODEL)
 
     # Search for the pattern
     result = grep_workers("UNICORN", since_hours=1)
@@ -361,7 +362,7 @@ def test_grep_workers_case_insensitive(
 ):
     """Test that grep is case-insensitive."""
     # Spawn a worker
-    spawn_worker(task="This task has UPPERCASE text", model="gpt-4o-mini")
+    spawn_worker(task="This task has UPPERCASE text", model=TEST_WORKER_MODEL)
 
     # Search with lowercase
     result = grep_workers("uppercase", since_hours=1)
@@ -373,9 +374,9 @@ def test_grep_workers_case_insensitive(
 def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_session):
     """Test complete workflow with multiple workers."""
     # Spawn multiple workers (get queued)
-    spawn_worker(task="First worker task", model="gpt-4o-mini")
-    spawn_worker(task="Second worker task", model="gpt-4o-mini")
-    spawn_worker(task="Third worker task", model="gpt-4o-mini")
+    spawn_worker(task="First worker task", model=TEST_WORKER_MODEL)
+    spawn_worker(task="Second worker task", model=TEST_WORKER_MODEL)
+    spawn_worker(task="Third worker task", model=TEST_WORKER_MODEL)
 
     # List all workers
     list_result = list_workers(limit=10)
@@ -397,11 +398,11 @@ def test_spawn_worker_with_different_models(
 ):
     """Test spawning workers with different models."""
     # Test with gpt-4o-mini
-    result1 = spawn_worker(task="Test with mini", model="gpt-4o-mini")
+    result1 = spawn_worker(task="Test with mini", model=TEST_WORKER_MODEL)
     assert "queued successfully" in result1
 
     # Test with gpt-4o
-    result2 = spawn_worker(task="Test with gpt-4o", model="gpt-4o")
+    result2 = spawn_worker(task="Test with gpt-4o", model=TEST_MODEL)
     assert "queued successfully" in result2 or "Worker job" in result2
 
 
@@ -409,7 +410,7 @@ def test_list_workers_limit(credential_context, temp_artifact_path, db_session):
     """Test that list_workers respects limit parameter."""
     # Spawn several workers
     for i in range(5):
-        spawn_worker(task=f"Worker {i}", model="gpt-4o-mini")
+        spawn_worker(task=f"Worker {i}", model=TEST_WORKER_MODEL)
 
     # List with limit of 3
     result = list_workers(limit=3)

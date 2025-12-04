@@ -20,6 +20,7 @@ from zerg.crud import crud
 from zerg.database import get_db
 from zerg.models.enums import AgentStatus
 from zerg.models.models import Agent
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 
 # Agent definitions
 JARVIS_AGENTS = [
@@ -42,7 +43,7 @@ Be brief, positive, and focus on actionable insights. Limit response to 3-4 para
 
 Present this as a friendly morning briefing.""",
         "schedule": "0 7 * * *",  # 7 AM daily
-        "model": "gpt-4o-mini",
+        "model": DEFAULT_WORKER_MODEL_ID,
         "config": {"temperature": 0.7, "max_tokens": 500},
     },
     {
@@ -64,7 +65,7 @@ Provide data-driven insights with specific recommendations.""",
 
 Be specific with numbers and trends.""",
         "schedule": "0 20 * * *",  # 8 PM daily
-        "model": "gpt-4o-mini",
+        "model": DEFAULT_WORKER_MODEL_ID,
         "config": {"temperature": 0.5, "max_tokens": 400},
     },
     {
@@ -86,7 +87,7 @@ Be strategic and help optimize time management.""",
 
 Provide a structured weekly overview.""",
         "schedule": "0 18 * * 0",  # 6 PM every Sunday
-        "model": "gpt-4o-mini",
+        "model": DEFAULT_WORKER_MODEL_ID,
         "config": {"temperature": 0.6, "max_tokens": 600},
     },
     {
@@ -107,7 +108,7 @@ Respond in 2-3 sentences max. Be direct and efficient.""",
 
 Keep it to 2-3 sentences total.""",
         "schedule": None,  # On-demand only
-        "model": "gpt-4o-mini",
+        "model": DEFAULT_WORKER_MODEL_ID,
         "config": {"temperature": 0.3, "max_tokens": 150},
     },
 ]
