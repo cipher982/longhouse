@@ -44,27 +44,27 @@ def test_invoke_calls_llm(agent_row):
     from zerg.agents_def import zerg_react_agent as mod
 
     # Patch ChatOpenAI so we don't hit real LLM
-    with (
-        patch("zerg.agents_def.zerg_react_agent.ChatOpenAI") as mock_llm_cls,
-        patch("zerg.agents_def.zerg_react_agent.MemorySaver", new=lambda *a, **kw: None),
-    ):
-        mock_instance = MagicMock()
-        # When llm_with_tools.invoke is called, return AIMessage("hi")
-        from unittest.mock import AsyncMock
+    # Note: No need to patch checkpointer - it will use MemorySaver in tests automatically
+    with patch("zerg.agents_def.zerg_react_agent.ChatOpenAI") as mock_llm_cls:
+            mock_instance = MagicMock()
+            # When llm_with_tools.invoke is called, return AIMessage("hi")
+            from unittest.mock import AsyncMock
 
-        from langchain_core.messages import AIMessage
+            from langchain_core.messages import AIMessage
 
-        mock_instance.bind_tools.return_value.invoke.return_value = AIMessage(content="hi")
-        # Fix: The runtime now awaits ainvoke() inside _call_model_async
-        mock_instance.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
-        mock_llm_cls.return_value = mock_instance
+            mock_instance.bind_tools.return_value.invoke.return_value = AIMessage(content="hi")
+            # Fix: The runtime now awaits ainvoke() inside _call_model_async
+            mock_instance.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
+            mock_llm_cls.return_value = mock_instance
 
-        runnable = mod.get_runnable(agent_row)
+            runnable = mod.get_runnable(agent_row)
 
-        # We don't patch the whole graph – the real runnable should work with
-        # our stubbed LLM. It should append an AIMessage("hi").
+            # We don't patch the whole graph – the real runnable should work with
+            # our stubbed LLM. It should append an AIMessage("hi").
 
-        res = runnable.invoke([])
+            # Provide config with thread_id required by checkpointer
+            config = {"configurable": {"thread_id": "test-thread-123"}}
+            res = runnable.invoke([], config=config)
 
-        # The runnable returns list of messages; last one should be AIMessage("hi")
-        assert res[-1].content == "hi"
+            # The runnable returns list of messages; last one should be AIMessage("hi")
+            assert res[-1].content == "hi"
