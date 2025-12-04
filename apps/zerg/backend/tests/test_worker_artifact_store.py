@@ -351,6 +351,21 @@ def test_search_workers(temp_store):
         assert "line" in match
 
 
+def test_search_workers_filters_by_ids(temp_store):
+    """Search can be restricted to specific worker IDs."""
+    worker1 = temp_store.create_worker("Disk check")
+    temp_store.save_result(worker1, "Disk usage is at 45% on server cube")
+
+    worker2 = temp_store.create_worker("CPU check")
+    temp_store.save_result(worker2, "CPU usage is high on server cube")
+
+    # Limit search to worker2 only
+    matches = temp_store.search_workers("cube", file_glob="*.txt", worker_ids=[worker2])
+
+    assert len(matches) == 1
+    assert matches[0]["worker_id"] == worker2
+
+
 def test_worker_collision(temp_store):
     """Test that worker_id collision is detected."""
     from unittest.mock import patch

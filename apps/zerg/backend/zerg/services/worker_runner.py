@@ -128,6 +128,7 @@ class WorkerRunner:
         worker_id = self.artifact_store.create_worker(task, config=config)
         logger.info(f"Created worker {worker_id} for task: {task[:50]}...")
 
+        temp_agent = False  # Track temporary agent for cleanup on failure
         try:
             # Start worker (marks as running)
             self.artifact_store.start_worker(worker_id)
@@ -201,6 +202,7 @@ class WorkerRunner:
             if temp_agent:
                 crud.delete_agent(db, agent.id)
                 db.commit()
+                temp_agent = False  # Prevent cleanup in finally
 
             logger.info(f"Worker {worker_id} completed successfully in {duration_ms}ms")
 
@@ -230,6 +232,14 @@ class WorkerRunner:
                 error=error_msg,
                 duration_ms=duration_ms,
             )
+        finally:
+            # Ensure temporary agents are not left behind on failure paths
+            if temp_agent and agent:
+                try:
+                    crud.delete_agent(db, agent.id)
+                    db.commit()
+                except Exception:
+                    logger.warning("Failed to clean up temporary agent after failure", exc_info=True)
 
     async def _create_temporary_agent(
         self, db: Session, task: str, config: dict[str, Any]
