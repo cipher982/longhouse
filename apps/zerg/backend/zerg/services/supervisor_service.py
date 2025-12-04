@@ -200,11 +200,12 @@ class SupervisorService:
             logger.info(f"Using existing supervisor run {run.id}")
         else:
             # Create run record (fallback for direct calls)
+            from zerg.models.enums import RunTrigger
             run = AgentRun(
                 agent_id=agent.id,
                 thread_id=thread.id,
                 status=RunStatus.RUNNING,
-                trigger_type="jarvis",
+                trigger=RunTrigger.API,
             )
             self.db.add(run)
             self.db.commit()
