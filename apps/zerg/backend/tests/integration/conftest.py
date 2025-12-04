@@ -91,10 +91,15 @@ def resend_from_email():
 
 @pytest.fixture
 def resend_to_email():
-    """Test recipient email for Resend."""
-    return _require_env(
+    """Test recipient email for Resend.
+
+    Uses Resend's official test addresses by default - these go through
+    the real pipeline (verifies API key, domain config) but don't deliver
+    to real inboxes. See: https://resend.com/docs/dashboard/emails/send-test-emails
+    """
+    return os.environ.get(
         "TEST_RESEND_TO_EMAIL",
-        "Test recipient email for Resend"
+        "delivered+zerg-integration@resend.dev"
     )
 
 
