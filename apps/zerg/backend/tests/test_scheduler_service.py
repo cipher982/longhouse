@@ -20,20 +20,20 @@ def patch_logging(monkeypatch):
 
 
 @pytest.fixture
-def service(test_session_factory):
+def service(test_session_factory, monkeypatch):
     """
     Create and return a SchedulerService instance for testing.
 
     The service is configured to use a test scheduler that does not actually
     run jobs but allows verifying that jobs would be scheduled correctly.
     """
-    service = SchedulerService(session_factory=test_session_factory)
     # Mock the event_bus subscription to avoid errors during tests
-    monkeypatch = pytest.MonkeyPatch()
+    # Using pytest's monkeypatch fixture ensures proper cleanup after test
     monkeypatch.setattr(
         "zerg.services.scheduler_service.event_bus.subscribe",
         lambda event_type, handler: None,
     )
+    service = SchedulerService(session_factory=test_session_factory)
     yield service
     # Ensure scheduler is properly shut down
     if service._initialized:
