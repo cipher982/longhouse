@@ -630,6 +630,8 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         owner_id: Owner ID for security filtering
     """
     queue: asyncio.Queue = asyncio.Queue()
+    pending_workers = 0
+    supervisor_done = False
 
     async def event_handler(event):
         """Filter and queue relevant events."""
@@ -673,8 +675,21 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                 # Determine event type
                 event_type = event.get("event_type") or event.get("type") or "event"
 
-                # Check for completion
-                if event_type in ("supervisor_complete", "error"):
+                # Track worker lifecycle so we don't close the stream until workers finish
+                if event_type == "worker_spawned":
+                    pending_workers += 1
+                elif event_type == "worker_complete" and pending_workers > 0:
+                    pending_workers -= 1
+                elif event_type == "worker_summary_ready" and pending_workers > 0:
+                    # In rare cases worker_complete may be dropped; treat summary_ready as completion
+                    pending_workers -= 1
+                elif event_type == "supervisor_complete":
+                    supervisor_done = True
+                elif event_type == "error":
+                    complete = True
+
+                # Close once supervisor is done AND all workers for this run have finished
+                if supervisor_done and pending_workers == 0:
                     complete = True
 
                 # Format payload (remove internal fields)
