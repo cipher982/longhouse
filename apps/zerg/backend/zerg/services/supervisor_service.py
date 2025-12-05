@@ -220,6 +220,7 @@ class SupervisorService:
         await event_bus.publish(
             EventType.SUPERVISOR_STARTED,
             {
+                "event_type": EventType.SUPERVISOR_STARTED,
                 "run_id": run.id,
                 "thread_id": thread.id,
                 "task": task,
@@ -242,6 +243,7 @@ class SupervisorService:
             await event_bus.publish(
                 EventType.SUPERVISOR_THINKING,
                 {
+                    "event_type": EventType.SUPERVISOR_THINKING,
                     "run_id": run.id,
                     "message": "Analyzing your request...",
                     "owner_id": owner_id,
@@ -290,6 +292,7 @@ class SupervisorService:
             await event_bus.publish(
                 EventType.SUPERVISOR_COMPLETE,
                 {
+                    "event_type": EventType.SUPERVISOR_COMPLETE,
                     "run_id": run.id,
                     "result": result_text or "(No result)",
                     "status": "success",
@@ -322,6 +325,7 @@ class SupervisorService:
             await event_bus.publish(
                 EventType.ERROR,
                 {
+                    "event_type": EventType.ERROR,
                     "run_id": run.id,
                     "message": str(e),
                     "owner_id": owner_id,
