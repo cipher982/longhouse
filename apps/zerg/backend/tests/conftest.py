@@ -187,17 +187,89 @@ from langchain_core.messages import AIMessage  # noqa: E402
 
 
 class _StubLlm:
-    """Stub LLM that returns deterministic response for both sync and async APIs."""
+    """Stub LLM that returns deterministic response for both sync and async APIs.
 
-    def invoke(self, _messages, **_kwargs):  # noqa: D401 – sync path used in production
+    When tools are bound, returns a tool call for the first tool.
+    When no tools are bound, returns a plain text response.
+    """
+
+    def __init__(self, tools=None):
+        self._tools = tools or []
+
+    def _make_response(self, messages):
+        """Generate a response based on bound tools and user message."""
+        # Check if there's already a tool response in the messages
+        # If so, return a plain text response (task complete)
+        has_tool_response = False
+        for msg in messages:
+            msg_type = getattr(msg, 'type', None)
+            if msg_type == 'tool':
+                has_tool_response = True
+                break
+
+        if has_tool_response:
+            # Tool has been executed, return completion response
+            return AIMessage(content="Task completed successfully.")
+
+        # Look for the last human message (the actual user request, not system context)
+        user_content = ""
+        for msg in reversed(messages):
+            if hasattr(msg, 'content') and hasattr(msg, 'type') and msg.type == 'human':
+                content = msg.content
+                # Skip system context injection (starts with <current_time>)
+                if content and not content.strip().startswith('<current_time>'):
+                    user_content = content
+                    break
+
+        # If tools are bound, pick the best tool based on user message
+        if self._tools:
+            import re
+
+            # Build tool name lookup
+            tool_names = [t.name if hasattr(t, 'name') else str(t) for t in self._tools]
+            user_lower = user_content.lower()
+
+            # Select tool based on keywords in user message
+            tool_name = tool_names[0]  # default to first
+            if any(kw in user_lower for kw in ['list', 'show', 'recent']):
+                if 'list_workers' in tool_names:
+                    tool_name = 'list_workers'
+            elif any(kw in user_lower for kw in ['read', 'result', 'job']):
+                if 'read_worker_result' in tool_names:
+                    tool_name = 'read_worker_result'
+            elif any(kw in user_lower for kw in ['spawn', 'calculate', 'delegate', 'create']):
+                if 'spawn_worker' in tool_names:
+                    tool_name = 'spawn_worker'
+
+            # Generate reasonable arguments based on tool name
+            tool_args = {}
+            if tool_name == "spawn_worker":
+                tool_args = {"task": user_content or "stub task", "model": "gpt-5-mini"}
+            elif tool_name == "list_workers":
+                tool_args = {"limit": 10}
+            elif tool_name == "read_worker_result":
+                match = re.search(r'job (\d+)', user_lower)
+                tool_args = {"job_id": int(match.group(1)) if match else 1}
+
+            return AIMessage(
+                content="",
+                tool_calls=[{
+                    "id": "stub-tool-call-1",
+                    "name": tool_name,
+                    "args": tool_args,
+                }]
+            )
+
         return AIMessage(content="stub-response")
 
-    # Async variants retained for completeness (never awaited in current tests)
-    async def ainvoke(self, _messages, **_kwargs):  # noqa: D401 – preferred async method
-        return AIMessage(content="stub-response")
+    def invoke(self, messages, **_kwargs):  # noqa: D401 – sync path used in production
+        return self._make_response(messages)
 
-    async def invoke_async(self, _messages, **_kwargs):  # noqa: D401 – legacy async method
-        return AIMessage(content="stub-response")
+    async def ainvoke(self, messages, **_kwargs):  # noqa: D401 – preferred async method
+        return self._make_response(messages)
+
+    async def invoke_async(self, messages, **_kwargs):  # noqa: D401 – legacy async method
+        return self._make_response(messages)
 
 
 class _StubChatOpenAI:
@@ -206,8 +278,8 @@ class _StubChatOpenAI:
     def __init__(self, *args, **kwargs):  # noqa: D401 – signature irrelevant
         pass
 
-    def bind_tools(self, _tools):  # noqa: D401
-        return _StubLlm()
+    def bind_tools(self, tools):  # noqa: D401
+        return _StubLlm(tools=tools)
 
 
 # Then patch specific classes or functions rather than entire modules
