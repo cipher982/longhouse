@@ -98,7 +98,7 @@ cd ../../..
 
 # Start React frontend
 echo "  ⚛️  Starting React frontend on port $FRONTEND_PORT..."
-cd apps/zerg/frontend-web && npm run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../../../visual-frontend.log 2>&1 &
+cd apps/zerg/frontend-web && bun run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../../../visual-frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd ../../..
 
@@ -129,7 +129,7 @@ echo ""
 cd apps/zerg/e2e
 
 # Prepare Playwright command
-PLAYWRIGHT_CMD="npx playwright test comprehensive-visual-test.ts"
+PLAYWRIGHT_CMD="bunx playwright test comprehensive-visual-test.ts"
 
 # Add headless/headed mode
 if [ "$HEADLESS" = "false" ]; then
@@ -165,7 +165,7 @@ if eval $PLAYWRIGHT_CMD; then
     echo "  📸 Screenshots: attached to test results"
     echo ""
     echo "🔍 To view detailed HTML report:"
-    echo "  cd e2e && npx playwright show-report"
+    echo "  cd e2e && bunx playwright show-report"
     echo ""
 else
     echo ""
@@ -175,7 +175,7 @@ else
     echo "  1. Check service logs: visual-backend.log, visual-frontend.log"
     echo "  2. Verify OpenAI API key is set: echo \$OPENAI_API_KEY"
     echo "  3. Run with --verbose for detailed output"
-    echo "  4. View test report: cd e2e && npx playwright show-report"
+    echo "  4. View test report: cd e2e && bunx playwright show-report"
     echo ""
     exit 1
 fi

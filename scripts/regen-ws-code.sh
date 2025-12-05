@@ -6,8 +6,8 @@
 # the generated code is always in sync with `asyncapi/chat.yml`.
 #
 # Prerequisites (not installed automatically):
-#   • Node ≥ 16 (for npx)
-#   • @asyncapi/generator  (fetched transparently via npx)
+#   • Bun or Node ≥ 16 (for bunx/npx)
+#   • @asyncapi/generator  (fetched transparently via bunx/npx)
 #   • @asyncapi/typescript-codegen  (ditto)
 #
 # Nothing here starts the backend server; it is safe in CI and pre-commit.
@@ -70,9 +70,14 @@ _run_with_timeout() {
       fi
     }
 
-    _run_with_timeout 15 npx --no-install @asyncapi/cli validate "$SPEC_FILE" >"$VALID_OUT" 2>&1
-    if [[ $? -ne 0 ]]; then
-      _run_with_timeout 15 npx --no-install asyncapi validate "$SPEC_FILE" >>"$VALID_OUT" 2>&1
+    # Try bunx first, then fall back to npx
+    if command -v bunx >/dev/null 2>&1; then
+      _run_with_timeout 15 bunx @asyncapi/cli validate "$SPEC_FILE" >"$VALID_OUT" 2>&1
+    else
+      _run_with_timeout 15 npx --no-install @asyncapi/cli validate "$SPEC_FILE" >"$VALID_OUT" 2>&1
+      if [[ $? -ne 0 ]]; then
+        _run_with_timeout 15 npx --no-install asyncapi validate "$SPEC_FILE" >>"$VALID_OUT" 2>&1
+      fi
     fi
 
     VALID_EXIT=$?

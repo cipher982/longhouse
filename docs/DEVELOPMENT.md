@@ -130,7 +130,7 @@ make test-zerg
 
 # Jarvis E2E tests (with Playwright UI)
 cd apps/jarvis/e2e
-npx playwright test --ui
+bunx playwright test --ui
 ```
 
 ---
@@ -254,7 +254,7 @@ Copy from `.env.example` if missing.
 - [ ] Is port 8787 free? (`lsof -i :8787`)
 - [ ] Is port 47300 free? (`lsof -i :47300`)
 - [ ] Do you have `.env` configured? (`cat .env`)
-- [ ] Are node_modules installed? (`cd apps/jarvis && yarn install`)
+- [ ] Are node_modules installed? (`bun install` from repo root)
 - [ ] Is Vite proxy configured? (`cat apps/jarvis/apps/web/vite.config.ts`)
 
 ---

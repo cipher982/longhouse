@@ -107,7 +107,7 @@ EOF
 # Install playwright if needed
 if [ ! -d "node_modules" ]; then
     echo "📦 Installing dependencies..."
-    npm install --silent
+    bun install --silent
 fi
 
 # Run the smoke test

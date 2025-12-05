@@ -78,11 +78,11 @@ else
     check_fail "Node.js not found - install Node.js 18+"
 fi
 
-if command -v npm &> /dev/null; then
-    NPM_VERSION=$(npm --version)
-    check_pass "npm installed ($NPM_VERSION)"
+if command -v bun &> /dev/null; then
+    BUN_VERSION=$(bun --version)
+    check_pass "Bun installed ($BUN_VERSION)"
 else
-    check_fail "npm not found"
+    check_fail "Bun not found - install with: curl -fsSL https://bun.sh/install | bash"
 fi
 
 if command -v python3 &> /dev/null; then
@@ -99,16 +99,16 @@ else
     check_warn "uv not found - install with: curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
 
-if [ -f "node_modules/.package-lock.json" ]; then
-    check_pass "Root npm dependencies installed"
+if [ -f "bun.lock" ] && [ -d "node_modules" ]; then
+    check_pass "Bun dependencies installed"
 else
-    check_warn "Root npm dependencies not installed - run: npm install"
+    check_warn "Dependencies not installed - run: bun install"
 fi
 
-if [ -f "apps/jarvis/node_modules/.yarn-integrity" ] || [ -d "apps/jarvis/node_modules" ]; then
+if [ -d "apps/jarvis/apps/web/node_modules" ] || [ -d "node_modules/@jarvis" ]; then
     check_pass "Jarvis dependencies installed"
 else
-    check_warn "Jarvis dependencies not installed - run: cd apps/jarvis && npm install"
+    check_warn "Jarvis dependencies not installed - run: bun install (from repo root)"
 fi
 
 if [ -f "apps/zerg/backend/.venv/bin/python" ] || [ -f "apps/zerg/backend/uv.lock" ]; then
@@ -259,7 +259,7 @@ else
     echo ""
     echo "Quick fixes:"
     echo "  - Missing .env: cp .env.example.swarm .env && nano .env"
-    echo "  - Missing deps: npm install && cd apps/jarvis && npm install"
+    echo "  - Missing deps: bun install"
     echo "  - Python deps: cd apps/zerg/backend && uv sync"
     exit 1
 fi

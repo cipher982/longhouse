@@ -2,7 +2,6 @@
   "name": "@jarvis/monorepo",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "yarn@4.5.0",
   "workspaces": {
     "packages": [
       "apps/*",
@@ -11,15 +10,15 @@
     ]
   },
   "scripts": {
-    "test": "npm run web:test",
-    "test:headed": "npm run web:test -- --headed",
-    "test:debug": "npm run web:test -- --debug",
-    "test:mobile": "npm run web:test -- --project=mobile",
-    "web:dev": "npm run dev --workspace @jarvis/web",
-    "web:test": "npm run test --workspace @jarvis/web",
-    "server:dev": "npm run dev --workspace @jarvis/server",
-    "native:dev": "npm run dev --workspace @jarvis/native",
-    "start:test": "concurrently \"npm run server:dev\" \"npm run web:dev\" --kill-others --success first"
+    "test": "bun run web:test",
+    "test:headed": "bun run web:test -- --headed",
+    "test:debug": "bun run web:test -- --debug",
+    "test:mobile": "bun run web:test -- --project=mobile",
+    "web:dev": "bun run --filter @jarvis/web dev",
+    "web:test": "bun run --filter @jarvis/web test",
+    "server:dev": "bun run --filter @jarvis/server dev",
+    "native:dev": "bun run --filter @jarvis/native dev",
+    "start:test": "concurrently \"bun run server:dev\" \"bun run web:dev\" --kill-others --success first"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

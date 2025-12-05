@@ -4,7 +4,7 @@
 # ---------------------------------------------------------------------------
 # The helper mirrors the logic in regen-ws-code.sh but only validates; no
 # code-generation.  We rely on the AsyncAPI CLI if available, otherwise fall
-# back to npx (no-install, then install).
+# back to bunx/npx.
 
 set -euo pipefail
 
@@ -38,6 +38,8 @@ else
   if [ -x "node_modules/.bin/asyncapi" ]; then
     _run node_modules/.bin/asyncapi validate "$SPEC_FILE" >"$TMP_OUT" 2>&1
     EXIT_CODE=$?
+  elif command -v bunx >/dev/null 2>&1; then
+    _run bunx @asyncapi/cli validate "$SPEC_FILE" >"$TMP_OUT" 2>&1 || EXIT_CODE=$?
   else
     _run npx --yes @asyncapi/cli validate "$SPEC_FILE" >"$TMP_OUT" 2>&1 || EXIT_CODE=$?
   fi
