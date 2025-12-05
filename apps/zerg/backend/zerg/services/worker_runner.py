@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
+from zerg.events import EventType, event_bus
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.models import Agent as AgentModel
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
@@ -83,6 +84,7 @@ class WorkerRunner:
         agent: AgentModel | None = None,
         agent_config: dict[str, Any] | None = None,
         timeout: int = 300,
+        event_context: dict[str, Any] | None = None,
     ) -> WorkerResult:
         """Execute a task as a worker agent.
 
@@ -120,6 +122,12 @@ class WorkerRunner:
             If agent execution fails
         """
         start_time = datetime.now(timezone.utc)
+        event_ctx = event_context or {}
+        owner_for_events = None
+        if agent is not None:
+            owner_for_events = getattr(agent, "owner_id", None)
+        elif agent_config:
+            owner_for_events = agent_config.get("owner_id")
 
         # Create worker directory
         config = agent_config or {}
@@ -133,6 +141,17 @@ class WorkerRunner:
         try:
             # Start worker (marks as running)
             self.artifact_store.start_worker(worker_id)
+            if event_context is not None:
+                await self._emit_event(
+                    EventType.WORKER_STARTED,
+                    {
+                        "event_type": EventType.WORKER_STARTED,
+                        "worker_id": worker_id,
+                        "owner_id": owner_for_events,
+                        "run_id": event_ctx.get("run_id"),
+                        "task": task[:100],
+                    },
+                )
 
             # Create or use existing agent
             if agent is None:
@@ -199,6 +218,31 @@ class WorkerRunner:
             summary, summary_meta = await self._extract_summary(task, result_for_summary)
             self.artifact_store.update_summary(worker_id, summary, summary_meta)
 
+            if event_context is not None:
+                await self._emit_event(
+                    EventType.WORKER_COMPLETE,
+                    {
+                        "event_type": EventType.WORKER_COMPLETE,
+                        "worker_id": worker_id,
+                        "status": "success",
+                        "duration_ms": duration_ms,
+                        "owner_id": owner_for_events,
+                        "run_id": event_ctx.get("run_id"),
+                    },
+                )
+
+                if summary:
+                    await self._emit_event(
+                        EventType.WORKER_SUMMARY_READY,
+                        {
+                            "event_type": EventType.WORKER_SUMMARY_READY,
+                            "worker_id": worker_id,
+                            "summary": summary,
+                            "owner_id": owner_for_events,
+                            "run_id": event_ctx.get("run_id"),
+                        },
+                    )
+
             # Clean up temporary agent if created
             if temp_agent:
                 crud.delete_agent(db, agent.id)
@@ -226,6 +270,20 @@ class WorkerRunner:
 
             logger.exception(f"Worker {worker_id} failed after {duration_ms}ms")
 
+            if event_context is not None:
+                await self._emit_event(
+                    EventType.WORKER_COMPLETE,
+                    {
+                        "event_type": EventType.WORKER_COMPLETE,
+                        "worker_id": worker_id,
+                        "status": "failed",
+                        "error": error_msg,
+                        "duration_ms": duration_ms,
+                        "owner_id": owner_for_events,
+                        "run_id": event_ctx.get("run_id"),
+                    },
+                )
+
             return WorkerResult(
                 worker_id=worker_id,
                 status="failed",
@@ -241,6 +299,13 @@ class WorkerRunner:
                     db.commit()
                 except Exception:
                     logger.warning("Failed to clean up temporary agent after failure", exc_info=True)
+
+    async def _emit_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
+        """Best-effort event emission for worker lifecycle."""
+        try:
+            await event_bus.publish(event_type, payload)
+        except Exception:
+            logger.warning("Failed to emit worker event %s", event_type, exc_info=True)
 
     async def _create_temporary_agent(
         self, db: Session, task: str, config: dict[str, Any]

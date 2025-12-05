@@ -27,6 +27,7 @@ from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
 from zerg.models.models import Thread as ThreadModel
 from zerg.prompts.supervisor_prompt import get_supervisor_prompt
+from zerg.services.supervisor_context import reset_seq
 from zerg.services.thread_service import ThreadService
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,7 @@ class SupervisorService:
                     "owner_id": owner_id,
                 },
             )
+            reset_seq(run.id)
 
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms")
 
@@ -316,6 +318,43 @@ class SupervisorService:
                 thread_id=thread.id,
                 status="success",
                 result=result_text,
+                duration_ms=duration_ms,
+                debug_url=f"/supervisor/{run.id}",
+            )
+
+        except asyncio.CancelledError:
+            # Calculate duration
+            end_time = datetime.now(timezone.utc)
+            duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+            # Update run status to cancelled if not already terminal
+            if run.status not in {RunStatus.CANCELLED, RunStatus.SUCCESS, RunStatus.FAILED}:
+                run.status = RunStatus.CANCELLED
+                run.finished_at = end_time
+                self.db.commit()
+
+            await event_bus.publish(
+                EventType.SUPERVISOR_COMPLETE,
+                {
+                    "event_type": EventType.SUPERVISOR_COMPLETE,
+                    "run_id": run.id,
+                    "thread_id": thread.id,
+                    "status": "cancelled",
+                    "message": "Supervisor run cancelled",
+                    "duration_ms": duration_ms,
+                    "debug_url": f"/supervisor/{run.id}",
+                    "owner_id": owner_id,
+                },
+            )
+            reset_seq(run.id)
+
+            logger.info(f"Supervisor run {run.id} cancelled after {duration_ms}ms")
+
+            return SupervisorRunResult(
+                run_id=run.id,
+                thread_id=thread.id,
+                status="cancelled",
+                result=None,
                 duration_ms=duration_ms,
                 debug_url=f"/supervisor/{run.id}",
             )
@@ -344,6 +383,7 @@ class SupervisorService:
                     "owner_id": owner_id,
                 },
             )
+            reset_seq(run.id)
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 

@@ -14,8 +14,7 @@ import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from typing import List
-from typing import Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -35,11 +34,53 @@ from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import Agent, AgentRun
 from zerg.services.task_runner import execute_agent_task
+from zerg.services.supervisor_context import get_next_seq, reset_seq
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jarvis", tags=["jarvis"])
 JARVIS_SESSION_COOKIE = "jarvis_session"
+
+# Track running supervisor tasks so we can cancel them on demand
+_supervisor_tasks: Dict[int, asyncio.Task] = {}
+_supervisor_tasks_lock = asyncio.Lock()
+
+
+async def _register_supervisor_task(run_id: int, task: asyncio.Task) -> None:
+    """Store the running supervisor task for cancellation."""
+    async with _supervisor_tasks_lock:
+        _supervisor_tasks[run_id] = task
+
+
+async def _pop_supervisor_task(run_id: int) -> Optional[asyncio.Task]:
+    """Remove and return the supervisor task for a run."""
+    async with _supervisor_tasks_lock:
+        return _supervisor_tasks.pop(run_id, None)
+
+
+async def _cancel_supervisor_task(run_id: int) -> bool:
+    """Attempt to cancel a running supervisor task.
+
+    Returns:
+        bool: True if a task was found (cancellation requested), False otherwise.
+    """
+    async with _supervisor_tasks_lock:
+        task = _supervisor_tasks.get(run_id)
+
+    if not task or task.done():
+        return False
+
+    task.cancel()
+    try:
+        # Give the task a moment to process cancellation
+        await asyncio.wait_for(task, timeout=1.0)
+    except asyncio.TimeoutError:
+        # Task is taking longer to cooperate; leave it cancelled in the background
+        pass
+    except asyncio.CancelledError:
+        pass
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -556,11 +597,14 @@ async def jarvis_supervisor(
                 )
         except Exception as e:
             logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
+        finally:
+            await _pop_supervisor_task(run_id)
 
     # Create background task - runs independently of the request
-    asyncio.create_task(
+    task_handle = asyncio.create_task(
         run_supervisor_background(current_user.id, request.task, run.id)
     )
+    await _register_supervisor_task(run.id, task_handle)
 
     return JarvisSupervisorResponse(
         run_id=run.id,
@@ -585,8 +629,6 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         run_id: The supervisor run ID to track
         owner_id: Owner ID for security filtering
     """
-    from zerg.services.supervisor_context import get_next_seq, reset_seq
-
     queue: asyncio.Queue = asyncio.Queue()
 
     async def event_handler(event):
@@ -665,12 +707,12 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     }),
                 }
 
+        # Run reached terminal state; clear sequence counter to avoid leaks
+        reset_seq(run_id)
+
     except asyncio.CancelledError:
         logger.info(f"Supervisor SSE stream disconnected for run {run_id}")
     finally:
-        # Clean up sequence counter for this run
-        reset_seq(run_id)
-
         # Unsubscribe from all events
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
@@ -795,6 +837,9 @@ async def jarvis_supervisor_cancel(
     db.add(run)
     db.commit()
 
+    # Attempt to cancel the running background task (best-effort)
+    await _cancel_supervisor_task(run_id)
+
     logger.info(f"Supervisor run {run_id} cancelled by user {current_user.id}")
 
     # Emit cancellation event for SSE subscribers
@@ -808,6 +853,9 @@ async def jarvis_supervisor_cancel(
             "message": "Investigation cancelled by user",
         },
     )
+
+    # Reset sequence counter once final event is emitted
+    reset_seq(run_id)
 
     return JarvisCancelResponse(
         run_id=run_id,
