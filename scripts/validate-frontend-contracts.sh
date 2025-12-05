@@ -57,7 +57,7 @@ cd "$FRONTEND_DIR"
 
 # Regenerate types from current schema
 echo "   Regenerating types from OpenAPI schema..."
-npm run generate:api > /dev/null 2>&1
+bun run generate:api > /dev/null 2>&1
 
 # Check if types file was created successfully
 if [ ! -f "src/generated/openapi-types.ts" ]; then
@@ -75,11 +75,11 @@ fi
 
 # Step 4: TypeScript compilation check
 echo -e "${BLUE}📋 Step 4: TypeScript Compilation${NC}"
-if npm run validate:types > /dev/null 2>&1; then
+if bun run validate:types > /dev/null 2>&1; then
     echo -e "${GREEN}✅ TypeScript compilation passed${NC}"
 else
     echo -e "${RED}❌ TypeScript compilation failed${NC}"
-    echo "   Run 'npm run validate:types' to see detailed errors"
+    echo "   Run 'bun run validate:types' to see detailed errors"
     VALIDATION_FAILED=1
 fi
 
@@ -100,11 +100,11 @@ fi
 
 # Step 6: Run unit tests
 echo -e "${BLUE}📋 Step 6: Unit Test Validation${NC}"
-if npm test -- --run > /dev/null 2>&1; then
+if bun run test -- --run > /dev/null 2>&1; then
     echo -e "${GREEN}✅ All unit tests passed${NC}"
 else
     echo -e "${RED}❌ Unit tests failed${NC}"
-    echo "   Run 'npm test' to see detailed errors"
+    echo "   Run 'bun run test' to see detailed errors"
     VALIDATION_FAILED=1
 fi
 

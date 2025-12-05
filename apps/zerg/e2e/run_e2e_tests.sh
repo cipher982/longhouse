@@ -112,9 +112,9 @@ fi
 # Pre-flight checks
 print_color $YELLOW "🔧 Pre-flight checks..."
 
-# Check if Playwright is installed
-if ! command -v npx &> /dev/null; then
-    print_color $RED "❌ npx not found. Please install Node.js and npm."
+# Check if Playwright is installed (bunx or npx)
+if ! command -v bunx &> /dev/null && ! command -v npx &> /dev/null; then
+    print_color $RED "❌ Neither bunx nor npx found. Please install Bun or Node.js."
     exit 1
 fi
 
@@ -161,7 +161,7 @@ print_color $CYAN "Test files: $TEST_FILES"
 echo ""
 
 # Build Playwright command based on mode and options
-PLAYWRIGHT_CMD="npx playwright test"
+PLAYWRIGHT_CMD="bunx playwright test"
 
 # Add test file filters
 if [[ -n "$TEST_FILES" ]]; then

@@ -13,12 +13,12 @@ cd "$(dirname "$0")/.."
 
 echo "🧪 Running React Unit Tests..."
 cd apps/zerg/frontend-web
-npm run test -- --run --reporter=basic
+bun run test -- --run --reporter=basic
 echo "  ✅ React unit tests passed"
 
 echo ""
 echo "🏗️  Testing React Build..."
-npm run build > /dev/null 2>&1
+bun run build > /dev/null 2>&1
 echo "  ✅ React build successful"
 
 echo ""
