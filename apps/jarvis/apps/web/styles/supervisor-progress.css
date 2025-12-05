@@ -1,0 +1,159 @@
+/**
+ * Supervisor Progress UI Styles
+ *
+ * Displays visual progress indicators when Jarvis routes tasks
+ * to the Zerg Supervisor for investigation.
+ */
+
+/* Main container */
+.supervisor-progress {
+  display: none;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.supervisor-progress-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Status header with spinner */
+.supervisor-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.supervisor-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(139, 92, 246, 0.3);
+  border-top-color: #8b5cf6;
+  border-radius: 50%;
+  animation: supervisor-spin 0.8s linear infinite;
+}
+
+@keyframes supervisor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.supervisor-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+}
+
+/* Workers list */
+.supervisor-workers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 30px;
+}
+
+.supervisor-worker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+  transition: opacity 0.2s ease;
+}
+
+.supervisor-worker .worker-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.supervisor-worker .worker-task {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-worker .worker-summary {
+  font-size: 12px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  font-style: italic;
+}
+
+/* Worker status states */
+.supervisor-worker.worker-status-spawned {
+  opacity: 0.7;
+}
+
+.supervisor-worker.worker-status-running {
+  opacity: 1;
+}
+
+.supervisor-worker.worker-status-running .worker-task {
+  color: var(--accent-purple, #8b5cf6);
+}
+
+.supervisor-worker.worker-status-complete {
+  opacity: 0.8;
+}
+
+.supervisor-worker.worker-status-complete .worker-task {
+  color: var(--success, #22c55e);
+}
+
+.supervisor-worker.worker-status-failed {
+  opacity: 0.8;
+}
+
+.supervisor-worker.worker-status-failed .worker-task {
+  color: var(--error, #ef4444);
+}
+
+/* Active worker count */
+.supervisor-active-count {
+  font-size: 12px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  padding-left: 30px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .supervisor-progress {
+    padding: 10px 12px;
+    margin: 0 8px 8px;
+    border-radius: 10px;
+  }
+
+  .supervisor-workers {
+    padding-left: 20px;
+  }
+
+  .supervisor-worker {
+    font-size: 12px;
+  }
+
+  .supervisor-active-count {
+    padding-left: 20px;
+  }
+}
+
+/* Animation for fade in */
+.supervisor-progress[style*="display: block"] {
+  animation: supervisor-fade-in 0.2s ease-out;
+}
+
+@keyframes supervisor-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

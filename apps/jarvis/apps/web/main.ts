@@ -5,6 +5,7 @@ import { contextLoader } from './contexts/context-loader';
 import { uiEnhancements } from './lib/ui-enhancements';
 import { ConversationRenderer } from './lib/conversation-renderer';
 import { ConversationUI } from './lib/conversation-ui';
+import { supervisorProgress } from './lib/supervisor-progress';
 import { buildConversationManagerOptions } from './lib/config';
 import './lib/test-helpers'; // Load test helpers for e2e testing
 
@@ -55,8 +56,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 2. Initialize UI Components
   const conversationRenderer = new ConversationRenderer(transcriptEl);
   conversationController.setRenderer(conversationRenderer);
-  
+
   const conversationUI = new ConversationUI();
+
+  // 2.5. Initialize Supervisor Progress UI (for complex task delegation)
+  supervisorProgress.initialize('supervisor-progress');
   
   // 3. Initialize Audio Controller (Visualizer + Remote Audio)
   if (pttBtn && remoteAudio) {

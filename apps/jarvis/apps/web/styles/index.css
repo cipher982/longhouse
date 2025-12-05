@@ -29,6 +29,9 @@
 /* Animations and transitions (200 lines) */
 @import './animations.css';
 
+/* Supervisor progress indicator */
+@import './supervisor-progress.css';
+
 /* Additional component styles can be added here as needed */
 
 /* Utility classes */

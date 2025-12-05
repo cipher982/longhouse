@@ -44,6 +44,17 @@ export interface EventMap {
   'connection:connected': { timestamp: number };
   'connection:disconnected': { timestamp: number };
   'connection:error': { error: Error; message: string };
+
+  // Supervisor Progress Events
+  'supervisor:started': { runId: number; task: string; timestamp: number };
+  'supervisor:thinking': { message: string; timestamp: number };
+  'supervisor:worker_spawned': { jobId: number; task: string; timestamp: number };
+  'supervisor:worker_started': { jobId: number; workerId?: string; timestamp: number };
+  'supervisor:worker_complete': { jobId: number; workerId?: string; status: string; durationMs?: number; timestamp: number };
+  'supervisor:worker_summary': { jobId: number; workerId?: string; summary: string; timestamp: number };
+  'supervisor:complete': { runId: number; result: string; status: string; durationMs?: number; timestamp: number };
+  'supervisor:error': { message: string; details?: string; timestamp: number };
+  'supervisor:cleared': { timestamp: number };
 }
 
 // Interaction state machine types

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { CONFIG } from './config';
 import type { SessionManager, SupervisorEvent } from '@jarvis/core';
 import { stateManager } from './state-manager';
+import { eventBus } from './event-bus';
 
 // ---------------------------------------------------------------------------
 // Standard Tools
@@ -126,6 +127,13 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
 
       console.log('🚀 Dispatching task to supervisor...');
 
+      // Emit started event for UI
+      eventBus.emit('supervisor:started', {
+        runId: 0, // Will be updated when we get the actual run_id
+        task,
+        timestamp: Date.now(),
+      });
+
       // Execute the supervisor task and wait for completion
       // The executeSupervisorTask method handles SSE subscription internally
       const result = await jarvisClient.executeSupervisorTask(task, {
@@ -133,7 +141,64 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
         onProgress: (event: SupervisorEvent) => {
           // Log progress events for debugging
           console.log(`📡 Supervisor progress: ${event.type}`, event.payload);
+
+          // Emit events for UI progress display
+          const timestamp = Date.now();
+          switch (event.type) {
+            case 'supervisor_started':
+              eventBus.emit('supervisor:started', {
+                runId: event.payload?.run_id || 0,
+                task: event.payload?.task || task,
+                timestamp,
+              });
+              break;
+            case 'supervisor_thinking':
+              eventBus.emit('supervisor:thinking', {
+                message: event.payload?.message || 'Analyzing...',
+                timestamp,
+              });
+              break;
+            case 'worker_spawned':
+              eventBus.emit('supervisor:worker_spawned', {
+                jobId: event.payload?.job_id || 0,
+                task: event.payload?.task || 'Worker task',
+                timestamp,
+              });
+              break;
+            case 'worker_started':
+              eventBus.emit('supervisor:worker_started', {
+                jobId: event.payload?.job_id || 0,
+                workerId: event.payload?.worker_id,
+                timestamp,
+              });
+              break;
+            case 'worker_complete':
+              eventBus.emit('supervisor:worker_complete', {
+                jobId: event.payload?.job_id || 0,
+                workerId: event.payload?.worker_id,
+                status: event.payload?.status || 'unknown',
+                durationMs: event.payload?.duration_ms,
+                timestamp,
+              });
+              break;
+            case 'worker_summary_ready':
+              eventBus.emit('supervisor:worker_summary', {
+                jobId: event.payload?.job_id || 0,
+                workerId: event.payload?.worker_id,
+                summary: event.payload?.summary || '',
+                timestamp,
+              });
+              break;
+          }
         }
+      });
+
+      // Emit completion event
+      eventBus.emit('supervisor:complete', {
+        runId: 0,
+        result,
+        status: 'success',
+        timestamp: Date.now(),
       });
 
       console.log('✅ Supervisor task completed');
@@ -142,6 +207,12 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
     } catch (error) {
       console.error('❌ Supervisor task failed:', error);
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+
+      // Emit error event for UI
+      eventBus.emit('supervisor:error', {
+        message: errorMsg,
+        timestamp: Date.now(),
+      });
 
       // Provide user-friendly error messages
       if (errorMsg.includes('timeout')) {
