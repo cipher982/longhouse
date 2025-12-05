@@ -346,3 +346,51 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
     workers = temp_store.list_workers(limit=10)
     worker_ids = [w["worker_id"] for w in workers]
     assert worker_id in worker_ids
+
+
+@pytest.mark.asyncio
+async def test_temporary_agent_has_infrastructure_tools(
+    worker_runner, temp_store, db_session, test_user
+):
+    """Test that temporary agents created for workers have ssh_exec and other infra tools."""
+    from zerg.crud import crud
+    from zerg.models.models import Agent
+
+    # Run worker without providing an agent (creates temporary agent)
+    task = "Test infrastructure tools"
+    result = await worker_runner.run_worker(
+        db=db_session,
+        task=task,
+        agent=None,
+        agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
+    )
+
+    # Worker should complete (temporary agent is cleaned up)
+    assert result.status == "success"
+
+    # Verify metadata captures expected tools in config
+    # The temporary agent gets deleted, but we can verify from the worker's perspective
+    metadata = temp_store.get_worker_metadata(result.worker_id)
+    assert metadata["status"] == "success"
+
+    # Verify the worker runner gives infrastructure tools to temp agents
+    # by checking the defaults in the code
+    from zerg.services.worker_runner import WorkerRunner
+
+    # Create a new temporary agent to inspect its tools
+    runner = WorkerRunner(artifact_store=temp_store)
+    temp_agent = await runner._create_temporary_agent(
+        db=db_session,
+        task="test",
+        config={"owner_id": test_user.id, "model": TEST_WORKER_MODEL},
+    )
+
+    try:
+        # Verify the agent has infrastructure tools
+        assert "ssh_exec" in temp_agent.allowed_tools
+        assert "http_request" in temp_agent.allowed_tools
+        assert "get_current_time" in temp_agent.allowed_tools
+    finally:
+        # Clean up the test agent
+        crud.delete_agent(db_session, temp_agent.id)
+        db_session.commit()
