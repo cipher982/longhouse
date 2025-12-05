@@ -58,6 +58,11 @@ class EventType(str, Enum):
     WORKER_COMPLETE = "worker_complete"
     WORKER_SUMMARY_READY = "worker_summary_ready"
 
+    # Worker tool events (roundabout monitoring)
+    WORKER_TOOL_STARTED = "worker_tool_started"
+    WORKER_TOOL_COMPLETED = "worker_tool_completed"
+    WORKER_TOOL_FAILED = "worker_tool_failed"
+
 
 class EventBus:
     """Central event bus for publishing and subscribing to events."""
