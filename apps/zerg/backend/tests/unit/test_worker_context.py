@@ -4,13 +4,10 @@ import asyncio
 
 import pytest
 
-from zerg.context import (
-    WorkerContext,
-    ToolCall,
-    get_worker_context,
-    set_worker_context,
-    reset_worker_context,
-)
+from zerg.context import WorkerContext
+from zerg.context import get_worker_context
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
 
 
 class TestWorkerContext:
@@ -79,10 +76,14 @@ class TestContextVar:
 
     def test_get_without_set_returns_none(self):
         """Test that get_worker_context returns None when not set."""
-        # Reset any existing context first
+        # Reset any existing context by setting and immediately resetting
+        temp_ctx = WorkerContext(worker_id="temp")
+        token = set_worker_context(temp_ctx)
+        reset_worker_context(token)
+
+        # Now context should be None
         ctx = get_worker_context()
-        # In a clean state, should be None
-        # (Note: this test may fail if run after other tests that don't clean up)
+        assert ctx is None
 
     def test_set_and_get_context(self):
         """Test setting and getting worker context."""
