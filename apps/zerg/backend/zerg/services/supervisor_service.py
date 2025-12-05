@@ -37,14 +37,18 @@ SUPERVISOR_THREAD_TYPE = ThreadType.SUPER
 
 @dataclass
 class SupervisorRunResult:
-    """Result from a supervisor run."""
+    """Result from a supervisor run.
+
+    Aligns with UI spec's SupervisorResult schema for frontend consumption.
+    """
 
     run_id: int
     thread_id: int
-    status: str
+    status: str  # 'success' | 'failed' | 'cancelled' | 'error'
     result: str | None = None
     error: str | None = None
     duration_ms: int = 0
+    debug_url: str | None = None  # Dashboard deep link
 
 
 class SupervisorService:
@@ -288,14 +292,19 @@ class SupervisorService:
                 run.total_tokens = runner.usage_total_tokens
             self.db.commit()
 
-            # Emit completion event
+            # Emit completion event with SupervisorResult-aligned schema
+            # Note: summary/recommendations/caveats would require parsing agent response
+            # For now, include required fields and let frontend extract details
             await event_bus.publish(
                 EventType.SUPERVISOR_COMPLETE,
                 {
                     "event_type": EventType.SUPERVISOR_COMPLETE,
                     "run_id": run.id,
+                    "thread_id": thread.id,
                     "result": result_text or "(No result)",
                     "status": "success",
+                    "duration_ms": duration_ms,
+                    "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
                 },
             )
@@ -308,6 +317,7 @@ class SupervisorService:
                 status="success",
                 result=result_text,
                 duration_ms=duration_ms,
+                debug_url=f"/supervisor/{run.id}",
             )
 
         except Exception as e:
@@ -321,13 +331,16 @@ class SupervisorService:
             run.error = str(e)
             self.db.commit()
 
-            # Emit error event
+            # Emit error event with consistent schema
             await event_bus.publish(
                 EventType.ERROR,
                 {
                     "event_type": EventType.ERROR,
                     "run_id": run.id,
+                    "thread_id": thread.id,
                     "message": str(e),
+                    "status": "error",
+                    "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
                 },
             )
@@ -340,6 +353,7 @@ class SupervisorService:
                 status="failed",
                 error=str(e),
                 duration_ms=duration_ms,
+                debug_url=f"/supervisor/{run.id}",
             )
 
 
