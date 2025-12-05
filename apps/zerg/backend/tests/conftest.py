@@ -221,44 +221,45 @@ class _StubLlm:
                     user_content = content
                     break
 
-        # If tools are bound, pick the best tool based on user message
+        # Only return tool calls for tool integration tests (agents with ALL supervisor tools)
+        # This prevents e2e tests from accidentally triggering background workers
         if self._tools:
             import re
 
-            # Build tool name lookup
             tool_names = [t.name if hasattr(t, 'name') else str(t) for t in self._tools]
-            user_lower = user_content.lower()
+            supervisor_tools = {'spawn_worker', 'list_workers', 'read_worker_result'}
 
-            # Select tool based on keywords in user message
-            tool_name = tool_names[0]  # default to first
-            if any(kw in user_lower for kw in ['list', 'show', 'recent']):
-                if 'list_workers' in tool_names:
+            # Only make tool calls if agent has ALL supervisor tools (tool integration tests)
+            if supervisor_tools.issubset(set(tool_names)) and user_content:
+                user_lower = user_content.lower()
+
+                # Select tool based on keywords in user message
+                tool_name = None
+                if any(kw in user_lower for kw in ['list', 'show', 'recent']):
                     tool_name = 'list_workers'
-            elif any(kw in user_lower for kw in ['read', 'result', 'job']):
-                if 'read_worker_result' in tool_names:
+                elif any(kw in user_lower for kw in ['read', 'result', 'job']):
                     tool_name = 'read_worker_result'
-            elif any(kw in user_lower for kw in ['spawn', 'calculate', 'delegate', 'create']):
-                if 'spawn_worker' in tool_names:
+                elif any(kw in user_lower for kw in ['spawn', 'calculate', 'delegate', 'create']):
                     tool_name = 'spawn_worker'
 
-            # Generate reasonable arguments based on tool name
-            tool_args = {}
-            if tool_name == "spawn_worker":
-                tool_args = {"task": user_content or "stub task", "model": "gpt-5-mini"}
-            elif tool_name == "list_workers":
-                tool_args = {"limit": 10}
-            elif tool_name == "read_worker_result":
-                match = re.search(r'job (\d+)', user_lower)
-                tool_args = {"job_id": int(match.group(1)) if match else 1}
+                if tool_name:
+                    tool_args = {}
+                    if tool_name == "spawn_worker":
+                        tool_args = {"task": user_content, "model": "gpt-5-mini"}
+                    elif tool_name == "list_workers":
+                        tool_args = {"limit": 10}
+                    elif tool_name == "read_worker_result":
+                        match = re.search(r'job (\d+)', user_lower)
+                        tool_args = {"job_id": int(match.group(1)) if match else 1}
 
-            return AIMessage(
-                content="",
-                tool_calls=[{
-                    "id": "stub-tool-call-1",
-                    "name": tool_name,
-                    "args": tool_args,
-                }]
-            )
+                    return AIMessage(
+                        content="",
+                        tool_calls=[{
+                            "id": "stub-tool-call-1",
+                            "name": tool_name,
+                            "args": tool_args,
+                        }]
+                    )
 
         return AIMessage(content="stub-response")
 
