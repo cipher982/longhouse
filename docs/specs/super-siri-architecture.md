@@ -927,3 +927,43 @@ Event names/payloads for `GET /api/jarvis/supervisor/events`:
 - Supervisor run timeout default: 60s (configurable); emits `error` with partial results if any.
 - Worker timeout default: 300s; statuses are system-determined (`success|failed|timeout`), never taken from LLM.
 - On timeout/failure, supervisor may synthesize partial results and suggest next steps; summaries are best-effort and can fall back to truncation.
+
+---
+
+## Addendum (Dec 2025): Worker Supervision Roundabout
+
+See **[Worker Supervision Roundabout](./worker-supervision-roundabout.md)** for detailed design.
+
+### Summary
+
+When a supervisor spawns a worker, it enters a "roundabout" - a temporary monitoring loop that provides real-time visibility without polluting the supervisor's thread context.
+
+**Key Concepts:**
+
+1. **Two Persistence Layers**
+   - **Disk artifacts**: Full audit trail, everything logged (thread.jsonl, tool_calls/, etc.)
+   - **Supervisor LLM thread**: Curated context, only meaningful conversation
+
+2. **Roundabout Behavior**
+   - Supervisor spawns worker → enters monitoring loop
+   - Every 5s: check worker status, present to supervisor
+   - Supervisor decides: wait, exit early, cancel, peek at details
+   - Loop iterations are ephemeral (not added to thread history)
+   - On exit: single result collapses back to thread
+
+3. **Benefits**
+   - Supervisor has real-time visibility into worker progress
+   - Can exit early if answer is visible in activity logs
+   - Can intervene if worker appears stuck
+   - Thread stays clean (no monitoring noise pollution)
+
+4. **New Events**
+   - `worker_tool_started`: Tool execution begins
+   - `worker_tool_completed`: Tool execution finished
+   - `worker_status_update`: Periodic status (every 5s)
+
+5. **UI Activity Ticker**
+   - Real-time display of worker tool calls
+   - Shows elapsed time per operation
+   - User sees system is actively working
+   - Clears when roundabout exits
