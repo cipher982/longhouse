@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
@@ -29,10 +30,11 @@ logger = logging.getLogger(__name__)
 
 # Allowed SSH hosts with their default configurations
 ALLOWED_HOSTS = {
-    "cube": {"user": "drose", "host": "100.70.237.79", "port": "2222"},
+    # Tailnet/private IPs align with ~/.ssh/config on the host
+    "cube": {"user": "drose", "host": "100.104.187.47", "port": "2222"},
     "clifford": {"user": "drose", "host": "REDACTED_IP", "port": "22"},
-    "zerg": {"user": "zerg", "host": "5.161.92.127", "port": "22"},
-    "slim": {"user": "drose", "host": "135.181.204.0", "port": "22"},
+    "zerg": {"user": "zerg", "host": "100.120.197.80", "port": "22"},
+    "slim": {"user": "drose", "host": "100.119.163.83", "port": "22"},
 }
 
 # Maximum output size before truncation (10KB)
@@ -165,19 +167,37 @@ def ssh_exec(
 
         user, hostname, port = parsed
 
+        # Pick an SSH key: prefer id_ed25519, fall back to "rosetta" if present
+        home_dir = Path(subprocess.os.path.expanduser("~"))
+        id_key = home_dir / ".ssh" / "id_ed25519"
+        rosetta_key = home_dir / ".ssh" / "rosetta"
+        key_path = None
+        if id_key.exists():
+            key_path = id_key
+        elif rosetta_key.exists():
+            key_path = rosetta_key
+
         # Construct SSH command
         # -o StrictHostKeyChecking=no: Don't prompt for host key verification
         # -o ConnectTimeout=5: Fail fast if connection hangs
-        # -i ~/.ssh/id_ed25519: Use the rosetta key for authentication
         ssh_cmd = [
             "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=5",
-            "-p", port,
-            "-i", f"{subprocess.os.path.expanduser('~')}/.ssh/id_ed25519",
-            f"{user}@{hostname}",
-            command,
+            "-F",
+            "/dev/null",  # ignore host config files (avoids macOS-only directives)
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=5",
+            "-p",
+            port,
         ]
+
+        if key_path:
+            ssh_cmd.extend(["-i", str(key_path)])
+        else:
+            logger.warning("SSH key not found; relying on default SSH agent/keys")
+
+        ssh_cmd.extend([f"{user}@{hostname}", command])
 
         logger.info(f"Executing SSH command on {host}: {command}")
         start_time = time.time()

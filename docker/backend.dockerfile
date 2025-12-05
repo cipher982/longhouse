@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libpq5 \
     ca-certificates \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -88,6 +89,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     make \
     curl \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment to /opt/venv to avoid volume mount conflicts
