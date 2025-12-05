@@ -5,8 +5,9 @@
  */
 
 import { type RealtimeSession } from '@openai/agents/realtime';
-import { logger } from '@jarvis/core';
+import { logger, getJarvisClient } from '@jarvis/core';
 import { stateManager } from './state-manager';
+import { getZergApiUrl } from './config';
 import { sessionHandler } from './session-handler';
 import { audioController } from './audio-controller';
 import { voiceController, type VoiceEvent } from './voice-controller';
@@ -37,10 +38,13 @@ export class AppController {
 
     logger.info('🚀 Initializing App Controller...');
 
-    // 1. Setup Event Listeners
+    // 1. Initialize JarvisClient for Zerg backend communication
+    await this.initializeJarvisClient();
+
+    // 2. Setup Event Listeners
     this.setupVoiceListeners();
 
-    // 2. Initialize Text Channel Controller
+    // 3. Initialize Text Channel Controller
     this.textChannelController = new TextChannelController({
       autoConnect: true,
       maxRetries: 3
@@ -48,14 +52,46 @@ export class AppController {
     this.textChannelController.setVoiceController(voiceController);
     this.textChannelController.setConnectCallback(this.connect);
 
-    // 3. Async initialization
+    // 4. Async initialization
     await this.textChannelController.initialize();
-    
+
     // Initialize UI
     uiController.initialize();
 
     this.initialized = true;
     logger.info('✅ App Controller initialized');
+  }
+
+  /**
+   * Initialize the JarvisClient for Zerg backend communication
+   */
+  private async initializeJarvisClient(): Promise<void> {
+    try {
+      const zergApiUrl = getZergApiUrl();
+      logger.info(`🔌 Initializing JarvisClient with URL: ${zergApiUrl}`);
+
+      const jarvisClient = getJarvisClient(zergApiUrl);
+      stateManager.setJarvisClient(jarvisClient);
+
+      // Check if already authenticated (from stored session)
+      if (jarvisClient.isAuthenticated()) {
+        logger.info('✅ JarvisClient already authenticated');
+        return;
+      }
+
+      // Attempt authentication with device secret from environment
+      const deviceSecret = import.meta.env?.VITE_JARVIS_DEVICE_SECRET;
+      if (deviceSecret) {
+        logger.info('🔐 Authenticating JarvisClient...');
+        await jarvisClient.authenticate(deviceSecret);
+        logger.info('✅ JarvisClient authenticated');
+      } else {
+        logger.warn('⚠️ VITE_JARVIS_DEVICE_SECRET not set - supervisor features will be unavailable');
+      }
+    } catch (error) {
+      logger.error('❌ Failed to initialize JarvisClient:', error);
+      // Non-fatal - supervisor features will be unavailable but voice still works
+    }
   }
 
   /**
