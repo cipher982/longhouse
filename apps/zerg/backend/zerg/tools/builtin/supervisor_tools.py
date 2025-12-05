@@ -80,6 +80,7 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
         await event_bus.publish(
             EventType.WORKER_SPAWNED,
             {
+                "event_type": EventType.WORKER_SPAWNED,
                 "job_id": worker_job.id,
                 "task": task[:100],
                 "model": worker_model,

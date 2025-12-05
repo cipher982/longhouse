@@ -125,6 +125,7 @@ class WorkerJobProcessor:
                 await event_bus.publish(
                     EventType.WORKER_STARTED,
                     {
+                        "event_type": EventType.WORKER_STARTED,
                         "job_id": job.id,
                         "task": task[:100],
                         "owner_id": owner_id,
@@ -165,6 +166,7 @@ class WorkerJobProcessor:
                 await event_bus.publish(
                     EventType.WORKER_COMPLETE,
                     {
+                        "event_type": EventType.WORKER_COMPLETE,
                         "job_id": job.id,
                         "worker_id": result.worker_id,
                         "status": result.status,
@@ -179,6 +181,7 @@ class WorkerJobProcessor:
                     await event_bus.publish(
                         EventType.WORKER_SUMMARY_READY,
                         {
+                            "event_type": EventType.WORKER_SUMMARY_READY,
                             "job_id": job.id,
                             "worker_id": result.worker_id,
                             "summary": result.summary,
@@ -201,6 +204,7 @@ class WorkerJobProcessor:
                     await event_bus.publish(
                         EventType.WORKER_COMPLETE,
                         {
+                            "event_type": EventType.WORKER_COMPLETE,
                             "job_id": job.id,
                             "status": "failed",
                             "error": str(e),

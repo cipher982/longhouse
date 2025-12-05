@@ -635,7 +635,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     "data": json.dumps({
                         "type": event_type,
                         "payload": payload,
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     }),
                 }
 
@@ -644,7 +644,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                 yield {
                     "event": "heartbeat",
                     "data": json.dumps({
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     }),
                 }
 
@@ -758,7 +758,7 @@ async def _jarvis_event_generator(_current_user):
                 event_data = {
                     "type": event_type,
                     "payload": payload,
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 }
 
                 yield {
@@ -768,7 +768,7 @@ async def _jarvis_event_generator(_current_user):
 
             except asyncio.TimeoutError:
                 # Send heartbeat to keep connection alive
-                heartbeat_ts = datetime.utcnow().isoformat() + "Z"
+                heartbeat_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 yield {
                     "event": "heartbeat",
                     "data": json.dumps({"timestamp": heartbeat_ts}),
