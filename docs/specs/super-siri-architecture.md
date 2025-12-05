@@ -245,6 +245,32 @@ send_email(to, subject, body)  # Notifications
 | Schedule manager | Cron jobs for background agents |
 | Connector config | API keys, OAuth tokens |
 
+### 3.5 Worker Tool Philosophy
+
+**Principle: The terminal is the primitive, not a curated tool list.**
+
+Workers are LLMs with shell access. They already know `df -h`, `docker ps`, `journalctl`,
+`grep`, `jq`, etc. We don't model each command as a separate tool.
+
+**Worker capabilities:**
+
+| Capability | Tool | Purpose |
+|------------|------|---------|
+| Remote shell | `ssh_exec` | Execute commands on cube, clifford, zerg, slim |
+| Local sandbox | `container_exec` | Sandboxed shell for safe experimentation |
+| HTTP | `http_request` | curl-equivalent for APIs |
+| Connectors | `send_email`, `send_slack`, etc. | Side effects shell can't do |
+
+**What we DON'T do:**
+- No tool profiles (INFRA, RESEARCH, COMMS)
+- No auxiliary LLM "tool planner"
+- No per-task tool restrictions
+
+**Safety boundaries:**
+- Host allowlist in `ssh_exec` (only known servers)
+- Audit trail via `tool_calls/*.txt` artifacts
+- Connector gating by owner_id if needed
+
 ---
 
 ## 4. User Experience Flows
@@ -608,34 +634,34 @@ Thread:
 - [x] Supervisor agent configuration and prompt
 - [x] Security: owner-based filtering
 
-### Phase 2: Jarvis Integration
+### Phase 2: Jarvis Integration (BACKEND COMPLETE ✅, Frontend TODO)
 
 **Goal:** Connect Jarvis to Zerg supervisor
 
-| Task | Description | Effort |
+| Task | Description | Status |
 |------|-------------|--------|
-| Supervisor endpoint | `POST /api/jarvis/supervisor` | 2 days |
-| SSE supervisor events | Stream progress to Jarvis | 2 days |
-| Jarvis intent detection | Route simple vs complex | 2 days |
-| Jarvis progress UI | Show "Investigating..." state | 1 day |
-| Result rendering | Display supervisor findings | 1 day |
+| Supervisor endpoint | `POST /api/jarvis/supervisor` | ✅ Done |
+| SSE supervisor events | Stream progress to Jarvis | ✅ Done |
+| Jarvis intent detection | Route simple vs complex | ⏳ TODO |
+| Jarvis progress UI | Show "Investigating..." state | ⏳ TODO |
+| Result rendering | Display supervisor findings | ⏳ TODO |
 
 **Deliverable:** User can say "check my servers" and get synthesized result.
 
-### Phase 2.5: Summary Extraction (NEXT ⏳)
+### Phase 2.5: Summary Extraction (COMPLETE ✅)
 
 **Goal:** Enable context-efficient worker scanning
 
 **Why now:** Without summaries, cannot scan 50+ workers without hitting context window limits.
 
-| Task | Description | Effort |
+| Task | Description | Status |
 |------|-------------|--------|
-| Summary extraction | Extract 150-char summary on worker completion | 2 hours |
-| Update metadata schema | Add summary + summary_meta fields | 30 min |
-| Graceful degradation | Fallback to truncation if LLM fails | 1 hour |
-| Update list_workers() | Return summaries only, not full results | 30 min |
-| Update tools docstring | Clarify list_workers contract | 15 min |
-| Add tests | Test extraction, fallback, list behavior | 2 hours |
+| Summary extraction | Extract 150-char summary on worker completion | ✅ Done |
+| Update metadata schema | Add summary + summary_meta fields | ✅ Done |
+| Graceful degradation | Fallback to truncation if LLM fails | ✅ Done |
+| Update list_workers() | Return summaries only, not full results | ✅ Done |
+| Update tools docstring | Clarify list_workers contract | ✅ Done |
+| Add tests | Test extraction, fallback, list behavior | ✅ Done |
 
 **Deliverable:** Supervisor can scan 100+ workers (1500 tokens) vs 25,000 tokens without summaries.
 
@@ -645,16 +671,21 @@ Thread:
 - Summary can fail → fallback to truncation
 - Cost: ~$0.00001 per worker, ~200ms latency
 
-### Phase 3: Real Workers
+### Phase 3: Real Workers (NEXT ⏳)
 
 **Goal:** Port existing crons as supervisor-callable workers
 
-| Worker | Tools Needed | Effort |
-|--------|--------------|--------|
-| Backup monitor | ssh_exec, email | 2 days |
-| Disk health | ssh_exec, parse SMART | 2 days |
-| Docker health | ssh_exec, docker API | 2 days |
-| Infrastructure check | ssh_exec, http_request | 2 days |
+**Prerequisite:** Add `ssh_exec` tool for remote host access.
+
+| Worker | What it does |
+|--------|--------------|
+| Backup monitor | Check Kopia snapshots, verify backup health |
+| Disk health | Check disk usage, SMART status across servers |
+| Docker health | Verify containers running, check for restarts |
+| Infrastructure check | Connectivity, service health, certificate expiry |
+
+Workers use shell-first approach: `ssh_exec` + connectors (email for alerts).
+No per-worker tool profiles needed.
 
 **Deliverable:** Supervisor can delegate real infrastructure checks.
 
@@ -714,10 +745,12 @@ Thread:
 
 | Component | Model | Est. Cost/Interaction |
 |-----------|-------|----------------------|
-| Quick mode | GPT-4o-realtime | ~$0.01 |
-| Supervisor | GPT-4o | ~$0.02-0.05 |
-| Worker | GPT-4o-mini | ~$0.005 |
+| Quick mode | Realtime model (voice) | ~$0.01 |
+| Supervisor | High-intelligence model (configurable) | ~$0.02-0.05 |
+| Worker | Efficient model (configurable) | ~$0.005 |
 | Typical complex task | 1 supervisor + 2 workers | ~$0.03-0.06 |
+
+*Models are env-configurable via `DEFAULT_MODEL_ID` and `DEFAULT_WORKER_MODEL_ID`.*
 
 ### 8.3 Security
 
@@ -767,10 +800,12 @@ Thread:
    - Context accumulates across all interactions (with summarization for older content)
    - Benefits: True "one brain", cross-domain synthesis, consistent personality
 
-2. **Worker tool access**:
-   - Workers inherit supervisor's tools?
-   - Workers get predefined tool sets?
-   - Task-specific tool selection?
+2. **Worker tool access** (DECIDED ✅):
+   - **Shell-first philosophy**: Workers get terminal access as the baseline primitive
+   - `ssh_exec` for remote hosts, `container_exec` for sandboxed local execution
+   - Connectors (email, Slack, Jira, etc.) available for side effects shell can't do
+   - No tool profiles or task-specific restrictions — trust the LLM to use what it needs
+   - Safety via: host allowlists, audit trails (`tool_calls/*.txt`), owner gating on connectors
 
 3. **OpenAI Realtime integration**:
    - Jarvis calls route_to_supervisor as function?
@@ -855,13 +890,15 @@ These notes remove ambiguity for Jarvis → Supervisor integration and worker ex
 Event names/payloads for `GET /api/jarvis/supervisor/events`:
 - `supervisor_started`: `{run_id, thread_id, task}`
 - `supervisor_thinking`: `{message}`
-- `worker_spawned`: `{worker_id, task, model}`
-- `worker_started`: `{worker_id}`
-- `worker_complete`: `{worker_id, status}` (status = success|failed|timeout)
-- `worker_summary_ready`: `{worker_id, summary}`
+- `worker_spawned`: `{job_id, task, model}` — *Note: `worker_id` not yet assigned*
+- `worker_started`: `{job_id, worker_id}` — *`worker_id` (filesystem artifact ID) assigned here*
+- `worker_complete`: `{job_id, worker_id, status, duration_ms}` (status = success|failed|timeout)
+- `worker_summary_ready`: `{job_id, worker_id, summary}`
 - `supervisor_complete`: `{run_id, result}`
 - `error`: `{run_id, message, details?}`
 - `heartbeat`: `{timestamp}` every 30s
+
+*`job_id` = DB integer (stable handle), `worker_id` = filesystem artifact ID (appears after execution starts).*
 
 ### C. Intent Routing Rules (Jarvis → quick vs supervisor)
 - Inputs: user utterance, optional history, latency budget.
