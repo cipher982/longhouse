@@ -50,6 +50,47 @@ export interface JarvisDispatchResponse {
   agent_name: string;
 }
 
+export interface JarvisSupervisorRequest {
+  task: string;
+  context?: {
+    conversation_id?: string;
+    previous_messages?: string[];
+  };
+  preferences?: {
+    verbosity?: 'minimal' | 'normal' | 'verbose';
+    notify_on_complete?: boolean;
+  };
+}
+
+export interface JarvisSupervisorResponse {
+  run_id: number;
+  thread_id: number;
+  status: string;
+  stream_url: string;
+}
+
+export interface SupervisorEvent {
+  type: string;
+  payload: Record<string, any>;
+  seq: number;
+  timestamp: string;
+}
+
+export interface SupervisorEventHandlers {
+  onConnected?: (data: { run_id: number; seq: number }) => void;
+  onSupervisorStarted?: (event: SupervisorEvent) => void;
+  onSupervisorThinking?: (event: SupervisorEvent) => void;
+  onWorkerSpawned?: (event: SupervisorEvent) => void;
+  onWorkerStarted?: (event: SupervisorEvent) => void;
+  onWorkerComplete?: (event: SupervisorEvent) => void;
+  onWorkerSummaryReady?: (event: SupervisorEvent) => void;
+  onSupervisorComplete?: (event: SupervisorEvent) => void;
+  onError?: (event: SupervisorEvent) => void;
+  onHeartbeat?: (seq: number, timestamp: string) => void;
+  onStreamError?: (error: Event) => void;
+  onStreamClose?: () => void;
+}
+
 export interface JarvisEventData {
   type: string;
   payload: Record<string, any>;
@@ -220,6 +261,238 @@ export class JarvisAPIClient {
     }
 
     return response.json();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Supervisor Methods
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Dispatch a task to the supervisor agent
+   */
+  async dispatchSupervisor(request: JarvisSupervisorRequest): Promise<JarvisSupervisorResponse> {
+    const response = await this.authenticatedFetch(
+      `${this._baseURL}/api/jarvis/supervisor`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      },
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Failed to dispatch supervisor: ${error.detail}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Cancel a running supervisor task
+   */
+  async cancelSupervisor(runId: number): Promise<{ run_id: number; status: string; message: string }> {
+    const response = await this.authenticatedFetch(
+      `${this._baseURL}/api/jarvis/supervisor/${runId}/cancel`,
+      {
+        method: 'POST',
+      },
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(`Failed to cancel supervisor: ${error.detail}`);
+    }
+
+    return response.json();
+  }
+
+  private supervisorEventSource: EventSource | null = null;
+
+  /**
+   * Connect to supervisor SSE event stream for a specific run
+   *
+   * Returns a promise that resolves with the final result when supervisor completes,
+   * or rejects on error.
+   */
+  connectSupervisorEventStream(runId: number, handlers: SupervisorEventHandlers): void {
+    this.ensureAuthenticated();
+
+    // Close existing supervisor connection if any
+    this.disconnectSupervisorEventStream();
+
+    const url = `${this._baseURL}/api/jarvis/supervisor/events?run_id=${runId}`;
+    this.supervisorEventSource = new EventSource(url, { withCredentials: true });
+
+    this.supervisorEventSource.addEventListener('connected', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        handlers.onConnected?.(data);
+      } catch (err) {
+        console.error('Failed to parse connected event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('supervisor_started', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onSupervisorStarted?.(event);
+      } catch (err) {
+        console.error('Failed to parse supervisor_started event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('supervisor_thinking', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onSupervisorThinking?.(event);
+      } catch (err) {
+        console.error('Failed to parse supervisor_thinking event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('worker_spawned', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onWorkerSpawned?.(event);
+      } catch (err) {
+        console.error('Failed to parse worker_spawned event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('worker_started', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onWorkerStarted?.(event);
+      } catch (err) {
+        console.error('Failed to parse worker_started event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('worker_complete', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onWorkerComplete?.(event);
+      } catch (err) {
+        console.error('Failed to parse worker_complete event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('worker_summary_ready', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onWorkerSummaryReady?.(event);
+      } catch (err) {
+        console.error('Failed to parse worker_summary_ready event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('supervisor_complete', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onSupervisorComplete?.(event);
+        // Auto-close on completion
+        this.disconnectSupervisorEventStream();
+        handlers.onStreamClose?.();
+      } catch (err) {
+        console.error('Failed to parse supervisor_complete event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('error', (e: MessageEvent) => {
+      try {
+        const event: SupervisorEvent = JSON.parse(e.data);
+        handlers.onError?.(event);
+        // Auto-close on error
+        this.disconnectSupervisorEventStream();
+        handlers.onStreamClose?.();
+      } catch (err) {
+        console.error('Failed to parse error event:', err);
+      }
+    });
+
+    this.supervisorEventSource.addEventListener('heartbeat', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        handlers.onHeartbeat?.(data.seq, data.timestamp);
+      } catch (err) {
+        console.error('Failed to parse heartbeat event:', err);
+      }
+    });
+
+    this.supervisorEventSource.onerror = (error) => {
+      handlers.onStreamError?.(error);
+    };
+  }
+
+  /**
+   * Execute a supervisor task and wait for completion
+   *
+   * This is a convenience method that dispatches a task and waits for the result.
+   * Returns the final result text or throws on error.
+   */
+  async executeSupervisorTask(task: string, options?: {
+    timeout?: number;
+    onProgress?: (event: SupervisorEvent) => void;
+  }): Promise<string> {
+    const timeout = options?.timeout ?? 120000; // 2 minute default timeout
+
+    // Dispatch the task
+    const response = await this.dispatchSupervisor({ task });
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.disconnectSupervisorEventStream();
+        reject(new Error(`Supervisor task timed out after ${timeout}ms`));
+      }, timeout);
+
+      this.connectSupervisorEventStream(response.run_id, {
+        onSupervisorStarted: (event) => {
+          options?.onProgress?.(event);
+        },
+        onSupervisorThinking: (event) => {
+          options?.onProgress?.(event);
+        },
+        onWorkerSpawned: (event) => {
+          options?.onProgress?.(event);
+        },
+        onWorkerStarted: (event) => {
+          options?.onProgress?.(event);
+        },
+        onWorkerComplete: (event) => {
+          options?.onProgress?.(event);
+        },
+        onWorkerSummaryReady: (event) => {
+          options?.onProgress?.(event);
+        },
+        onSupervisorComplete: (event) => {
+          clearTimeout(timeoutId);
+          const result = event.payload?.result || event.payload?.message || 'Task completed';
+          resolve(result);
+        },
+        onError: (event) => {
+          clearTimeout(timeoutId);
+          const errorMsg = event.payload?.message || event.payload?.error || 'Supervisor task failed';
+          reject(new Error(errorMsg));
+        },
+        onStreamError: (error) => {
+          clearTimeout(timeoutId);
+          reject(new Error('SSE stream error'));
+        },
+      });
+    });
+  }
+
+  /**
+   * Disconnect from supervisor SSE event stream
+   */
+  disconnectSupervisorEventStream(): void {
+    if (this.supervisorEventSource) {
+      this.supervisorEventSource.close();
+      this.supervisorEventSource = null;
+    }
   }
 
   /**
