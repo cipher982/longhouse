@@ -51,6 +51,15 @@ class ToolName(str, Enum):
     # iMessage tools (macOS only)
     SEND_IMESSAGE = "send_imessage"
     LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
+    # SSH tools
+    SSH_EXEC = "ssh_exec"
+    # Supervisor/worker tools
+    SPAWN_WORKER = "spawn_worker"
+    LIST_WORKERS = "list_workers"
+    READ_WORKER_RESULT = "read_worker_result"
+    READ_WORKER_FILE = "read_worker_file"
+    GREP_WORKERS = "grep_workers"
+    GET_WORKER_METADATA = "get_worker_metadata"
 
 
 class ServerName(str, Enum):
@@ -71,6 +80,8 @@ class ServerName(str, Enum):
     LINEAR = "linear"
     NOTION = "notion"
     IMESSAGE = "imessage"
+    SSH = "ssh"
+    SUPERVISOR = "supervisor"
 
 
 # Tool to server mapping for validation
@@ -120,6 +131,15 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     # iMessage tools
     ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
     ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
+    # SSH tools
+    ToolName.SSH_EXEC: ServerName.SSH,
+    # Supervisor/worker tools
+    ToolName.SPAWN_WORKER: ServerName.SUPERVISOR,
+    ToolName.LIST_WORKERS: ServerName.SUPERVISOR,
+    ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
+    ToolName.READ_WORKER_FILE: ServerName.SUPERVISOR,
+    ToolName.GREP_WORKERS: ServerName.SUPERVISOR,
+    ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
 }
 
 
