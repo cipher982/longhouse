@@ -123,6 +123,14 @@ class JarvisSupervisorResponse(BaseModel):
     stream_url: str = Field(..., description="SSE stream URL for progress updates")
 
 
+class JarvisCancelResponse(BaseModel):
+    """Response from supervisor cancellation."""
+
+    run_id: int = Field(..., description="The cancelled run ID")
+    status: str = Field(..., description="Run status after cancellation")
+    message: str = Field(..., description="Human-readable status message")
+
+
 # ---------------------------------------------------------------------------
 # Authentication Endpoint
 # ---------------------------------------------------------------------------
@@ -571,11 +579,14 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     """Generate SSE events for a specific supervisor run.
 
     Subscribes to supervisor and worker events filtered by run_id/owner_id.
+    All events include a monotonically increasing `seq` for idempotent reconnect handling.
 
     Args:
         run_id: The supervisor run ID to track
         owner_id: Owner ID for security filtering
     """
+    from zerg.services.supervisor_context import get_next_seq, reset_seq
+
     queue: asyncio.Queue = asyncio.Queue()
 
     async def event_handler(event):
@@ -601,12 +612,13 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     event_bus.subscribe(EventType.ERROR, event_handler)
 
     try:
-        # Send initial connection event
+        # Send initial connection event with seq
         yield {
             "event": "connected",
             "data": json.dumps({
                 "message": "Supervisor SSE stream connected",
                 "run_id": run_id,
+                "seq": get_next_seq(run_id),
             }),
         }
 
@@ -630,20 +642,25 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     if k not in {"event_type", "type", "owner_id"}
                 }
 
+                # Add monotonically increasing seq for idempotent reconnect handling
+                seq = get_next_seq(run_id)
+
                 yield {
                     "event": event_type,
                     "data": json.dumps({
                         "type": event_type,
                         "payload": payload,
+                        "seq": seq,
                         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     }),
                 }
 
             except asyncio.TimeoutError:
-                # Send heartbeat
+                # Send heartbeat with seq
                 yield {
                     "event": "heartbeat",
                     "data": json.dumps({
+                        "seq": get_next_seq(run_id),
                         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     }),
                 }
@@ -651,6 +668,9 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     except asyncio.CancelledError:
         logger.info(f"Supervisor SSE stream disconnected for run {run_id}")
     finally:
+        # Clean up sequence counter for this run
+        reset_seq(run_id)
+
         # Unsubscribe from all events
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
@@ -712,6 +732,87 @@ async def jarvis_supervisor_events(
 
     return EventSourceResponse(
         _supervisor_event_generator(run_id, current_user.id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Supervisor Cancel Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.post("/supervisor/{run_id}/cancel", response_model=JarvisCancelResponse)
+async def jarvis_supervisor_cancel(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> JarvisCancelResponse:
+    """Cancel a running supervisor investigation.
+
+    Marks the run as cancelled and emits a cancellation event to SSE subscribers.
+    If the run is already complete, returns the current status without error.
+
+    Args:
+        run_id: The supervisor run ID to cancel
+        db: Database session
+        current_user: Authenticated user
+
+    Returns:
+        JarvisCancelResponse with run status
+
+    Raises:
+        HTTPException 404: If run not found or doesn't belong to user
+    """
+    from zerg.models.enums import RunStatus
+
+    # Validate run exists
+    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",
+        )
+
+    # Check ownership via the run's agent
+    agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
+    if not agent or agent.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",  # Don't reveal existence to other users
+        )
+
+    # Check if already complete
+    terminal_statuses = {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED}
+    if run.status in terminal_statuses:
+        return JarvisCancelResponse(
+            run_id=run_id,
+            status=run.status.value if hasattr(run.status, "value") else str(run.status),
+            message="Run already completed",
+        )
+
+    # Mark as cancelled
+    run.status = RunStatus.CANCELLED
+    run.finished_at = datetime.now(timezone.utc)
+    db.add(run)
+    db.commit()
+
+    logger.info(f"Supervisor run {run_id} cancelled by user {current_user.id}")
+
+    # Emit cancellation event for SSE subscribers
+    await event_bus.publish(
+        EventType.SUPERVISOR_COMPLETE,
+        {
+            "event_type": "supervisor_complete",
+            "run_id": run_id,
+            "owner_id": current_user.id,
+            "status": "cancelled",
+            "message": "Investigation cancelled by user",
+        },
+    )
+
+    return JarvisCancelResponse(
+        run_id=run_id,
+        status="cancelled",
+        message="Investigation cancelled",
     )
 
 
