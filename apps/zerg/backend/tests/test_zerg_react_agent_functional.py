@@ -60,9 +60,10 @@ def test_basic_llm_invoke(monkeypatch, dummy_agent_row):
         async def ainvoke(self, messages, **kwargs):
             return AIMessage(content="res")
 
-    # Patch LLM and disable MemorySaver to avoid checkpoint config errors
+    # Patch LLM and disable checkpointer to avoid checkpoint config errors
     monkeypatch.setattr(mod, "ChatOpenAI", DummyLLM)
-    monkeypatch.setattr(mod, "MemorySaver", lambda *a, **kw: None)
+    # Patch get_checkpointer to return None (no checkpointing for this test)
+    monkeypatch.setattr("zerg.services.checkpointer.get_checkpointer", lambda *a, **kw: None)
     # Ensure token streaming flag is disabled so callbacks kwarg isn't added
     monkeypatch.setenv("LLM_TOKEN_STREAM", "false")
     # Build the runnable and invoke with one HumanMessage
