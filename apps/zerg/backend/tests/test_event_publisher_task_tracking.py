@@ -20,44 +20,51 @@ class TestEventPublisherTaskTracking:
 
     @pytest.mark.asyncio
     async def test_task_tracking_lifecycle(self):
-        """Test that tasks are properly tracked and cleaned up."""
+        """Test that tasks are properly tracked and cleaned up.
+
+        Note: With the shared async runner implementation, fire-and-forget events
+        execute synchronously, so task tracking always returns 0. This test verifies
+        the API contract is maintained.
+        """
         # Start with clean state
         initial_count = get_active_task_count()
+        assert initial_count == 0, "Shared runner should have no tracked tasks"
 
         # Publish several fire-and-forget events
         event_count = 3
         for i in range(event_count):
-            publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {"node_id": f"test-{i}"})
+            publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {
+                "node_id": f"test-{i}",
+                "execution_id": f"exec-{i}"  # Required by _handle_node_state_event
+            })
 
-        # Tasks should be tracked immediately
+        # With shared runner, tasks execute synchronously
         active_count = get_active_task_count()
-        assert (
-            active_count >= initial_count + event_count
-        ), f"Expected at least {initial_count + event_count} active tasks, got {active_count}"
+        assert active_count == 0, "Shared runner executes synchronously, no pending tasks"
 
-        # Wait for tasks to complete
+        # Count should remain stable
         await asyncio.sleep(0.1)
-
-        # Tasks should be cleaned up automatically
         final_count = get_active_task_count()
-        assert (
-            final_count <= initial_count
-        ), f"Expected task count to return to {initial_count} or less, got {final_count}"
+        assert final_count == 0
 
     @pytest.mark.asyncio
     async def test_graceful_shutdown(self):
-        """Test that shutdown waits for active tasks."""
+        """Test that shutdown waits for active tasks.
+
+        Note: With the shared async runner, events execute synchronously,
+        so shutdown has no pending tasks to wait for.
+        """
         # Publish some events
         for i in range(2):
             publish_event_fire_and_forget(EventType.EXECUTION_FINISHED, {"execution_id": i})
 
-        # Verify we have active tasks
-        assert get_active_task_count() > 0
+        # With shared runner, tasks execute synchronously
+        assert get_active_task_count() == 0, "Shared runner has no pending tasks"
 
-        # Shutdown should wait for completion
+        # Shutdown should complete immediately (no-op with shared runner)
         await shutdown_event_publisher()
 
-        # All tasks should be completed
+        # Count should still be zero
         assert get_active_task_count() == 0
 
     def test_fire_and_forget_with_no_loop(self):
@@ -73,21 +80,26 @@ class TestEventPublisherTaskTracking:
 
     @pytest.mark.asyncio
     async def test_task_count_monitoring(self):
-        """Test that get_active_task_count provides accurate monitoring."""
+        """Test that get_active_task_count provides accurate monitoring.
+
+        Note: With the shared async runner, the count always returns 0
+        since events execute synchronously.
+        """
         initial_count = get_active_task_count()
         assert isinstance(initial_count, int)
-        assert initial_count >= 0
+        assert initial_count == 0, "Shared runner has no tracked tasks"
 
         # Publish an event
-        publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {"test": "monitoring"})
+        publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {
+            "test": "monitoring",
+            "execution_id": "test-exec"  # Required by _handle_node_state_event
+        })
 
-        # Count should increase
+        # With shared runner, count stays at 0 (synchronous execution)
         new_count = get_active_task_count()
-        assert new_count > initial_count
+        assert new_count == 0, "Shared runner executes synchronously"
 
-        # Wait for completion
+        # Wait a bit and verify count is still stable
         await asyncio.sleep(0.1)
-
-        # Count should return to initial state
         final_count = get_active_task_count()
-        assert final_count <= initial_count
+        assert final_count == 0
