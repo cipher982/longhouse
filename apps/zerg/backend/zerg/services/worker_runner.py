@@ -247,6 +247,9 @@ class WorkerRunner:
     ) -> AgentModel:
         """Create a temporary agent for a worker run.
 
+        Workers get access to infrastructure tools (ssh_exec, http_request, etc.)
+        following the "shell-first philosophy" - the terminal is the primitive.
+
         Parameters
         ----------
         db
@@ -275,6 +278,15 @@ class WorkerRunner:
                 raise ValueError("No users found - cannot create worker agent")
             owner_id = user.id
 
+        # Default worker tools: infrastructure access + utilities
+        # Workers are disposable and should have the tools they need for common tasks
+        default_worker_tools = config.get("allowed_tools", [
+            "ssh_exec",        # Remote command execution on cube, clifford, zerg, slim
+            "http_request",    # API calls and web requests
+            "get_current_time", # Time lookups
+            "send_email",      # Notifications (if configured)
+        ])
+
         # Create agent (status is set automatically to "idle")
         agent = crud.create_agent(
             db=db,
@@ -283,11 +295,15 @@ class WorkerRunner:
             model=config.get("model", DEFAULT_WORKER_MODEL_ID),
             system_instructions=config.get(
                 "system_instructions",
-                "You are a helpful assistant executing a specific task. "
-                "Complete the task and provide a clear, concise result.",
+                "You are a worker agent executing a specific task. "
+                "You have access to SSH for remote commands on servers (cube, clifford, zerg, slim). "
+                "Complete the task and provide a clear, concise result with findings.",
             ),
             task_instructions=task,
         )
+
+        # Set allowed tools for infrastructure access
+        agent.allowed_tools = default_worker_tools
         db.commit()
         db.refresh(agent)
 
