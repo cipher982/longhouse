@@ -4,19 +4,15 @@ These tests verify that tool events (WORKER_TOOL_STARTED, WORKER_TOOL_COMPLETED,
 WORKER_TOOL_FAILED) are emitted correctly when tools are executed in a worker context.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import datetime
+from datetime import timezone
 
 import pytest
-from langchain_core.messages import ToolMessage
 
-from zerg.context import (
-    WorkerContext,
-    set_worker_context,
-    reset_worker_context,
-    get_worker_context,
-)
+from zerg.context import WorkerContext
+from zerg.context import get_worker_context
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
 from zerg.events import EventType
 
 
@@ -45,14 +41,17 @@ class TestWorkerToolEventEmission:
         assert ctx.run_id == "run-abc"
 
     def test_no_context_when_not_set(self):
-        """Test that no context is returned when not in a worker."""
-        # Ensure no context is set (clean state)
-        ctx = get_worker_context()
-        # May be None or from another test, but checking the pattern works
-        # In isolated test, this would be None
+        """Test that get_worker_context returns None when no context is set."""
+        # Reset any existing context by setting and immediately resetting
+        temp_ctx = WorkerContext(worker_id="temp")
+        token = set_worker_context(temp_ctx)
+        reset_worker_context(token)
 
-    @pytest.mark.asyncio
-    async def test_tool_events_include_correct_fields(self, worker_context):
+        # Now context should be None
+        ctx = get_worker_context()
+        assert ctx is None
+
+    def test_tool_events_include_correct_fields(self, worker_context):
         """Test that tool events include all required fields."""
         # Create a test event payload matching what _call_tool_async creates
         event_data = {
@@ -73,8 +72,7 @@ class TestWorkerToolEventEmission:
         assert "tool_name" in event_data
         assert "timestamp" in event_data
 
-    @pytest.mark.asyncio
-    async def test_completed_event_includes_duration(self, worker_context):
+    def test_completed_event_includes_duration(self, worker_context):
         """Test that WORKER_TOOL_COMPLETED includes duration_ms."""
         event_data = {
             "event_type": EventType.WORKER_TOOL_COMPLETED,
@@ -87,8 +85,7 @@ class TestWorkerToolEventEmission:
         assert "duration_ms" in event_data
         assert event_data["duration_ms"] >= 0
 
-    @pytest.mark.asyncio
-    async def test_failed_event_includes_error(self, worker_context):
+    def test_failed_event_includes_error(self, worker_context):
         """Test that WORKER_TOOL_FAILED includes error details."""
         event_data = {
             "event_type": EventType.WORKER_TOOL_FAILED,
@@ -124,9 +121,9 @@ class TestWorkerContextToolTracking:
         """Test tracking multiple concurrent tool calls."""
         ctx = WorkerContext(worker_id="test")
 
-        call1 = ctx.record_tool_start("tool_a")
-        call2 = ctx.record_tool_start("tool_b")
-        call3 = ctx.record_tool_start("tool_c")
+        ctx.record_tool_start("tool_a")
+        ctx.record_tool_start("tool_b")
+        ctx.record_tool_start("tool_c")
 
         assert len(ctx.tool_calls) == 3
         assert [c.name for c in ctx.tool_calls] == ["tool_a", "tool_b", "tool_c"]

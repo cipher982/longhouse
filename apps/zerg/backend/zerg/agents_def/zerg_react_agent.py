@@ -21,11 +21,11 @@ from langgraph.graph.message import add_messages
 # Local imports (late to avoid circulars)
 from zerg.config import get_settings
 
-# Centralised flags
-from zerg.tools.unified_access import get_tool_resolver
-
 # Worker context for tool event emission
 from zerg.context import get_worker_context
+
+# Centralised flags
+from zerg.tools.unified_access import get_tool_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +216,70 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         return ToolMessage(content=str(observation), tool_call_id=tool_call["id"], name=tool_name)
 
+    # ---------------------------------------------------------------
+    # Helper functions for tool event emission
+    # ---------------------------------------------------------------
+
+    # Keys that should be redacted from event payloads to prevent secret leakage
+    SENSITIVE_KEYS = frozenset({
+        "key", "api_key", "apikey", "token", "secret", "password", "passwd",
+        "credential", "credentials", "auth", "authorization", "bearer",
+        "private_key", "privatekey", "access_token", "refresh_token",
+    })
+
+    def _redact_sensitive_args(args: dict) -> dict:
+        """Redact sensitive fields from tool arguments for safe logging."""
+        if not isinstance(args, dict):
+            return {"_raw": "[non-dict args]"}
+
+        redacted = {}
+        for key, value in args.items():
+            key_lower = key.lower()
+            # Check if key contains any sensitive term
+            if any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
+                redacted[key] = "[REDACTED]"
+            elif isinstance(value, dict):
+                redacted[key] = _redact_sensitive_args(value)
+            else:
+                redacted[key] = value
+        return redacted
+
+    def _check_tool_error(result_content: str) -> tuple[bool, str | None]:
+        """Check if tool result indicates an error.
+
+        Handles multiple error formats:
+        1. Legacy: "<tool-error> ..." or "Error: ..."
+        2. error_envelope: {"ok": false, "error_type": "...", "user_message": "..."}
+
+        Returns (is_error, error_message).
+        """
+        # Legacy format check
+        if result_content.startswith("<tool-error>"):
+            return True, result_content
+        if result_content.startswith("Error:"):
+            return True, result_content
+
+        # error_envelope format check (JSON with ok: false)
+        # Try to parse as JSON to detect {"ok": false, ...}
+        if result_content.startswith("{"):
+            try:
+                import json
+                parsed = json.loads(result_content)
+                if isinstance(parsed, dict) and parsed.get("ok") is False:
+                    # Extract user_message if available, else use error_type
+                    error_msg = parsed.get("user_message") or parsed.get("error_type") or "Tool returned ok=false"
+                    return True, error_msg
+            except (json.JSONDecodeError, TypeError):
+                pass  # Not valid JSON, not an error envelope
+
+        return False, None
+
+    def _safe_preview(content: str, max_len: int = 200) -> str:
+        """Create a safe preview of content, truncating if needed."""
+        if len(content) <= max_len:
+            return content
+        return content[:max_len - 3] + "..."
+
     async def _call_tool_async(tool_call: dict):  # noqa: D401 – coroutine helper
         """Run tool execution in a worker thread with event emission.
 
@@ -224,9 +288,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         events for real-time monitoring.
         """
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
 
-        from zerg.events import EventType, event_bus
+        from zerg.events import EventType
+        from zerg.events import event_bus
 
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
@@ -236,12 +302,15 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         ctx = get_worker_context()
         tool_record = None
 
+        # Redact sensitive fields from args for event emission
+        safe_args = _redact_sensitive_args(tool_args)
+
         # Emit STARTED event if in worker context
         if ctx:
             tool_record = ctx.record_tool_start(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                args=tool_args,
+                args=tool_args,  # Full args for internal tracking
             )
             try:
                 await event_bus.publish(
@@ -253,7 +322,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                         "run_id": ctx.run_id,
                         "tool_name": tool_name,
                         "tool_call_id": tool_call_id,
-                        "tool_args_preview": str(tool_args)[:200],
+                        "tool_args_preview": _safe_preview(str(safe_args)),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                 )
@@ -266,14 +335,14 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         result = await asyncio.to_thread(_call_tool_sync, tool_call)
         duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
 
-        # Check if tool execution failed (errors are returned as <tool-error> in content)
-        result_content = str(result.content) if hasattr(result, 'content') else str(result)
-        is_error = result_content.startswith("<tool-error>") or result_content.startswith("Error:")
+        # Check if tool execution failed
+        result_content = str(result.content) if hasattr(result, "content") else str(result)
+        is_error, error_msg = _check_tool_error(result_content)
 
         # Emit appropriate event if in worker context
         if ctx and tool_record:
             if is_error:
-                ctx.record_tool_complete(tool_record, success=False, error=result_content)
+                ctx.record_tool_complete(tool_record, success=False, error=error_msg)
                 try:
                     await event_bus.publish(
                         EventType.WORKER_TOOL_FAILED,
@@ -285,7 +354,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,
-                            "error": result_content[:500],
+                            "error": _safe_preview(error_msg or result_content, 500),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                     )
@@ -304,7 +373,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,
-                            "result_preview": result_content[:200],
+                            "result_preview": _safe_preview(result_content),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                     )
