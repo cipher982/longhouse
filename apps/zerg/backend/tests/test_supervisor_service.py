@@ -12,6 +12,8 @@ from zerg.services.supervisor_context import (
     get_supervisor_run_id,
     set_supervisor_run_id,
     reset_supervisor_run_id,
+    get_next_seq,
+    reset_seq,
 )
 from zerg.services.supervisor_service import (
     SupervisorService,
@@ -185,6 +187,53 @@ class TestSupervisorContext:
         # Reset first - should restore None
         reset_supervisor_run_id(token1)
         assert get_supervisor_run_id() is None
+
+    def test_seq_counter_starts_at_one(self):
+        """Test that seq counter starts at 1 for a new run_id."""
+        run_id = 999
+        try:
+            assert get_next_seq(run_id) == 1
+        finally:
+            reset_seq(run_id)
+
+    def test_seq_counter_increments(self):
+        """Test that seq counter increments monotonically."""
+        run_id = 1001
+        try:
+            assert get_next_seq(run_id) == 1
+            assert get_next_seq(run_id) == 2
+            assert get_next_seq(run_id) == 3
+        finally:
+            reset_seq(run_id)
+
+    def test_seq_counter_per_run_isolation(self):
+        """Test that different run_ids have separate counters."""
+        run_id_a = 2001
+        run_id_b = 2002
+        try:
+            # Both should start at 1
+            assert get_next_seq(run_id_a) == 1
+            assert get_next_seq(run_id_b) == 1
+
+            # Incrementing one doesn't affect the other
+            assert get_next_seq(run_id_a) == 2
+            assert get_next_seq(run_id_a) == 3
+            assert get_next_seq(run_id_b) == 2
+        finally:
+            reset_seq(run_id_a)
+            reset_seq(run_id_b)
+
+    def test_seq_reset_clears_counter(self):
+        """Test that reset_seq clears the counter for a run_id."""
+        run_id = 3001
+        try:
+            assert get_next_seq(run_id) == 1
+            assert get_next_seq(run_id) == 2
+            reset_seq(run_id)
+            # After reset, should start at 1 again
+            assert get_next_seq(run_id) == 1
+        finally:
+            reset_seq(run_id)
 
 
 class TestWorkerSupervisorCorrelation:

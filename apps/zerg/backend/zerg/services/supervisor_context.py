@@ -15,12 +15,17 @@ Usage in SupervisorService.run_supervisor:
 Usage in spawn_worker:
     from zerg.services.supervisor_context import get_supervisor_run_id
     supervisor_run_id = get_supervisor_run_id()  # May be None
+
+Sequence Counter:
+    Each supervisor run has a monotonically increasing sequence counter for SSE events.
+    This enables idempotent reconnect handling - clients can dedupe events via (run_id, seq).
 """
 
 from __future__ import annotations
 
 import contextvars
-from typing import Optional
+import threading
+from typing import Dict, Optional
 
 # Context variable holding the current supervisor run ID
 # Set by SupervisorService before invoking the agent, read by spawn_worker
@@ -28,6 +33,10 @@ _supervisor_run_id_var: contextvars.ContextVar[Optional[int]] = contextvars.Cont
     "_supervisor_run_id_var",
     default=None,
 )
+
+# Sequence counters per run_id - thread-safe dict with lock
+_sequence_counters: Dict[int, int] = {}
+_sequence_lock = threading.Lock()
 
 
 def get_supervisor_run_id() -> Optional[int]:
@@ -64,8 +73,41 @@ def reset_supervisor_run_id(token: contextvars.Token) -> None:
     _supervisor_run_id_var.reset(token)
 
 
+def get_next_seq(run_id: int) -> int:
+    """Get the next sequence number for a supervisor run.
+
+    Thread-safe, monotonically increasing counter per run_id.
+    Used by SSE events for idempotent reconnect handling.
+
+    Args:
+        run_id: The supervisor run ID
+
+    Returns:
+        Next sequence number (starts at 1, increments each call)
+    """
+    with _sequence_lock:
+        current = _sequence_counters.get(run_id, 0)
+        next_seq = current + 1
+        _sequence_counters[run_id] = next_seq
+        return next_seq
+
+
+def reset_seq(run_id: int) -> None:
+    """Reset the sequence counter for a run.
+
+    Called when a run completes to clean up memory.
+
+    Args:
+        run_id: The supervisor run ID to clean up
+    """
+    with _sequence_lock:
+        _sequence_counters.pop(run_id, None)
+
+
 __all__ = [
     "get_supervisor_run_id",
     "set_supervisor_run_id",
     "reset_supervisor_run_id",
+    "get_next_seq",
+    "reset_seq",
 ]
