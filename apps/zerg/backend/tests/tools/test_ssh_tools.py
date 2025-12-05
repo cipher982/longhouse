@@ -21,7 +21,7 @@ class TestParseHost:
         assert result is not None
         user, hostname, port = result
         assert user == "drose"
-        assert hostname == "100.70.237.79"
+        assert hostname == "100.104.187.47"
         assert port == "2222"
 
     def test_parse_known_host_clifford(self):
@@ -39,7 +39,7 @@ class TestParseHost:
         assert result is not None
         user, hostname, port = result
         assert user == "zerg"
-        assert hostname == "5.161.92.127"
+        assert hostname == "100.120.197.80"
         assert port == "22"
 
     def test_parse_known_host_slim(self):
@@ -48,7 +48,7 @@ class TestParseHost:
         assert result is not None
         user, hostname, port = result
         assert user == "drose"
-        assert hostname == "135.181.204.0"
+        assert hostname == "100.119.163.83"
         assert port == "22"
 
     def test_parse_custom_user_at_hostname(self):
@@ -249,7 +249,7 @@ class TestSshExecExecution:
         assert "ConnectTimeout=5" in call_args
         assert "-p" in call_args
         assert "2222" in call_args  # cube uses port 2222
-        assert "drose@100.70.237.79" in call_args
+        assert "drose@100.104.187.47" in call_args
         assert "echo test" in call_args
 
     @patch("subprocess.run")
@@ -261,7 +261,7 @@ class TestSshExecExecution:
 
         # Verify SSH command was called with correct arguments for zerg user
         call_args = mock_run.call_args[0][0]
-        assert "zerg@5.161.92.127" in call_args
+        assert "zerg@100.120.197.80" in call_args
         assert "-p" in call_args
         assert "22" in call_args
 
