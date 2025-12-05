@@ -194,6 +194,31 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
   }
 
+  // Text Input Handlers
+  if (textInput && sendTextBtn) {
+    const handleTextSend = async () => {
+      const text = textInput.value.trim();
+      if (text) {
+        textInput.value = '';
+        conversationController.addUserTurn(text);
+        try {
+          await appController.sendText(text);
+        } catch (error: any) {
+          console.error('Failed to send text:', error);
+          uiEnhancements.showToast(`Failed to send: ${error.message}`, 'error');
+        }
+      }
+    };
+
+    sendTextBtn.addEventListener('click', handleTextSend);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleTextSend();
+      }
+    });
+  }
+
   // Hands-free Toggle
   if (handsFreeToggle) {
     handsFreeToggle.addEventListener('click', () => {

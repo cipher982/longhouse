@@ -140,6 +140,16 @@ export class AppController {
   }
 
   /**
+   * Send a text message to the session
+   */
+  async sendText(text: string): Promise<void> {
+    if (!this.textChannelController) {
+      throw new Error('Text channel not initialized');
+    }
+    await this.textChannelController.sendText(text);
+  }
+
+  /**
    * Disconnect from Voice Session
    */
   async disconnect(): Promise<void> {
