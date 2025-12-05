@@ -491,8 +491,11 @@ def get_worker_metadata(job_id: str) -> str:
 
 
 # Export tools list for registration
+# Note: We provide both func (sync) and coroutine (async) so LangChain
+# can use whichever invocation method is appropriate for the runtime.
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
+        func=spawn_worker,
         coroutine=spawn_worker_async,
         name="spawn_worker",
         description="Spawn a worker agent to execute a task independently. "
@@ -500,6 +503,7 @@ TOOLS: List[StructuredTool] = [
         "Use for delegation, parallel work, or tasks that might generate verbose output.",
     ),
     StructuredTool.from_function(
+        func=list_workers,
         coroutine=list_workers_async,
         name="list_workers",
         description="List recent worker jobs with SUMMARIES ONLY. "
@@ -508,12 +512,14 @@ TOOLS: List[StructuredTool] = [
         "This prevents context overflow when scanning 50+ workers.",
     ),
     StructuredTool.from_function(
+        func=read_worker_result,
         coroutine=read_worker_result_async,
         name="read_worker_result",
         description="Read the final result from a completed worker job. "
         "Provide the job ID (integer) to get the natural language result text.",
     ),
     StructuredTool.from_function(
+        func=read_worker_file,
         coroutine=read_worker_file_async,
         name="read_worker_file",
         description="Read a specific file from a worker job's artifacts. "
@@ -521,6 +527,7 @@ TOOLS: List[StructuredTool] = [
         "tool outputs (tool_calls/*.txt), conversation history (thread.jsonl), or metadata (metadata.json).",
     ),
     StructuredTool.from_function(
+        func=grep_workers,
         coroutine=grep_workers_async,
         name="grep_workers",
         description="Search across completed worker job artifacts for a text pattern. "
@@ -528,6 +535,7 @@ TOOLS: List[StructuredTool] = [
         "Useful for finding jobs that encountered specific errors or outputs.",
     ),
     StructuredTool.from_function(
+        func=get_worker_metadata,
         coroutine=get_worker_metadata_async,
         name="get_worker_metadata",
         description="Get detailed metadata about a worker job execution including "
