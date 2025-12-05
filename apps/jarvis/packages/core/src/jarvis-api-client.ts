@@ -317,7 +317,11 @@ export class JarvisAPIClient {
    * Returns a promise that resolves with the final result when supervisor completes,
    * or rejects on error.
    */
-  connectSupervisorEventStream(runId: number, handlers: SupervisorEventHandlers): void {
+  connectSupervisorEventStream(
+    runId: number,
+    handlers: SupervisorEventHandlers,
+    options?: { closeOnComplete?: boolean },
+  ): void {
     this.ensureAuthenticated();
 
     // Close existing supervisor connection if any
@@ -393,9 +397,10 @@ export class JarvisAPIClient {
       try {
         const event: SupervisorEvent = JSON.parse(e.data);
         handlers.onSupervisorComplete?.(event);
-        // Auto-close on completion
-        this.disconnectSupervisorEventStream();
-        handlers.onStreamClose?.();
+        if (options?.closeOnComplete !== false) {
+          this.disconnectSupervisorEventStream();
+          handlers.onStreamClose?.();
+        }
       } catch (err) {
         console.error('Failed to parse supervisor_complete event:', err);
       }
@@ -405,9 +410,10 @@ export class JarvisAPIClient {
       try {
         const event: SupervisorEvent = JSON.parse(e.data);
         handlers.onError?.(event);
-        // Auto-close on error
-        this.disconnectSupervisorEventStream();
-        handlers.onStreamClose?.();
+        if (options?.closeOnComplete !== false) {
+          this.disconnectSupervisorEventStream();
+          handlers.onStreamClose?.();
+        }
       } catch (err) {
         console.error('Failed to parse error event:', err);
       }
@@ -424,6 +430,9 @@ export class JarvisAPIClient {
 
     this.supervisorEventSource.onerror = (error) => {
       handlers.onStreamError?.(error);
+      if (options?.closeOnComplete !== false) {
+        handlers.onStreamClose?.();
+      }
     };
   }
 
@@ -443,10 +452,35 @@ export class JarvisAPIClient {
     const response = await this.dispatchSupervisor({ task });
 
     return new Promise((resolve, reject) => {
+      let resolved = false;
+      let pendingWorkers = 0;
+      let supervisorCompleteEvent: SupervisorEvent | null = null;
       const timeoutId = setTimeout(() => {
         this.disconnectSupervisorEventStream();
         reject(new Error(`Supervisor task timed out after ${timeout}ms`));
       }, timeout);
+
+      const doResolve = (forceComplete = false) => {
+        if (resolved) return;
+        // Normal resolution: supervisor complete and all workers finished
+        // Forced resolution: stream closed, supervisor said it's done (workers may be orphaned)
+        if (supervisorCompleteEvent && (pendingWorkers === 0 || forceComplete)) {
+          if (forceComplete && pendingWorkers > 0) {
+            console.warn(
+              `[JarvisClient] Stream closed with ${pendingWorkers} pending workers. ` +
+              'Some workers may have crashed without emitting worker_complete.',
+            );
+          }
+          resolved = true;
+          clearTimeout(timeoutId);
+          const result =
+            supervisorCompleteEvent.payload?.result ||
+            supervisorCompleteEvent.payload?.message ||
+            'Task completed';
+          resolve(result);
+          this.disconnectSupervisorEventStream();
+        }
+      };
 
       this.connectSupervisorEventStream(response.run_id, {
         onSupervisorStarted: (event) => {
@@ -457,31 +491,57 @@ export class JarvisAPIClient {
         },
         onWorkerSpawned: (event) => {
           options?.onProgress?.(event);
+          pendingWorkers += 1;
         },
         onWorkerStarted: (event) => {
           options?.onProgress?.(event);
         },
         onWorkerComplete: (event) => {
           options?.onProgress?.(event);
+          pendingWorkers = Math.max(0, pendingWorkers - 1);
+          doResolve();
         },
         onWorkerSummaryReady: (event) => {
           options?.onProgress?.(event);
+          // worker_summary_ready indicates worker finished processing
+          // Decrement here too in case worker_complete was missed
+          if (pendingWorkers > 0) {
+            pendingWorkers = Math.max(0, pendingWorkers - 1);
+            doResolve();
+          }
         },
         onSupervisorComplete: (event) => {
-          clearTimeout(timeoutId);
-          const result = event.payload?.result || event.payload?.message || 'Task completed';
-          resolve(result);
+          supervisorCompleteEvent = event;
+          doResolve();
         },
         onError: (event) => {
+          if (resolved) return;
+          resolved = true;
           clearTimeout(timeoutId);
           const errorMsg = event.payload?.message || event.payload?.error || 'Supervisor task failed';
+          this.disconnectSupervisorEventStream();
           reject(new Error(errorMsg));
         },
         onStreamError: (error) => {
+          if (resolved) return;
+          resolved = true;
           clearTimeout(timeoutId);
+          this.disconnectSupervisorEventStream();
           reject(new Error('SSE stream error'));
         },
-      });
+        onStreamClose: () => {
+          // Stream closed - if supervisor completed, resolve even with pending workers
+          // This handles the case where workers crashed without emitting worker_complete
+          if (supervisorCompleteEvent) {
+            doResolve(true);
+          } else if (!resolved) {
+            // Stream closed before supervisor_complete - unexpected
+            resolved = true;
+            clearTimeout(timeoutId);
+            reject(new Error('SSE stream closed before supervisor completed'));
+          }
+        },
+      }, { closeOnComplete: false });
     });
   }
 
