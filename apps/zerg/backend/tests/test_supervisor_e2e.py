@@ -79,10 +79,22 @@ class TestSupervisorE2EFlow:
         # But run IDs should be different
         assert data1["run_id"] != data2["run_id"]
 
+    @pytest.mark.skip(
+        reason="TestClient doesn't support SSE streaming - use Playwright tests instead"
+    )
     def test_supervisor_sse_stream_connects(
         self, client, db_session, test_user, temp_artifact_path
     ):
-        """Test SSE stream connects and receives initial event."""
+        """Test SSE stream connects and receives initial event.
+
+        NOTE: This test is skipped because:
+        1. TestClient.stream() blocks synchronously waiting for data
+        2. By the time we connect to SSE, the supervisor run has already completed
+        3. No events will arrive because the run finished before subscription
+
+        SSE functionality is properly tested via Playwright in:
+        - apps/jarvis/tests/supervisor-flow.spec.ts
+        """
         # First create a run
         response = client.post(
             "/api/jarvis/supervisor",
