@@ -24,6 +24,9 @@ from zerg.config import get_settings
 # Centralised flags
 from zerg.tools.unified_access import get_tool_resolver
 
+# Worker context for tool event emission
+from zerg.context import get_worker_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -214,11 +217,101 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         return ToolMessage(content=str(observation), tool_call_id=tool_call["id"], name=tool_name)
 
     async def _call_tool_async(tool_call: dict):  # noqa: D401 – coroutine helper
-        """Run tool execution in a worker thread."""
+        """Run tool execution in a worker thread with event emission.
 
+        If running in a worker context (set by WorkerRunner), emits
+        WORKER_TOOL_STARTED, WORKER_TOOL_COMPLETED, or WORKER_TOOL_FAILED
+        events for real-time monitoring.
+        """
         import asyncio
+        from datetime import datetime, timezone
 
-        return await asyncio.to_thread(_call_tool_sync, tool_call)
+        from zerg.events import EventType, event_bus
+
+        tool_name = tool_call["name"]
+        tool_args = tool_call.get("args", {})
+        tool_call_id = tool_call.get("id")
+
+        # Get worker context (None if not running as a worker)
+        ctx = get_worker_context()
+        tool_record = None
+
+        # Emit STARTED event if in worker context
+        if ctx:
+            tool_record = ctx.record_tool_start(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                args=tool_args,
+            )
+            try:
+                await event_bus.publish(
+                    EventType.WORKER_TOOL_STARTED,
+                    {
+                        "event_type": EventType.WORKER_TOOL_STARTED,
+                        "worker_id": ctx.worker_id,
+                        "owner_id": ctx.owner_id,
+                        "run_id": ctx.run_id,
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "tool_args_preview": str(tool_args)[:200],
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.warning("Failed to emit WORKER_TOOL_STARTED event", exc_info=True)
+
+        start_time = datetime.now(timezone.utc)
+
+        # Execute tool in thread (unchanged behavior)
+        result = await asyncio.to_thread(_call_tool_sync, tool_call)
+        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+
+        # Check if tool execution failed (errors are returned as <tool-error> in content)
+        result_content = str(result.content) if hasattr(result, 'content') else str(result)
+        is_error = result_content.startswith("<tool-error>") or result_content.startswith("Error:")
+
+        # Emit appropriate event if in worker context
+        if ctx and tool_record:
+            if is_error:
+                ctx.record_tool_complete(tool_record, success=False, error=result_content)
+                try:
+                    await event_bus.publish(
+                        EventType.WORKER_TOOL_FAILED,
+                        {
+                            "event_type": EventType.WORKER_TOOL_FAILED,
+                            "worker_id": ctx.worker_id,
+                            "owner_id": ctx.owner_id,
+                            "run_id": ctx.run_id,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "duration_ms": duration_ms,
+                            "error": result_content[:500],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to emit WORKER_TOOL_FAILED event", exc_info=True)
+            else:
+                ctx.record_tool_complete(tool_record, success=True)
+                try:
+                    await event_bus.publish(
+                        EventType.WORKER_TOOL_COMPLETED,
+                        {
+                            "event_type": EventType.WORKER_TOOL_COMPLETED,
+                            "worker_id": ctx.worker_id,
+                            "owner_id": ctx.owner_id,
+                            "run_id": ctx.run_id,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "duration_ms": duration_ms,
+                            "result_preview": result_content[:200],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to emit WORKER_TOOL_COMPLETED event", exc_info=True)
+
+        return result
 
     # --- Define main entrypoint ---
     async def _agent_executor_async(
