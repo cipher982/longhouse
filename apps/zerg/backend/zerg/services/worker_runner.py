@@ -24,6 +24,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.messages import ToolMessage
 from sqlalchemy.orm import Session
 
+from zerg.context import WorkerContext, set_worker_context, reset_worker_context
 from zerg.crud import crud
 from zerg.events import EventType, event_bus
 from zerg.managers.agent_runner import AgentRunner
@@ -136,6 +137,17 @@ class WorkerRunner:
             config.setdefault("model", agent.model)
         worker_id = self.artifact_store.create_worker(task, config=config)
         logger.info(f"Created worker {worker_id} for task: {task[:50]}...")
+
+        # Set up worker context for tool event emission
+        # This context is read by zerg_react_agent._call_tool_async to emit
+        # WORKER_TOOL_STARTED/COMPLETED/FAILED events
+        worker_context = WorkerContext(
+            worker_id=worker_id,
+            owner_id=owner_for_events,
+            run_id=event_ctx.get("run_id"),
+            task=task[:100],
+        )
+        context_token = set_worker_context(worker_context)
 
         temp_agent = False  # Track temporary agent for cleanup on failure
         try:
@@ -292,6 +304,9 @@ class WorkerRunner:
                 duration_ms=duration_ms,
             )
         finally:
+            # Always reset worker context to prevent leaking to other calls
+            reset_worker_context(context_token)
+
             # Ensure temporary agents are not left behind on failure paths
             if temp_agent and agent:
                 try:
