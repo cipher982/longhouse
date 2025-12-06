@@ -61,8 +61,8 @@
 
 .supervisor-worker {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   transition: opacity 0.2s ease;
@@ -84,6 +84,93 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   font-style: italic;
+}
+
+/* Worker header (contains icon and task) */
+.supervisor-worker .worker-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Tool calls list within worker */
+.supervisor-worker .worker-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-1);
+  margin-left: 22px;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-border-muted);
+}
+
+/* Individual tool call */
+.worker-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.worker-tool .tool-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.worker-tool .tool-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.worker-tool .tool-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.worker-tool .tool-duration {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* Tool status states */
+.worker-tool.tool-status-running {
+  color: var(--color-brand-primary);
+}
+
+.worker-tool.tool-status-running .tool-icon {
+  animation: tool-pulse 1s ease-in-out infinite;
+}
+
+.worker-tool.tool-status-completed .tool-icon {
+  color: var(--color-intent-success);
+}
+
+.worker-tool.tool-status-failed .tool-icon {
+  color: var(--color-intent-error);
+}
+
+.worker-tool.tool-status-failed .tool-preview {
+  color: var(--color-intent-error);
+}
+
+@keyframes tool-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* Worker status states */

@@ -10,6 +10,18 @@
 
 import { eventBus } from './event-bus';
 
+interface ToolCall {
+  toolCallId: string;
+  toolName: string;
+  status: 'running' | 'completed' | 'failed';
+  argsPreview?: string;
+  resultPreview?: string;
+  error?: string;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+}
+
 interface WorkerState {
   jobId: number;
   workerId?: string;
@@ -18,6 +30,7 @@ interface WorkerState {
   summary?: string;
   startedAt: number;
   completedAt?: number;
+  toolCalls: Map<string, ToolCall>;
 }
 
 export class SupervisorProgressUI {
@@ -109,6 +122,25 @@ export class SupervisorProgressUI {
         this.clear();
       })
     );
+
+    // Tool event subscriptions (Phase 2: Activity Ticker)
+    this.unsubscribers.push(
+      eventBus.on('worker:tool_started', (data) => {
+        this.handleToolStarted(data.workerId, data.toolCallId, data.toolName, data.argsPreview);
+      })
+    );
+
+    this.unsubscribers.push(
+      eventBus.on('worker:tool_completed', (data) => {
+        this.handleToolCompleted(data.workerId, data.toolCallId, data.durationMs, data.resultPreview);
+      })
+    );
+
+    this.unsubscribers.push(
+      eventBus.on('worker:tool_failed', (data) => {
+        this.handleToolFailed(data.workerId, data.toolCallId, data.durationMs, data.error);
+      })
+    );
   }
 
   /**
@@ -140,6 +172,7 @@ export class SupervisorProgressUI {
       task,
       status: 'spawned',
       startedAt: Date.now(),
+      toolCalls: new Map(),
     });
     console.log(`[SupervisorProgress] Worker spawned: ${jobId} - ${task}`);
     this.render();
@@ -182,6 +215,72 @@ export class SupervisorProgressUI {
     }
     console.log(`[SupervisorProgress] Worker summary: ${jobId} - ${summary}`);
     this.render();
+  }
+
+  /**
+   * Find worker by workerId (filesystem artifact ID)
+   */
+  private findWorkerByWorkerId(workerId: string): WorkerState | undefined {
+    for (const worker of this.workers.values()) {
+      if (worker.workerId === workerId) {
+        return worker;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Handle tool started
+   */
+  private handleToolStarted(workerId: string, toolCallId: string, toolName: string, argsPreview?: string): void {
+    const worker = this.findWorkerByWorkerId(workerId);
+    if (worker) {
+      worker.toolCalls.set(toolCallId, {
+        toolCallId,
+        toolName,
+        status: 'running',
+        argsPreview,
+        startedAt: Date.now(),
+      });
+      console.log(`[SupervisorProgress] Tool started: ${toolName} (${toolCallId})`);
+      this.render();
+    }
+  }
+
+  /**
+   * Handle tool completed
+   */
+  private handleToolCompleted(workerId: string, toolCallId: string, durationMs: number, resultPreview?: string): void {
+    const worker = this.findWorkerByWorkerId(workerId);
+    if (worker) {
+      const toolCall = worker.toolCalls.get(toolCallId);
+      if (toolCall) {
+        toolCall.status = 'completed';
+        toolCall.durationMs = durationMs;
+        toolCall.resultPreview = resultPreview;
+        toolCall.completedAt = Date.now();
+        console.log(`[SupervisorProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
+        this.render();
+      }
+    }
+  }
+
+  /**
+   * Handle tool failed
+   */
+  private handleToolFailed(workerId: string, toolCallId: string, durationMs: number, error: string): void {
+    const worker = this.findWorkerByWorkerId(workerId);
+    if (worker) {
+      const toolCall = worker.toolCalls.get(toolCallId);
+      if (toolCall) {
+        toolCall.status = 'failed';
+        toolCall.durationMs = durationMs;
+        toolCall.error = error;
+        toolCall.completedAt = Date.now();
+        console.log(`[SupervisorProgress] Tool failed: ${toolCall.toolName} - ${error}`);
+        this.render();
+      }
+    }
   }
 
   /**
@@ -264,13 +363,87 @@ export class SupervisorProgressUI {
       ? worker.task.substring(0, 40) + '...'
       : worker.task;
 
+    const toolCallsArray = Array.from(worker.toolCalls.values());
+    const hasToolCalls = toolCallsArray.length > 0;
+
     return `
       <div class="supervisor-worker ${statusClass}">
-        <span class="worker-icon">${statusIcon}</span>
-        <span class="worker-task">${this.escapeHtml(taskPreview)}</span>
-        ${worker.summary ? `<span class="worker-summary">${this.escapeHtml(worker.summary)}</span>` : ''}
+        <div class="worker-header">
+          <span class="worker-icon">${statusIcon}</span>
+          <span class="worker-task">${this.escapeHtml(taskPreview)}</span>
+        </div>
+        ${hasToolCalls ? `
+          <div class="worker-tools">
+            ${toolCallsArray.map(tool => this.renderToolCall(tool)).join('')}
+          </div>
+        ` : ''}
+        ${worker.summary ? `<div class="worker-summary">${this.escapeHtml(worker.summary)}</div>` : ''}
       </div>
     `;
+  }
+
+  /**
+   * Render a single tool call
+   */
+  private renderToolCall(tool: ToolCall): string {
+    const statusIcon = this.getToolStatusIcon(tool.status);
+    const statusClass = `tool-status-${tool.status}`;
+    const duration = tool.durationMs ? `${tool.durationMs}ms` : this.getElapsedTime(tool.startedAt);
+
+    // Format tool name for display (e.g., ssh_exec -> ssh_exec)
+    const toolNameDisplay = tool.toolName;
+
+    // Show args preview if running, result/error preview if done
+    let preview = '';
+    if (tool.status === 'running' && tool.argsPreview) {
+      preview = this.truncatePreview(tool.argsPreview, 50);
+    } else if (tool.status === 'failed' && tool.error) {
+      preview = this.truncatePreview(tool.error, 50);
+    }
+
+    return `
+      <div class="worker-tool ${statusClass}">
+        <span class="tool-icon">${statusIcon}</span>
+        <span class="tool-name">${this.escapeHtml(toolNameDisplay)}</span>
+        ${preview ? `<span class="tool-preview">${this.escapeHtml(preview)}</span>` : ''}
+        <span class="tool-duration">${duration}</span>
+      </div>
+    `;
+  }
+
+  /**
+   * Get icon for tool status
+   */
+  private getToolStatusIcon(status: string): string {
+    switch (status) {
+      case 'running':
+        return '⏳';
+      case 'completed':
+        return '✓';
+      case 'failed':
+        return '✗';
+      default:
+        return '•';
+    }
+  }
+
+  /**
+   * Get elapsed time since start
+   */
+  private getElapsedTime(startedAt: number): string {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < 1000) {
+      return `${elapsed}ms`;
+    }
+    return `${(elapsed / 1000).toFixed(1)}s`;
+  }
+
+  /**
+   * Truncate preview text
+   */
+  private truncatePreview(text: string, maxLen: number): string {
+    if (text.length <= maxLen) return text;
+    return text.substring(0, maxLen - 3) + '...';
   }
 
   /**

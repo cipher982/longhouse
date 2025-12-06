@@ -189,6 +189,36 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
                 timestamp,
               });
               break;
+            // Worker tool events (Phase 2: Activity Ticker)
+            case 'worker_tool_started':
+              eventBus.emit('worker:tool_started', {
+                workerId: event.payload?.worker_id || '',
+                toolName: event.payload?.tool_name || '',
+                toolCallId: event.payload?.tool_call_id || '',
+                argsPreview: event.payload?.tool_args_preview,
+                timestamp,
+              });
+              break;
+            case 'worker_tool_completed':
+              eventBus.emit('worker:tool_completed', {
+                workerId: event.payload?.worker_id || '',
+                toolName: event.payload?.tool_name || '',
+                toolCallId: event.payload?.tool_call_id || '',
+                durationMs: event.payload?.duration_ms || 0,
+                resultPreview: event.payload?.result_preview,
+                timestamp,
+              });
+              break;
+            case 'worker_tool_failed':
+              eventBus.emit('worker:tool_failed', {
+                workerId: event.payload?.worker_id || '',
+                toolName: event.payload?.tool_name || '',
+                toolCallId: event.payload?.tool_call_id || '',
+                durationMs: event.payload?.duration_ms || 0,
+                error: event.payload?.error || 'Unknown error',
+                timestamp,
+              });
+              break;
           }
         }
       });

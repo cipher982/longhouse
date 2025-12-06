@@ -55,6 +55,31 @@ export interface EventMap {
   'supervisor:complete': { runId: number; result: string; status: string; durationMs?: number; timestamp: number };
   'supervisor:error': { message: string; details?: string; timestamp: number };
   'supervisor:cleared': { timestamp: number };
+
+  // Worker Tool Events (Phase 2: Activity Ticker)
+  'worker:tool_started': {
+    workerId: string;
+    toolName: string;
+    toolCallId: string;
+    argsPreview?: string;
+    timestamp: number;
+  };
+  'worker:tool_completed': {
+    workerId: string;
+    toolName: string;
+    toolCallId: string;
+    durationMs: number;
+    resultPreview?: string;
+    timestamp: number;
+  };
+  'worker:tool_failed': {
+    workerId: string;
+    toolName: string;
+    toolCallId: string;
+    durationMs: number;
+    error: string;
+    timestamp: number;
+  };
 }
 
 // Interaction state machine types

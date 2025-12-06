@@ -654,6 +654,10 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
     event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
     event_bus.subscribe(EventType.ERROR, event_handler)
+    # Subscribe to worker tool events (Phase 2: Activity Ticker)
+    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
 
     try:
         # Send initial connection event with seq
@@ -737,6 +741,10 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
         event_bus.unsubscribe(EventType.ERROR, event_handler)
+        # Unsubscribe from worker tool events
+        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
 
 
 @router.get("/supervisor/events")
