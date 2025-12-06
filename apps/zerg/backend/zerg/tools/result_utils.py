@@ -82,33 +82,82 @@ SENSITIVE_KEYS = frozenset({
 })
 
 
-def redact_sensitive_args(args: dict) -> dict:
+def redact_sensitive_args(args):
     """Redact sensitive fields from tool arguments for safe logging.
+
+    Recursively walks dicts, lists, tuples, and sets to find and redact
+    any values whose keys contain sensitive terms (api_key, token, secret, etc).
+
+    Also detects key-value pair patterns like:
+        {"key": "api_key", "value": "secret123"}
+        {"title": "token", "value": "sk-live-..."}
+        {"name": "Authorization", "value": "Bearer ..."}
+
+    Where if the semantic key (key/title/name) contains a sensitive term,
+    the corresponding value field is redacted.
 
     Parameters
     ----------
     args
-        Tool arguments dict (may be nested)
+        Tool arguments (dict, list, tuple, set, or primitive)
 
     Returns
     -------
-    dict
-        Copy of args with sensitive values replaced with "[REDACTED]"
+    Same type as input
+        Copy with sensitive values replaced with "[REDACTED]"
     """
-    if not isinstance(args, dict):
-        return {"_raw": "[non-dict args]"}
+    # Handle dict - check keys for sensitive terms
+    if isinstance(args, dict):
+        # Structural keys used in key-value pair patterns (don't treat as sensitive)
+        STRUCTURAL_KEYS = {"key", "title", "name", "type", "kind"}
 
-    redacted = {}
-    for key, value in args.items():
-        key_lower = key.lower()
-        # Check if key contains any sensitive term
-        if any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
-            redacted[key] = "[REDACTED]"
-        elif isinstance(value, dict):
-            redacted[key] = redact_sensitive_args(value)
-        else:
-            redacted[key] = value
-    return redacted
+        # Check for key-value pair pattern (common in Slack/Discord/headers)
+        semantic_key = args.get("key") or args.get("title") or args.get("name")
+        if semantic_key and isinstance(semantic_key, str):
+            semantic_lower = semantic_key.lower()
+            # If the semantic key is a sensitive term, redact the value field
+            if any(sensitive in semantic_lower for sensitive in SENSITIVE_KEYS):
+                # Redact the value field while keeping structure
+                redacted = {}
+                for k, v in args.items():
+                    if k in ("value", "val"):
+                        redacted[k] = "[REDACTED]"
+                    else:
+                        redacted[k] = redact_sensitive_args(v)
+                return redacted
+
+        # Standard dict processing
+        redacted = {}
+        for key, value in args.items():
+            key_lower = key.lower()
+            # Don't treat structural keys as sensitive
+            if key_lower in STRUCTURAL_KEYS:
+                redacted[key] = redact_sensitive_args(value)
+            # Check if key contains any sensitive term
+            elif any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
+                redacted[key] = "[REDACTED]"
+            else:
+                # Recursively redact the value
+                redacted[key] = redact_sensitive_args(value)
+        return redacted
+
+    # Handle list - recurse into each element
+    elif isinstance(args, list):
+        return [redact_sensitive_args(item) for item in args]
+
+    # Handle tuple - recurse and return tuple
+    elif isinstance(args, tuple):
+        return tuple(redact_sensitive_args(item) for item in args)
+
+    # Handle set - recurse (though sets usually contain primitives)
+    elif isinstance(args, set):
+        # Sets can only contain hashable items, so dicts won't be in them
+        # But we still try to redact in case of nested tuples
+        return {redact_sensitive_args(item) for item in args}
+
+    # Primitive value - return as-is
+    else:
+        return args
 
 
 def safe_preview(content: str, max_len: int = 200) -> str:
