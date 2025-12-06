@@ -5,12 +5,12 @@
 | Phase       | Description                  | Status          | Notes                                                     |
 | ----------- | ---------------------------- | --------------- | --------------------------------------------------------- |
 | **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** | See `docs/completed/worker-tool-events-implementation.md` |
-| **Phase 2** | UI Activity Ticker           | ⏳ Not started  | Frontend component for real-time tool display             |
+| **Phase 2** | UI Activity Ticker           | ✅ **COMPLETE** | Jarvis shows real-time tool calls per worker              |
 | **Phase 3** | Roundabout Monitoring Loop   | ⏳ Not started  | Supervisor polling + ephemeral context                    |
 | **Phase 4** | Supervisor Decision Handling | ⏳ Not started  | wait/exit/cancel/peek options                             |
 | **Phase 5** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
 
-**Next recommended**: Phase 2 (UI Activity Ticker) or Phase 5 (Fail-Fast Tools)
+**Next recommended**: Phase 3 (Roundabout Monitoring Loop) or Phase 5 (Fail-Fast Tools)
 
 ---
 
@@ -310,14 +310,28 @@ Key components:
 - Modified `zerg_react_agent._call_tool_async` for event emission
 - Modified `WorkerRunner.run_worker` for context setup/teardown
 
-### Phase 2: UI Activity Ticker
+### Phase 2: UI Activity Ticker ✅ COMPLETE
 
-Frontend component that:
+**Implementation details:**
 
-- Subscribes to tool events
-- Displays scrolling activity log
-- Shows elapsed time per operation
-- Clears on worker complete
+Backend:
+
+- Added tool event subscriptions to SSE endpoint (`jarvis.py`)
+- Events: `WORKER_TOOL_STARTED`, `WORKER_TOOL_COMPLETED`, `WORKER_TOOL_FAILED`
+
+Frontend (`apps/jarvis/apps/web/`):
+
+- Added tool event types to `lib/event-bus.ts`
+- Added event forwarding in `lib/tool-factory.ts`
+- Enhanced `lib/supervisor-progress.ts` to track/display tool calls per worker
+- Added CSS styles in `styles/supervisor-progress.css`
+
+UI displays:
+
+- Tool name, status icon (⏳ running, ✓ completed, ✗ failed)
+- Duration (elapsed while running, final ms when done)
+- Args preview (while running) or error (if failed)
+- Tool calls nested under each worker with visual hierarchy
 
 ### Phase 3: Roundabout Loop
 
