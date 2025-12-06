@@ -5,6 +5,7 @@
 
 import type { Message, ConversationTurn } from '@jarvis/data-local';
 import { userIcon, assistantIcon } from '../assets/icons';
+import { renderMarkdown, renderStreamingContent } from './markdown-renderer';
 
 export class ConversationRenderer {
   private messages: Message[] = [];
@@ -80,12 +81,14 @@ export class ConversationRenderer {
     const turnElement = this.element.querySelector(`[data-message-id="${id}"]`);
     if (!turnElement) return false;
 
-    const contentElement = turnElement.querySelector('.turn-content');
+    const contentElement = turnElement.querySelector('.turn-content') as HTMLElement;
     if (!contentElement) return false;
 
-    // Update text content while preserving cursor
-    const escapedContent = this.escapeHtml(content);
+    // During streaming: use escaped plain text with whitespace preservation
+    // This avoids rendering incomplete markdown (unclosed code blocks, etc.)
+    const escapedContent = renderStreamingContent(content);
     contentElement.innerHTML = `${escapedContent}<span class="cursor">▋</span>`;
+    contentElement.classList.add('streaming-content');
 
     if (shouldScroll) {
       this.scrollToBottom();
@@ -193,7 +196,14 @@ export class ConversationRenderer {
     // Build set of message IDs we need
     const neededIds = new Set(sortedMessages.map(m => m.id));
 
-    // Remove DOM elements that are no longer needed
+    // Remove any non-message elements (like status divs) when messages exist
+    Array.from(this.element.children).forEach(el => {
+      if (!el.hasAttribute('data-message-id')) {
+        el.remove();
+      }
+    });
+
+    // Remove message DOM elements that are no longer needed
     this.element.querySelectorAll('[data-message-id]').forEach(el => {
       const id = el.getAttribute('data-message-id');
       if (id && !neededIds.has(id)) {
@@ -242,10 +252,16 @@ export class ConversationRenderer {
       el.classList.add('streaming');
     } else {
       el.classList.remove('streaming');
-      // Update content when streaming ends
-      const contentEl = el.querySelector('.turn-content');
+      // When streaming ends: render full markdown and remove streaming styles
+      const contentEl = el.querySelector('.turn-content') as HTMLElement;
       if (contentEl) {
-        contentEl.innerHTML = this.escapeHtml(message.content);
+        contentEl.classList.remove('streaming-content');
+        // Render markdown for assistant messages, plain text for user messages
+        if (message.role === 'assistant') {
+          contentEl.innerHTML = renderMarkdown(message.content);
+        } else {
+          contentEl.innerHTML = this.escapeHtml(message.content);
+        }
       }
     }
   }
@@ -268,11 +284,25 @@ export class ConversationRenderer {
     const roleLabel = message.role === 'user' ? 'You' : 'Assistant';
     const streamingCursor = message.isStreaming ? '<span class="cursor">▋</span>' : '';
     const streamingClass = message.isStreaming ? ' streaming' : '';
+    const streamingContentClass = message.isStreaming ? ' streaming-content' : '';
+
+    // Render content based on state and role
+    let renderedContent: string;
+    if (message.isStreaming) {
+      // During streaming: plain text with whitespace preservation
+      renderedContent = renderStreamingContent(message.content);
+    } else if (message.role === 'assistant') {
+      // Completed assistant messages: render markdown
+      renderedContent = renderMarkdown(message.content);
+    } else {
+      // User messages: escaped plain text
+      renderedContent = this.escapeHtml(message.content);
+    }
 
     return `
       <div class="${message.role}-turn${streamingClass}" data-message-id="${message.id}">
         <div class="turn-header">${icon} ${roleLabel}</div>
-        <div class="turn-content">${this.escapeHtml(message.content)}${streamingCursor}</div>
+        <div class="turn-content${streamingContentClass}">${renderedContent}${streamingCursor}</div>
         <div class="turn-timestamp">${timeStr}</div>
       </div>
     `;
