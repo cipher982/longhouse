@@ -131,12 +131,14 @@ services:
       VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-secret}
       VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
       VITE_VOICE_CONTEXT: "personal"
+      # HMR needs to know the external proxy port for WebSocket connection
+      JARPXY_PORT: ${JARPXY_PORT}
     # Internal only - accessed via reverse proxy
     ports: []
     volumes:
-      - ../apps/jarvis/apps/web:/app/apps/web:cached
-      - ../apps/jarvis/configs:/app/configs:cached
-      - ../apps/jarvis/packages:/app/packages:cached
+      - ../apps/jarvis/apps/web:/app/apps/jarvis/apps/web:cached
+      - ../apps/jarvis/configs:/app/apps/jarvis/configs:cached
+      - ../apps/jarvis/packages:/app/apps/jarvis/packages:cached
       - /app/node_modules
       - ../logs/jarvis-web:/app/logs
     healthcheck:

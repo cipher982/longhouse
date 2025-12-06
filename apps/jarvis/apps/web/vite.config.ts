@@ -23,6 +23,18 @@ export default defineConfig({
     fs: {
       allow: [resolve(__dirname, '..', '..')]
     },
+    // Docker on macOS doesn't propagate filesystem events - must use polling
+    watch: {
+      usePolling: true,
+      interval: 500,
+    },
+    // HMR config for Docker behind nginx proxy
+    hmr: {
+      protocol: 'ws',
+      host: 'localhost',
+      // Browser connects to nginx proxy port, not container port
+      clientPort: process.env.JARPXY_PORT ? parseInt(process.env.JARPXY_PORT) : 30080,
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8787',
