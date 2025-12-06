@@ -1,5 +1,19 @@
 # Worker Supervision Roundabout
 
+## Implementation Status
+
+| Phase       | Description                  | Status          | Notes                                                     |
+| ----------- | ---------------------------- | --------------- | --------------------------------------------------------- |
+| **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** | See `docs/completed/worker-tool-events-implementation.md` |
+| **Phase 2** | UI Activity Ticker           | ⏳ Not started  | Frontend component for real-time tool display             |
+| **Phase 3** | Roundabout Monitoring Loop   | ⏳ Not started  | Supervisor polling + ephemeral context                    |
+| **Phase 4** | Supervisor Decision Handling | ⏳ Not started  | wait/exit/cancel/peek options                             |
+| **Phase 5** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
+
+**Next recommended**: Phase 2 (UI Activity Ticker) or Phase 5 (Fail-Fast Tools)
+
+---
+
 ## Overview
 
 When a supervisor spawns a worker, it enters a "roundabout" - a temporary monitoring loop that provides real-time visibility into worker execution without polluting the supervisor's long-lived thread context.
@@ -279,14 +293,22 @@ UI receives events, displays ticker, clears when roundabout exits.
 
 ## Implementation Phases
 
-### Phase 1: Tool Activity Events
+### Phase 1: Tool Activity Events ✅ COMPLETE
 
-Add events for tool execution:
+**Implementation details**: See `docs/completed/worker-tool-events-implementation.md`
 
-- `worker_tool_started` - emitted before tool call
-- `worker_tool_completed` - emitted after tool call
+Events implemented:
 
-Modify `WorkerRunner` to emit these events.
+- `WORKER_TOOL_STARTED` - emitted when tool begins
+- `WORKER_TOOL_COMPLETED` - emitted when tool succeeds
+- `WORKER_TOOL_FAILED` - emitted when tool fails (via error_envelope detection)
+
+Key components:
+
+- `zerg/context.py` - WorkerContext via ContextVars
+- `zerg/tools/result_utils.py` - Error detection + secret redaction
+- Modified `zerg_react_agent._call_tool_async` for event emission
+- Modified `WorkerRunner.run_worker` for context setup/teardown
 
 ### Phase 2: UI Activity Ticker
 
