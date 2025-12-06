@@ -280,6 +280,60 @@ class TestSafePreview:
         assert preview == "This is..."
 
 
+class TestRegressionCases:
+    """Regression tests for specific security issues."""
+
+    def test_lone_key_field_redacted(self):
+        """Regression: lone {"key": "sk-123"} should be redacted."""
+        args = {"key": "sk-live-abc123"}
+        redacted = redact_sensitive_args(args)
+
+        assert redacted["key"] == "[REDACTED]"
+
+    def test_lone_api_key_field_redacted(self):
+        """Regression: lone {"api_key": "..."} should always be redacted."""
+        args = {"api_key": "sk-secret-xyz"}
+        redacted = redact_sensitive_args(args)
+
+        assert redacted["api_key"] == "[REDACTED]"
+
+    def test_key_value_pair_with_sensitive_semantic_key(self):
+        """Key-value pair where semantic key is sensitive should redact value."""
+        args = {"key": "Authorization", "value": "Bearer token123"}
+        redacted = redact_sensitive_args(args)
+
+        # "key" field preserved, "value" field redacted
+        assert redacted["key"] == "Authorization"
+        assert redacted["value"] == "[REDACTED]"
+
+    def test_key_value_pair_with_non_sensitive_semantic_key(self):
+        """Key-value pair where semantic key is NOT sensitive should not redact."""
+        args = {"key": "Status", "value": "Running"}
+        redacted = redact_sensitive_args(args)
+
+        # Neither should be redacted
+        assert redacted["key"] == "Status"
+        assert redacted["value"] == "Running"
+
+    def test_http_headers_with_authorization(self):
+        """Real-world case: HTTP headers array with Authorization header."""
+        args = {
+            "headers": [
+                {"key": "Content-Type", "value": "application/json"},
+                {"key": "Authorization", "value": "Bearer sk_live_12345"},
+            ],
+        }
+
+        redacted = redact_sensitive_args(args)
+
+        # First header unchanged
+        assert redacted["headers"][0] == {"key": "Content-Type", "value": "application/json"}
+
+        # Second header value redacted
+        assert redacted["headers"][1]["key"] == "Authorization"
+        assert redacted["headers"][1]["value"] == "[REDACTED]"
+
+
 class TestSensitiveKeysConstant:
     """Tests for SENSITIVE_KEYS constant."""
 

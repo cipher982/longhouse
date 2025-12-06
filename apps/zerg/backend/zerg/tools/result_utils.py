@@ -113,12 +113,16 @@ def redact_sensitive_args(args: Any) -> Any:
     """
     # Handle dict - check keys for sensitive terms
     if isinstance(args, dict):
-        # Structural keys used in key-value pair patterns (don't treat as sensitive)
-        STRUCTURAL_KEYS = {"key", "title", "name", "type", "kind"}
-
         # Check for key-value pair pattern (common in Slack/Discord/headers)
+        # Pattern: {"key": "Authorization", "value": "Bearer ..."}
+        # Only applies when BOTH a semantic key AND value field are present
+        has_value_field = "value" in args or "val" in args
         semantic_key = args.get("key") or args.get("title") or args.get("name")
-        if semantic_key and isinstance(semantic_key, str):
+
+        # Structural keys that should be exempt from redaction ONLY in pair patterns
+        structural_keys_in_pattern = {"key", "title", "name", "type", "kind"}
+
+        if semantic_key and isinstance(semantic_key, str) and has_value_field:
             semantic_lower = semantic_key.lower()
             # If the semantic key is a sensitive term, redact the value field
             if any(sensitive in semantic_lower for sensitive in SENSITIVE_KEYS):
@@ -128,18 +132,30 @@ def redact_sensitive_args(args: Any) -> Any:
                     if k in ("value", "val"):
                         redacted[k] = "[REDACTED]"
                     else:
+                        # Don't redact the structural keys in this pattern
                         redacted[k] = redact_sensitive_args(v)
                 return redacted
 
-        # Standard dict processing
+            # Key-value pair with NON-sensitive semantic key
+            # Don't redact the structural key/title/name fields in this pattern
+            redacted = {}
+            for k, v in args.items():
+                if k in structural_keys_in_pattern:
+                    # Keep structural field as-is in pair pattern
+                    redacted[k] = redact_sensitive_args(v)
+                elif any(sensitive in k.lower() for sensitive in SENSITIVE_KEYS):
+                    redacted[k] = "[REDACTED]"
+                else:
+                    redacted[k] = redact_sensitive_args(v)
+            return redacted
+
+        # Standard dict processing - check ALL keys for sensitive terms
+        # No exemptions - even "key" field alone gets redacted if it contains a sensitive term
         redacted = {}
         for key, value in args.items():
             key_lower = key.lower()
-            # Don't treat structural keys as sensitive
-            if key_lower in STRUCTURAL_KEYS:
-                redacted[key] = redact_sensitive_args(value)
             # Check if key contains any sensitive term
-            elif any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
+            if any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
                 redacted[key] = "[REDACTED]"
             else:
                 # Recursively redact the value
