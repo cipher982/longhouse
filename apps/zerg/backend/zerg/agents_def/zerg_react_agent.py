@@ -250,6 +250,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         Handles multiple error formats:
         1. Legacy: "<tool-error> ..." or "Error: ..."
         2. error_envelope: {"ok": false, "error_type": "...", "user_message": "..."}
+           (works with both JSON and Python literal syntax)
 
         Returns (is_error, error_message).
         """
@@ -259,18 +260,27 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         if result_content.startswith("Error:"):
             return True, result_content
 
-        # error_envelope format check (JSON with ok: false)
-        # Try to parse as JSON to detect {"ok": false, ...}
+        # error_envelope format check - try both JSON and Python literal
         if result_content.startswith("{"):
+            parsed = None
+
+            # Try JSON first (double quotes)
             try:
                 import json
                 parsed = json.loads(result_content)
-                if isinstance(parsed, dict) and parsed.get("ok") is False:
-                    # Extract user_message if available, else use error_type
-                    error_msg = parsed.get("user_message") or parsed.get("error_type") or "Tool returned ok=false"
-                    return True, error_msg
             except (json.JSONDecodeError, TypeError):
-                pass  # Not valid JSON, not an error envelope
+                # Try Python literal (single quotes) - this is what str(dict) produces
+                try:
+                    import ast
+                    parsed = ast.literal_eval(result_content)
+                except (ValueError, SyntaxError):
+                    pass  # Neither JSON nor valid Python literal
+
+            # Check if parsed dict indicates error
+            if isinstance(parsed, dict) and parsed.get("ok") is False:
+                # Extract user_message if available, else use error_type
+                error_msg = parsed.get("user_message") or parsed.get("error_type") or "Tool returned ok=false"
+                return True, error_msg
 
         return False, None
 
