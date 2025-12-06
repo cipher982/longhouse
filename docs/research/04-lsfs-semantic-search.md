@@ -61,12 +61,14 @@ LSFS operates at the macro level (comprehensive API) and micro level (vector DB 
 ### Traditional Path-Based Access (Current Zerg Approach)
 
 **How it works:**
+
 ```
 /data/agents/agent_123/runs/run_456/output.json
 /data/workflows/wf_789/execution_012/node_state.json
 ```
 
 **Strengths:**
+
 - Simple, predictable structure
 - Fast direct access by ID
 - Easy backup and replication
@@ -74,6 +76,7 @@ LSFS operates at the macro level (comprehensive API) and micro level (vector DB 
 - Transparent debugging (inspect files directly)
 
 **Weaknesses:**
+
 - Requires knowing exact location
 - No content-based discovery
 - Must traverse hierarchy manually
@@ -82,18 +85,21 @@ LSFS operates at the macro level (comprehensive API) and micro level (vector DB 
 ### Semantic Search Access (LSFS Approach)
 
 **How it works:**
+
 ```
 Query: "Find all agent runs that successfully processed email triggers"
 → Vector search returns relevant artifacts regardless of path
 ```
 
 **Strengths:**
+
 - Natural language queries
 - Content-based discovery
 - Find related artifacts by meaning
 - No need to remember paths
 
 **Weaknesses:**
+
 - Requires embedding generation (cost + latency)
 - Vector DB infrastructure needed
 - Index maintenance overhead
@@ -108,18 +114,21 @@ Query: "Find all agent runs that successfully processed email triggers"
 Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models/models.py`:
 
 **Artifact Storage:**
+
 1. **Agent Runs**: Stored in `AgentRun` model with `summary` field (Text)
 2. **Workflow Executions**: `WorkflowExecution` with `log` field (Text)
 3. **Node States**: `NodeExecutionState` with `output` field (JSON)
 4. **Thread Messages**: `ThreadMessage` with `content` field (Text)
 
 **Current Access Patterns:**
+
 - Direct SQL queries by agent_id, workflow_id, run_id
 - Time-based filtering (created_at, updated_at timestamps)
 - Status-based queries (phase, result, error fields)
 - Relationship traversal (agent → runs → threads → messages)
 
 **No Current Semantic Capabilities:**
+
 - No vector embeddings stored
 - No semantic indexing layer
 - No content-based search beyond SQL LIKE queries
@@ -231,10 +240,12 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 ### Cost Estimates
 
 **For moderate usage (1000 runs/day, 500 tokens avg per run):**
+
 - Embedding cost: 500K tokens/day × $0.02/1M = $0.01/day = $3.65/year
 - Vector DB: pgvector (free) or Pinecone starter (~$70/month)
 
 **Storage:**
+
 - 1536 dimensions × 4 bytes = 6KB per embedding
 - 1M artifacts × 6KB = ~6GB vector storage
 
@@ -245,6 +256,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 ### Why This is a "Later" Priority
 
 **Current State:**
+
 1. **Low Artifact Volume**: Early MVP stage, limited historical data
 2. **Direct Access Works**: Current ID-based queries are sufficient
 3. **No User Pain Points**: No evidence users struggle to find artifacts
@@ -252,6 +264,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 5. **Cost Before Value**: Embedding costs without proven use case
 
 **Prerequisites Before Implementation:**
+
 1. **Scale Threshold**: 10K+ historical runs worth searching
 2. **User Demand**: Explicit requests for "find similar runs" features
 3. **Search Use Cases**: Identified patterns that SQL can't handle
@@ -260,6 +273,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 ### When to Revisit
 
 **Triggering Conditions:**
+
 1. Users repeatedly ask: "How do I find that run where...?"
 2. Support burden from artifact discovery issues
 3. Internal ops team needs pattern analysis across runs
@@ -275,6 +289,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 ### Phase 1: Foundation (2-4 weeks)
 
 1. **Add pgvector Extension**
+
    ```sql
    CREATE EXTENSION vector;
    ALTER TABLE agent_runs ADD COLUMN embedding vector(1536);
@@ -347,6 +362,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 **Recommendation**: DEFER to post-MVP phase (6-12 months out)
 
 **Rationale:**
+
 1. Current filesystem + SQL approach is sufficient for MVP scale
 2. No identified user pain points that semantic search would solve
 3. Infrastructure investment not justified by current artifact volume
@@ -354,6 +370,7 @@ Based on examination of `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/models
 5. Can adopt later with minimal refactoring (additive change)
 
 **Action Items:**
+
 - [ ] Monitor for triggering conditions (user requests, scale issues)
 - [ ] Revisit decision at 10K+ artifact milestone
 - [ ] Consider during Q2 2026 planning if platform gains traction

@@ -237,7 +237,7 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
     Regression test: Verify that GET /threads/{id}/messages returns messages
     strictly ordered by database ID (insertion order), even when timestamps
     are out of order.
-    
+
     This ensures deterministic ordering regardless of timestamp precision issues.
     """
     from datetime import UTC
@@ -245,11 +245,11 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
     from datetime import timedelta
 
     from zerg.models.models import ThreadMessage
-    
+
     # Create messages with intentionally out-of-order timestamps
     # but they will get sequential IDs from auto-increment
     base_time = datetime.now(UTC)
-    
+
     msg1 = ThreadMessage(
         thread_id=sample_thread.id,
         role="user",
@@ -268,37 +268,37 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
         content="Third message",
         sent_at=(base_time + timedelta(seconds=15)).isoformat(),  # Latest sent time
     )
-    
+
     # Add in reverse order to emphasize that insertion order doesn't matter
     db_session.add(msg3)
     db_session.add(msg1)
     db_session.add(msg2)
     db_session.commit()
-    
+
     # Refresh to get IDs assigned
     db_session.refresh(msg1)
     db_session.refresh(msg2)
     db_session.refresh(msg3)
-    
+
     # Store IDs to verify ordering
     ids = [msg1.id, msg2.id, msg3.id]
     min_id = min(ids)
     max_id = max(ids)
-    
+
     # API response must be ordered by ID (ascending)
     response = client.get(f"/api/threads/{sample_thread.id}/messages")
     assert response.status_code == 200
     messages = response.json()
-    
+
     # Filter to only our test messages
     test_messages = [m for m in messages if m["id"] in ids]
     assert len(test_messages) == 3
-    
+
     # Verify strict ID-ascending order
     message_ids = [m["id"] for m in test_messages]
     assert message_ids == sorted(message_ids), \
         f"Messages must be ordered by ID ascending, but got: {message_ids}"
-    
+
     # Verify first message has the minimum ID (not necessarily the earliest timestamp)
     assert test_messages[0]["id"] == min_id
     assert test_messages[-1]["id"] == max_id

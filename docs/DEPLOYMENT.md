@@ -28,6 +28,7 @@ This guide covers deploying the Swarm Platform (Jarvis + Zerg) to production env
 ## Prerequisites
 
 ### System Requirements
+
 - **OS**: Linux (Ubuntu 22.04+ recommended)
 - **Python**: 3.11+
 - **Node.js**: 18+
@@ -36,6 +37,7 @@ This guide covers deploying the Swarm Platform (Jarvis + Zerg) to production env
 - **Storage**: 10GB+ disk space
 
 ### Required Services
+
 - PostgreSQL database
 - (Optional) Redis for caching
 - (Optional) Nginx/Caddy for reverse proxy
@@ -66,6 +68,7 @@ services:
 ```
 
 Deploy to Coolify:
+
 1. Push code to git repository
 2. Create new application in Coolify
 3. Point to `docker-compose.prod.yml`
@@ -120,6 +123,7 @@ sudo systemctl reload nginx
 ### Critical Variables
 
 #### Zerg Backend
+
 ```bash
 # Database
 DATABASE_URL="postgresql://zerg:password@localhost:5432/zerg_prod"
@@ -159,6 +163,7 @@ AUTH_DISABLED="0"
 ```
 
 #### Jarvis Frontend
+
 ```bash
 # Zerg Backend URL
 VITE_ZERG_API_URL="https://api.swarmlet.com"
@@ -254,6 +259,7 @@ WantedBy=multi-user.target
 ```
 
 Enable and start:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable zerg-backend
@@ -420,6 +426,7 @@ curl http://localhost:47300/metrics
 ```
 
 Key metrics:
+
 - `agent_runs_total` - Total agent executions
 - `agent_runs_duration_seconds` - Execution time
 - `agent_runs_cost_usd` - Cost per run
@@ -543,6 +550,7 @@ server {
 ### Database Scaling
 
 For high load:
+
 1. Use PostgreSQL connection pooling (pgBouncer)
 2. Add read replicas for `/api/jarvis/agents` and `/api/jarvis/runs`
 3. Cache agent listings in Redis (60s TTL)
@@ -585,10 +593,10 @@ Integrate Prometheus:
 ```yaml
 # prometheus.yml
 scrape_configs:
-  - job_name: 'zerg-backend'
+  - job_name: "zerg-backend"
     static_configs:
-      - targets: ['localhost:47300']
-    metrics_path: '/metrics'
+      - targets: ["localhost:47300"]
+    metrics_path: "/metrics"
 ```
 
 ### Log Aggregation
@@ -706,6 +714,7 @@ EOF
 Before going live:
 
 ### Configuration
+
 - [ ] All required environment variables set
 - [ ] Strong secrets generated (64+ chars)
 - [ ] Database configured with backups
@@ -713,6 +722,7 @@ Before going live:
 - [ ] CORS origins configured properly
 
 ### Security
+
 - [ ] Firewall rules in place
 - [ ] Rate limiting enabled
 - [ ] Cost budgets configured
@@ -720,6 +730,7 @@ Before going live:
 - [ ] Database connections encrypted
 
 ### Monitoring
+
 - [ ] Health checks configured
 - [ ] Prometheus metrics exposed
 - [ ] Discord alerts enabled
@@ -727,6 +738,7 @@ Before going live:
 - [ ] Uptime monitoring active
 
 ### Testing
+
 - [ ] Run integration tests: `./scripts/test-jarvis-integration.sh`
 - [ ] Test Jarvis authentication
 - [ ] Verify SSE streaming works
@@ -734,6 +746,7 @@ Before going live:
 - [ ] Confirm scheduled agents run
 
 ### Deployment
+
 - [ ] Database migrations applied
 - [ ] Baseline agents seeded
 - [ ] Systemd services enabled
@@ -743,6 +756,7 @@ Before going live:
 ## Support
 
 For issues or questions:
+
 - Check logs: `sudo journalctl -u zerg-backend -f`
 - Review documentation: `/docs/jarvis_integration.md`
 - Test integration: `./scripts/test-jarvis-integration.sh`
@@ -808,6 +822,7 @@ async def list_jarvis_agents(...):
 ## Next Steps
 
 After deployment:
+
 1. Test all endpoints with `./scripts/test-jarvis-integration.sh`
 2. Seed agents with `make seed-jarvis-agents`
 3. Monitor logs for first 24 hours
@@ -816,6 +831,7 @@ After deployment:
 6. Document any custom configuration
 
 For ongoing development:
+
 - See [Jarvis Integration](./jarvis_integration.md) for API details
 - See [Tool Manifest Workflow](./tool_manifest_workflow.md) for adding tools
 - See main README.swarm.md for development workflow

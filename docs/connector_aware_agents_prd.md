@@ -29,6 +29,7 @@
 **Static tool registration + dynamic credential availability = mismatch**
 
 The agent has:
+
 - Tool definitions (static, code-defined)
 - No knowledge of connector configurations (dynamic, user-specific)
 - No knowledge of credential validity (runtime state)
@@ -37,12 +38,12 @@ The agent has:
 
 ## Design Approaches Considered
 
-| Approach | Description | Pros | Cons |
-|----------|-------------|------|------|
-| **Filtered** | Only register tools for configured connectors | Clean, no false promises | Agent can't discover what's *possible* |
-| **Annotated** | Show all tools, mark status in context | Full discovery, proactive guidance | More context in prompt |
-| **Fail-fast** | Try tools, fail with error (current) | Simple implementation | Worst UX, trial-and-error |
-| **Hybrid** ✅ | Categorized (READY vs NEEDS_SETUP) + conditional enable | Best of both worlds | Medium complexity |
+| Approach      | Description                                             | Pros                               | Cons                                   |
+| ------------- | ------------------------------------------------------- | ---------------------------------- | -------------------------------------- |
+| **Filtered**  | Only register tools for configured connectors           | Clean, no false promises           | Agent can't discover what's _possible_ |
+| **Annotated** | Show all tools, mark status in context                  | Full discovery, proactive guidance | More context in prompt                 |
+| **Fail-fast** | Try tools, fail with error (current)                    | Simple implementation              | Worst UX, trial-and-error              |
+| **Hybrid** ✅ | Categorized (READY vs NEEDS_SETUP) + conditional enable | Best of both worlds                | Medium complexity                      |
 
 ### Decision: Hybrid/Annotated Approach
 
@@ -163,13 +164,13 @@ This approach aligns with current best practices:
 
 ### Status Values
 
-| Status | Meaning | Agent Behavior |
-|--------|---------|----------------|
-| `connected` | Credentials valid, tools callable | Can use tools, offer capabilities |
-| `not_configured` | User hasn't set up | Mention as available, offer setup_url |
-| `invalid_credentials` | Token expired/revoked | Explain issue, suggest reconnecting |
-| `rate_limited` | Temporarily unavailable | Explain, suggest waiting |
-| `disabled_by_admin` | Organization policy | Do not offer or mention |
+| Status                | Meaning                           | Agent Behavior                        |
+| --------------------- | --------------------------------- | ------------------------------------- |
+| `connected`           | Credentials valid, tools callable | Can use tools, offer capabilities     |
+| `not_configured`      | User hasn't set up                | Mention as available, offer setup_url |
+| `invalid_credentials` | Token expired/revoked             | Explain issue, suggest reconnecting   |
+| `rate_limited`        | Temporarily unavailable           | Explain, suggest waiting              |
+| `disabled_by_admin`   | Organization policy               | Do not offer or mention               |
 
 ### Current Time Injection
 
@@ -457,30 +458,30 @@ Now agent can reason about time gaps, though with fresh connector status this is
 
 ## Open Design Decisions
 
-| Decision | Options | Recommendation |
-|----------|---------|----------------|
-| **Tool registration** | Filter unconfigured vs register all + mark disabled | Filter out, but list in prompt context as "available" |
-| **Refresh frequency** | Per-session vs per-turn | Per-turn (always fresh) |
-| **Error envelope** | Standardize `{ok, error_type, user_message}` | Yes, standardize all tool errors |
-| **Scope visibility** | Include scopes in status | Yes (enables "can read but not write") |
-| **Message timestamps** | Add to all messages | Yes (low effort, high value) |
-| **Multi-connector tools** | What if tool needs GitHub AND Slack? | Check all required, fail with specific missing connector |
+| Decision                  | Options                                             | Recommendation                                           |
+| ------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
+| **Tool registration**     | Filter unconfigured vs register all + mark disabled | Filter out, but list in prompt context as "available"    |
+| **Refresh frequency**     | Per-session vs per-turn                             | Per-turn (always fresh)                                  |
+| **Error envelope**        | Standardize `{ok, error_type, user_message}`        | Yes, standardize all tool errors                         |
+| **Scope visibility**      | Include scopes in status                            | Yes (enables "can read but not write")                   |
+| **Message timestamps**    | Add to all messages                                 | Yes (low effort, high value)                             |
+| **Multi-connector tools** | What if tool needs GitHub AND Slack?                | Check all required, fail with specific missing connector |
 
 ---
 
 ## Implementation Priority
 
-| Change | Effort | Impact | Priority |
-|--------|--------|--------|----------|
-| Per-turn `connector_status` injection | Low | High | **P0** |
-| `current_time` injection | Trivial | High | **P0** |
-| `captured_at` on status | Trivial | Medium | **P0** |
-| Static protocols in system prompt | Medium | High | **P0** |
-| Standardized error envelope | Medium | Medium | **P1** |
-| Timestamps on messages | Medium | Medium | **P1** |
-| Capability presentation protocol | Low | Medium | **P1** |
-| Meta-tool for refresh | Medium | Low | **P2** |
-| Tool filtering based on status | Medium | Medium | **P2** |
+| Change                                | Effort  | Impact | Priority |
+| ------------------------------------- | ------- | ------ | -------- |
+| Per-turn `connector_status` injection | Low     | High   | **P0**   |
+| `current_time` injection              | Trivial | High   | **P0**   |
+| `captured_at` on status               | Trivial | Medium | **P0**   |
+| Static protocols in system prompt     | Medium  | High   | **P0**   |
+| Standardized error envelope           | Medium  | Medium | **P1**   |
+| Timestamps on messages                | Medium  | Medium | **P1**   |
+| Capability presentation protocol      | Low     | Medium | **P1**   |
+| Meta-tool for refresh                 | Medium  | Low    | **P2**   |
+| Tool filtering based on status        | Medium  | Medium | **P2**   |
 
 ---
 
@@ -557,22 +558,22 @@ The result: Agents accurately represent what they can do NOW, guide users to ena
 
 ### P0 Items - ✅ COMPLETE
 
-| Item | Status | Implementation |
-|------|--------|----------------|
+| Item                                  | Status  | Implementation                                                   |
+| ------------------------------------- | ------- | ---------------------------------------------------------------- |
 | Per-turn `connector_status` injection | ✅ Done | `zerg/connectors/status_builder.py` - `build_connector_status()` |
-| `current_time` injection | ✅ Done | `build_agent_context()` includes ISO 8601 timestamp |
-| `captured_at` on status | ✅ Done | XML attribute on `<connector_status>` block |
-| Static protocols in system prompt | ✅ Done | `zerg/prompts/connector_protocols.py` |
-| Agent runner integration | ✅ Done | `zerg/managers/agent_runner.py` - `run_thread()` |
-| Unit tests | ✅ Done | 53 tests in `tests/connectors/` and `tests/prompts/` |
+| `current_time` injection              | ✅ Done | `build_agent_context()` includes ISO 8601 timestamp              |
+| `captured_at` on status               | ✅ Done | XML attribute on `<connector_status>` block                      |
+| Static protocols in system prompt     | ✅ Done | `zerg/prompts/connector_protocols.py`                            |
+| Agent runner integration              | ✅ Done | `zerg/managers/agent_runner.py` - `run_thread()`                 |
+| Unit tests                            | ✅ Done | 53 tests in `tests/connectors/` and `tests/prompts/`             |
 
 ### P1 Items - ✅ COMPLETE
 
-| Item | Status | Implementation |
-|------|--------|----------------|
-| Standardized error envelope | ✅ Done | `zerg/tools/error_envelope.py` + all 9 connector tools updated |
-| Timestamps on messages | ✅ Done | `zerg/services/thread_service.py` - ISO 8601 prefix on messages |
-| Capability presentation protocol | ✅ Done | Included in P0 protocols |
+| Item                             | Status  | Implementation                                                  |
+| -------------------------------- | ------- | --------------------------------------------------------------- |
+| Standardized error envelope      | ✅ Done | `zerg/tools/error_envelope.py` + all 9 connector tools updated  |
+| Timestamps on messages           | ✅ Done | `zerg/services/thread_service.py` - ISO 8601 prefix on messages |
+| Capability presentation protocol | ✅ Done | Included in P0 protocols                                        |
 
 ### Key Files
 
@@ -602,39 +603,24 @@ apps/zerg/backend/tests/
 ### Git Commits
 
 **P0 Commits:**
+
 1. `51d0618` - feat(connectors): add connector status builder for agent context
 2. `425a110` - feat(agents): inject connector status context into agent turns
 3. `018db82` - feat(prompts): add connector-aware protocol definitions
 4. `579ae26` - test(connectors): add tests for connector-aware agent context
 
-**P1 Commits:**
-5. `e400120` - feat(tools): add standardized error envelope module
-6. `de9ccb7` - feat(tools): standardize github tools to use error envelope
-7. `e277ee2` - feat(tools): standardize slack tools to use error envelope
-8. `a76bd77` - test(tools): add comprehensive tests for error envelope module
-9. `5e71a0e` - feat(tools): standardize discord/email/sms tools to use error envelope
-10. `31e1cc3` - feat(tools): standardize jira tools to use error envelope
-11. `f2b145d` - feat(tools): standardize linear/notion/imessage tools to use error envelope
-12. `f5599fd` - feat(agents): add timestamps to conversation history messages
+**P1 Commits:** 5. `e400120` - feat(tools): add standardized error envelope module 6. `de9ccb7` - feat(tools): standardize github tools to use error envelope 7. `e277ee2` - feat(tools): standardize slack tools to use error envelope 8. `a76bd77` - test(tools): add comprehensive tests for error envelope module 9. `5e71a0e` - feat(tools): standardize discord/email/sms tools to use error envelope 10. `31e1cc3` - feat(tools): standardize jira tools to use error envelope 11. `f2b145d` - feat(tools): standardize linear/notion/imessage tools to use error envelope 12. `f5599fd` - feat(agents): add timestamps to conversation history messages
 
-**Bug Fix Commits:**
-13. `4f1edbd` - fix(connectors): check credential test_status in status_builder
-14. `37c45fb` - fix(tools): complete jira_tools error envelope migration
-15. `128e8b1` - fix(tests): update tool tests for new error envelope contract
-16. `8c30c59` - fix(tests): update ThreadService tests for timestamp prefix
-17. `15e7ede` - fix(tests): update status_builder tests for direct DB queries
-18. `a4e87ea` - fix(connectors): remove unused imports and variables (lint)
+**Bug Fix Commits:** 13. `4f1edbd` - fix(connectors): check credential test_status in status_builder 14. `37c45fb` - fix(tools): complete jira_tools error envelope migration 15. `128e8b1` - fix(tests): update tool tests for new error envelope contract 16. `8c30c59` - fix(tests): update ThreadService tests for timestamp prefix 17. `15e7ede` - fix(tests): update status_builder tests for direct DB queries 18. `a4e87ea` - fix(connectors): remove unused imports and variables (lint)
 
-**P2 Commits:**
-19. `d5ef8fb` - feat(tools): add refresh_connector_status meta-tool
-20. `18b9cde` - feat(connectors): add get_unavailable_tools helper for tool filtering
+**P2 Commits:** 19. `d5ef8fb` - feat(tools): add refresh_connector_status meta-tool 20. `18b9cde` - feat(connectors): add get_unavailable_tools helper for tool filtering
 
 ### P2 Items - ✅ COMPLETE
 
-| Item | Status | Implementation |
-|------|--------|----------------|
+| Item                  | Status  | Implementation                                          |
+| --------------------- | ------- | ------------------------------------------------------- |
 | Meta-tool for refresh | ✅ Done | `refresh_connector_status` tool in `connector_tools.py` |
-| Tool filtering helper | ✅ Done | `get_unavailable_tools()` in `status_builder.py` |
+| Tool filtering helper | ✅ Done | `get_unavailable_tools()` in `status_builder.py`        |
 
 **Note on tool filtering:** Full runtime filtering would require changes to the cached agent runnable architecture. The current approach (protocols + error envelope) provides equivalent UX: agents know not to call disconnected tools, and if they do, they get clear errors.
 
@@ -653,6 +639,7 @@ The implementation follows the PRD's cache-aware message structure:
 ```
 
 **Key design decisions:**
+
 1. Protocols prepended to system message (not stored in DB)
 2. Context injected as ephemeral user/assistant pair (not persisted)
 3. Graceful degradation if context building fails

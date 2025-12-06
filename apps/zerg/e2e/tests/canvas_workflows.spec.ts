@@ -21,7 +21,7 @@ test.describe('Canvas Editor basic node interactions', () => {
     const canvasArea = page.locator('#canvas-container canvas');
     // REQUIRE canvas to exist - core functionality
     await expect(canvasArea).toBeVisible({ timeout: 5000 });
-    
+
     const bbox = await canvasArea.boundingBox();
     expect(bbox).toBeTruthy(); // Canvas must have proper dimensions
 
@@ -37,7 +37,7 @@ test.describe('Canvas Editor basic node interactions', () => {
     await expect(pill).toBeVisible();
     const canvasArea = page.locator('#canvas-container canvas');
     await pill.dragTo(canvasArea, { targetPosition: { x: 50, y: 50 } });
-    
+
     const node = page.locator('.canvas-node, .generic-node').first();
     await expect(node).toBeVisible({ timeout: 5000 });
     const posBefore = await node.boundingBox();
@@ -57,12 +57,12 @@ test.describe('Canvas Editor basic node interactions', () => {
     const pill = page.locator('#agent-shelf .agent-pill').first();
     await expect(pill).toBeVisible();
     const canvasArea = page.locator('#canvas-container canvas');
-    
+
     // Create first node
     await pill.dragTo(canvasArea, { targetPosition: { x: 50, y: 50 } });
-    // Create second node  
+    // Create second node
     await pill.dragTo(canvasArea, { targetPosition: { x: 200, y: 50 } });
-    
+
     const nodes = page.locator('.canvas-node, .generic-node');
     await expect(nodes).toHaveCount(2, { timeout: 5000 }); // REQUIRE two nodes
 
@@ -86,7 +86,7 @@ test.describe('Canvas Editor basic node interactions', () => {
     await expect(pill).toBeVisible();
     const canvasArea = page.locator('#canvas-container canvas');
     await pill.dragTo(canvasArea, { targetPosition: { x: 100, y: 100 } });
-    
+
     const node = page.locator('.canvas-node, .generic-node').first();
     await expect(node).toBeVisible({ timeout: 5000 }); // REQUIRE node exists
     await node.click({ button: 'right' });
@@ -101,25 +101,25 @@ test.describe('Canvas Editor basic node interactions', () => {
     const pill = page.locator('#agent-shelf .agent-pill').first();
     await expect(pill).toBeVisible();
     const canvasArea = page.locator('#canvas-container canvas');
-    
+
     // Create and connect two nodes
     await pill.dragTo(canvasArea, { targetPosition: { x: 50, y: 50 } });
     await pill.dragTo(canvasArea, { targetPosition: { x: 200, y: 50 } });
-    
+
     const nodes = page.locator('.canvas-node, .generic-node');
     await expect(nodes).toHaveCount(2, { timeout: 5000 });
-    
+
     // Create edge by dragging between nodes
     await nodes.nth(0).dragTo(nodes.nth(1));
     await expect(page.locator('.canvas-edge, path.edge')).toHaveCount(1, { timeout: 5000 });
-    
+
     // Right-click on edge to delete it
     const edge = page.locator('.canvas-edge, path.edge').first();
     await edge.click({ button: 'right' });
     const deleteEdgeOption = page.locator('text=Delete Edge, text=Remove Connection');
     await expect(deleteEdgeOption).toBeVisible({ timeout: 5000 });
     await deleteEdgeOption.click();
-    
+
     // Verify edge is deleted
     await expect(page.locator('.canvas-edge, path.edge')).toHaveCount(0, { timeout: 5000 });
   });
@@ -135,14 +135,14 @@ test.describe('Canvas Editor basic node interactions', () => {
 
     const canvasArea = page.locator('#canvas-container canvas');
     await pill.dragTo(canvasArea, { targetPosition: { x: 200, y: 200 } });
-    
+
     // Wait for node to appear
     await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(1, { timeout: 5000 });
-    
+
     // Reload page to test persistence
     await page.reload();
     await page.waitForSelector('#canvas-container', { timeout: 10_000 });
-    
+
     // Verify node persists after reload
     await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(1, { timeout: 5000 });
   });
@@ -160,11 +160,11 @@ test.describe('Canvas Editor basic node interactions', () => {
     const dropdownToggle = page.locator('.dropdown-toggle');
     await expect(dropdownToggle).toBeVisible({ timeout: 5000 });
     await dropdownToggle.click();
-    
+
     const clearOption = page.locator('text=Clear Canvas');
     await expect(clearOption).toBeVisible({ timeout: 5000 }); // REQUIRE clear functionality
     await clearOption.click();
-    
+
     // Verify canvas is cleared
     await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(0, { timeout: 5000 });
   });

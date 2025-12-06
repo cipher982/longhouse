@@ -100,7 +100,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # NOTE: Do NOT capture token stream setting here – it must be evaluated
     # at invocation time, not at runnable creation time. This allows the
     # LLM_TOKEN_STREAM environment variable to be changed without restarting.
-    
+
     # --- Define tools and model within scope ---
     # ------------------------------------------------------------------
     # MCP INTEGRATION – Dynamically load tools provided by *all* MCP servers

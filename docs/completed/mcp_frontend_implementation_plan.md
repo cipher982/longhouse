@@ -1,6 +1,6 @@
 # MCP Frontend Implementation Plan
 
-*Status: ✅ COMPLETED*  ·  *Completed: May 2025*  ·  *Moved to completed: June 15, 2025*
+_Status: ✅ COMPLETED_ · _Completed: May 2025_ · _Moved to completed: June 15, 2025_
 
 ## Overview
 
@@ -9,6 +9,7 @@ This document outlined the frontend implementation plan for integrating MCP (Mod
 ## Architecture Overview
 
 ### Frontend Stack
+
 - **Language**: Rust compiled to WebAssembly
 - **DOM Manipulation**: web-sys
 - **State Management**: Global APP_STATE with message-based updates
@@ -37,11 +38,13 @@ This document outlined the frontend implementation plan for integrating MCP (Mod
 ### 1.1 Add "Tools & Integrations" Tab ✅ COMPLETED
 
 **Files Modified**:
+
 - `frontend/src/state.rs`: Added `ToolsIntegrations` to `AgentConfigTab` enum, and new MCP-related state structures (`AgentMcpConfig`, `McpServerConfig`, `McpToolInfo`, `ConnectionStatus`) and fields to `AppState`.
 - `frontend/src/messages.rs`: Added new message types for MCP operations (e.g., `LoadMcpTools`, `AddMcpServer`, `TestMcpConnection`).
 - `frontend/src/update.rs`: Updated match statements to handle `AgentConfigTab::ToolsIntegrations` and all new MCP-related messages.
 
 **Implementation Steps**:
+
 1. Update `build_dom()` to include new tab button
 2. Create content container for tools section
 3. Add tab switching logic
@@ -49,16 +52,17 @@ This document outlined the frontend implementation plan for integrating MCP (Mod
 ### 1.2 Create Tool Sections Layout
 
 **Structure**:
+
 ```
 <div id="agent-tools-content" class="tab-content">
     <div id="builtin-tools-section" class="tools-section">
         <!-- Built-in tools list -->
     </div>
-    
+
     <div id="quick-connect-section" class="tools-section">
         <!-- Preset buttons -->
     </div>
-    
+
     <div id="custom-servers-section" class="tools-section">
         <!-- Custom MCP servers -->
     </div>
@@ -73,7 +77,7 @@ This document outlined the frontend implementation plan for integrating MCP (Mod
 // Add to AppState
 pub struct AppState {
     // ... existing fields ...
-    
+
     // MCP-related state
     pub agent_mcp_configs: HashMap<u32, AgentMcpConfig>,
     pub available_mcp_tools: HashMap<u32, Vec<McpToolInfo>>,
@@ -113,132 +117,132 @@ pub enum ConnectionStatus {
 ```css
 /* Tools & Integrations Tab Styles */
 .tools-section {
-    margin-bottom: 24px;
-    padding: 16px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background-color: var(--bg-secondary);
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-secondary);
 }
 
 .tools-section h3 {
-    margin: 0 0 12px 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .tool-item {
-    display: flex;
-    align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .tool-item:last-child {
-    border-bottom: none;
+  border-bottom: none;
 }
 
 .tool-checkbox {
-    margin-right: 12px;
+  margin-right: 12px;
 }
 
 .tool-name {
-    flex: 1;
-    font-size: 14px;
+  flex: 1;
+  font-size: 14px;
 }
 
 .tool-source {
-    font-size: 12px;
-    color: var(--text-secondary);
-    background-color: var(--bg-tertiary);
-    padding: 2px 8px;
-    border-radius: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background-color: var(--bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 12px;
 }
 
 /* Quick Connect Buttons */
 .quick-connect-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 12px;
-    margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .preset-button {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background-color: var(--bg-primary);
-    cursor: pointer;
-    transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-primary);
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
 .preset-button:hover {
-    border-color: var(--primary-color);
-    transform: translateY(-2px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-color: var(--primary-color);
+  transform: translateY(-2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .preset-button .icon {
-    font-size: 24px;
-    margin-bottom: 4px;
+  font-size: 24px;
+  margin-bottom: 4px;
 }
 
 /* Connection Status Indicators */
 .connection-status {
-    display: inline-flex;
-    align-items: center;
-    font-size: 12px;
-    margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  margin-left: 8px;
 }
 
 .status-healthy {
-    color: var(--success-color);
+  color: var(--success-color);
 }
 
 .status-slow {
-    color: var(--warning-color);
+  color: var(--warning-color);
 }
 
 .status-failed {
-    color: var(--error-color);
+  color: var(--error-color);
 }
 
 .status-checking {
-    color: var(--text-secondary);
+  color: var(--text-secondary);
 }
 
 /* MCP Server Card */
 .mcp-server-card {
-    padding: 12px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    margin-bottom: 8px;
-    background-color: var(--bg-primary);
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background-color: var(--bg-primary);
 }
 
 .server-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .server-name {
-    font-weight: 600;
-    font-size: 14px;
+  font-weight: 600;
+  font-size: 14px;
 }
 
 .server-actions {
-    display: flex;
-    gap: 8px;
+  display: flex;
+  gap: 8px;
 }
 
 .server-details {
-    font-size: 12px;
-    color: var(--text-secondary);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 ```
 
@@ -289,7 +293,7 @@ impl McpConnectionModal {
     pub fn show_preset(preset_name: &str) -> Result<(), JsValue> {
         // Show modal for connecting to a preset service
     }
-    
+
     pub fn show_custom() -> Result<(), JsValue> {
         // Show modal for adding custom MCP server
     }
@@ -307,6 +311,7 @@ impl McpConnectionModal {
 ### 3.1 Tool Selection UI
 
 **Features**:
+
 - Collapsible sections by server
 - Checkbox for each tool
 - Bulk selection options
@@ -341,16 +346,19 @@ impl McpConnectionModal {
 ## Testing Strategy
 
 ### Unit Tests
+
 - State management logic
 - API request/response handling
 - UI component behavior
 
 ### Integration Tests
+
 - End-to-end connection flow
 - Tool selection persistence
 - Error scenarios
 
 ### E2E Tests
+
 - Complete user journey
 - Cross-browser compatibility
 - Performance under load

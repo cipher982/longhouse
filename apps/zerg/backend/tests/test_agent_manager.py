@@ -3,7 +3,7 @@ import pytest
 pytest.skip("Legacy AgentManager tests skipped - AgentManager has been removed", allow_module_level=True)
 """
 These tests are for the deprecated AgentManager which has been completely removed
-from the codebase. The functionality has been replaced by AgentRunner and related 
+from the codebase. The functionality has been replaced by AgentRunner and related
 services.
 """
 

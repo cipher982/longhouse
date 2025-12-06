@@ -174,4 +174,3 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 	    echo "✅ Makefile validation passed"; \
 	fi; \
 	exit $$failed
-

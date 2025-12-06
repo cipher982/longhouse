@@ -16,6 +16,7 @@ The supervisor/worker system introduces a fundamental UX question:
 > **How much of the orchestration machinery should users see?**
 
 Two extremes exist:
+
 - **Full transparency**: Show every worker, every tool call, every intermediate result
 - **Complete abstraction**: Hide everything, just show final answers
 
@@ -26,12 +27,14 @@ Neither extreme serves users well. Full transparency overwhelms. Complete abstra
 **Show the story, not the machinery.**
 
 Users see:
+
 - What the assistant is doing ("Checking your servers...")
 - Progress through meaningful phases ("Found an issue, investigating...")
 - The synthesized result with confidence
 - Honest caveats when data is incomplete
 
 Users don't see (unless they ask):
+
 - Individual worker IDs
 - Tool call payloads
 - Token counts
@@ -41,13 +44,13 @@ Users don't see (unless they ask):
 
 ### 1.3 Guiding Principles
 
-| Principle | Implication |
-|-----------|-------------|
-| **One Brain** | Never expose "workers" as separate entities to casual users |
-| **Earned Complexity** | Details available on demand, not by default |
-| **Conversation First** | Progress appears as natural dialogue, not dashboards |
-| **Trust Through Narrative** | Show reasoning path, not raw data |
-| **Debug Escape Hatch** | Power users can always drill down |
+| Principle                   | Implication                                                 |
+| --------------------------- | ----------------------------------------------------------- |
+| **One Brain**               | Never expose "workers" as separate entities to casual users |
+| **Earned Complexity**       | Details available on demand, not by default                 |
+| **Conversation First**      | Progress appears as natural dialogue, not dashboards        |
+| **Trust Through Narrative** | Show reasoning path, not raw data                           |
+| **Debug Escape Hatch**      | Power users can always drill down                           |
 
 ### 1.4 Design Invariants (Hard Rules)
 
@@ -55,7 +58,7 @@ These are non-negotiable rules that all implementations must follow:
 
 1. **No Implementation Leakage**
    - Jarvis NEVER mentions "workers", "tools", or "agents" to end users
-   - Only speak in terms of *actions* ("checking", "analyzing") and *findings*
+   - Only speak in terms of _actions_ ("checking", "analyzing") and _findings_
 
 2. **Acknowledgment Guarantee**
    - Every supervisor run MUST acknowledge within 500ms
@@ -119,6 +122,7 @@ Jarvis remains conversational. Supervisor integration should feel like talking t
 Users can ask "How did you figure that out?" and get a short, human explanation without opening the dashboard.
 
 Every supervisor result offers two transparency levels:
+
 - **[How did you figure this out?]** → Jarvis explains reasoning in conversation
 - **[Show details]** → Opens dashboard with full artifacts
 
@@ -272,6 +276,7 @@ Users can cancel investigations at any time:
 **UI**: Click `[Cancel]` or `✕` button
 
 Cancellation response:
+
 ```
 ┌──────────────────────────────────────┐
 │  ✓ Stopped the investigation.        │
@@ -290,22 +295,22 @@ Backend: `POST /api/jarvis/supervisor/{run_id}/cancel`
 
 Map backend events to three user-understandable phases:
 
-| Phase | Label | When |
-|-------|-------|------|
-| 1 | "Gathering data..." | Workers spawning/executing |
-| 2 | "Analyzing..." | Workers completing, supervisor processing |
-| 3 | "Writing up what I found..." | Supervisor generating final response |
+| Phase | Label                        | When                                      |
+| ----- | ---------------------------- | ----------------------------------------- |
+| 1     | "Gathering data..."          | Workers spawning/executing                |
+| 2     | "Analyzing..."               | Workers completing, supervisor processing |
+| 3     | "Writing up what I found..." | Supervisor generating final response      |
 
 ### 4.2 Activity Narrative
 
 Instead of showing "Worker 1", "Worker 2", show what's happening:
 
-| Backend Event | User-Facing Narrative |
-|---------------|----------------------|
-| `worker_spawned: "Check disk usage on cube"` | "Checking disk space..." |
-| `worker_spawned: "Review docker containers"` | "Reviewing containers..." |
-| `worker_complete: success` | [narrative disappears, next one shows] |
-| `worker_complete: failed` | "Had trouble checking X, trying another way..." |
+| Backend Event                                | User-Facing Narrative                           |
+| -------------------------------------------- | ----------------------------------------------- |
+| `worker_spawned: "Check disk usage on cube"` | "Checking disk space..."                        |
+| `worker_spawned: "Review docker containers"` | "Reviewing containers..."                       |
+| `worker_complete: success`                   | [narrative disappears, next one shows]          |
+| `worker_complete: failed`                    | "Had trouble checking X, trying another way..." |
 
 ### 4.3 Progress Bar Philosophy
 
@@ -315,11 +320,11 @@ Why: We can't predict how long investigations take. A percentage that stalls at 
 
 ### 4.4 Timing SLAs
 
-| Milestone | Target | Fallback |
-|-----------|--------|----------|
-| Acknowledgment | < 500ms | Show "Processing..." immediately |
-| First narrative | < 5s | Show phase label even without worker detail |
-| Background prompt | > 30s | Offer "Continue in background" |
+| Milestone         | Target  | Fallback                                    |
+| ----------------- | ------- | ------------------------------------------- |
+| Acknowledgment    | < 500ms | Show "Processing..." immediately            |
+| First narrative   | < 5s    | Show phase label even without worker detail |
+| Background prompt | > 30s   | Offer "Continue in background"              |
 
 ### 4.5 Narrative Generation
 
@@ -350,22 +355,22 @@ Supervisor results should have consistent structure:
 ```typescript
 interface SupervisorResult {
   // Required fields
-  runId: number;                       // For follow-ups and deep links
-  status: 'healthy' | 'warning' | 'problem' | 'error';
-  summary: string;                     // 1-2 sentence TL;DR
-  debugUrl: string;                    // Dashboard deep link
+  runId: number; // For follow-ups and deep links
+  status: "healthy" | "warning" | "problem" | "error";
+  summary: string; // 1-2 sentence TL;DR
+  debugUrl: string; // Dashboard deep link
 
   // Optional fields
-  details?: string;                    // Expanded explanation
-  recommendations?: string[];          // Required if status is warning/problem
+  details?: string; // Expanded explanation
+  recommendations?: string[]; // Required if status is warning/problem
   affectedSystems?: string[];
 
   // Transparency fields
-  confidence?: 'high' | 'medium' | 'low';
-  caveats?: string[];                  // e.g. ["Couldn't reach clifford"]
+  confidence?: "high" | "medium" | "low";
+  caveats?: string[]; // e.g. ["Couldn't reach clifford"]
 
   // For "How did you figure this out?"
-  reasoning?: string;                  // Human-readable explanation of approach
+  reasoning?: string; // Human-readable explanation of approach
 }
 ```
 
@@ -389,6 +394,7 @@ interface SupervisorResult {
 ### 5.3 Voice Rendering
 
 For voice output, read only:
+
 1. Status + Summary
 2. Caveat (if any)
 3. First recommendation (if any)
@@ -426,12 +432,12 @@ Background tasks need a landing place. The **Task Inbox** is a "While you were a
 
 ### 6.3 Notification Routing
 
-| Result Status | Notification |
-|---------------|--------------|
-| `healthy` | Task Inbox only |
-| `warning` | Task Inbox + optional email |
-| `problem` | Task Inbox + email |
-| `error` | Task Inbox + email + consider SMS for critical systems |
+| Result Status | Notification                                           |
+| ------------- | ------------------------------------------------------ |
+| `healthy`     | Task Inbox only                                        |
+| `warning`     | Task Inbox + optional email                            |
+| `problem`     | Task Inbox + email                                     |
+| `error`       | Task Inbox + email + consider SMS for critical systems |
 
 ---
 
@@ -442,17 +448,20 @@ Background tasks need a landing place. The **Task Inbox** is a "While you were a
 Add to Zerg Dashboard (not Jarvis):
 
 **1. Supervisor Runs Page** (`/supervisor`)
+
 - List of all supervisor runs with status, duration, timestamp
 - Filter by: Status (✅/⚠️/❌), Time (1h/24h/7d/All)
 - Free-text search across task and summary
 - Click to expand → show workers, result, thread
 
 **2. Worker Artifacts Browser** (`/supervisor/[runId]`)
+
 - Tree view of worker directories
-- View result.txt, metadata.json, tool_calls/*
+- View result.txt, metadata.json, tool_calls/\*
 - Syntax highlighting for logs/JSON
 
 **3. Thread Inspector** (`/supervisor/[runId]/thread`)
+
 - Full conversation history
 - Message-by-message view
 - Token counts per message
@@ -460,6 +469,7 @@ Add to Zerg Dashboard (not Jarvis):
 ### 7.2 "Show Details" Deep Link
 
 When user clicks "Show details" in Jarvis, open:
+
 ```
 https://zerg.yourdomain.com/supervisor/{run_id}
 ```
@@ -500,6 +510,7 @@ Never fail silently. Always provide some response.
 ### 8.3 Duplicate Prevention
 
 If the same query is routed while a previous run is still active:
+
 - Don't start a new run
 - Instead: "I'm still working on that. Here's what I've found so far..."
 
@@ -517,10 +528,10 @@ interface JarvisState {
   activeRun: {
     runId: number;
     threadId: number;
-    status: 'running' | 'complete' | 'error' | 'cancelled';
-    phase: 'gathering' | 'analyzing' | 'writing';
-    narratives: string[];  // Current activity narratives
-    lastSeq: number;       // For event deduplication
+    status: "running" | "complete" | "error" | "cancelled";
+    phase: "gathering" | "analyzing" | "writing";
+    narratives: string[]; // Current activity narratives
+    lastSeq: number; // For event deduplication
   } | null;
 
   // SSE connection
@@ -540,28 +551,28 @@ const handleSupervisorEvent = (event: SupervisorEvent) => {
   updateLastSeq(event.seq);
 
   switch (event.type) {
-    case 'supervisor_thinking':
-      setPhase('gathering');
-      setNarratives(['Starting investigation...']);
+    case "supervisor_thinking":
+      setPhase("gathering");
+      setNarratives(["Starting investigation..."]);
       break;
 
-    case 'worker_spawned':
+    case "worker_spawned":
       addNarrative(humanizeTask(event.task));
       break;
 
-    case 'worker_complete':
+    case "worker_complete":
       removeNarrative(event.taskId);
-      if (allWorkersComplete()) setPhase('analyzing');
+      if (allWorkersComplete()) setPhase("analyzing");
       break;
 
-    case 'supervisor_complete':
-      setPhase('writing');
+    case "supervisor_complete":
+      setPhase("writing");
       setResult(event.result);
       closeEventSource();
       break;
 
-    case 'error':
-      setStatus('error');
+    case "error":
+      setStatus("error");
       setErrorMessage(event.message);
       closeEventSource();
       break;
@@ -583,12 +594,12 @@ SSE connections can drop and reconnect. To handle this:
 
 ### 10.1 User-Facing Errors
 
-| Error Type | User Message |
-|------------|--------------|
-| Timeout | "This is taking longer than expected. I'll keep trying in the background." |
+| Error Type     | User Message                                                                |
+| -------------- | --------------------------------------------------------------------------- |
+| Timeout        | "This is taking longer than expected. I'll keep trying in the background."  |
 | Worker failure | "Had trouble with part of the investigation. Here's what I found so far..." |
-| Total failure | "Sorry, I couldn't complete that investigation. [Try again] [Show details]" |
-| Cancelled | "Stopped the investigation. [Start over]" |
+| Total failure  | "Sorry, I couldn't complete that investigation. [Try again] [Show details]" |
+| Cancelled      | "Stopped the investigation. [Start over]"                                   |
 
 ### 10.2 Never Show to Users
 
@@ -606,6 +617,7 @@ Always have a human-readable fallback.
 ### 11.1 Policy
 
 Allow multiple concurrent runs per user, but:
+
 - Main chat shows only **one** active investigation (most recent)
 - Additional concurrent runs appear as small "pill" indicators
 - Or in a "Recent investigations" sidebar/dropdown
@@ -648,6 +660,7 @@ User can say "Run that check again" and Jarvis understands from context which `r
 "Take action" buttons are just **pre-filled follow-up requests**, not direct imperatives.
 
 When user clicks `[Restart postgres]`:
+
 - Jarvis sends: "Restart the postgres container on clifford"
 - This triggers a new supervisor run with that task
 - User sees progress and confirmation
@@ -664,18 +677,21 @@ When user clicks `[Restart postgres]`:
 ## 14. Implementation Phases
 
 ### Phase 1: Foundation (1-2 days)
+
 - [ ] `useSupervisorDispatch` hook - call supervisor endpoint
 - [ ] `useSupervisorEvents` hook - consume SSE stream with deduplication
 - [ ] Basic state management for active run
 - [ ] Cancel endpoint and UI
 
 ### Phase 2: Progress UI (1-2 days)
+
 - [ ] Progress indicator component (pulsing bar)
 - [ ] Phase labels (Gathering → Analyzing → Writing)
 - [ ] Activity narrative display
 - [ ] Task-to-narrative transformation
 
 ### Phase 3: Result Rendering (1-2 days)
+
 - [ ] Result display component with full schema
 - [ ] Status icons (healthy/warning/problem)
 - [ ] Confidence/caveats display
@@ -683,16 +699,19 @@ When user clicks `[Restart postgres]`:
 - [ ] "Show details" link generation
 
 ### Phase 4: Task Inbox (1 day)
+
 - [ ] Inbox component
 - [ ] Background result delivery
 - [ ] Notification routing (email for warnings/problems)
 
 ### Phase 5: Dashboard Views (2-3 days)
+
 - [ ] Supervisor runs list page with filters
 - [ ] Worker artifacts browser
 - [ ] Thread inspector
 
 ### Phase 6: Polish (1-2 days)
+
 - [ ] Error handling refinement
 - [ ] Voice output optimization
 - [ ] Animation/transitions
@@ -717,15 +736,15 @@ The UI redesign succeeds if:
 
 ## Appendix A: Event Type Reference
 
-| SSE Event | Trigger | Payload |
-|-----------|---------|---------|
-| `supervisor_started` | Run begins | `{ run_id, thread_id, task, seq }` |
-| `supervisor_thinking` | LLM processing | `{ message, seq }` |
-| `worker_spawned` | Worker queued | `{ job_id, task, seq }` |
-| `worker_started` | Worker executing | `{ job_id, worker_id, seq }` |
-| `worker_complete` | Worker finished | `{ job_id, status, duration_ms, seq }` |
-| `supervisor_complete` | Final result | `{ run_id, result: SupervisorResult, seq }` |
-| `error` | Failure | `{ message, details, seq }` |
+| SSE Event             | Trigger          | Payload                                     |
+| --------------------- | ---------------- | ------------------------------------------- |
+| `supervisor_started`  | Run begins       | `{ run_id, thread_id, task, seq }`          |
+| `supervisor_thinking` | LLM processing   | `{ message, seq }`                          |
+| `worker_spawned`      | Worker queued    | `{ job_id, task, seq }`                     |
+| `worker_started`      | Worker executing | `{ job_id, worker_id, seq }`                |
+| `worker_complete`     | Worker finished  | `{ job_id, status, duration_ms, seq }`      |
+| `supervisor_complete` | Final result     | `{ run_id, result: SupervisorResult, seq }` |
+| `error`               | Failure          | `{ message, details, seq }`                 |
 
 All events include `seq` for idempotent handling on reconnect.
 
@@ -733,13 +752,13 @@ All events include `seq` for idempotent handling on reconnect.
 
 ## Appendix B: Narrative Examples
 
-| Worker Task | User Narrative |
-|-------------|----------------|
-| `ssh cube docker ps` | "Checking containers on cube..." |
-| `ssh clifford df -h` | "Checking disk space..." |
-| `Check kopia snapshot status` | "Verifying backups..." |
-| `Review nginx access logs for errors` | "Scanning recent logs..." |
-| `Query prometheus for memory usage` | "Analyzing memory usage..." |
+| Worker Task                           | User Narrative                   |
+| ------------------------------------- | -------------------------------- |
+| `ssh cube docker ps`                  | "Checking containers on cube..." |
+| `ssh clifford df -h`                  | "Checking disk space..."         |
+| `Check kopia snapshot status`         | "Verifying backups..."           |
+| `Review nginx access logs for errors` | "Scanning recent logs..."        |
+| `Query prometheus for memory usage`   | "Analyzing memory usage..."      |
 
 Keep narratives: action verbs, present continuous, no jargon, under 40 chars.
 
@@ -747,11 +766,11 @@ Keep narratives: action verbs, present continuous, no jargon, under 40 chars.
 
 ## Appendix C: Confidence/Caveat Examples
 
-| Situation | Confidence | Caveats |
-|-----------|------------|---------|
-| All checks succeeded | `high` | (none) |
-| One server unreachable | `medium` | `["Couldn't reach clifford"]` |
-| Using cached data | `medium` | `["Based on data from 2 hours ago"]` |
-| Partial timeout | `low` | `["Some checks timed out", "Results may be incomplete"]` |
+| Situation              | Confidence | Caveats                                                  |
+| ---------------------- | ---------- | -------------------------------------------------------- |
+| All checks succeeded   | `high`     | (none)                                                   |
+| One server unreachable | `medium`   | `["Couldn't reach clifford"]`                            |
+| Using cached data      | `medium`   | `["Based on data from 2 hours ago"]`                     |
+| Partial timeout        | `low`      | `["Some checks timed out", "Results may be incomplete"]` |
 
 Voice rendering: "I'm reasonably confident, though I couldn't reach clifford so this is based only on cube and zerg."

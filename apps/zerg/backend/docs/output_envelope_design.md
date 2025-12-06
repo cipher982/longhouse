@@ -9,16 +9,18 @@ This document defines the new standardized output structure for all workflow nod
 ### Inconsistent Output Structures
 
 **ToolNodeExecutor:**
+
 ```json
 {
   "tool_name": "data_processor",
-  "parameters": {"operation": "calculate"}, 
-  "result": {"actual": "result", "data": "here"},
+  "parameters": { "operation": "calculate" },
+  "result": { "actual": "result", "data": "here" },
   "status": "completed"
 }
 ```
 
 **AgentNodeExecutor:**
+
 ```json
 {
   "agent_id": 123,
@@ -65,31 +67,34 @@ This document defines the new standardized output structure for all workflow nod
 ### ToolNodeExecutor
 
 **Before:**
+
 ```json
 {
   "tool_name": "data_processor",
-  "parameters": {"operation": "calculate"},
-  "result": {"score": 85, "status": "completed"},
+  "parameters": { "operation": "calculate" },
+  "result": { "score": 85, "status": "completed" },
   "status": "completed"
 }
 ```
 
 **After:**
+
 ```json
 {
-  "value": {"score": 85, "status": "completed"},
+  "value": { "score": 85, "status": "completed" },
   "meta": {
     "node_type": "tool",
     "status": "completed",
     "execution_time_ms": 1250,
     "tool_name": "data_processor",
-    "parameters": {"operation": "calculate"},
+    "parameters": { "operation": "calculate" },
     "tool_version": "1.2.0"
   }
 }
 ```
 
 **Variable Access:**
+
 - `${tool-1.result}` → `{"score": 85, "status": "completed"}`
 - `${tool-1.value}` → `{"score": 85, "status": "completed"}`
 - `${tool-1.result.score}` → `85` (nested access)
@@ -99,16 +104,18 @@ This document defines the new standardized output structure for all workflow nod
 ### AgentNodeExecutor
 
 **Before:**
+
 ```json
 {
   "agent_id": 123,
-  "thread_id": 456, 
+  "thread_id": 456,
   "messages_created": 3,
   "status": "completed"
 }
 ```
 
 **After:**
+
 ```json
 {
   "value": {
@@ -118,7 +125,7 @@ This document defines the new standardized output structure for all workflow nod
   },
   "meta": {
     "node_type": "agent",
-    "status": "completed", 
+    "status": "completed",
     "execution_time_ms": 5670,
     "agent_id": 123,
     "agent_name": "Data Analyst",
@@ -130,6 +137,7 @@ This document defines the new standardized output structure for all workflow nod
 ```
 
 **Variable Access:**
+
 - `${agent-1.result}` → `{"messages_created": 3, "final_response": "...", "thread_id": 456}`
 - `${agent-1.result.messages_created}` → `3`
 - `${agent-1.meta.agent_name}` → `"Data Analyst"`
@@ -138,6 +146,7 @@ This document defines the new standardized output structure for all workflow nod
 ### ConditionalNodeExecutor
 
 **Before:**
+
 ```json
 {
   "condition": "${tool-1.result} > 50",
@@ -148,6 +157,7 @@ This document defines the new standardized output structure for all workflow nod
 ```
 
 **After:**
+
 ```json
 {
   "value": {
@@ -166,21 +176,29 @@ This document defines the new standardized output structure for all workflow nod
 ```
 
 **Variable Access:**
+
 - `${conditional-1.result}` → `{"condition_result": true, "branch": "true"}`
-- `${conditional-1.result.branch}` → `"true"` 
+- `${conditional-1.result.branch}` → `"true"`
 - `${conditional-1.meta.condition}` → `"${tool-1.result} > 50"`
 
 ### TriggerNodeExecutor
 
 **Before:**
+
 ```json
 {
   "status": "triggered",
-  "config": {"trigger": {"type": "manual", "config": {"enabled": true, "params": {}, "filters": []}}}
+  "config": {
+    "trigger": {
+      "type": "manual",
+      "config": { "enabled": true, "params": {}, "filters": [] }
+    }
+  }
 }
 ```
 
 **After:**
+
 ```json
 {
   "value": {
@@ -190,9 +208,9 @@ This document defines the new standardized output structure for all workflow nod
   "meta": {
     "node_type": "trigger",
     "status": "completed",
-    "execution_time_ms": 5, 
+    "execution_time_ms": 5,
     "trigger_type": "manual",
-    "trigger_config": {"enabled": true, "params": {}, "filters": []}
+    "trigger_config": { "enabled": true, "params": {}, "filters": [] }
   }
 }
 ```
@@ -230,18 +248,20 @@ This document defines the new standardized output structure for all workflow nod
 ### Node-Specific Metadata
 
 **Tool Nodes:**
+
 ```json
 {
   "meta": {
     "tool_name": "data_processor",
-    "tool_version": "1.2.0", 
-    "parameters": {"operation": "calculate"},
+    "tool_version": "1.2.0",
+    "parameters": { "operation": "calculate" },
     "tool_execution_time_ms": 1200
   }
 }
 ```
 
 **Agent Nodes:**
+
 ```json
 {
   "meta": {
@@ -259,26 +279,26 @@ This document defines the new standardized output structure for all workflow nod
 
 ### Primary Access Patterns
 
-| Pattern | Resolves To | Description |
-|---------|-------------|-------------|
-| `${node}` | `output["value"]` | Primary result (shorthand) |
-| `${node.value}` | `output["value"]` | Primary result (explicit) |
+| Pattern          | Resolves To       | Description                      |
+| ---------------- | ----------------- | -------------------------------- |
+| `${node}`        | `output["value"]` | Primary result (shorthand)       |
+| `${node.value}`  | `output["value"]` | Primary result (explicit)        |
 | `${node.result}` | `output["value"]` | Primary result (intuitive alias) |
 
 ### Nested Access Patterns
 
-| Pattern | Resolves To | Description |
-|---------|-------------|-------------|
+| Pattern                | Resolves To                | Description            |
+| ---------------------- | -------------------------- | ---------------------- |
 | `${node.result.field}` | `output["value"]["field"]` | Nested field in result |
-| `${node.value.field}` | `output["value"]["field"]` | Nested field in result |
+| `${node.value.field}`  | `output["value"]["field"]` | Nested field in result |
 
 ### Metadata Access Patterns
 
-| Pattern | Resolves To | Description |
-|---------|-------------|-------------|
-| `${node.meta.status}` | `output["meta"]["status"]` | Execution status |
-| `${node.meta.tool_name}` | `output["meta"]["tool_name"]` | Tool-specific metadata |
-| `${node.meta.execution_time_ms}` | `output["meta"]["execution_time_ms"]` | Performance data |
+| Pattern                          | Resolves To                           | Description            |
+| -------------------------------- | ------------------------------------- | ---------------------- |
+| `${node.meta.status}`            | `output["meta"]["status"]`            | Execution status       |
+| `${node.meta.tool_name}`         | `output["meta"]["tool_name"]`         | Tool-specific metadata |
+| `${node.meta.execution_time_ms}` | `output["meta"]["execution_time_ms"]` | Performance data       |
 
 ## Backward Compatibility Strategy
 
@@ -289,7 +309,7 @@ Support both old and new formats during transition:
 ```python
 def resolve_variable_with_compatibility(node_output, path_parts):
     """Resolve variable with backward compatibility."""
-    
+
     # Check if this is new envelope format
     if "value" in node_output and "meta" in node_output:
         return resolve_new_format(node_output, path_parts)
@@ -301,6 +321,7 @@ def resolve_variable_with_compatibility(node_output, path_parts):
 ### Legacy Format Mapping
 
 **For ToolNodeExecutor legacy outputs:**
+
 ```python
 def map_legacy_tool_output(legacy_output):
     """Map legacy tool output to new envelope format."""
@@ -321,7 +342,7 @@ def map_legacy_tool_output(legacy_output):
 ```python
 def resolve_legacy_format(node_output, path_parts):
     """Resolve legacy format with deprecation warning."""
-    
+
     # Detect problematic patterns
     if len(path_parts) >= 2 and path_parts[0] == "result" and path_parts[1] == "result":
         logger.warning(
@@ -329,28 +350,32 @@ def resolve_legacy_format(node_output, path_parts):
             f"Use ${{node.result}} instead of ${{node.result.result}}. "
             "This pattern will be removed in the next major version."
         )
-    
+
     return legacy_resolve_logic(node_output, path_parts)
 ```
 
 ## Implementation Plan
 
 ### Phase 1: Base Infrastructure
+
 1. Create `NodeOutputEnvelope` schema class
 2. Update `BaseNodeExecutor` to use new format
 3. Implement compatibility layer for variable resolution
 
 ### Phase 2: Node Executor Updates
+
 1. Update each node executor to emit new format
 2. Preserve all existing metadata in appropriate locations
 3. Add standard metadata fields (execution time, status, etc.)
 
 ### Phase 3: Testing & Validation
-1. Test all variable access patterns work correctly  
+
+1. Test all variable access patterns work correctly
 2. Validate backward compatibility with existing workflows
 3. Performance testing for metadata overhead
 
 ### Phase 4: Migration Support
+
 1. Add deprecation warnings for old patterns
 2. Create migration tools for existing workflows
 3. Update documentation and examples
@@ -358,12 +383,14 @@ def resolve_legacy_format(node_output, path_parts):
 ## Benefits
 
 ### For Users
+
 - **Intuitive Access:** `${tool.result}` just works
 - **Rich Metadata:** Performance data, execution context available
 - **Consistent Experience:** Same patterns across all node types
 - **Better Debugging:** Clear execution metadata for troubleshooting
 
-### For Developers  
+### For Developers
+
 - **Standardized Interface:** All nodes follow same pattern
 - **Extensible Design:** Easy to add new metadata fields
 - **Clean Separation:** Business logic (value) vs execution metadata (meta)
@@ -371,5 +398,5 @@ def resolve_legacy_format(node_output, path_parts):
 
 ---
 
-**Status:** Design Complete ✅  
+**Status:** Design Complete ✅
 **Next Task:** Design Variable Resolution Engine

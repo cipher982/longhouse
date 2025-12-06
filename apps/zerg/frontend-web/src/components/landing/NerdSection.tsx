@@ -71,8 +71,8 @@ export function NerdSection() {
 
         {/* Visual workflow canvas preview */}
         <div className="landing-nerd-canvas">
-          <img 
-            src="/images/landing/canvas-preview.png" 
+          <img
+            src="/images/landing/canvas-preview.png"
             alt="Visual workflow canvas showing AI agent nodes connected with triggers and actions"
             className="landing-nerd-canvas-image"
           />
@@ -92,4 +92,3 @@ export function NerdSection() {
     </section>
   );
 }
-

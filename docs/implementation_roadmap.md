@@ -8,21 +8,21 @@
 
 ### Output/Notification Tools
 
-| Tool | Status | Notes |
-|------|--------|-------|
-| **Slack Webhook** | ✅ Done | `send_slack_webhook` - messages + Block Kit |
-| **Discord Webhook** | ✅ Done | `send_discord_webhook` - messages + embeds |
-| **Email (Resend)** | ✅ Done | `send_email` - text/HTML via Resend API |
-| **SMS (Twilio)** | ✅ Done | `send_sms` - SMS via Twilio API |
+| Tool                | Status  | Notes                                       |
+| ------------------- | ------- | ------------------------------------------- |
+| **Slack Webhook**   | ✅ Done | `send_slack_webhook` - messages + Block Kit |
+| **Discord Webhook** | ✅ Done | `send_discord_webhook` - messages + embeds  |
+| **Email (Resend)**  | ✅ Done | `send_email` - text/HTML via Resend API     |
+| **SMS (Twilio)**    | ✅ Done | `send_sms` - SMS via Twilio API             |
 
 ### Project Management Connectors
 
-| Connector | Status | Tools Included |
-|-----------|--------|----------------|
+| Connector  | Status  | Tools Included                                                                                                                                |
+| ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | **GitHub** | ✅ Done | `github_create_issue`, `github_list_issues`, `github_get_issue`, `github_add_comment`, `github_list_pull_requests`, `github_get_pull_request` |
-| **Jira** | ✅ Done | `jira_create_issue`, `jira_list_issues`, `jira_get_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_update_issue` |
-| **Linear** | ✅ Done | `linear_create_issue`, `linear_list_issues`, `linear_get_issue`, `linear_update_issue`, `linear_add_comment`, `linear_list_teams` |
-| **Notion** | ✅ Done | `notion_create_page`, `notion_get_page`, `notion_update_page`, `notion_search`, `notion_query_database`, `notion_append_blocks` |
+| **Jira**   | ✅ Done | `jira_create_issue`, `jira_list_issues`, `jira_get_issue`, `jira_add_comment`, `jira_transition_issue`, `jira_update_issue`                   |
+| **Linear** | ✅ Done | `linear_create_issue`, `linear_list_issues`, `linear_get_issue`, `linear_update_issue`, `linear_add_comment`, `linear_list_teams`             |
+| **Notion** | ✅ Done | `notion_create_page`, `notion_get_page`, `notion_update_page`, `notion_search`, `notion_query_database`, `notion_append_blocks`               |
 
 ### Test Coverage
 
@@ -36,10 +36,10 @@
 
 ### Priority 1: State/Memory Tools
 
-| Feature | Effort | Description |
-|---------|--------|-------------|
-| Key-Value Store | 1 day | `agent_state` table + CRUD tools |
-| State TTL/Expiry | 2 hrs | Add `expires_at` column |
+| Feature          | Effort | Description                      |
+| ---------------- | ------ | -------------------------------- |
+| Key-Value Store  | 1 day  | `agent_state` table + CRUD tools |
+| State TTL/Expiry | 2 hrs  | Add `expires_at` column          |
 
 ```python
 # Tools to add
@@ -51,28 +51,28 @@ kv_list(prefix: str = None) -> List[str]
 
 ### Priority 2: File Operations
 
-| Feature | Effort | Description |
-|---------|--------|-------------|
-| Write File | 4 hrs | Write to agent workspace |
-| Read File | 2 hrs | Read from workspace |
-| Generate CSV | 2 hrs | Python csv module |
+| Feature      | Effort | Description              |
+| ------------ | ------ | ------------------------ |
+| Write File   | 4 hrs  | Write to agent workspace |
+| Read File    | 2 hrs  | Read from workspace      |
+| Generate CSV | 2 hrs  | Python csv module        |
 | Generate PDF | 3 days | WeasyPrint or Playwright |
 
 ### Priority 3: Enhanced Workflows
 
-| Feature | Effort | Description |
-|---------|--------|-------------|
-| Scheduled Actions | 4 days | Queue future tool executions |
-| Multi-Agent Calls | 3 days | Tool to invoke another agent |
-| Human Approval | 7 days | Approval nodes with notifications |
+| Feature           | Effort | Description                       |
+| ----------------- | ------ | --------------------------------- |
+| Scheduled Actions | 4 days | Queue future tool executions      |
+| Multi-Agent Calls | 3 days | Tool to invoke another agent      |
+| Human Approval    | 7 days | Approval nodes with notifications |
 
 ### Priority 4: OAuth Connectors
 
-| Feature | Effort | Description |
-|---------|--------|-------------|
-| Google OAuth | 5 days | OAuth2 flow, token refresh |
-| Google Calendar | 3 days | Calendar read/write |
-| Google Sheets | 3 days | Sheets read/write |
+| Feature         | Effort | Description                |
+| --------------- | ------ | -------------------------- |
+| Google OAuth    | 5 days | OAuth2 flow, token refresh |
+| Google Calendar | 3 days | Calendar read/write        |
+| Google Sheets   | 3 days | Sheets read/write          |
 | Slack App OAuth | 5 days | Full Slack bot integration |
 
 ---
@@ -167,4 +167,4 @@ Run integration tests: `pytest tests/integration/ -v`
 
 ---
 
-*Last updated: November 2024*
+_Last updated: November 2024_

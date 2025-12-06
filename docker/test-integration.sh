@@ -51,7 +51,7 @@ if docker buildx build \
     --target production \
     -t zerg-backend:test \
     backend/; then
-    
+
     end_time=$(date +%s)
     duration=$((end_time - start_time))
     log_info "✅ Backend build completed in ${duration}s"
@@ -71,7 +71,7 @@ if docker buildx build \
     --target production \
     -t zerg-frontend:test \
     frontend/; then
-    
+
     end_time=$(date +%s)
     duration=$((end_time - start_time))
     log_info "✅ Frontend build completed in ${duration}s"
@@ -104,21 +104,21 @@ if docker run --rm -d \
     -e AUTH_DISABLED=1 \
     -p 8001:8000 \
     zerg-backend:test; then
-    
+
     log_info "✅ Backend container started successfully"
-    
+
     # Wait a bit and check if it's still running
     sleep 5
     if docker ps | grep -q zerg-backend-test; then
         log_info "✅ Backend container is still running after 5s"
-        
+
         # Test health endpoint (if available)
         if curl -f -s http://localhost:8001/ >/dev/null 2>&1; then
             log_info "✅ Backend health check passed"
         else
             log_warn "⚠️  Backend health check failed (may be expected if no health endpoint)"
         fi
-        
+
         docker stop zerg-backend-test
     else
         log_error "❌ Backend container crashed"
@@ -136,21 +136,21 @@ if docker run --rm -d \
     --name zerg-frontend-test \
     -p 8002:80 \
     zerg-frontend:test; then
-    
+
     log_info "✅ Frontend container started successfully"
-    
+
     # Wait a bit and check if it's still running
     sleep 3
     if docker ps | grep -q zerg-frontend-test; then
         log_info "✅ Frontend container is still running after 3s"
-        
+
         # Test nginx endpoint
         if curl -f -s http://localhost:8002/ >/dev/null 2>&1; then
             log_info "✅ Frontend health check passed"
         else
             log_warn "⚠️  Frontend health check failed"
         fi
-        
+
         docker stop zerg-frontend-test
     else
         log_error "❌ Frontend container crashed"
@@ -182,20 +182,20 @@ export COMPOSE_FILE="docker-compose.dev.yml"
 if docker-compose -f docker-compose.dev.yml \
     --env-file .env.test \
     up -d --build; then
-    
+
     log_info "✅ Development stack started successfully"
-    
+
     # Wait for services to be ready
     log_info "Waiting for services to be ready..."
     sleep 10
-    
+
     # Check if services are running
     if docker-compose -f docker-compose.dev.yml ps | grep -q "Up"; then
         log_info "✅ Services are running"
-        
+
         # Test service endpoints
         log_info "Testing service endpoints..."
-        
+
         # Test backend (with retry)
         for i in {1..5}; do
             if curl -f -s http://localhost:8000/ >/dev/null 2>&1; then
@@ -205,7 +205,7 @@ if docker-compose -f docker-compose.dev.yml \
             log_info "Waiting for backend... (attempt $i/5)"
             sleep 2
         done
-        
+
         # Test frontend
         for i in {1..3}; do
             if curl -f -s http://localhost:8080/ >/dev/null 2>&1; then
@@ -215,17 +215,17 @@ if docker-compose -f docker-compose.dev.yml \
             log_info "Waiting for frontend... (attempt $i/3)"
             sleep 2
         done
-        
+
     else
         log_error "❌ Some services failed to start"
         docker-compose -f docker-compose.dev.yml logs
         exit 1
     fi
-    
+
     # Cleanup
     docker-compose -f docker-compose.dev.yml down --volumes
     log_info "✅ Development stack test completed"
-    
+
 else
     log_error "❌ Development stack failed to start"
     exit 1

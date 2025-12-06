@@ -19,7 +19,7 @@ async function createTestAgent() {
             task_instructions: 'Perform test tasks'
         })
     });
-    
+
     if (response.ok) {
         const agent = await response.json();
         console.log('✅ Created test agent:', agent);
@@ -59,7 +59,7 @@ async function testCanvasDataUpdate() {
             }
         ]
     };
-    
+
     const response = await fetch('http://localhost:8001/api/workflows/current/canvas-data', {
         method: 'PATCH',
         headers: {
@@ -70,7 +70,7 @@ async function testCanvasDataUpdate() {
             canvas_data: testCanvasData
         })
     });
-    
+
     if (response.ok) {
         const workflow = await response.json();
         console.log('✅ Canvas data updated:', workflow);
@@ -88,7 +88,7 @@ async function verifyCanvasData() {
             'Authorization': `Bearer ${localStorage.getItem('jwt')}`
         }
     });
-    
+
     if (response.ok) {
         const workflow = await response.json();
         console.log('✅ Current workflow:', workflow);
@@ -104,29 +104,29 @@ async function verifyCanvasData() {
 // Run the test sequence
 async function runTest() {
     console.log('🚀 Starting canvas data persistence test...');
-    
+
     // Check if user is logged in
     const jwt = localStorage.getItem('jwt');
     if (!jwt) {
         console.error('❌ Not logged in - please log in first');
         return;
     }
-    
+
     try {
         // Test canvas data update
         console.log('📝 Testing canvas data update...');
         const updatedWorkflow = await testCanvasDataUpdate();
-        
+
         if (updatedWorkflow) {
             // Verify the data was saved
             console.log('🔍 Verifying saved data...');
             await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a second
             const currentWorkflow = await verifyCanvasData();
-            
+
             if (currentWorkflow && currentWorkflow.canvas_data) {
                 const nodeCount = currentWorkflow.canvas_data.nodes?.length || 0;
                 const edgeCount = currentWorkflow.canvas_data.edges?.length || 0;
-                
+
                 if (nodeCount > 0 && edgeCount > 0) {
                     console.log('🎉 SUCCESS: Canvas data persistence is working!');
                     console.log(`   - Nodes saved: ${nodeCount}`);

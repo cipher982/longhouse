@@ -577,17 +577,17 @@ def delete_thread(db: Session, thread_id: int):
 def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int = 100):
     """
     Get all messages for a specific thread, ordered strictly by database ID.
-    
+
     IMPORTANT: This function returns messages ordered by ThreadMessage.id (insertion order).
     This ordering is authoritative and must be preserved by clients. The client MUST NOT
     sort these messages client-side; the server ordering is the source of truth.
-    
+
     Rationale: Use the *id* column for deterministic chronological ordering. SQLite
     timestamps have a resolution of 1 second which can lead to two messages inserted within
     the same second being returned in undefined order if sorted by timestamp. The
     auto-incrementing primary-key is strictly monotonic, therefore provides a stable
     ordering even when multiple rows share the same timestamp.
-    
+
     See the API endpoint documentation in zerg.routers.threads.read_thread_messages().
     """
     return (

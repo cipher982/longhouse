@@ -682,7 +682,7 @@
 <body>
     <div class="container">
         <h1>Agent Platform - Logo Concepts</h1>
-        
+
         <div class="logo-grid">
             <!-- Concept 1: Network Nodes -->
             <div class="logo-card">
@@ -942,9 +942,9 @@
         <div style="margin-top: 60px; text-align: center; padding: 30px; background: rgba(255, 255, 255, 0.05); border-radius: 12px;">
             <h3 style="margin-bottom: 20px; color: #64ffda;">Design Rationale</h3>
             <p style="line-height: 1.6; max-width: 800px; margin: 0 auto; color: #b0b0b0;">
-                Each concept captures different aspects of the Agent Platform: network connectivity, modular architecture, 
-                real-time processing, and swarm intelligence. The color palette combines teal (#64ffda) and purple (#7c4dff) 
-                to represent both the technical sophistication and the creative potential of AI orchestration. 
+                Each concept captures different aspects of the Agent Platform: network connectivity, modular architecture,
+                real-time processing, and swarm intelligence. The color palette combines teal (#64ffda) and purple (#7c4dff)
+                to represent both the technical sophistication and the creative potential of AI orchestration.
                 The designs are scalable, memorable, and work well across different media formats.
             </p>
         </div>
@@ -968,16 +968,16 @@
 
         function animateNodes() {
             if (animationActive) return;
-            
+
             animationActive = true;
             const nodes = document.querySelectorAll('.agent-node');
             let delay = 0;
-            
+
             nodes.forEach(node => {
                 setTimeout(() => {
                     node.style.transform = 'scale(1.5)';
                     node.style.boxShadow = '0 0 25px #64ffda';
-                    
+
                     setTimeout(() => {
                         node.style.transform = 'scale(1)';
                         node.style.boxShadow = 'none';
@@ -985,7 +985,7 @@
                 }, delay);
                 delay += 200;
             });
-            
+
             setTimeout(() => {
                 animationActive = false;
             }, 1500);
@@ -995,7 +995,7 @@
             connectionsVisible = false;
             const connections = document.querySelectorAll('.connection-line');
             const nodes = document.querySelectorAll('.agent-node');
-            
+
             connections.forEach(conn => conn.classList.remove('active'));
             nodes.forEach(node => {
                 node.style.transform = 'scale(1)';
@@ -1014,7 +1014,7 @@
                     });
                 }
             });
-            
+
             node.addEventListener('mouseleave', () => {
                 if (!connectionsVisible) {
                     document.querySelectorAll('.connection-line').forEach(line => {

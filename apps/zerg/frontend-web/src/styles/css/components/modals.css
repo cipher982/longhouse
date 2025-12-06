@@ -1,334 +1,342 @@
 /* ====================================================================
-   Shared Modal Components - Modern CSS Implementation  
+   Shared Modal Components - Modern CSS Implementation
    Uses native dialog element, view transitions, and modern CSS
    ==================================================================== */
 
 /* Modal Dialog Base */
 .modal {
-    padding: 0;
-    border: none;
-    border-radius: 1rem;
-    background: var(--surface-primary);
-    color: var(--text);
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-    max-width: min(90vw, 32rem);
-    max-height: 90vh;
-    overflow: hidden;
-    
-    /* Container query support */
-    container-type: inline-size;
-    container-name: modal;
-    
-    /* Modern backdrop styling */
+  padding: 0;
+  border: none;
+  border-radius: 1rem;
+  background: var(--surface-primary);
+  color: var(--text);
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 25%);
+  max-width: min(90vw, 32rem);
+  max-height: 90vh;
+  overflow: hidden;
+
+  /* Container query support */
+  container-type: inline-size;
+  container-name: modal;
+
+  /* Modern backdrop styling */
+  &::backdrop {
+    background: color-mix(in srgb, black 50%, transparent);
+    backdrop-filter: blur(8px);
+    transition: all 0.2s ease;
+  }
+
+  /* Open/Close animations with View Transitions API */
+  @supports (view-transition-name: modal-transition) {
+    view-transition-name: modal-transition;
+  }
+
+  /* Fallback animation for browsers without View Transitions */
+  @supports not (view-transition-name: modal-transition) {
+    &[open] {
+      animation: modal-fade-in 0.2s ease forwards;
+    }
+
     &::backdrop {
-        background: color-mix(in srgb, black 50%, transparent);
-        backdrop-filter: blur(8px);
-        transition: all 0.2s ease;
+      animation: backdrop-fade-in 0.2s ease forwards;
     }
-    
-    /* Open/Close animations with View Transitions API */
-    @supports (view-transition-name: modal-transition) {
-        view-transition-name: modal-transition;
-    }
-    
-    /* Fallback animation for browsers without View Transitions */
-    @supports not (view-transition-name: modal-transition) {
-        &[open] {
-            animation: modal-fade-in 0.2s ease forwards;
-        }
-        
-        &::backdrop {
-            animation: backdrop-fade-in 0.2s ease forwards;
-        }
-    }
+  }
 }
 
 /* Modal Structure */
 .modal__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1.5rem 1.5rem 0;
-    
-    h2, h3 {
-        margin: 0;
-        font-size: 1.25rem;
-        font-weight: 600;
-        line-height: 1.75rem;
-        color: var(--text);
-    }
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem 1.5rem 0;
+
+  h2,
+  h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1.75rem;
+    color: var(--text);
+  }
 }
 
 .modal__body {
-    padding: 1.5rem;
-    overflow-y: auto;
-    max-height: 60vh;
-    
-    /* Modern scrollbar styling */
-    scrollbar-width: thin;
-    scrollbar-color: var(--border-subtle) transparent;
-    
-    &::-webkit-scrollbar {
-        width: 6px;
+  padding: 1.5rem;
+  overflow-y: auto;
+  max-height: 60vh;
+
+  /* Modern scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--border-subtle);
+    border-radius: 3px;
+
+    &:hover {
+      background: var(--border-primary);
     }
-    
-    &::-webkit-scrollbar-track {
-        background: transparent;
-    }
-    
-    &::-webkit-scrollbar-thumb {
-        background: var(--border-subtle);
-        border-radius: 3px;
-        
-        &:hover {
-            background: var(--border-primary);
-        }
-    }
+  }
 }
 
 .modal__footer {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.75rem;
-    padding: 0 1.5rem 1.5rem;
-    border-top: 1px solid var(--border-subtle);
-    margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0 1.5rem 1.5rem;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: auto;
 }
 
 /* Close Button */
 .modal__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    border: none;
-    background: none;
-    border-radius: 0.375rem;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    
-    &:hover {
-        background: var(--surface-tertiary);
-        color: var(--text);
-    }
-    
-    &:focus-visible {
-        outline: 2px solid var(--color-primary);
-        outline-offset: 2px;
-    }
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  background: none;
+  border-radius: 0.375rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: var(--surface-tertiary);
+    color: var(--text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
 }
 
 /* Modal Size Variants */
 .modal--sm {
-    max-width: min(90vw, 20rem);
+  max-width: min(90vw, 20rem);
 }
 
 .modal--md {
-    max-width: min(90vw, 32rem);
+  max-width: min(90vw, 32rem);
 }
 
 .modal--lg {
-    max-width: min(90vw, 48rem);
+  max-width: min(90vw, 48rem);
 }
 
 .modal--xl {
-    max-width: min(90vw, 64rem);
+  max-width: min(90vw, 64rem);
 }
 
 .modal--fullscreen {
-    max-width: 95vw;
-    max-height: 95vh;
-    border-radius: 0.5rem;
+  max-width: 95vw;
+  max-height: 95vh;
+  border-radius: 0.5rem;
 }
 
 /* Modal Overlay (for custom modal implementations) */
 .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, black 50%, transparent);
-    backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 1rem;
-    
-    /* Click outside to close */
-    cursor: pointer;
-    
-    .modal {
-        cursor: default;
-    }
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, black 50%, transparent);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+
+  /* Click outside to close */
+  cursor: pointer;
+
+  .modal {
+    cursor: default;
+  }
 }
 
 /* Confirmation Modals */
 .modal--confirm {
-    .modal__header {
-        padding-bottom: 1rem;
-        border-bottom: 1px solid var(--border-subtle);
-        
-        h3 {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--color-warning, var(--text));
-        }
+  .modal__header {
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+
+    h3 {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--color-warning, var(--text));
     }
-    
-    .modal__body {
-        padding-top: 1rem;
-    }
+  }
+
+  .modal__body {
+    padding-top: 1rem;
+  }
 }
 
 .modal--danger {
-    .modal__header h3 {
-        color: var(--color-danger);
-    }
+  .modal__header h3 {
+    color: var(--color-danger);
+  }
 }
 
 /* Form Modals */
 .modal--form {
-    .modal__body {
-        padding-bottom: 0;
+  .modal__body {
+    padding-bottom: 0;
+  }
+
+  .form-group {
+    margin-bottom: 1rem;
+
+    &:last-child {
+      margin-bottom: 0;
     }
-    
-    .form-group {
-        margin-bottom: 1rem;
-        
-        &:last-child {
-            margin-bottom: 0;
-        }
+  }
+
+  label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  input,
+  textarea,
+  select {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-primary);
+    border-radius: 0.375rem;
+    background: var(--surface-secondary);
+    color: var(--text);
+    font-size: 0.875rem;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+
+    &:focus {
+      outline: none;
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--color-primary) 10%, transparent);
     }
-    
-    label {
-        display: block;
-        margin-bottom: 0.5rem;
-        font-weight: 500;
-        color: var(--text);
+
+    &:invalid {
+      border-color: var(--color-danger);
     }
-    
-    input, textarea, select {
-        width: 100%;
-        padding: 0.5rem 0.75rem;
-        border: 1px solid var(--border-primary);
-        border-radius: 0.375rem;
-        background: var(--surface-secondary);
-        color: var(--text);
-        font-size: 0.875rem;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
-        
-        &:focus {
-            outline: none;
-            border-color: var(--color-primary);
-            box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 10%, transparent);
-        }
-        
-        &:invalid {
-            border-color: var(--color-danger);
-        }
-    }
-    
-    textarea {
-        resize: vertical;
-        min-height: 4rem;
-    }
+  }
+
+  textarea {
+    resize: vertical;
+    min-height: 4rem;
+  }
 }
 
 /* Container Queries for Responsive Modals */
 @container modal (max-width: 400px) {
-    .modal__header,
-    .modal__body,
-    .modal__footer {
-        padding-left: 1rem;
-        padding-right: 1rem;
+  .modal__header,
+  .modal__body,
+  .modal__footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .modal__header h2,
+  .modal__header h3 {
+    font-size: 1.125rem;
+  }
+
+  .modal__footer {
+    flex-direction: column-reverse;
+
+    .btn {
+      width: 100%;
     }
-    
-    .modal__header h2,
-    .modal__header h3 {
-        font-size: 1.125rem;
-    }
-    
-    .modal__footer {
-        flex-direction: column-reverse;
-        
-        .btn {
-            width: 100%;
-        }
-    }
+  }
 }
 
 /* Animations */
 @keyframes modal-fade-in {
-    from {
-        opacity: 0;
-        transform: scale(0.95) translateY(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 @keyframes backdrop-fade-in {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* Reduced Motion Support */
 @media (prefers-reduced-motion: reduce) {
-    .modal {
-        animation: none !important;
-        transition: none !important;
-        
-        &::backdrop {
-            animation: none !important;
-            transition: none !important;
-        }
+  .modal {
+    animation: none !important;
+    transition: none !important;
+
+    &::backdrop {
+      animation: none !important;
+      transition: none !important;
     }
-    
-    .modal__close {
-        transition: none;
-    }
+  }
+
+  .modal__close {
+    transition: none;
+  }
 }
 
 /* Mobile Optimizations */
-@media (max-width: 640px) {
-    .modal {
-        max-width: 95vw;
-        max-height: 95vh;
-        border-radius: 0.75rem;
-        margin: 0.5rem;
-    }
-    
-    .modal--fullscreen {
-        max-width: 100vw;
-        max-height: 100vh;
-        border-radius: 0;
-        margin: 0;
-    }
-    
-    .modal-overlay {
-        padding: 0.5rem;
-    }
+@media (width <= 640px) {
+  .modal {
+    max-width: 95vw;
+    max-height: 95vh;
+    border-radius: 0.75rem;
+    margin: 0.5rem;
+  }
+
+  .modal--fullscreen {
+    max-width: 100vw;
+    max-height: 100vh;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  .modal-overlay {
+    padding: 0.5rem;
+  }
 }
 
 /* High Contrast Mode Support */
 @media (prefers-contrast: high) {
-    .modal {
-        border: 2px solid var(--border-primary);
-    }
-    
-    .modal__header,
-    .modal__body,
-    .modal__footer {
-        border-color: var(--border-primary);
-        border-width: 2px;
-    }
+  .modal {
+    border: 2px solid var(--border-primary);
+  }
+
+  .modal__header,
+  .modal__body,
+  .modal__footer {
+    border-color: var(--border-primary);
+    border-width: 2px;
+  }
 }

@@ -63,6 +63,7 @@ The Swarm Platform integrates **Jarvis** (voice/text UI) with **Zerg** (agent or
 Authenticate Jarvis device and establish a session.
 
 **Request**:
+
 ```json
 {
   "device_secret": "your-secret-from-env"
@@ -70,6 +71,7 @@ Authenticate Jarvis device and establish a session.
 ```
 
 **Response**:
+
 ```json
 {
   "session_cookie_name": "jarvis_session",
@@ -78,12 +80,14 @@ Authenticate Jarvis device and establish a session.
 ```
 
 **Flow**:
+
 1. Validates device secret against `JARVIS_DEVICE_SECRET` env var
 2. Creates or fetches `jarvis@swarm.local` ADMIN user
 3. Issues JWT token (7-day expiry) and sets HttpOnly cookie (`jarvis_session`)
 4. Jarvis stores expiry metadata locally for re-auth reminders
 
 **Errors**:
+
 - `401 Unauthorized`: Invalid device secret
 - `500 Internal Server Error`: JARVIS_DEVICE_SECRET not configured
 
@@ -94,10 +98,12 @@ Authenticate Jarvis device and establish a session.
 List all available agents with their schedules.
 
 **Authentication**:
+
 - HttpOnly session cookie set during `/api/jarvis/auth`
 - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Response**:
+
 ```json
 [
   {
@@ -120,14 +126,17 @@ List all available agents with their schedules.
 Get recent agent execution history.
 
 **Authentication**:
+
 - HttpOnly session cookie set by `/api/jarvis/auth`
 - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Query Parameters**:
+
 - `limit` (optional, default 50): Maximum number of runs to return
 - `agent_id` (optional): Filter by specific agent
 
 **Response**:
+
 ```json
 [
   {
@@ -152,15 +161,18 @@ Get recent agent execution history.
 Trigger immediate agent execution from Jarvis.
 
 **Authentication**:
+
 - HttpOnly session cookie set by `/api/jarvis/auth`
 - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Headers**:
+
 ```
 Content-Type: application/json
 ```
 
 **Request**:
+
 ```json
 {
   "agent_id": 1,
@@ -169,6 +181,7 @@ Content-Type: application/json
 ```
 
 **Response**:
+
 ```json
 {
   "run_id": 43,
@@ -179,6 +192,7 @@ Content-Type: application/json
 ```
 
 **Errors**:
+
 - `404 Not Found`: Agent doesn't exist
 - `409 Conflict`: Agent already running
 - `500 Internal Server Error`: Execution failure
@@ -192,24 +206,28 @@ Content-Type: application/json
 Server-Sent Events stream for real-time updates.
 
 **Authentication**:
+
 - HttpOnly session cookie set by `/api/jarvis/auth`
 - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
 **Event Types**:
 
 1. **connected** - Initial connection
+
 ```
 event: connected
 data: {"message": "Jarvis SSE stream connected"}
 ```
 
 2. **heartbeat** - Keep-alive (every 30s)
+
 ```
 event: heartbeat
 data: {"timestamp": "2025-10-06T19:00:00Z"}
 ```
 
 3. **run_created** - New agent run started
+
 ```
 event: run_created
 data: {
@@ -224,6 +242,7 @@ data: {
 ```
 
 4. **run_updated** - Run status changed
+
 ```
 event: run_updated
 data: {
@@ -238,6 +257,7 @@ data: {
 ```
 
 5. **agent_updated** - Agent config/status changed
+
 ```
 event: agent_updated
 data: {
@@ -251,6 +271,7 @@ data: {
 ```
 
 **Use Case**:
+
 - Jarvis opens SSE connection on startup
 - Receives real-time updates for Task Inbox
 - Can speak notifications when runs complete
@@ -330,6 +351,7 @@ User: "Run my morning digest"
 ## Data Models
 
 ### JarvisAuthRequest
+
 ```typescript
 {
   device_secret: string;
@@ -337,14 +359,16 @@ User: "Run my morning digest"
 ```
 
 ### JarvisAuthResponse
+
 ```typescript
 {
-  session_cookie_name: string;   // "jarvis_session"
-  session_expires_in: number;    // Seconds (604800 = 7 days)
+  session_cookie_name: string; // "jarvis_session"
+  session_expires_in: number; // Seconds (604800 = 7 days)
 }
 ```
 
 ### JarvisAgentSummary
+
 ```typescript
 {
   id: number;
@@ -357,6 +381,7 @@ User: "Run my morning digest"
 ```
 
 ### JarvisRunSummary
+
 ```typescript
 {
   id: number;
@@ -371,6 +396,7 @@ User: "Run my morning digest"
 ```
 
 ### JarvisDispatchRequest
+
 ```typescript
 {
   agent_id: number;
@@ -379,6 +405,7 @@ User: "Run my morning digest"
 ```
 
 ### JarvisDispatchResponse
+
 ```typescript
 {
   run_id: number;
@@ -391,12 +418,14 @@ User: "Run my morning digest"
 ## Security Model
 
 ### Device Authentication
+
 - Jarvis uses a pre-shared **device secret** stored in environment
 - Secret is exchanged for a JWT token with 7-day expiry
 - Token includes `jarvis@swarm.local` user identity with ADMIN role
 - Token stored in localStorage (IndexedDB in production)
 
 ### Token Lifecycle
+
 ```
 Day 0: Authenticate with device secret → Token (7 day expiry)
 Day 1-6: Use stored token for all API calls
@@ -404,6 +433,7 @@ Day 7: Token expires → Re-authenticate automatically
 ```
 
 ### Authorization
+
 - All `/api/jarvis/*` endpoints require the HttpOnly `jarvis_session` cookie issued by `/api/jarvis/auth`
 - Cookie is validated via `get_current_jarvis_user`
 - Dev mode (`AUTH_DISABLED=1`) still honors the global dev auth fallback
@@ -414,9 +444,11 @@ Day 7: Token expires → Re-authenticate automatically
 ### Development Setup Options
 
 #### Option A: Unified Docker Compose (Recommended)
+
 All services run in a single Docker network with Nginx reverse proxy.
 
 **Zerg Backend (.env)**:
+
 ```bash
 # Required ports (fail-fast configuration - must be set)
 JARPXY_PORT=30080         # External: Jarvis PWA entry point
@@ -434,6 +466,7 @@ JWT_SECRET="your-jwt-secret"
 ```
 
 **Jarvis Client**:
+
 ```bash
 # Uses proxy path (no hardcoded hostnames)
 VITE_ZERG_API_URL="/api/zerg"
@@ -442,13 +475,16 @@ OPENAI_API_KEY="sk-..."
 ```
 
 **Access URLs**:
+
 - Jarvis PWA: http://localhost:30080
 - Zerg Dashboard: http://localhost:30081
 
 #### Option B: Traditional Docker Compose
+
 Separate services with direct connections.
 
 **Zerg Backend (.env)**:
+
 ```bash
 # Jarvis Integration
 JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
@@ -461,6 +497,7 @@ JWT_SECRET="your-jwt-secret"
 ```
 
 **Jarvis Client (apps/jarvis/.env)**:
+
 ```bash
 # Direct connection to Zerg backend
 VITE_ZERG_API_URL="http://localhost:47300"
@@ -471,6 +508,7 @@ OPENAI_API_KEY="sk-..."
 ```
 
 **Access URLs**:
+
 - Jarvis PWA: http://localhost:8080
 - Zerg Backend: http://localhost:47300
 - Zerg Frontend: http://localhost:47200
@@ -478,6 +516,7 @@ OPENAI_API_KEY="sk-..."
 ## Implementation Status
 
 ### ✅ Complete (Backend)
+
 - [x] Device secret authentication
 - [x] JWT token issuance (7-day expiry)
 - [x] Agent listing endpoint
@@ -492,6 +531,7 @@ OPENAI_API_KEY="sk-..."
 - [x] Tool manifest generation
 
 ### 🚧 Pending (Frontend)
+
 - [ ] Task Inbox UI component
 - [ ] Text input mode in Jarvis PWA
 - [ ] SSE connection management
@@ -501,6 +541,7 @@ OPENAI_API_KEY="sk-..."
 - [ ] Run summary display in UI
 
 ### 📋 Future Enhancements
+
 - [ ] Web push notifications (background PWA)
 - [ ] Offline dispatch queue
 - [ ] Multi-device sync
@@ -513,6 +554,7 @@ OPENAI_API_KEY="sk-..."
 ### Testing the Backend
 
 #### Option A: Unified Docker Compose
+
 ```bash
 # Start all services
 cd /Users/davidrose/git/zerg
@@ -533,6 +575,7 @@ curl -s -X POST http://localhost:30080/api/session \
 ```
 
 #### Option B: Traditional Setup
+
 ```bash
 # Start Zerg backend
 cd /Users/davidrose/git/zerg
@@ -561,12 +604,14 @@ curl -N http://localhost:47300/api/jarvis/events \
 ```
 
 **Note**: In unified mode, API routes are split between:
+
 - `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787)
 - `/api/zerg/*` → zerg-backend (Port 8000)
 
 ### Seeding Baseline Agents
 
 #### Option A: Unified Docker Compose
+
 ```bash
 cd /Users/davidrose/git/zerg
 ./start-unified-dev.sh
@@ -576,6 +621,7 @@ docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
 ```
 
 #### Option B: Traditional Setup
+
 ```bash
 cd /Users/davidrose/git/zerg
 make seed-jarvis-agents
@@ -586,6 +632,7 @@ uv run python scripts/seed_jarvis_agents.py
 ```
 
 This creates 4 baseline agents:
+
 1. **Morning Digest** - 7 AM daily (health + calendar + weather)
 2. **Health Watch** - 8 PM daily (WHOOP trends and insights)
 3. **Weekly Planning** - 6 PM Sundays (week ahead planning)
@@ -594,7 +641,7 @@ This creates 4 baseline agents:
 ### Integrating in Jarvis PWA
 
 ```typescript
-import { getJarvisClient } from '@jarvis/core';
+import { getJarvisClient } from "@jarvis/core";
 
 // Initialize client
 const client = getJarvisClient(import.meta.env.VITE_ZERG_API_URL);
@@ -610,15 +657,15 @@ const result = await client.dispatch({ agent_id: 1 });
 
 // Connect to SSE stream
 client.connectEventStream({
-  onConnected: () => console.log('Connected to Zerg'),
+  onConnected: () => console.log("Connected to Zerg"),
   onRunCreated: (event) => updateTaskInbox(event),
   onRunUpdated: (event) => {
     updateTaskInbox(event);
-    if (event.payload.status === 'success') {
+    if (event.payload.status === "success") {
       speakResult(event.payload.summary);
     }
   },
-  onError: (error) => console.error('SSE error:', error),
+  onError: (error) => console.error("SSE error:", error),
 });
 ```
 
@@ -662,6 +709,7 @@ All events published to the event bus follow this structure:
 ### Subscriptions
 
 The SSE endpoint subscribes to:
+
 - `EventType.RUN_CREATED` - New runs initiated
 - `EventType.RUN_UPDATED` - Status changes, summaries added
 - `EventType.AGENT_UPDATED` - Agent config/status changes
@@ -693,27 +741,30 @@ client.connectEventStream({
 
 ### Backend Error Codes
 
-| Code | Meaning | Action |
-|------|---------|--------|
-| 401 | Invalid token | Re-authenticate |
-| 404 | Agent not found | Update agent list |
-| 409 | Agent already running | Wait for completion |
-| 500 | Server error | Retry with backoff |
+| Code | Meaning               | Action              |
+| ---- | --------------------- | ------------------- |
+| 401  | Invalid token         | Re-authenticate     |
+| 404  | Agent not found       | Update agent list   |
+| 409  | Agent already running | Wait for completion |
+| 500  | Server error          | Retry with backoff  |
 
 ## Performance Considerations
 
 ### SSE Connection Management
+
 - **Heartbeat**: 30-second intervals prevent timeout
 - **Queue depth**: 100 events max (drops oldest)
 - **Reconnection**: Client should auto-reconnect on error
 - **Connection limit**: 1 per Jarvis instance
 
 ### API Rate Limits
+
 - **Auth**: No limit (device secret validation only)
 - **Agents/Runs**: No limit (read-only)
 - **Dispatch**: Limited by agent locking (1 concurrent run per agent)
 
 ### Caching Strategy
+
 - **Agent list**: Cache for 60 seconds in Jarvis
 - **Token**: Cache until 1 hour before expiry
 - **Run summaries**: Fetch on SSE events, not polling
@@ -721,22 +772,26 @@ client.connectEventStream({
 ## Troubleshooting
 
 ### "Not authenticated" errors
+
 1. Check `JARVIS_DEVICE_SECRET` matches in both .env files
 2. Verify token in localStorage hasn't expired
 3. Check backend logs for auth failures
 
 ### SSE stream not receiving events
+
 1. Verify event_bus subscribers are active
 2. Check backend logs for "Jarvis SSE stream connected"
 3. Ensure runs are actually completing (check DB)
 4. Test with curl to isolate client vs server issues
 
 ### Agent dispatch fails with 409
+
 - Agent is already running
 - Check `/api/jarvis/runs` for active run
 - Wait for completion or cancel via Zerg UI
 
 ### Missing summaries in run history
+
 - `AgentRun.summary` column might not be populated yet
 - Check `crud.mark_finished()` populates summary field
 - Verify migration ran: `uv run alembic current`
@@ -744,6 +799,7 @@ client.connectEventStream({
 ## Next Steps
 
 ### Immediate (Jarvis UI)
+
 1. Implement Task Inbox component
 2. Add text input mode
 3. Connect SSE stream on startup
@@ -751,6 +807,7 @@ client.connectEventStream({
 5. Voice command → dispatch integration
 
 ### Near-Term (Features)
+
 1. Push notifications for backgrounded PWA
 2. Offline dispatch queue
 3. Run detail view (full conversation)
@@ -758,6 +815,7 @@ client.connectEventStream({
 5. Tool manifest validation
 
 ### Long-Term (Platform)
+
 1. Multi-model support (Anthropic, local LLMs)
 2. Visual workflow builder in Jarvis
 3. Evaluation harness and metrics

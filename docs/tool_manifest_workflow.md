@@ -5,6 +5,7 @@
 ## Overview
 
 The tool manifest ensures that:
+
 1. Jarvis knows which tools are available for voice/text commands
 2. Zerg knows how to route tool calls to MCP servers
 3. Context-specific tools (personal vs work) are properly filtered
@@ -56,6 +57,7 @@ Each tool contains:
 ### 1. Adding a New Tool
 
 **Step 1**: Define in MCP presets (if not already present)
+
 ```python
 # apps/zerg/backend/zerg/tools/mcp_presets.py
 MCP_PRESETS = {
@@ -70,6 +72,7 @@ MCP_PRESETS = {
 ```
 
 **Step 2**: Update baseline tools in generator
+
 ```python
 # scripts/generate-tool-manifest.py
 BASELINE_TOOLS = [
@@ -86,6 +89,7 @@ BASELINE_TOOLS = [
 ```
 
 **Step 3**: Regenerate manifests
+
 ```bash
 make generate-sdk
 # Or directly:
@@ -93,6 +97,7 @@ python3 scripts/generate-tool-manifest.py
 ```
 
 **Step 4**: Verify outputs
+
 ```bash
 # Check TypeScript export
 cat packages/tool-manifest/index.ts
@@ -102,15 +107,17 @@ cat packages/tool-manifest/tools.py
 ```
 
 **Step 5**: Use in Jarvis context
+
 ```typescript
 // apps/jarvis/apps/web/contexts/personal/config.ts
-import { getToolsForContext } from '@swarm/tool-manifest';
+import { getToolsForContext } from "@swarm/tool-manifest";
 
-const tools = getToolsForContext('personal');
+const tools = getToolsForContext("personal");
 // Filter and configure for OpenAI Realtime API
 ```
 
 **Step 6**: Test end-to-end
+
 ```bash
 # Start Jarvis and verify tool is available
 make jarvis-dev
@@ -192,10 +199,10 @@ def get_tool_by_name(name: str) -> dict[str, Any] | None:
 
 ```typescript
 // apps/jarvis/apps/web/contexts/personal/config.ts
-import { getToolsForContext } from '@swarm/tool-manifest';
+import { getToolsForContext } from "@swarm/tool-manifest";
 
 // Get tools for personal context
-const availableTools = getToolsForContext('personal');
+const availableTools = getToolsForContext("personal");
 
 // Configure for OpenAI Realtime API
 export const personalContext = {
@@ -242,9 +249,12 @@ make validate-contracts
 
 ```typescript
 // Test in Jarvis
-import { TOOL_MANIFEST } from '@swarm/tool-manifest';
+import { TOOL_MANIFEST } from "@swarm/tool-manifest";
 
-console.log('Available tools:', TOOL_MANIFEST.map(t => t.name));
+console.log(
+  "Available tools:",
+  TOOL_MANIFEST.map((t) => t.name),
+);
 // Expected: ['whoop', 'obsidian', 'traccar', 'gmail', 'slack']
 ```
 
@@ -259,26 +269,31 @@ print("Available tools:", [t["name"] for t in TOOL_MANIFEST])
 ## Best Practices
 
 ### 1. Single Source of Truth
+
 - Tool definitions should ultimately come from `apps/zerg/backend/zerg/tools/mcp_presets.py`
 - For now, `BASELINE_TOOLS` in the generator acts as the source
 - In production, script should import and extract from actual presets
 
 ### 2. Context Separation
+
 - **Personal**: Personal health, location, notes
 - **Work**: Company emails, Slack, knowledge base
 - Tools can be available in multiple contexts
 
 ### 3. Environment Variables
+
 - Store API keys in `.env`, not in tool definitions
-- Tool definitions include env variable *names*, not values
+- Tool definitions include env variable _names_, not values
 - Example: `"env": {"WHOOP_API_KEY": "$WHOOP_API_KEY"}`
 
 ### 4. Version Control
+
 - Commit generated files to ensure reproducibility
 - Tag manifest changes in PR descriptions
 - Run generation in CI to catch drift
 
 ### 5. Documentation
+
 - Update tool descriptions when capabilities change
 - Document required environment variables
 - Provide examples of tool usage
@@ -286,18 +301,21 @@ print("Available tools:", [t["name"] for t in TOOL_MANIFEST])
 ## Troubleshooting
 
 ### "Tool not found" errors in Jarvis
+
 1. Check tool exists in manifest: `cat packages/tool-manifest/index.ts`
 2. Verify tool is in correct context: `getToolsForContext('personal')`
 3. Regenerate manifest: `python3 scripts/generate-tool-manifest.py`
 4. Restart Jarvis dev server
 
 ### Tool execution fails in Zerg
+
 1. Verify MCP server command is valid: `which uvx`
 2. Check environment variables are set: `echo $WHOOP_API_KEY`
 3. Test MCP server directly: `uvx mcp-server-whoop`
 4. Check Zerg logs for detailed error
 
 ### Manifest out of sync
+
 ```bash
 # Regenerate from source
 python3 scripts/generate-tool-manifest.py
@@ -313,6 +331,7 @@ git commit -m "chore: regenerate tool manifest"
 ## Future Improvements
 
 ### Auto-extraction from Backend
+
 ```python
 # Instead of BASELINE_TOOLS, extract directly:
 from zerg.tools.mcp_presets import MCP_PRESETS
@@ -329,11 +348,13 @@ def extract_tool_definitions():
 ```
 
 ### Schema Validation
+
 - Add JSON schema for tool definitions
 - Validate on generation
 - Fail CI if invalid
 
 ### Dynamic Tool Registration
+
 - Allow Jarvis to discover tools at runtime
 - Support plugin architecture
 - Hot-reload tool changes without restart

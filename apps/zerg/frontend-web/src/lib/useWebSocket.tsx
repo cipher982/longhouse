@@ -37,7 +37,7 @@ interface UseWebSocketOptions {
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
-  
+
   // Streaming message handler
   onStreamingMessage?: (envelope: WebSocketMessage) => void;
 

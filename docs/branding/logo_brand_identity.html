@@ -494,7 +494,7 @@
                     <circle cx="150" cy="150" r="20" fill="var(--secondary)" opacity="0.8">
                         <animate attributeName="r" values="20;25;20" dur="2s" repeatCount="indefinite"/>
                     </circle>
-                    
+
                     <!-- Agent Nodes -->
                     <g id="agentNodes">
                         <circle cx="150" cy="80" r="12" fill="var(--primary)">
@@ -516,7 +516,7 @@
                             <animate attributeName="opacity" values="0.6;1;0.6" dur="3s" begin="2.5s" repeatCount="indefinite"/>
                         </circle>
                     </g>
-                    
+
                     <!-- Connections -->
                     <g id="connections" stroke="url(#connectionGradient)" stroke-width="2" fill="none" opacity="0.6">
                         <line x1="150" y1="130" x2="150" y2="90">
@@ -538,12 +538,12 @@
                             <animate attributeName="stroke-dasharray" values="0,100;60,40" dur="3s" begin="2.5s" repeatCount="indefinite"/>
                         </line>
                     </g>
-                    
+
                     <!-- Orbital Ring -->
                     <circle cx="150" cy="150" r="100" fill="none" stroke="var(--primary)" stroke-width="1" opacity="0.2" stroke-dasharray="5,10">
                         <animateTransform attributeName="transform" type="rotate" from="0 150 150" to="360 150 150" dur="60s" repeatCount="indefinite"/>
                     </circle>
-                    
+
                     <defs>
                         <linearGradient id="connectionGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                             <stop offset="0%" style="stop-color:var(--primary);stop-opacity:1" />
@@ -561,7 +561,7 @@
     <section id="variations">
         <h2 class="section-title">Logo Variations</h2>
         <p class="section-subtitle">Adaptable designs for every context and platform</p>
-        
+
         <div class="variations-grid">
             <div class="variation-card">
                 <div class="variation-logo">
@@ -575,7 +575,7 @@
                 </div>
                 <div class="variation-label">App Icon</div>
             </div>
-            
+
             <div class="variation-card">
                 <div class="variation-logo">
                     <svg viewBox="0 0 100 100">
@@ -586,7 +586,7 @@
                 </div>
                 <div class="variation-label">Favicon</div>
             </div>
-            
+
             <div class="variation-card">
                 <div class="variation-logo">
                     <svg viewBox="0 0 100 40">
@@ -596,7 +596,7 @@
                 </div>
                 <div class="variation-label">Horizontal</div>
             </div>
-            
+
             <div class="variation-card">
                 <div class="variation-logo">
                     <svg viewBox="0 0 100 100">
@@ -606,7 +606,7 @@
                 </div>
                 <div class="variation-label">Minimal</div>
             </div>
-            
+
             <div class="variation-card">
                 <div class="variation-logo">
                     <svg viewBox="0 0 100 100">
@@ -617,7 +617,7 @@
                 </div>
                 <div class="variation-label">Inverted</div>
             </div>
-            
+
             <div class="variation-card">
                 <div class="variation-logo">
                     <svg viewBox="0 0 100 100">
@@ -634,7 +634,7 @@
     <section id="applications">
         <h2 class="section-title">Real-World Applications</h2>
         <p class="section-subtitle">See how the brand comes to life across different touchpoints</p>
-        
+
         <div class="app-grid">
             <div class="app-card">
                 <div class="app-preview" style="display: flex; align-items: center; justify-content: center;">
@@ -650,7 +650,7 @@
                     <p class="app-description">Clean integration with navigation, maintaining brand visibility while preserving functionality.</p>
                 </div>
             </div>
-            
+
             <div class="app-card">
                 <div class="app-preview" style="display: flex; align-items: center; justify-content: center;">
                     <div style="width: 80px; height: 160px; background: var(--light); border-radius: 12px; padding: 20px;">
@@ -662,7 +662,7 @@
                     <p class="app-description">Optimized for small screens with high contrast and instant recognition.</p>
                 </div>
             </div>
-            
+
             <div class="app-card">
                 <div class="app-preview" style="display: flex; align-items: center; justify-content: center;">
                     <div style="width: 160px; height: 100px; background: white; border-radius: 8px; padding: 20px;">
@@ -685,7 +685,7 @@
     <section id="colors">
         <h2 class="section-title">Color Palette</h2>
         <p class="section-subtitle">A carefully crafted palette that balances vibrancy with professionalism</p>
-        
+
         <div class="color-grid">
             <div class="color-card" style="background: var(--primary);" onclick="copyColor('#64ffda')">
                 <div>#64FFDA</div>
@@ -712,14 +712,14 @@
     <section id="typography">
         <h2 class="section-title">Typography</h2>
         <p class="section-subtitle">Clean, modern typefaces that enhance readability and brand personality</p>
-        
+
         <div class="type-showcase">
             <div class="type-example">
                 <h2>Heading Typography</h2>
                 <h3>Subheading Example</h3>
                 <p>Body text showcasing the primary font family. The chosen typeface balances technical precision with approachability, ensuring clear communication across all platforms.</p>
             </div>
-            
+
             <div class="type-example" style="font-family: monospace;">
                 <h3>Code Typography</h3>
                 <p>const agent = new AgentPlatform();<br>
@@ -732,26 +732,26 @@
     <section id="sound">
         <h2 class="section-title">Sound Design</h2>
         <p class="section-subtitle">Audio cues that enhance the user experience</p>
-        
+
         <div class="sound-grid">
             <div class="sound-card" onclick="playSound('startup')">
                 <div class="sound-icon">🎵</div>
                 <div class="sound-label">Startup Sound</div>
                 <div class="sound-description">Ascending synth arpeggio representing activation</div>
             </div>
-            
+
             <div class="sound-card" onclick="playSound('connect')">
                 <div class="sound-icon">🔗</div>
                 <div class="sound-label">Connection</div>
                 <div class="sound-description">Soft chime indicating successful agent connection</div>
             </div>
-            
+
             <div class="sound-card" onclick="playSound('process')">
                 <div class="sound-icon">⚡</div>
                 <div class="sound-label">Processing</div>
                 <div class="sound-description">Rhythmic pulse during agent computation</div>
             </div>
-            
+
             <div class="sound-card" onclick="playSound('complete')">
                 <div class="sound-icon">✓</div>
                 <div class="sound-label">Task Complete</div>
@@ -764,7 +764,7 @@
     <section id="download">
         <h2 class="section-title">Download Assets</h2>
         <p class="section-subtitle">Get everything you need to implement the brand</p>
-        
+
         <div class="download-grid">
             <div class="download-card">
                 <div class="download-icon">📦</div>
@@ -772,14 +772,14 @@
                 <p class="download-formats">SVG, PNG, EPS, AI</p>
                 <button class="download-btn" onclick="downloadAsset('logo-package')">Download</button>
             </div>
-            
+
             <div class="download-card">
                 <div class="download-icon">🎨</div>
                 <h3 class="download-title">Brand Guidelines</h3>
                 <p class="download-formats">PDF, 24 pages</p>
                 <button class="download-btn" onclick="downloadAsset('guidelines')">Download</button>
             </div>
-            
+
             <div class="download-card">
                 <div class="download-icon">💻</div>
                 <h3 class="download-title">UI Kit</h3>
@@ -874,14 +874,14 @@
 
         function animate() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
+
             particles.forEach(particle => {
                 particle.update();
                 particle.draw();
             });
-            
+
             drawConnections();
-            
+
             animationId = requestAnimationFrame(animate);
         }
 

@@ -1,4 +1,4 @@
-⏺ Product Requirements Document: Modern Observability Infrastructure 
+⏺ Product Requirements Document: Modern Observability Infrastructure
 Implementation
 
 Executive Summary
@@ -13,19 +13,20 @@ Background & Context
 Current System Architecture
 
 - Backend: FastAPI with extensive WebSocket usage for real-time agent
-communication
+  communication
 - Frontend: Rust/WASM with complex WebSocket message handling
 - Key Challenge: Previous API spam issue (GET /api/agents) caused by WebSocket
-fallback mechanisms
+  fallback mechanisms
 - Data Patterns: High-frequency WebSocket messages, agent execution events,
-workflow state changes
+  workflow state changes
 
 Problem Statement
 
 Traditional monitoring approaches (Prometheus histograms, pre-aggregated
 metrics) are insufficient for:
+
 1. High-cardinality data from WebSocket events with user/agent/session
-dimensions
+   dimensions
 2. Retroactive analysis requirements for debugging complex distributed flows
 3. Cost-effective storage of high-volume, real-time event streams
 4. Flexible querying without pre-defining metric aggregations
@@ -44,24 +45,27 @@ Technology Stack Selection
 1. Data Collection Layer
 
 OpenTelemetry (OTel) as universal instrumentation standard
+
 - Rationale: Industry standard, vendor-neutral, auto-instrumentation available
 - WebSocket Integration: Custom trace context propagation over WebSocket
-headers
+  headers
 - WASM Considerations: OTel WASM SDK in alpha; fallback to manual event
-emission
+  emission
 
 2. Data Pipeline Layer
 
 Vector for observability data processing
+
 - Rationale: 10x performance advantage, Rust-based reliability, zero vendor
-lock-in
+  lock-in
 - Capabilities: Real-time transformation, routing, enrichment without code
-changes
+  changes
 - Integration: Receives OTel traces, application logs, system metrics
 
 3. Storage Layer
 
 ClickHouse for raw event storage
+
 - Rationale: Columnar storage, 40x compression, petabyte-scale performance
 - Query Performance: Sub-second SQL queries on raw events
 - Cost Efficiency: 140x lower storage costs vs. Elasticsearch
@@ -70,8 +74,9 @@ ClickHouse for raw event storage
 4. Analysis Layer
 
 Grafana + ClickHouse Datasource for visualization
+
 - Rationale: Familiar interface, SQL-based queries, flexible dashboard
-creation
+  creation
 - Alternative: HyperDX for SaaS experience with ClickHouse backend
 
 Implementation Phases
@@ -83,20 +88,23 @@ Objective: Basic event collection and storage
 Backend Instrumentation
 
 # Auto-instrumentation setup
+
 pip install opentelemetry-distro[auto_patcher] opentelemetry-exporter-otlp
 opentelemetry-bootstrap -a integrate
 
 # Environment configuration
+
 OTEL_SERVICE_NAME=zerg-backend
 OTEL_EXPORTER_OTLP_ENDPOINT=http://vector:4318
 
 WebSocket Event Correlation
 
 # Custom WebSocket trace propagation
+
 async def send_websocket_message(websocket, data):
-    current_span = trace.get_current_span()
-    trace_context = {}
-    TraceContextTextMapPropagator().inject(trace_context)
+current_span = trace.get_current_span()
+trace_context = {}
+TraceContextTextMapPropagator().inject(trace_context)
 
     message = {
         "data": data,
@@ -108,19 +116,19 @@ async def send_websocket_message(websocket, data):
 Infrastructure Deployment
 
 # Docker Compose services
+
 services:
 vector:
-    image: timberio/vector:latest
-    ports: ["4318:4318"]  # OTel receiver
+image: timberio/vector:latest
+ports: ["4318:4318"] # OTel receiver
 
 clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    ports: ["8123:8123"]
+image: clickhouse/clickhouse-server:latest
+ports: ["8123:8123"]
 
 grafana:
-    image: grafana/grafana:latest
-    environment:
-    - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+image: grafana/grafana:latest
+environment: - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
 
 Phase 2: Frontend Integration (Week 3)
 
@@ -128,18 +136,18 @@ Objective: Rust/WASM event collection
 
 WASM Event Emission
 
-// Fallback for alpha OTel WASM SDK
-#[wasm_bindgen]
+// Fallback for alpha OTel WASM SDK #[wasm_bindgen]
 pub fn emit_websocket_event(event_type: &str, duration_ms: f64, attrs:
 JsValue) {
-    let event = json!({
-        "timestamp": js_sys::Date::now(),
-        "event_type": event_type,
-        "duration_ms": duration_ms,
-        "attributes": serde_wasm_bindgen::from_value(attrs).unwrap()
-    });
+let event = json!({
+"timestamp": js_sys::Date::now(),
+"event_type": event_type,
+"duration_ms": duration_ms,
+"attributes": serde_wasm_bindgen::from_value(attrs).unwrap()
+});
 
     send_to_vector_http(event);
+
 }
 
 Vector Configuration Enhancement
@@ -155,7 +163,7 @@ source = '''
 .service = "zerg-frontend"
 .environment = get_env_var("ENVIRONMENT") ?? "development"
 if .event_type == "websocket_message_processed" {
-    .is_critical_path = true
+.is_critical_path = true
 }
 '''
 
@@ -180,7 +188,7 @@ ORDER BY minute;
 -- Agent execution success rates by type
 SELECT
 attributes['agent.type'] as agent_type,
-countIf(attributes['success'] = 'true') / count() * 100 as success_rate,
+countIf(attributes['success'] = 'true') / count() \* 100 as success_rate,
 count() as total_executions
 FROM agent_events
 WHERE event_type = 'agent_execution_completed'
@@ -190,6 +198,7 @@ GROUP BY agent_type;
 Alerting Configuration
 
 # Vector-based alerting
+
 [sinks.alerts]
 type = "webhook"
 inputs = ["transformed_events"]
@@ -202,16 +211,16 @@ Data Schema Design
 
 -- Unified events table
 CREATE TABLE zerg_events (
-    timestamp DateTime64(3),
-    trace_id String,
-    span_id String,
-    parent_span_id String,
-    service_name String,
-    event_type String,
-    attributes Map(String, String),
-    resource_attributes Map(String, String),
-    duration_ms Nullable(Float64),
-    status_code String
+timestamp DateTime64(3),
+trace_id String,
+span_id String,
+parent_span_id String,
+service_name String,
+event_type String,
+attributes Map(String, String),
+resource_attributes Map(String, String),
+duration_ms Nullable(Float64),
+status_code String
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (service_name, event_type, timestamp)
@@ -281,17 +290,25 @@ Risk Assessment & Mitigation
 Technical Risks
 
 1. ClickHouse Learning Curve
+
 - Mitigation: Start with simple queries, provide SQL training
+
 2. WebSocket Trace Propagation Complexity
+
 - Mitigation: Implement custom propagation with fallback mechanisms
+
 3. WASM OTel SDK Maturity
+
 - Mitigation: Use HTTP-based fallback for frontend events
 
 Operational Risks
 
 1. Data Volume Growth
+
 - Mitigation: Implement automatic retention policies and sampling
+
 2. Query Performance Degradation
+
 - Mitigation: Proper partitioning, indexing, and query optimization
 
 Future Considerations

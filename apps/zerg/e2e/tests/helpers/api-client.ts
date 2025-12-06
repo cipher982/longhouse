@@ -8,7 +8,7 @@ function getBackendPort(): number {
   if (process.env.BACKEND_PORT) {
     return parseInt(process.env.BACKEND_PORT);
   }
-  
+
   // Load from .env file
   const envPath = path.resolve(__dirname, '../../../.env');
   if (fs.existsSync(envPath)) {
@@ -21,7 +21,7 @@ function getBackendPort(): number {
       }
     }
   }
-  
+
   return 8001; // Default fallback
 }
 
@@ -79,14 +79,14 @@ export class ApiClient {
     const url = `${this.baseUrl}${path}`;
     let response;
     let errorText = '';
-    
+
     try {
       response = await fetch(url, {
         method,
         headers: this.headers,
         body: body ? JSON.stringify(body) : undefined,
       });
-      
+
       if (!response.ok) {
         errorText = await response.text();
         throw new Error(`API request failed: ${method} ${path} - ${response.status} ${response.statusText}: ${errorText}`);
@@ -103,13 +103,13 @@ export class ApiClient {
         responseStatus: response?.status,
         responseText: errorText
       });
-      
+
       // If it's a 500 error, wait a bit and retry once
       if (response?.status === 500) {
         await new Promise(resolve => setTimeout(resolve, 1000));
         return this.request(method, path, body);
       }
-      
+
       throw error;
     }
   }

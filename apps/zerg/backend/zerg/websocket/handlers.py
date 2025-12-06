@@ -200,8 +200,8 @@ async def send_to_client(
             the mandatory envelope keys (``v``, ``topic``, ``ts``) it will be
             embedded into a new envelope automatically.
         topic:    Optional topic string.  Required when *message* itself does
-            not include a topic.  Helpers such as ``_subscribe_agent`` 
-            therefore forward their known topic so the wrapper logic can 
+            not include a topic.  Helpers such as ``_subscribe_agent``
+            therefore forward their known topic so the wrapper logic can
             construct a valid envelope.
 
     Returns:

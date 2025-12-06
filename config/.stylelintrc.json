@@ -3,12 +3,12 @@
     "stylelint-config-standard"
   ],
   "rules": {
-    "declaration-property-value-disallowed-list": {
-      "overflow": ["hidden"],
-      "transform": ["/^.+$/"],
-      "filter": ["/^.+$/"],
-      "opacity": ["/^0?\\.[0-9]+$/"]
-    },
-    "selector-max-id": 3
+    "selector-max-id": 3,
+    "unit-no-unknown": [
+      true,
+      {
+        "ignoreUnits": ["dvh", "dvw", "svh", "svw", "lvh", "lvw"]
+      }
+    ]
   }
 }

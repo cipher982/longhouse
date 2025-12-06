@@ -14,7 +14,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       # Ephemeral database - data is lost when containers stop
-      # Development: expose logs  
+      # Development: expose logs
       - ../logs/postgres:/var/log/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -115,7 +115,7 @@ services:
   # Development tools container (optional)
   # Uncomment to enable: docker compose --profile tools up
   # devtools:
-  #   image: alpine:latest  
+  #   image: alpine:latest
   #   command: tail -f /dev/null
   #   volumes:
   #     - .:/workspace:cached

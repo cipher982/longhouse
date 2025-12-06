@@ -1,15 +1,34 @@
 /* Status indicator styles - refined for modern aesthetic */
 
 /* Table status colors */
-.status-idle      { color: var(--color-text-muted); }
-.status-error     { color: var(--color-intent-error); }
-.status-running   { color: var(--color-intent-success); }
-.status-scheduled { color: var(--color-brand-primary); }
-.status-paused    { color: var(--color-intent-warning); }
-.status-processing { color: var(--color-brand-secondary); }
+.status-idle {
+  color: var(--color-text-muted);
+}
+
+.status-error {
+  color: var(--color-intent-error);
+}
+
+.status-running {
+  color: var(--color-intent-success);
+}
+
+.status-scheduled {
+  color: var(--color-brand-primary);
+}
+
+.status-paused {
+  color: var(--color-intent-warning);
+}
+
+.status-processing {
+  color: var(--color-brand-secondary);
+}
 
 /* ------------------------------------------------------------------ */
+
 /*  Status indicators (task, API heartbeat, etc.)                      */
+
 /* ------------------------------------------------------------------ */
 
 #status {
@@ -20,17 +39,31 @@
   font-size: var(--font-size-sm);
 }
 
-#status.red   { background-color: var(--color-intent-error); }
-#status.green { background-color: var(--color-intent-success); }
+#status.red {
+  background-color: var(--color-intent-error);
+}
+
+#status.green {
+  background-color: var(--color-intent-success);
+}
+
 #status.yellow {
   background-color: var(--color-intent-warning);
   color: var(--color-text-inverse);
 }
 
 /* layout-status is text-only version for inline use */
-#layout-status.red    { color: var(--color-intent-error); }
-#layout-status.green  { color: var(--color-intent-success); }
-#layout-status.yellow { color: var(--color-intent-warning); }
+#layout-status.red {
+  color: var(--color-intent-error);
+}
+
+#layout-status.green {
+  color: var(--color-intent-success);
+}
+
+#layout-status.yellow {
+  color: var(--color-intent-warning);
+}
 
 /* Network/API activity indicator */
 #api-status {
@@ -60,10 +93,10 @@
 }
 
 /* Inline status chips used inside agents table */
-.status-indicator { 
-  padding: var(--space-1) var(--space-3); 
-  border-radius: var(--radius-full); 
-  font-size: var(--font-size-xs); 
+.status-indicator {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
   font-weight: 500;
   display: inline-flex;
   align-items: center;
@@ -87,6 +120,6 @@
 }
 
 .status-indicator.status-processing {
-  background: rgba(129, 140, 248, 0.15);
+  background: rgb(129 140 248 / 15%);
   color: var(--color-brand-secondary);
 }

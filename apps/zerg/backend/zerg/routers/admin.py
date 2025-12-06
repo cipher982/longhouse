@@ -552,22 +552,22 @@ async def fix_database_schema():
                 # PostgreSQL approach
                 session.execute(
                     text("""
-                    ALTER TABLE connectors 
+                    ALTER TABLE connectors
                     ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 """)
                 )
 
                 session.execute(
                     text("""
-                    UPDATE connectors 
-                    SET updated_at = created_at 
+                    UPDATE connectors
+                    SET updated_at = created_at
                     WHERE updated_at IS NULL
                 """)
                 )
 
                 session.execute(
                     text("""
-                    ALTER TABLE connectors 
+                    ALTER TABLE connectors
                     ALTER COLUMN updated_at SET NOT NULL
                 """)
                 )
@@ -576,15 +576,15 @@ async def fix_database_schema():
                 # SQLite approach
                 session.execute(
                     text("""
-                    ALTER TABLE connectors 
+                    ALTER TABLE connectors
                     ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 """)
                 )
 
                 session.execute(
                     text("""
-                    UPDATE connectors 
-                    SET updated_at = created_at 
+                    UPDATE connectors
+                    SET updated_at = created_at
                     WHERE updated_at IS NULL
                 """)
                 )

@@ -108,15 +108,15 @@ function TriggerNode({ data }: { data: { label: string } }) {
 function MiniMapNode(props: any) {
   // Extract positioning and dimensions
   const { x, y, width, height, id } = props;
-  
+
   // Retrieve the full node data from the store using the ID
   // properties like 'type' and 'data' are not passed directly to MiniMapNode in all versions
   const node = useStore((s) => s.nodeLookup.get(id));
-  
+
   if (!node) return null;
-  
+
   const { type, data } = node;
-  
+
   return (
     <foreignObject x={x} y={y} width={width} height={height}>
       {/* We use a div with 100% size to contain the node component */}
@@ -1382,14 +1382,14 @@ function CanvasPageContent() {
                 const isPending = executeWorkflowMutation.isPending;
                 const noWorkflow = !workflow?.id;
                 const isDisabled = isPending || noWorkflow || isRunning || !hasNodes;
-                
+
                 // Determine the appropriate tooltip
                 let tooltip = "Run Workflow";
                 if (isPending) tooltip = "Starting workflow...";
                 else if (isRunning) tooltip = "Workflow is already running";
                 else if (noWorkflow) tooltip = "No workflow loaded";
                 else if (!hasNodes) tooltip = "Add nodes to the canvas before running";
-                
+
                 return (
                   <button
                     className={`run-button ${isPending ? 'loading' : ''}`}
@@ -1545,7 +1545,7 @@ function CanvasPageContent() {
                 )}
                 {guidesVisible && <Background gap={SNAP_GRID_SIZE} />}
                 <Controls />
-                <MiniMap 
+                <MiniMap
                   nodeComponent={MiniMapNode}
                   maskColor="rgba(20, 20, 35, 0.6)"
                   style={{

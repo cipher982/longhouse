@@ -9,7 +9,7 @@ function getBackendPort(): number {
   if (process.env.BACKEND_PORT) {
     return parseInt(process.env.BACKEND_PORT);
   }
-  
+
   // Load from .env file
   const envPath = path.resolve(__dirname, '../../../.env');
   if (fs.existsSync(envPath)) {
@@ -22,7 +22,7 @@ function getBackendPort(): number {
       }
     }
   }
-  
+
   return 8001; // Default fallback
 }
 
@@ -41,19 +41,19 @@ export interface DatabaseResetOptions {
  * Reset database for a specific worker with retry and verification
  */
 export async function resetDatabaseForWorker(
-  workerId: string, 
+  workerId: string,
   options: DatabaseResetOptions = {}
 ): Promise<void> {
   const { retries = 3, timeout = 5000, skipVerification = false } = options;
   const apiClient = createApiClient(workerId);
-  
+
   let attempts = 0;
-  
+
   while (attempts < retries) {
     try {
       // Reset the database
       await apiClient.resetDatabase();
-      
+
       if (!skipVerification) {
         // Verify reset was successful
         const agents = await apiClient.listAgents();
@@ -67,13 +67,13 @@ export async function resetDatabaseForWorker(
     } catch (error) {
       console.warn(`Database reset attempt ${attempts + 1} failed:`, error);
     }
-    
+
     attempts++;
     if (attempts < retries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
-  
+
   throw new Error(`Failed to reset database after ${retries} attempts`);
 }
 
@@ -86,11 +86,11 @@ export async function resetDatabaseViaRequest(
 ): Promise<void> {
   const { retries = 3, workerId } = options;
   let attempts = 0;
-  
+
   // Use single backend port; isolation via X-Test-Worker header
   const basePort = getBackendPort();
   const baseUrl = `http://localhost:${basePort}`;
-  
+
   while (attempts < retries) {
     try {
       const response = await page.request.post(`${baseUrl}/api/admin/reset-database`, {
@@ -116,13 +116,13 @@ export async function resetDatabaseViaRequest(
     } catch (error) {
       console.warn(`Database reset attempt ${attempts + 1} failed:`, error);
     }
-    
+
     attempts++;
     if (attempts < retries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
-  
+
   throw new Error(`Failed to reset database via request after ${retries} attempts`);
 }
 
@@ -174,7 +174,7 @@ export async function getDatabaseStats(workerId: string): Promise<{
 }> {
   const apiClient = createApiClient(workerId);
   const agents = await apiClient.listAgents();
-  
+
   return {
     agentCount: agents.length,
     workerId,

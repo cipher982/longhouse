@@ -22,13 +22,13 @@ That's it. One command to start, Ctrl+C to stop. Everything shuts down cleanly.
 
 ### Services & Ports
 
-| Service | Port | URL |
-|---------|------|-----|
-| **Jarvis UI** | 8080 | http://localhost:8080 |
-| Jarvis Voice Server | 8787 | Internal (proxied from UI) |
-| Zerg Backend API | 47300 | http://localhost:47300 |
-| Zerg Frontend | 47200 | http://localhost:47200 |
-| PostgreSQL | 5432 | Internal (Docker network) |
+| Service             | Port  | URL                        |
+| ------------------- | ----- | -------------------------- |
+| **Jarvis UI**       | 8080  | http://localhost:8080      |
+| Jarvis Voice Server | 8787  | Internal (proxied from UI) |
+| Zerg Backend API    | 47300 | http://localhost:47300     |
+| Zerg Frontend       | 47200 | http://localhost:47200     |
+| PostgreSQL          | 5432  | Internal (Docker network)  |
 
 ---
 
@@ -154,14 +154,17 @@ Ctrl+C
 ### Making Changes
 
 **Frontend changes** (Jarvis UI):
+
 - Edit files in `apps/jarvis/apps/web/`
 - Browser auto-refreshes (Vite HMR)
 
 **Backend changes** (Jarvis voice server):
+
 - Edit files in `apps/jarvis/apps/server/`
 - Must restart: Ctrl+C, then `make dev`
 
 **Zerg changes** (Docker):
+
 - Edit files in `apps/zerg/backend/` or `apps/zerg/frontend-web/`
 - Must rebuild: `make zerg-down && make zerg-up`
 

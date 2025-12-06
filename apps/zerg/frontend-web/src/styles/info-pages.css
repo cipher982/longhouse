@@ -114,7 +114,7 @@
 
 .pricing-tier.featured {
   border-color: var(--color-brand-primary);
-  box-shadow: 0 0 24px rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 24px rgb(99 102 241 / 15%);
 }
 
 .pricing-tier-badge {
@@ -122,7 +122,11 @@
   top: calc(-1 * var(--space-3));
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(135deg, var(--color-brand-primary), var(--color-brand-secondary));
+  background: linear-gradient(
+    135deg,
+    var(--color-brand-primary),
+    var(--color-brand-secondary)
+  );
   color: white;
   padding: var(--space-1) var(--space-4);
   border-radius: var(--radius-full);
@@ -172,7 +176,7 @@
 }
 
 .pricing-tier-features li::before {
-  content: '✓';
+  content: "✓";
   position: absolute;
   left: 0;
   color: var(--color-intent-success);
@@ -317,7 +321,11 @@
 }
 
 .changelog-version-tag {
-  background: linear-gradient(135deg, var(--color-brand-primary), var(--color-brand-secondary));
+  background: linear-gradient(
+    135deg,
+    var(--color-brand-primary),
+    var(--color-brand-secondary)
+  );
   color: white;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
@@ -351,7 +359,7 @@
 }
 
 .changelog-changes li::before {
-  content: '•';
+  content: "•";
   position: absolute;
   left: 0;
   color: var(--color-brand-primary);
@@ -368,17 +376,17 @@
 }
 
 .changelog-badge.new {
-  background: rgba(34, 197, 94, 0.15);
+  background: rgb(34 197 94 / 15%);
   color: var(--color-intent-success);
 }
 
 .changelog-badge.improved {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgb(99 102 241 / 15%);
   color: var(--color-brand-primary);
 }
 
 .changelog-badge.fixed {
-  background: rgba(251, 191, 36, 0.15);
+  background: rgb(251 191 36 / 15%);
   color: #fbbf24;
 }
 
@@ -459,7 +467,11 @@
   width: 48px;
   height: 48px;
   margin: 0 auto var(--space-3);
-  background: linear-gradient(135deg, var(--color-brand-primary), var(--color-brand-secondary));
+  background: linear-gradient(
+    135deg,
+    var(--color-brand-primary),
+    var(--color-brand-secondary)
+  );
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
@@ -524,12 +536,12 @@
 }
 
 .security-roadmap-status.done {
-  background: rgba(34, 197, 94, 0.15);
+  background: rgb(34 197 94 / 15%);
   color: var(--color-intent-success);
 }
 
 .security-roadmap-status.in-progress {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgb(99 102 241 / 15%);
   color: var(--color-brand-primary);
 }
 
@@ -577,7 +589,7 @@
    Responsive
    -------------------------------------------------------- */
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
   .info-page-title {
     font-size: var(--font-size-3xl);
   }
@@ -595,7 +607,7 @@
   }
 }
 
-@media (max-width: 480px) {
+@media (width <= 480px) {
   .info-page-content {
     padding: var(--space-8) var(--space-4);
   }

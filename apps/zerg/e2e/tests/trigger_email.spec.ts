@@ -21,4 +21,3 @@ test.describe('Gmail trigger UI', () => {
     test.skip();
   });
 });
-

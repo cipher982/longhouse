@@ -10,4 +10,4 @@ select = ["I", "E", "F", "Q000"]
 "tests/**/*.py" = ["E402", "E501"]
 
 [lint.isort]
-force-single-line = true 
+force-single-line = true

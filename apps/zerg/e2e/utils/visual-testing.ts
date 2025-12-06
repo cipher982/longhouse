@@ -1,6 +1,6 @@
 /**
  * VISUAL TESTING UTILITIES
- * 
+ *
  * This module provides advanced visual testing capabilities including:
  * - Screenshot comparison and regression testing
  * - Visual element validation
@@ -196,7 +196,7 @@ export class VisualTestHelper {
         };
 
         // Only report significant shifts (> 1px)
-        if (Math.abs(shift.x) > 1 || Math.abs(shift.y) > 1 || 
+        if (Math.abs(shift.x) > 1 || Math.abs(shift.y) > 1 ||
             Math.abs(shift.width) > 1 || Math.abs(shift.height) > 1) {
           layoutShifts.push({
             element: selector,
@@ -221,7 +221,7 @@ export class VisualTestHelper {
       try {
         const element = this.page.locator(selector).first();
         const count = await element.count();
-        
+
         if (count > 0) {
           positions[selector] = await element.boundingBox();
         } else {
@@ -253,7 +253,7 @@ export class VisualTestHelper {
     for (const element of elements) {
       const locator = this.page.locator(element.selector);
       const count = await locator.count();
-      
+
       if (count === 0) {
         results.push({
           selector: element.selector,
@@ -270,7 +270,7 @@ export class VisualTestHelper {
       let position;
       if (boundingBox && viewport) {
         const inViewport = (
-          boundingBox.x >= 0 && 
+          boundingBox.x >= 0 &&
           boundingBox.y >= 0 &&
           boundingBox.x + boundingBox.width <= viewport.width &&
           boundingBox.y + boundingBox.height <= viewport.height
@@ -284,7 +284,7 @@ export class VisualTestHelper {
       }
 
       const passes = (isVisible === element.shouldBeVisible) &&
-                    (!element.position || 
+                    (!element.position ||
                      (element.position === 'above-fold' && position?.inViewport) ||
                      (element.position === 'below-fold' && !position?.inViewport));
 
@@ -402,13 +402,13 @@ export class ColorAccessibilityHelper {
   static getContrastRatio(color1: string, color2: string): number {
     const rgb1 = this.hexToRgb(color1);
     const rgb2 = this.hexToRgb(color2);
-    
+
     const lum1 = this.getLuminance(rgb1);
     const lum2 = this.getLuminance(rgb2);
-    
+
     const brightest = Math.max(lum1, lum2);
     const darkest = Math.min(lum1, lum2);
-    
+
     return (brightest + 0.05) / (darkest + 0.05);
   }
 
@@ -416,8 +416,8 @@ export class ColorAccessibilityHelper {
    * Evaluate contrast ratio against WCAG standards
    */
   static evaluateContrast(contrastRatio: number): ContrastResult {
-    const level = contrastRatio >= 7 ? 'AAA' : 
-                  contrastRatio >= 4.5 ? 'AA' : 
+    const level = contrastRatio >= 7 ? 'AAA' :
+                  contrastRatio >= 4.5 ? 'AA' :
                   contrastRatio >= 3 ? 'A' : 'FAIL';
 
     return {
@@ -449,18 +449,18 @@ export class ColorAccessibilityHelper {
     return await page.evaluate(() => {
       const results = [];
       const elements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, div, button, a');
-      
+
       // This is a simplified version - in a real implementation,
       // you'd need more sophisticated color extraction
       elements.forEach((element, index) => {
         if (index > 20) return; // Limit to first 20 elements
-        
+
         const styles = window.getComputedStyle(element);
         const foreground = styles.color;
         const background = styles.backgroundColor;
-        
+
         // Convert to hex (simplified - would need proper conversion)
-        const selector = element.tagName + (element.id ? '#' + element.id : '') + 
+        const selector = element.tagName + (element.id ? '#' + element.id : '') +
                         (element.className ? '.' + element.className.split(' ')[0] : '');
 
         results.push({
@@ -472,7 +472,7 @@ export class ColorAccessibilityHelper {
           passes: false
         });
       });
-      
+
       return results;
     });
   }
@@ -531,9 +531,9 @@ export class VisualRegressionHelper {
 
       // Take screenshot
       const screenshotPath = `visual-tests/${this.testName}/${scenario.name}.png`;
-      await page.screenshot({ 
+      await page.screenshot({
         path: screenshotPath,
-        fullPage: true 
+        fullPage: true
       });
 
       results.push({

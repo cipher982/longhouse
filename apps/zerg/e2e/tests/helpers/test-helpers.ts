@@ -17,7 +17,7 @@ export async function setupTestData(workerId: string, options: {
   threadsPerAgent?: number;
 } = {}): Promise<TestContext> {
   logTestStep('Setting up test data', { workerId, options });
-  
+
   const apiClient = createApiClient(workerId);
   const context: TestContext = {
     agents: [],
@@ -72,7 +72,7 @@ export async function cleanupTestData(workerId: string, context: TestContext): P
   if (context.agents) {
     await cleanupAgents(workerId, context.agents);
   }
-  
+
   logTestStep('Test data cleanup complete');
 }
 
@@ -93,7 +93,7 @@ export async function waitForElement(page: Page, selector: string, timeout: numb
 export async function waitForDashboardReady(page: Page): Promise<void> {
   try {
     await page.goto('/', { waitUntil: 'networkidle' });
-    
+
     // Wait for critical UI elements to be interactive
     await Promise.all([
       page.waitForSelector('#dashboard:visible', { timeout: 2000 }),
@@ -102,7 +102,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
   } catch (error) {
     // Log detailed error information
     console.error('Dashboard failed to load properly:', error);
-    
+
     // Try to get current DOM state for debugging
     const domState = await page.evaluate(() => ({
       dashboardRoot: !!document.querySelector('#dashboard-root'),
@@ -112,11 +112,11 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
       createBtn: !!document.querySelector('[data-testid="create-agent-btn"]'),
       bodyHTML: document.body.innerHTML.substring(0, 200)
     }));
-    
+
     console.error('Current DOM state:', domState);
     throw new Error(`Dashboard did not load properly. DOM state: ${JSON.stringify(domState)}`);
   }
-  
+
   // Wait a bit more for any reactive updates
   await page.waitForTimeout(500);
 }
@@ -134,7 +134,7 @@ export async function getAgentRowCount(page: Page): Promise<number> {
  */
 export async function createAgentViaUI(page: Page): Promise<string> {
   await page.locator('[data-testid="create-agent-btn"]').click();
-  
+
   // Wait for new row to be visible and stable
   const newRow = page.locator('tr[data-agent-id]').first();
   await expect(newRow).toBeVisible({ timeout: 2000 });
@@ -145,12 +145,12 @@ export async function createAgentViaUI(page: Page): Promise<string> {
     },
     'tr[data-agent-id]:first-of-type'
   );
-  
+
   const agentId = await newRow.getAttribute('data-agent-id');
   if (!agentId) {
     throw new Error('Failed to get agent ID from newly created agent row');
   }
-  
+
   return agentId;
 }
 
@@ -173,22 +173,22 @@ export async function editAgentViaUI(page: Page, agentId: string, data: {
   if (data.name !== undefined) {
     await page.locator('#agent-name').fill(data.name);
   }
-  
+
   if (data.systemInstructions !== undefined) {
     await page.locator('#system-instructions').fill(data.systemInstructions);
   }
-  
+
   if (data.taskInstructions !== undefined) {
     await page.locator('#default-task-instructions').fill(data.taskInstructions);
   }
-  
+
   if (data.temperature !== undefined) {
     const tempInput = page.locator('#temperature-input');
     if (await tempInput.count() > 0) {
       await tempInput.fill(data.temperature.toString());
     }
   }
-  
+
   if (data.model !== undefined) {
     const modelSelect = page.locator('#model-select');
     if (await modelSelect.count() > 0) {
@@ -198,7 +198,7 @@ export async function editAgentViaUI(page: Page, agentId: string, data: {
 
   // Save changes
   await page.locator('#save-agent').click();
-  
+
   // Wait for modal to close (hidden)
   await expect(page.locator('#agent-modal')).not.toBeVisible({ timeout: 5000 });
 }
@@ -218,7 +218,7 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
 
   // Click delete button
   await page.locator(`[data-testid="delete-agent-${agentId}"]`).click();
-  
+
   if (confirm) {
     // Wait for row to disappear
     await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(0, { timeout: 5000 });
@@ -233,7 +233,7 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
  */
 export async function navigateToChat(page: Page, agentId: string): Promise<void> {
   await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
-  
+
   // Wait for chat interface to load (if implemented)
   try {
     await waitForElement(page, '.chat-input', 5000);

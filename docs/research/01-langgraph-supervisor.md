@@ -95,6 +95,7 @@ for chunk in supervisor_graph.stream(user_query):
 ### Agent System (`/apps/zerg/backend/zerg/`)
 
 #### 1. **Agent Definition** (`agents_def/zerg_react_agent.py`)
+
 - **Pattern**: Single-agent ReAct loop (not multi-agent coordination)
 - **Key Features**:
   - Functional API using `@entrypoint` decorator
@@ -105,6 +106,7 @@ for chunk in supervisor_graph.stream(user_query):
 - **Architecture**: Standalone agent executor, no supervisor/worker model
 
 **Core Loop**:
+
 ```python
 async def _agent_executor_async(messages, previous, enable_token_stream):
     current_messages = messages or previous or []
@@ -121,6 +123,7 @@ async def _agent_executor_async(messages, previous, enable_token_stream):
 ```
 
 #### 2. **Agent Execution** (`managers/agent_runner.py`)
+
 - **Pattern**: Single-threaded execution wrapper
 - **Responsibilities**:
   - Persists agent turns to database
@@ -130,6 +133,7 @@ async def _agent_executor_async(messages, previous, enable_token_stream):
 - **Limitation**: One agent per thread, no multi-agent coordination
 
 **Key Flow**:
+
 ```python
 async def run_thread(self, db, thread):
     # Inject system context (connectors, protocols)
@@ -145,6 +149,7 @@ async def run_thread(self, db, thread):
 ```
 
 #### 3. **Task Runner** (`services/task_runner.py`)
+
 - **Pattern**: Single-agent task execution
 - **Purpose**: Non-interactive "Play" button runs and scheduled tasks
 - **Process**:
@@ -155,6 +160,7 @@ async def run_thread(self, db, thread):
 - **Limitation**: No multi-step orchestration or agent collaboration
 
 #### 4. **Workflow Engine** (`services/workflow_engine.py`)
+
 - **Pattern**: LangGraph StateGraph with typed node executors
 - **Architecture**:
   - Centralized workflow orchestration (not agent-to-agent)
@@ -163,6 +169,7 @@ async def run_thread(self, db, thread):
   - State flows through graph edges, not agent handoffs
 
 **Key Differences from Supervisor Pattern**:
+
 ```python
 class WorkflowState(TypedDict):
     node_outputs: Annotated[Dict[str, Any], merge_dicts]
@@ -174,6 +181,7 @@ class WorkflowState(TypedDict):
 - **LangGraph Supervisor**: Message-based agent-to-agent communication
 
 **Workflow Execution**:
+
 ```python
 def _build_langgraph(self, workflow_data, execution_id):
     graph = StateGraph(WorkflowState)
@@ -189,6 +197,7 @@ def _build_langgraph(self, workflow_data, execution_id):
 ```
 
 #### 5. **Node Executors** (`services/node_executors.py`)
+
 - **Pattern**: Typed executor classes for each node type
 - **Node Types**:
   - `AgentNodeExecutor`: Runs an agent via `AgentRunner`
@@ -199,6 +208,7 @@ def _build_langgraph(self, workflow_data, execution_id):
 - **Output Format**: Envelope pattern `{"value": ..., "meta": {...}}`
 
 **Agent Node Example**:
+
 ```python
 async def _execute_node_logic(self, db, state, execution_id):
     agent_id = resolved_config.get("agent_id")
@@ -217,15 +227,15 @@ async def _execute_node_logic(self, db, state, execution_id):
 
 ### Key Architectural Patterns
 
-| Aspect | Zerg Current | LangGraph Supervisor |
-|--------|--------------|---------------------|
-| **Coordination** | Central workflow state | Agent-to-agent handoffs |
-| **State Management** | Typed `WorkflowState` dict | Message history list |
-| **Task Assignment** | Pre-defined graph edges | Dynamic LLM routing |
-| **Agent Communication** | Shared node_outputs | Handoff messages |
-| **Execution Model** | Node executor pattern | ReAct agent pattern |
-| **Persistence** | Database-backed threads | In-memory checkpoints |
-| **Streaming** | WebSocket events per node | Stream chunks from graph |
+| Aspect                  | Zerg Current               | LangGraph Supervisor     |
+| ----------------------- | -------------------------- | ------------------------ |
+| **Coordination**        | Central workflow state     | Agent-to-agent handoffs  |
+| **State Management**    | Typed `WorkflowState` dict | Message history list     |
+| **Task Assignment**     | Pre-defined graph edges    | Dynamic LLM routing      |
+| **Agent Communication** | Shared node_outputs        | Handoff messages         |
+| **Execution Model**     | Node executor pattern      | ReAct agent pattern      |
+| **Persistence**         | Database-backed threads    | In-memory checkpoints    |
+| **Streaming**           | WebSocket events per node  | Stream chunks from graph |
 
 ---
 
@@ -290,12 +300,14 @@ async def _execute_node_logic(self, db, state, execution_id):
 **Scenario**: Research question requiring web search + data analysis + report writing
 
 **Zerg Current Approach**:
+
 ```
 [Trigger] → [Agent1: Research] → [Agent2: Analyze] → [Agent3: Write]
             (3 separate threads, no shared context)
 ```
 
 **LangGraph Supervisor Approach**:
+
 ```
 User Query → [Supervisor LLM]
                 ↓
@@ -327,6 +339,7 @@ User Query → [Supervisor LLM]
 **Integrate supervisor pattern into existing workflow nodes without replacing core architecture.**
 
 **Implementation**:
+
 1. Create new `SupervisorNodeExecutor` class
 2. Node config specifies available worker agents
 3. Supervisor delegates to workers via internal message passing
@@ -334,12 +347,14 @@ User Query → [Supervisor LLM]
 5. Output envelope contains routing decisions + results
 
 **Benefits**:
+
 - Preserves existing workflow engine and persistence
 - Adds dynamic routing where needed
 - Minimal breaking changes
 - Gradual adoption path
 
 **Pseudocode**:
+
 ```python
 class SupervisorNodeExecutor(BaseNodeExecutor):
     async def _execute_node_logic(self, db, state, execution_id):
@@ -391,17 +406,20 @@ class SupervisorNodeExecutor(BaseNodeExecutor):
 **Build separate supervisor-based workflows alongside existing system.**
 
 **Implementation**:
+
 1. Create `SupervisorWorkflow` model separate from `Workflow`
 2. New execution engine using LangGraph supervisor pattern
 3. Different UI for supervisor workflows vs. canvas workflows
 4. Both systems coexist, users choose appropriate tool
 
 **Benefits**:
+
 - No risk to existing workflows
 - Experiment with supervisor pattern safely
 - Learn from usage before deeper integration
 
 **Drawbacks**:
+
 - Maintenance burden of two systems
 - User confusion about which to use
 - Code duplication
@@ -411,6 +429,7 @@ class SupervisorNodeExecutor(BaseNodeExecutor):
 **Replace workflow engine with LangGraph supervisor architecture.**
 
 **Why Not**:
+
 - Breaks all existing workflows (100+ hours of user-built automation)
 - Loses database persistence and audit trail
 - Loses visual workflow editor

@@ -27,30 +27,30 @@ class ModernProtocolGenerator:
         self.schema_path = Path(schema_path)
         self.schema = self._load_schema()
         self.output_dir = self.schema_path.parent
-        
+
     def _load_schema(self) -> Dict[str, Any]:
         """Load and validate AsyncAPI schema."""
         if not self.schema_path.exists():
             print(f"❌ Schema file not found: {self.schema_path}")
             sys.exit(1)
-            
+
         try:
             with open(self.schema_path, 'r') as f:
                 schema = yaml.safe_load(f)
-                
+
             # Validate it's AsyncAPI 3.0
             if schema.get('asyncapi') != '3.0.0':
                 print(f"⚠️  Schema is not AsyncAPI 3.0 (found: {schema.get('asyncapi')})")
-                
+
             return schema
         except Exception as e:
             print(f"❌ Error loading schema: {e}")
             sys.exit(1)
-            
+
     async def generate_all(self):
         """Generate all code artifacts using modern toolchain."""
         print(f"🚀 Generating code from AsyncAPI 3.0 schema: {self.schema_path}")
-        
+
         # Generate in parallel for speed
         await asyncio.gather(
             self._generate_python_types(),
@@ -58,29 +58,29 @@ class ModernProtocolGenerator:
             self._generate_json_schema(),
             return_exceptions=True
         )
-        
+
         # Generate contract validation files
         self._generate_contract_json()
-        
+
         print("✅ Modern code generation complete!")
-        
+
     async def _generate_python_types(self):
         """Generate Python Pydantic models with modern features."""
         print("🐍 Generating Python types...")
-        
+
         output_path = self.output_dir / "backend" / "zerg" / "generated" / "ws_messages.py"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         code = self._generate_python_header()
         code += self._generate_python_envelope()
         code += self._generate_python_payloads()
         code += self._generate_python_message_enum()
         code += self._generate_python_typed_emitter()
         code += self._generate_python_validation()
-        
+
         with open(output_path, 'w') as f:
             f.write(code)
-            
+
         print(f"✅ Python types: {output_path}")
 
     async def _generate_typescript_types(self):
@@ -246,13 +246,13 @@ export interface Envelope<T = unknown> {
 
         code += "\n"
         return code
-        
+
     async def _generate_json_schema(self):
         """Generate JSON Schema for IDE integration."""
         print("📋 Generating JSON Schema for IDE...")
-        
+
         output_path = self.output_dir / "ws-protocol.schema.json"
-        
+
         # Convert AsyncAPI to JSON Schema
         json_schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -262,21 +262,21 @@ export interface Envelope<T = unknown> {
             "properties": {},
             "definitions": {}
         }
-        
+
         # Extract schemas from AsyncAPI components
         if "components" in self.schema and "schemas" in self.schema["components"]:
             json_schema["definitions"] = self.schema["components"]["schemas"]
-            
+
         with open(output_path, 'w') as f:
             json.dump(json_schema, f, indent=2)
-            
+
         print(f"✅ JSON Schema: {output_path}")
-        
+
     def _generate_contract_json(self):
         """Generate contract validation JSON."""
         output_path = self.output_dir / "contracts" / "ws-protocol-v1.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         contract = {
             "version": 1,
             "generated_at": datetime.utcnow().isoformat() + "Z",
@@ -289,12 +289,12 @@ export interface Envelope<T = unknown> {
             "performance_contracts": self.schema.get("x-performance-contracts", {}),
             "security_contracts": self.schema.get("x-security-contracts", {})
         }
-        
+
         with open(output_path, 'w') as f:
             json.dump(contract, f, indent=2)
-            
+
         print(f"✅ Contract JSON: {output_path}")
-        
+
     def _extract_channel_contracts(self) -> Dict[str, Any]:
         """Extract channel information for contracts."""
         channels = {}
@@ -306,7 +306,7 @@ export interface Envelope<T = unknown> {
                 "messages": list(channel_data.get("messages", {}).keys())
             }
         return channels
-        
+
     def _extract_message_contracts(self) -> Dict[str, Any]:
         """Extract message contracts."""
         messages = {}
@@ -318,7 +318,7 @@ export interface Envelope<T = unknown> {
                 "aliases": msg_data.get("x-aliases", [])
             }
         return messages
-        
+
     def _extract_operation_contracts(self) -> Dict[str, Any]:
         """Extract operation contracts."""
         operations = {}
@@ -329,7 +329,7 @@ export interface Envelope<T = unknown> {
                 "messages": op_data.get("messages", [])
             }
         return operations
-        
+
     def _generate_python_header(self) -> str:
         """Generate Python file header with modern imports."""
         return f'''# AUTO-GENERATED FILE - DO NOT EDIT
@@ -355,14 +355,14 @@ import jsonschema
         """Generate modern Python Envelope with validation."""
         return '''class Envelope(BaseModel):
     """Unified envelope for all WebSocket messages with validation."""
-    
+
     v: int = Field(default=1, description="Protocol version")
-    type: str = Field(description="Message type identifier") 
+    type: str = Field(description="Message type identifier")
     topic: str = Field(description="Topic routing string")
     req_id: Optional[str] = Field(default=None, description="Request correlation ID")
     ts: int = Field(description="Timestamp in milliseconds since epoch")
     data: Dict[str, Any] = Field(description="Message payload")
-    
+
     @classmethod
     def create(
         cls,
@@ -394,42 +394,42 @@ import jsonschema
     def _generate_python_payloads(self) -> str:
         """Generate Python payload classes from AsyncAPI schemas."""
         code = "# Message payload schemas\n\n"
-        
+
         schemas = self.schema.get("components", {}).get("schemas", {})
-        
+
         for name, schema_def in schemas.items():
             if name == "Envelope":
                 continue
-                
+
             if schema_def.get("type") == "object":
                 code += self._python_schema_to_pydantic_class(name, schema_def)
                 code += "\n\n"
-                
+
         return code
-        
+
     def _python_schema_to_pydantic_class(self, name: str, schema: Dict[str, Any]) -> str:
         """Convert AsyncAPI schema to modern Pydantic class."""
         lines = [f"class {name}(BaseModel):"]
-        
+
         description = schema.get("description", f"Payload for {name} messages")
         lines.append(f'    """{description}"""')
         lines.append("")
-        
+
         properties = schema.get("properties", {})
         required = schema.get("required", [])
-        
+
         if not properties:
             lines.append("    pass")
             return "\n".join(lines)
-            
+
         for prop_name, prop_schema in properties.items():
             python_type = self._json_type_to_python_modern(prop_schema)
             is_required = prop_name in required
-            
+
             # Add validation and description
             description = prop_schema.get("description", "")
             constraints = self._extract_field_constraints(prop_schema)
-            
+
             if is_required:
                 field_def = f"Field({constraints}description='{description}')" if constraints or description else ""
                 if field_def:
@@ -439,13 +439,13 @@ import jsonschema
             else:
                 field_def = f"Field(default=None, {constraints}description='{description}')" if constraints or description else "None"
                 lines.append(f"    {prop_name}: Optional[{python_type}] = {field_def}")
-                
+
         return "\n".join(lines)
-        
+
     def _extract_field_constraints(self, schema: Dict[str, Any]) -> str:
         """Extract Pydantic field constraints from JSON schema."""
         constraints = []
-        
+
         if "minimum" in schema:
             constraints.append(f"ge={schema['minimum']}")
         if "maximum" in schema:
@@ -456,17 +456,17 @@ import jsonschema
             constraints.append(f"max_length={schema['maxLength']}")
         if "pattern" in schema:
             constraints.append(f"pattern=r'{schema['pattern']}'")
-            
+
         return ", ".join(constraints) + (", " if constraints else "")
-        
+
     def _json_type_to_python_modern(self, schema: Dict[str, Any]) -> str:
         """Convert JSON schema type to modern Python type hint."""
         if "$ref" in schema:
             ref_name = schema["$ref"].split("/")[-1]
             return ref_name
-            
+
         json_type = schema.get("type", "any")
-        
+
         if json_type == "string":
             if "enum" in schema:
                 enum_values = "', '".join(schema["enum"])
@@ -492,32 +492,32 @@ import jsonschema
             return "Dict[str, Any]"
         else:
             return "Any"
-            
+
     def _generate_python_message_enum(self) -> str:
         """Generate message type enum from AsyncAPI messages."""
         code = "class MessageType(str, Enum):\n"
         code += '    """Enumeration of all WebSocket message types."""\n\n'
-        
+
         messages = self.schema.get("components", {}).get("messages", {})
-        
+
         for msg_data in messages.values():
             msg_name = msg_data.get("name", "unknown")
             enum_name = msg_name.upper()
             code += f'    {enum_name} = "{msg_name}"\n'
-            
+
         return code + "\n\n"
-        
+
     def _generate_python_typed_emitter(self) -> str:
         """Generate modern typed emitter for contract enforcement."""
         return '''# Typed emitter for contract enforcement
 
 class TypedEmitter(Protocol):
     """Protocol for typed WebSocket message emission."""
-    
+
     async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
+        self,
+        topic: str,
+        message_type: MessageType,
         payload: BaseModel
     ) -> None:
         """Send a typed message with validation."""
@@ -525,28 +525,28 @@ class TypedEmitter(Protocol):
 
 class TypedEmitterImpl:
     """Implementation of typed emitter with runtime validation."""
-    
+
     def __init__(self, raw_emitter):
         """Initialize with raw broadcast function."""
         self.raw_emitter = raw_emitter
-        
+
     async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
+        self,
+        topic: str,
+        message_type: MessageType,
         payload: BaseModel
     ) -> None:
         """Send a typed message with full validation."""
         # Validate payload matches expected type for message
         validate_payload_for_message_type(message_type, payload)
-        
+
         # Create envelope with validation
         envelope = Envelope.create(
             message_type=message_type.value,
             topic=topic,
             data=payload.model_dump()
         )
-        
+
         # Send via raw emitter
         await self.raw_emitter(topic, envelope.model_dump_validated())
 
@@ -601,10 +601,10 @@ async def main():
     if len(sys.argv) != 2:
         print("Usage: python generate-ws-types-modern.py <asyncapi-schema-file>")
         sys.exit(1)
-        
+
     schema_file = sys.argv[1]
     generator = ModernProtocolGenerator(schema_file)
-    
+
     try:
         await generator.generate_all()
         print("🎉 Modern WebSocket types generated successfully!")

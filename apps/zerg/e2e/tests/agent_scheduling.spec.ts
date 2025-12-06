@@ -34,7 +34,7 @@ test.describe('Agent scheduling UI', () => {
 
     // Wait for WebSocket update then check for scheduled indicator
     await page.waitForTimeout(1000);
-    
+
     // Look for scheduled status in the status column
     const scheduledStatus = page.locator('tr[data-agent-id] .status-indicator', { hasText: 'Scheduled' });
     if (await scheduledStatus.count() === 0) {
@@ -88,12 +88,12 @@ test.describe('Agent scheduling UI', () => {
     await page.waitForTimeout(500);
     const errorElements = page.locator('.validation-error, .error-msg');
     const modalStillVisible = await page.locator('#agent-modal').isVisible();
-    
+
     if (await errorElements.count() === 0 && !modalStillVisible) {
       test.skip(true, 'Client-side validation for scheduling not implemented yet');
       return;
     }
-    
+
     if (await errorElements.count() > 0) {
       await expect(errorElements.first()).toBeVisible();
     }

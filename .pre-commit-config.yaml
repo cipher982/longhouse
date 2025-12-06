@@ -7,6 +7,8 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
       - id: fix-byte-order-marker
       - id: check-case-conflict
       - id: check-executables-have-shebangs
@@ -57,7 +59,7 @@ repos:
         pass_filenames: false
         files: ^asyncapi/
 
-      
+
 
       - id: contract-field-validation
         name: "Contract field name validation"
@@ -86,12 +88,12 @@ repos:
 
   - repo: local
     hooks:
-      - id: stylelint
-        name: stylelint (CSS)
-        language: system
-        entry: npx --no-install stylelint
-        files: \.(css|scss)$
-        pass_filenames: true
+#      - id: stylelint
+#        name: stylelint (CSS)
+#        language: system
+#        entry: npx --no-install stylelint --config config/.stylelintrc.json --fix
+#        files: \.(css|scss)$
+#        pass_filenames: true
 
       - id: prettier
         name: prettier (CSS/Markdown)

@@ -1,14 +1,15 @@
 # PRD: Visual Workflow Canvas - Tool & Trigger Nodes
 
-*Status: 🟡 IN PROGRESS - Phase 1 Complete, Phase 2+ Active*  
-*Owner: Development Team*  
-*Last Updated: 2025-06-15*
+_Status: 🟡 IN PROGRESS - Phase 1 Complete, Phase 2+ Active_
+_Owner: Development Team_
+_Last Updated: 2025-06-15_
 
 ---
 
 ## Implementation Status (Auto-Tracked)
 
 ### Phase 1: Foundation (Weeks 1-2)
+
 - [x] Extend NodeType enum for Tool nodes
 - [x] Tool node rendering with basic styling
 - [x] Tool palette with MCP integration (basic, static for now)
@@ -21,6 +22,7 @@
 - [x] Build compiles successfully
 
 ### Phase 2: Execution Engine (Current Focus)
+
 - [x] Tool configuration modal opens (modal-based, not sidebar)
 - [x] Tool configuration modal: input mapping (static values), save/cancel, state update via message dispatch
 - [x] Agent configuration modal is robust
@@ -59,6 +61,7 @@
 ## 1. Problem Statement
 
 ### Current State Pain Points
+
 - **Hidden Capabilities**: MCP tools configured in modals, invisible during workflow creation
 - **No Visual Automation**: Users can't see or build automated workflows
 - **ChatGPT Comparison**: "This is just ChatGPT with extra configuration steps"
@@ -66,12 +69,14 @@
 - **No Immediate Value**: Setup-heavy with unclear payoff
 
 ### User Journey Problems
+
 1. User configures MCP tools in agent modal
 2. User chats with agent hoping it uses the right tools
 3. User has no visibility into what tools are available or how they're used
 4. User doesn't understand how to build automation
 
 ### Competitive Landscape
+
 - **ChatGPT**: Single conversation, no automation
 - **Zapier**: Visual workflows, no AI reasoning
 - **Make.com**: Complex automation, steep learning curve
@@ -82,9 +87,11 @@
 ## 2. Solution Overview
 
 ### Vision Statement
+
 Transform Zerg into a visual workflow automation platform where users drag, connect, and run AI-powered workflows that integrate with real-world services.
 
 ### Core Principle: "What You Draw Is What Runs"
+
 Every visual element on the canvas maps 1-to-1 to runtime execution:
 
 ```
@@ -95,6 +102,7 @@ Every visual element on the canvas maps 1-to-1 to runtime execution:
 ```
 
 ### Key Value Propositions
+
 1. **Immediate Visual Feedback**: See all capabilities at a glance
 2. **Real-world Integration**: Connect to actual services, not just chat
 3. **Progressive Complexity**: Start simple, build sophisticated workflows
@@ -110,6 +118,7 @@ Every visual element on the canvas maps 1-to-1 to runtime execution:
 **As a user, I want to see available tools as draggable nodes so I can build workflows visually.**
 
 #### Story 1.1: Tool Palette
+
 ```
 GIVEN I'm on the canvas editor
 WHEN I open the node palette
@@ -118,7 +127,7 @@ THEN I see organized tool categories:
 - 🔧 Tools (NEW)
   - Built-in Tools (HTTP, Math, DateTime)
   - GitHub Tools (if MCP connected)
-  - Slack Tools (if MCP connected)  
+  - Slack Tools (if MCP connected)
   - Linear Tools (if MCP connected)
   - Custom MCP Tools
 - ⚡ Triggers (NEW)
@@ -126,6 +135,7 @@ THEN I see organized tool categories:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Tool palette shows all available tools from MCP registry
 - [ ] Tools grouped by source with clear visual hierarchy
 - [ ] Unavailable tools grayed out with "Connect [Service]" hint
@@ -133,6 +143,7 @@ THEN I see organized tool categories:
 - [ ] Drag-drop from palette to canvas creates tool node
 
 #### Story 1.2: Tool Node Rendering
+
 ```
 GIVEN I drag "GitHub Create Issue" tool to canvas
 WHEN the node is created
@@ -145,6 +156,7 @@ THEN I see:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Tool nodes visually distinct from Agent nodes
 - [ ] Connection status always visible and accurate
 - [ ] Hover tooltip shows tool description and requirements
@@ -152,6 +164,7 @@ THEN I see:
 - [ ] Node resizes based on port count
 
 #### Story 1.3: Tool Configuration Panel
+
 ```
 GIVEN I click on a Tool node
 WHEN the configuration panel opens
@@ -165,6 +178,7 @@ THEN I can:
 ```
 
 **Acceptance Criteria:**
+
 - [x] Modal opens for tool nodes (not sidebar)
 - [x] Minimal input mapping UI (static values, placeholder for node outputs)
 - [x] Save/cancel logic, state update via message dispatch
@@ -179,6 +193,7 @@ THEN I can:
 **As a user, I want to create triggers visually so I can start automated workflows.**
 
 #### Story 2.1: Webhook Trigger Node
+
 ```
 GIVEN I drag "Webhook Trigger" to canvas
 WHEN I configure it
@@ -191,6 +206,7 @@ THEN I get:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Webhook URL generated immediately and copyable
 - [ ] HMAC secret shown with copy button and regenerate option
 - [ ] JSON payload preview and filtering UI
@@ -198,6 +214,7 @@ THEN I get:
 - [ ] Webhook activity log (last 10 requests)
 
 #### Story 2.2: Schedule Trigger Node
+
 ```
 GIVEN I drag "Schedule Trigger" to canvas
 WHEN I configure it
@@ -210,6 +227,7 @@ THEN I can:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Visual cron builder with common presets (hourly, daily, weekly)
 - [ ] Next execution times preview updates in real-time
 - [ ] Timezone selector with user's timezone as default
@@ -217,6 +235,7 @@ THEN I can:
 - [ ] Schedule history (last 10 executions)
 
 #### Story 2.3: Email Trigger Node (Gmail Integration)
+
 ```
 GIVEN I have Gmail connected via MCP
 WHEN I drag "Gmail Trigger" to canvas
@@ -228,6 +247,7 @@ THEN I can:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Gmail connection status indicator
 - [ ] Email filter builder with AND/OR logic
 - [ ] Preview of emails matching current filters
@@ -239,6 +259,7 @@ THEN I can:
 **As a user, I want to see my workflow running in real-time so I understand what's happening.**
 
 #### Story 3.1: Live Execution Visualization
+
 ```
 GIVEN I have a connected workflow (Trigger → Agent → Tool)
 WHEN the workflow executes
@@ -251,6 +272,7 @@ THEN I see:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Active node has animated border/glow effect
 - [ ] Connection lines show data flow animation
 - [ ] Node states: idle/queued/running/success/failed with icons
@@ -259,6 +281,7 @@ THEN I see:
 - [ ] Execution completes with summary notification
 
 #### Story 3.2: Execution History & Debugging
+
 ```
 GIVEN my workflow has run multiple times
 WHEN I click "Execution History"
@@ -272,6 +295,7 @@ THEN I see:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Execution history panel with pagination
 - [ ] Filter by date range, status, trigger type
 - [ ] Click execution to see detailed step-by-step flow
@@ -279,6 +303,7 @@ THEN I see:
 - [ ] Search functionality across execution logs
 
 #### Story 3.3: Workflow Templates & Examples
+
 ```
 GIVEN I'm a new user
 WHEN I visit the canvas
@@ -290,6 +315,7 @@ THEN I see:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Template gallery with categories (productivity, development, marketing)
 - [ ] Template preview with description and required connections
 - [ ] "Use Template" button creates workflow copy
@@ -305,25 +331,25 @@ THEN I see:
 - The modal is ready for incremental improvements (advanced mapping, validation, test, etc.).
 - Trigger modal, workflow execution, and templates remain as next major milestones.
 
-
 ## 4. Technical Architecture
 
 ### Frontend (Rust/WASM) Changes
 
 #### Enhanced Node System
+
 ```rust
 // Extend existing node types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeType {
     Agent { agent_id: u32 },
-    Tool { 
-        tool_name: String, 
+    Tool {
+        tool_name: String,
         server_name: String,
-        config: ToolConfig 
+        config: ToolConfig
     },
-    Trigger { 
+    Trigger {
         // Removed legacy: trigger_type. Use typed config.trigger in NodeConfig.
-        config: TriggerConfig 
+        config: TriggerConfig
     },
     // Future: Condition, Loop, etc.
 }
@@ -342,6 +368,7 @@ pub enum InputValue {
 ```
 
 #### Node Palette Component
+
 ```rust
 pub struct NodePalette {
     pub categories: Vec<PaletteCategory>,
@@ -364,6 +391,7 @@ impl NodePalette {
 ```
 
 #### Workflow Execution State
+
 ```rust
 #[derive(Debug, Clone)]
 pub struct WorkflowExecution {
@@ -389,39 +417,41 @@ pub enum NodeExecutionState {
 ### Backend (Python/FastAPI) Changes
 
 #### Workflow Engine
+
 ```python
 class WorkflowEngine:
     """Orchestrates execution of visual workflows"""
-    
+
     async def execute_workflow(
-        self, 
-        workflow: Workflow, 
+        self,
+        workflow: Workflow,
         trigger_data: dict,
         execution_id: str
     ) -> WorkflowExecution:
         """Execute complete workflow from trigger through all nodes"""
-        
+
     async def execute_node(
-        self, 
-        node: WorkflowNode, 
+        self,
+        node: WorkflowNode,
         input_data: dict,
         execution_context: ExecutionContext
     ) -> NodeResult:
         """Execute single node with proper error handling and logging"""
-        
+
     async def resolve_node_inputs(
-        self, 
-        node: WorkflowNode, 
+        self,
+        node: WorkflowNode,
         execution_context: ExecutionContext
     ) -> dict:
         """Resolve input mappings from previous node outputs"""
 ```
 
 #### Enhanced Tool Integration
+
 ```python
 class VisualToolExecutor:
     """Executes tools from visual workflow nodes"""
-    
+
     async def execute_tool_node(
         self,
         tool_name: str,
@@ -436,10 +466,11 @@ class VisualToolExecutor:
 ```
 
 #### Workflow Storage Schema
+
 ```python
 class Workflow(Base):
     __tablename__ = "workflows"
-    
+
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(Text)
@@ -451,7 +482,7 @@ class Workflow(Base):
 
 class WorkflowExecution(Base):
     __tablename__ = "workflow_executions"
-    
+
     id = Column(String, primary_key=True)  # UUID
     workflow_id = Column(Integer, ForeignKey("workflows.id"))
     # Removed legacy flattened columns. Triggers are encoded in workflow.canvas JSON
@@ -465,7 +496,7 @@ class WorkflowExecution(Base):
 
 class WorkflowNode(Base):
     __tablename__ = "workflow_nodes"
-    
+
     id = Column(String, primary_key=True)  # UUID
     workflow_id = Column(Integer, ForeignKey("workflows.id"))
     node_type = Column(String)  # 'agent', 'tool', 'trigger'
@@ -481,30 +512,35 @@ class WorkflowNode(Base):
 ### Visual Design Principles
 
 #### Node Visual Hierarchy
+
 ```
 🤖 Agent Nodes: Rounded rectangles, blue gradient, brain icon
-🔧 Tool Nodes: Sharp rectangles, service-color accent, tool icon  
+🔧 Tool Nodes: Sharp rectangles, service-color accent, tool icon
 ⚡ Trigger Nodes: Diamond shape, green gradient, lightning icon
 🔀 Logic Nodes: Hexagon, purple gradient, logic icon (future)
 ```
 
 #### Connection Lines
+
 - **Data Flow**: Animated dots moving along connections during execution
 - **Connection Types**: Different line styles for data vs control flow
 - **Status Colors**: Green (success), red (error), yellow (warning), gray (idle)
 
 #### Execution Feedback
+
 - **Node Glow**: Animated border during execution
 - **Progress Bars**: For long-running operations
 - **Status Icons**: ✅ ❌ ⚠️ ⏳ overlaid on nodes
 - **Execution Path**: Highlight the path taken through the workflow
 
 ### Responsive Design
+
 - **Desktop**: Full canvas with side panels
 - **Tablet**: Collapsible panels, touch-friendly nodes
 - **Mobile**: Simplified view, execution monitoring only
 
 ### Accessibility
+
 - **Keyboard Navigation**: Tab through nodes, arrow keys to navigate canvas
 - **Screen Reader**: Proper ARIA labels for all interactive elements
 - **High Contrast**: Alternative color scheme for visual impairments
@@ -517,12 +553,14 @@ class WorkflowNode(Base):
 ### Primary Success Metrics
 
 #### User Adoption
+
 - **Workflow Creation Rate**: 80% of users create first workflow within 10 minutes
 - **Tool Usage**: 60% of workflows use 2+ different tools/services
 - **Template Adoption**: 40% of new workflows start from templates
 - **User Retention**: 70% of workflow creators return within 7 days
 
 #### Product Engagement
+
 - **Workflow Complexity**: Average 3.5 nodes per workflow
 - **Execution Success**: 90% of workflows execute without errors
 - **Daily Active Workflows**: 50% of created workflows run at least daily
@@ -531,18 +569,21 @@ class WorkflowNode(Base):
 ### Secondary Metrics
 
 #### User Experience
+
 - **Time to First Success**: <5 minutes from signup to working workflow
 - **Support Ticket Reduction**: 80% fewer "how do I use tools" questions
 - **User Satisfaction**: >4.5/5 rating on workflow building experience
 - **Demo Conversion**: Prospects understand value in <3 minutes
 
 #### Technical Performance
+
 - **Execution Latency**: <2 seconds for simple workflows
 - **System Reliability**: 99.5% uptime for workflow execution
 - **Error Recovery**: 95% of failed workflows auto-retry successfully
 - **Canvas Performance**: Smooth interaction with 50+ nodes
 
 ### Qualitative Success Indicators
+
 - User feedback: "Now I see how this is different from ChatGPT"
 - Sales feedback: "Demos are much more compelling"
 - Support feedback: "Users understand the platform immediately"
@@ -553,16 +594,19 @@ class WorkflowNode(Base):
 ## 7. Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-2)
+
 **Goal**: Basic tool and trigger nodes on canvas
 
 #### Week 1: Tool Nodes
+
 - [x] Extend NodeType enum for Tool nodes
 - [x] Tool node rendering with basic styling
 - [x] Tool palette with MCP integration
 - [x] Drag-drop from palette to canvas
 - [x] Tool configuration modal (basic, modal-based)
 
-#### Week 2: Trigger Nodes  
+#### Week 2: Trigger Nodes
+
 - [ ] Complete trigger frontend modal (existing M1 milestone)
 - [ ] Trigger node rendering and configuration
 - [ ] Webhook trigger with URL generation
@@ -572,9 +616,11 @@ class WorkflowNode(Base):
 **Success Criteria**: Users can drag tools and triggers onto canvas and configure them
 
 ### Phase 2: Workflow Execution (Weeks 3-4)
+
 **Goal**: Workflows actually run and show live feedback
 
 #### Week 3: Execution Engine
+
 - [ ] Workflow execution backend service
 - [ ] Node input/output resolution
 - [ ] Tool node execution integration
@@ -582,6 +628,7 @@ class WorkflowNode(Base):
 - [ ] WebSocket execution status updates
 
 #### Week 4: Visual Feedback
+
 - [ ] Live execution status on canvas nodes
 - [ ] Execution flow animation along connections
 - [ ] Execution history panel
@@ -591,9 +638,11 @@ class WorkflowNode(Base):
 **Success Criteria**: Users can run workflows and see real-time execution feedback
 
 ### Phase 3: Polish & Templates (Weeks 5-6)
+
 **Goal**: Production-ready experience with templates
 
 #### Week 5: User Experience Polish
+
 - [ ] Node palette search and filtering
 - [ ] Improved tool configuration UX
 - [ ] Workflow save/load functionality
@@ -601,6 +650,7 @@ class WorkflowNode(Base):
 - [ ] Mobile-responsive design
 
 #### Week 6: Templates & Examples
+
 - [ ] Template system architecture
 - [ ] 5 pre-built workflow templates
 - [ ] Template gallery UI
@@ -610,9 +660,11 @@ class WorkflowNode(Base):
 **Success Criteria**: New users can successfully create workflows using templates
 
 ### Phase 4: Advanced Features (Weeks 7-8)
+
 **Goal**: Power user features and scalability
 
 #### Week 7: Advanced Workflow Features
+
 - [ ] Workflow versioning and history
 - [ ] Bulk operations and batch processing
 - [ ] Conditional logic nodes (basic)
@@ -620,6 +672,7 @@ class WorkflowNode(Base):
 - [ ] Advanced debugging tools
 
 #### Week 8: Performance & Scale
+
 - [ ] Canvas optimization for large workflows
 - [ ] Execution engine performance tuning
 - [ ] Advanced error recovery
@@ -635,18 +688,20 @@ class WorkflowNode(Base):
 ### Technical Risks
 
 #### Canvas Performance with Many Nodes
+
 - **Risk**: Canvas becomes slow with 50+ nodes
 - **Likelihood**: Medium
 - **Impact**: High (user experience degradation)
-- **Mitigation**: 
+- **Mitigation**:
   - Implement virtual scrolling for large canvases
   - Optimize rendering with canvas-based approach
   - Add node grouping/folding functionality
   - Performance testing with large workflows
 
 #### Workflow Execution Reliability
+
 - **Risk**: Complex workflows fail unpredictably
-- **Likelihood**: Medium  
+- **Likelihood**: Medium
 - **Impact**: High (user trust and adoption)
 - **Mitigation**:
   - Comprehensive error handling and retry logic
@@ -655,6 +710,7 @@ class WorkflowNode(Base):
   - Detailed logging and debugging tools
 
 #### MCP Integration Stability
+
 - **Risk**: External MCP servers cause workflow failures
 - **Likelihood**: High
 - **Impact**: Medium (specific tool failures)
@@ -667,6 +723,7 @@ class WorkflowNode(Base):
 ### User Experience Risks
 
 #### Learning Curve Too Steep
+
 - **Risk**: Users find visual workflow building complex
 - **Likelihood**: Medium
 - **Impact**: High (adoption failure)
@@ -677,6 +734,7 @@ class WorkflowNode(Base):
   - Clear visual feedback and error messages
 
 #### Feature Discoverability
+
 - **Risk**: Users don't discover powerful features
 - **Likelihood**: Medium
 - **Impact**: Medium (underutilization)
@@ -689,6 +747,7 @@ class WorkflowNode(Base):
 ### Business Risks
 
 #### Competitive Response
+
 - **Risk**: Competitors copy visual workflow approach
 - **Likelihood**: High
 - **Impact**: Medium (market differentiation)
@@ -699,6 +758,7 @@ class WorkflowNode(Base):
   - Strong brand and community building
 
 #### Support and Documentation Load
+
 - **Risk**: Complex features increase support burden
 - **Likelihood**: Medium
 - **Impact**: Medium (operational costs)
@@ -715,18 +775,21 @@ class WorkflowNode(Base):
 ### Phase 2 Features (Months 2-3)
 
 #### Advanced Logic Nodes
+
 - **Condition Nodes**: If/then/else branching logic
-- **Loop Nodes**: Iterate over arrays and datasets  
+- **Loop Nodes**: Iterate over arrays and datasets
 - **Switch Nodes**: Multi-way branching based on values
 - **Merge Nodes**: Combine multiple workflow paths
 
 #### Workflow Collaboration
+
 - **Shared Workflows**: Team access and permissions
 - **Version Control**: Track changes and rollback capability
 - **Comments and Annotations**: Collaborative workflow documentation
 - **Approval Workflows**: Require approval before execution
 
 #### Advanced Integrations
+
 - **Database Nodes**: Direct SQL query execution
 - **API Builder**: Custom REST API endpoint creation
 - **File Processing**: Upload, transform, and download files
@@ -735,18 +798,21 @@ class WorkflowNode(Base):
 ### Phase 3 Features (Months 4-6)
 
 #### Workflow Marketplace
+
 - **Community Templates**: User-contributed workflows
 - **Template Ratings**: Community-driven quality assessment
 - **Template Categories**: Organized by use case and industry
 - **Premium Templates**: Professional workflow templates
 
 #### Advanced Analytics
+
 - **Workflow Performance**: Execution time and success rate analytics
 - **Cost Tracking**: Monitor API usage and costs per workflow
 - **Usage Insights**: Identify most valuable workflows and tools
 - **Optimization Suggestions**: AI-powered workflow improvement recommendations
 
 #### Enterprise Features
+
 - **Single Sign-On**: SAML/OIDC integration
 - **Audit Logging**: Comprehensive activity tracking
 - **Role-Based Access**: Granular permissions and access control
@@ -759,21 +825,25 @@ class WorkflowNode(Base):
 ### Competitive Analysis
 
 #### Zapier
+
 - **Strengths**: Large integration ecosystem, simple trigger-action model
 - **Weaknesses**: No AI reasoning, limited data transformation
 - **Zerg Advantage**: AI agents provide intelligent decision-making and data processing
 
 #### Make.com (formerly Integromat)
+
 - **Strengths**: Visual workflow builder, advanced logic capabilities
 - **Weaknesses**: Complex interface, steep learning curve, no AI
 - **Zerg Advantage**: AI-powered nodes simplify complex logic, better user experience
 
 #### Microsoft Power Automate
+
 - **Strengths**: Deep Microsoft ecosystem integration, enterprise features
 - **Weaknesses**: Limited to Microsoft ecosystem, complex pricing
 - **Zerg Advantage**: Open ecosystem, AI-first approach, simpler pricing
 
 #### n8n
+
 - **Strengths**: Open source, self-hosted option, developer-friendly
 - **Weaknesses**: Technical setup required, limited AI capabilities
 - **Zerg Advantage**: Hosted solution, AI-native design, visual simplicity
@@ -781,16 +851,19 @@ class WorkflowNode(Base):
 ### Technical Specifications
 
 #### Canvas Rendering Performance
+
 - **Target**: 60 FPS interaction with 100+ nodes
 - **Approach**: Canvas-based rendering with viewport culling
 - **Optimization**: Only render visible nodes, use efficient hit detection
 
 #### Workflow Execution Scalability
+
 - **Target**: 1000+ concurrent workflow executions
 - **Approach**: Async execution with proper resource management
 - **Monitoring**: Execution queue depth, memory usage, response times
 
 #### Data Flow Architecture
+
 ```
 Trigger Event → Workflow Engine → Node Executor → Tool/Agent → Result Storage
      ↓              ↓                ↓              ↓           ↓
@@ -802,24 +875,28 @@ WebSocket ← Status Updates ← Execution Log ← Progress ← Output Data
 #### Target User Personas
 
 **"Automation Andy" - Operations Manager**
+
 - Wants to automate repetitive business processes
 - Comfortable with tools like Zapier but wants AI capabilities
 - Values reliability and clear error reporting
 - Success metric: Hours saved per week through automation
 
-**"Developer Dana" - Technical Product Manager**  
+**"Developer Dana" - Technical Product Manager**
+
 - Builds workflows for team productivity
 - Wants to integrate custom APIs and internal tools
 - Values flexibility and extensibility
 - Success metric: Team velocity improvement
 
 **"Marketing Mary" - Digital Marketing Manager**
+
 - Automates content creation and distribution workflows
 - Wants AI to help with content optimization
 - Values templates and ease of use
 - Success metric: Campaign performance improvement
 
 #### Key User Feedback Themes
+
 1. **"Show me what's possible"** - Users want to see capabilities upfront
 2. **"Make it work reliably"** - Reliability more important than features
 3. **"Help me get started"** - Templates and examples are crucial
@@ -829,7 +906,7 @@ WebSocket ← Status Updates ← Execution Log ← Progress ← Output Data
 
 ## Conclusion
 
-This PRD transforms Zerg from a "ChatGPT alternative" into a unique "Visual AI Workflow Platform" that combines the best of automation tools (Zapier) with AI reasoning capabilities. 
+This PRD transforms Zerg from a "ChatGPT alternative" into a unique "Visual AI Workflow Platform" that combines the best of automation tools (Zapier) with AI reasoning capabilities.
 
 The visual canvas approach makes AI capabilities immediately discoverable and usable, while the workflow execution engine enables real-world automation that goes far beyond simple chat interactions.
 

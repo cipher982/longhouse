@@ -266,4 +266,3 @@ export function useDebouncedUpdateAllowedTools(agentId: number | null, debounceM
     error: mutation.error,
   };
 }
-

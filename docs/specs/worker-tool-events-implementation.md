@@ -9,6 +9,7 @@ This document summarizes the implementation of **Phase 1: Tool Activity Events**
 ## The Problem
 
 **Before this work:**
+
 ```
 Supervisor spawns worker
     ↓
@@ -18,6 +19,7 @@ Supervisor spawns worker
 ```
 
 Problems:
+
 - No visibility into what the worker is doing
 - If a tool hangs (SSH timeout, API call), nobody knows until hard timeout
 - No opportunity for early exit or intervention
@@ -30,6 +32,7 @@ Problems:
 **Full architecture documented in**: [`docs/specs/worker-supervision-roundabout.md`](./worker-supervision-roundabout.md)
 
 The roundabout is a monitoring loop where the supervisor:
+
 1. Spawns a worker
 2. Enters monitoring mode (checks status every 5s)
 3. Sees real-time tool activity (ssh_exec, http_request, etc.)
@@ -42,13 +45,13 @@ The roundabout is a monitoring loop where the supervisor:
 
 ## Implementation Phases
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| **Phase 1** | Tool Activity Events | ✅ **COMPLETE** |
-| **Phase 2** | UI Activity Ticker | ⏳ Not started |
-| **Phase 3** | Roundabout Monitoring Loop | ⏳ Not started |
-| **Phase 4** | Supervisor Decision Handling | ⏳ Not started |
-| **Phase 5** | Graceful Failure Handling | ⏳ Not started |
+| Phase       | Description                  | Status          |
+| ----------- | ---------------------------- | --------------- |
+| **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** |
+| **Phase 2** | UI Activity Ticker           | ⏳ Not started  |
+| **Phase 3** | Roundabout Monitoring Loop   | ⏳ Not started  |
+| **Phase 4** | Supervisor Decision Handling | ⏳ Not started  |
+| **Phase 5** | Graceful Failure Handling    | ⏳ Not started  |
 
 ---
 
@@ -57,6 +60,7 @@ The roundabout is a monitoring loop where the supervisor:
 ### What We Built
 
 Real-time event emission from worker tool execution:
+
 - `WORKER_TOOL_STARTED` - emitted when tool begins (ssh_exec, http_request, etc.)
 - `WORKER_TOOL_COMPLETED` - emitted when tool succeeds
 - `WORKER_TOOL_FAILED` - emitted when tool fails (detected via error_envelope)
@@ -66,6 +70,7 @@ Real-time event emission from worker tool execution:
 **Option A (chosen): ContextVars + Manual Event Emission**
 
 We chose `contextvars` over LangChain callbacks because:
+
 - Cleaner integration (single point of setup)
 - No callback plumbing through multiple layers
 - Decoupled from LangChain/LangGraph internals
@@ -96,6 +101,7 @@ We chose `contextvars` over LangChain callbacks because:
 ### Components Created
 
 #### 1. **`zerg/context.py`** (NEW)
+
 ```python
 @dataclass
 class WorkerContext:
@@ -117,6 +123,7 @@ reset_worker_context(token) -> None
 **Why this matters**: Any code in the call stack can access worker context without explicit parameter threading. `asyncio.to_thread` automatically propagates context.
 
 #### 2. **Event Types** (`zerg/events/event_bus.py`)
+
 ```python
 WORKER_TOOL_STARTED = "worker_tool_started"
 WORKER_TOOL_COMPLETED = "worker_tool_completed"
@@ -124,7 +131,9 @@ WORKER_TOOL_FAILED = "worker_tool_failed"
 ```
 
 #### 3. **Modified: `zerg_react_agent._call_tool_async`**
+
 Wrapped tool execution with event emission:
+
 ```python
 async def _call_tool_async(tool_call: dict):
     ctx = get_worker_context()
@@ -146,7 +155,9 @@ async def _call_tool_async(tool_call: dict):
 ```
 
 #### 4. **Modified: `WorkerRunner.run_worker`**
+
 Sets up and tears down context:
+
 ```python
 worker_context = WorkerContext(worker_id=..., owner_id=..., ...)
 context_token = set_worker_context(worker_context)
@@ -159,12 +170,14 @@ finally:
 #### 5. **`zerg/tools/result_utils.py`** (NEW - Centralized Utilities)
 
 **`check_tool_error(result_content: Any) -> tuple[bool, str | None]`**
+
 - Detects legacy format: `<tool-error> ...` or `Error: ...`
 - Detects error_envelope: `{"ok": False, "error_type": "...", "user_message": "..."}`
 - Handles both JSON (double quotes) and Python literal (single quotes) via `ast.literal_eval()`
 - Type-safe: accepts None, converts to string
 
 **`redact_sensitive_args(args: Any) -> Any`**
+
 - Recursively walks dicts, lists, tuples, sets
 - Redacts keys containing: key, api_key, token, secret, password, credential, auth, bearer, etc.
 - Detects key-value pair patterns: `{"key": "Authorization", "value": "Bearer..."}` → redacts value
@@ -172,6 +185,7 @@ finally:
 - Type-safe: handles any input type
 
 **`safe_preview(content: Any, max_len: int) -> str`**
+
 - Truncates content with "..." ellipsis
 - Type-safe: converts None → "(None)"
 
@@ -180,6 +194,7 @@ finally:
 ## Critical Bugs Fixed During Implementation
 
 ### 1. Error Detection Broken (Critical)
+
 **Issue**: `str(dict)` produces Python literals like `{'ok': False, ...}` but `json.loads()` expects JSON with double quotes. Error envelopes were NEVER detected.
 
 **Fix**: Added `ast.literal_eval()` fallback to parse Python literals.
@@ -187,6 +202,7 @@ finally:
 **Commit**: `4e3c539`
 
 ### 2. Secrets in WorkerContext (Medium → High)
+
 **Issue**: `WorkerContext.tool_calls` stored unredacted args, accessible via logs/SSE/UI.
 
 **Fix**: Pass redacted args to `ctx.record_tool_start()`.
@@ -194,6 +210,7 @@ finally:
 **Commit**: `65ada61`
 
 ### 3. Secrets in Nested Lists (High)
+
 **Issue**: Slack attachments like `[{"title": "token", "value": "sk-..."}]` leaked secrets because redaction didn't recurse into lists.
 
 **Fix**: Made `redact_sensitive_args` walk lists/tuples/sets recursively.
@@ -201,6 +218,7 @@ finally:
 **Commit**: `578c068`
 
 ### 4. Structural Key Exemption Regression (High)
+
 **Issue**: Lone fields like `{"key": "sk-123"}` leaked because structural keys were exempted globally.
 
 **Fix**: Only exempt structural keys when in a key-value pair pattern (both semantic key AND value field present).
@@ -208,6 +226,7 @@ finally:
 **Commit**: `8687909`
 
 ### 5. Tests Don't Exercise Production Code (High)
+
 **Issue**: Tests manually reimplemented logic instead of calling real functions.
 
 **Fix**: Extracted utilities to `result_utils.py` and rewrote tests to import/test real functions.
@@ -219,6 +238,7 @@ finally:
 ## Event Payload Structure
 
 ### WORKER_TOOL_STARTED
+
 ```json
 {
   "event_type": "worker_tool_started",
@@ -233,6 +253,7 @@ finally:
 ```
 
 ### WORKER_TOOL_COMPLETED
+
 ```json
 {
   "event_type": "worker_tool_completed",
@@ -248,6 +269,7 @@ finally:
 ```
 
 ### WORKER_TOOL_FAILED
+
 ```json
 {
   "event_type": "worker_tool_failed",
@@ -269,24 +291,28 @@ finally:
 **63 tests total**, organized in 4 files:
 
 ### `test_worker_context.py` (10 tests)
+
 - ContextVar basic operations (set/get/reset)
 - Nested contexts
 - Async propagation through `asyncio.to_thread`
 - Isolation between concurrent workers
 
 ### `test_worker_tool_events.py` (13 tests)
+
 - WorkerContext accessibility
 - ToolCall tracking
 - Event payload structure
 - Integration with real redaction function
 
 ### `test_result_utils.py` (29 tests)
+
 - Error detection (JSON, Python literal, legacy formats)
 - Secret redaction (flat, nested, lists, tuples, key-value pairs)
 - Safe preview (truncation, None handling)
 - **5 regression tests** for security fixes
 
 ### `test_error_detection.py` (11 tests)
+
 - Comprehensive envelope parsing edge cases
 - Malformed input handling
 - Nested data structures
@@ -298,6 +324,7 @@ finally:
 ### Redaction Strategy
 
 **Sensitive key patterns** (case-insensitive, partial match):
+
 ```
 key, api_key, apikey, token, secret, password, passwd,
 credential, credentials, auth, authorization, bearer,
@@ -305,6 +332,7 @@ private_key, privatekey, access_token, refresh_token
 ```
 
 **Redaction rules**:
+
 1. **Lone sensitive key**: `{"api_key": "sk-123"}` → `{"api_key": "[REDACTED]"}`
 2. **Nested sensitive key**: `{"config": {"token": "..."}}` → `{"config": {"token": "[REDACTED]"}}`
 3. **Key-value pair pattern**: `{"key": "Authorization", "value": "Bearer..."}` → value redacted
@@ -316,13 +344,16 @@ private_key, privatekey, access_token, refresh_token
 ### What Gets Redacted
 
 **Event payloads (SSE)**:
+
 - `tool_args_preview` - redacted before emission
 - `result_preview` - safe preview (no redaction needed, results don't contain input secrets)
 
 **WorkerContext.tool_calls** (in-memory activity log):
+
 - `args_preview` - redacted before storage
 
 **NOT redacted** (full audit trail):
+
 - Disk artifacts: `/data/workers/{worker_id}/tool_calls/` - contains full args for debugging
 
 ---
@@ -332,6 +363,7 @@ private_key, privatekey, access_token, refresh_token
 ### Phase 2: UI Activity Ticker
 
 **Frontend component** that subscribes to tool events and displays:
+
 ```
 ┌─────────────────────────────────────────┐
 │ 🔍 Investigating...                     │
@@ -345,12 +377,14 @@ private_key, privatekey, access_token, refresh_token
 ```
 
 **Technical requirements**:
+
 - Subscribe to `WORKER_TOOL_STARTED/COMPLETED/FAILED` via SSE
 - Show tool name, duration, status icon
 - Clear ticker on `WORKER_COMPLETE` event
 - Handle multiple workers (future: parallel workers)
 
 **Files to modify**:
+
 - `apps/zerg/frontend-web/src/components/WorkerActivityTicker.tsx` (NEW)
 - Subscribe to events in chat message handler
 
@@ -380,6 +414,7 @@ def spawn_worker(task: str) -> str:
 ```
 
 **Configuration**:
+
 ```python
 ROUNDABOUT_CONFIG = {
     "check_interval_seconds": 5,
@@ -392,6 +427,7 @@ ROUNDABOUT_CONFIG = {
 ### Phase 4: Supervisor Decision Handling
 
 **Supervisor options during monitoring**:
+
 - **wait** (default): Continue monitoring, check again in 5s
 - **exit**: Saw the answer in logs, don't need full result
 - **cancel**: Worker is stuck or on wrong path, abort
@@ -400,6 +436,7 @@ ROUNDABOUT_CONFIG = {
 ### Phase 5: Graceful Failure Handling
 
 **Make tools fail fast**:
+
 - `ssh_exec`: Check for SSH key before connecting → immediate error if missing
 - `jira_*`: Check connector configured → immediate error if not
 - `github_*`: Check credentials → immediate error if invalid
@@ -415,12 +452,14 @@ ROUNDABOUT_CONFIG = {
 We debugged both approaches with test scripts:
 
 **LangChain Callbacks** (Option C):
+
 - ✅ Work when passed to `tool.invoke(config={"callbacks": [...]})`
 - ❌ Require plumbing through multiple layers
 - ❌ Some LangGraph versions have callback firing issues
 - ❌ Tightly coupled to LangChain internals
 
 **ContextVars** (Option A - chosen):
+
 - ✅ Single point of setup (WorkerRunner)
 - ✅ Automatically propagate through `asyncio.to_thread`
 - ✅ Visible everywhere in call stack
@@ -430,6 +469,7 @@ We debugged both approaches with test scripts:
 ### Why Extract to `result_utils.py`?
 
 Originally implemented inline in `zerg_react_agent.py`, but extracted because:
+
 1. **Reusability**: Other parts of the system need this (artifact store, roundabout loop)
 2. **Testability**: Can't easily test functions defined inside `get_runnable()`
 3. **Maintainability**: Single source of truth for error detection and redaction
@@ -439,6 +479,7 @@ Originally implemented inline in `zerg_react_agent.py`, but extracted because:
 **Challenge**: Tools return dicts that get stringified via `str(observation)`, producing Python literal syntax with single quotes and capitalized booleans.
 
 **Solution**: Try JSON first, fall back to `ast.literal_eval()`:
+
 ```python
 try:
     parsed = json.loads(result_content)  # Double quotes
@@ -452,12 +493,14 @@ if isinstance(parsed, dict) and parsed.get("ok") is False:
 ### Secret Redaction Strategy
 
 **Challenge**: Secrets appear in various forms:
+
 - Direct keys: `{"api_key": "sk-123"}`
 - Nested: `{"config": {"token": "xyz"}}`
 - Lists: `[{"title": "token", "value": "sk-..."}]`
 - Key-value pairs: `{"key": "Authorization", "value": "Bearer..."}`
 
 **Solution**: Multi-pass recursive algorithm:
+
 1. Check for key-value pair pattern (semantic key + value field both present)
 2. If pattern detected and semantic key is sensitive → redact value field
 3. Otherwise, apply standard redaction to all keys
@@ -489,6 +532,7 @@ a9d3146 feat: emit worker tool events from zerg_react_agent
 ## Files Modified/Created
 
 ### New Files
+
 - `apps/zerg/backend/zerg/context.py` (117 lines)
 - `apps/zerg/backend/zerg/tools/result_utils.py` (154 lines)
 - `apps/zerg/backend/tests/unit/test_worker_context.py` (140 lines)
@@ -497,6 +541,7 @@ a9d3146 feat: emit worker tool events from zerg_react_agent
 - `apps/zerg/backend/tests/unit/test_error_detection.py` (112 lines)
 
 ### Modified Files
+
 - `apps/zerg/backend/zerg/events/event_bus.py` (added 3 event types)
 - `apps/zerg/backend/zerg/agents_def/zerg_react_agent.py` (~100 lines added for event emission)
 - `apps/zerg/backend/zerg/services/worker_runner.py` (15 lines for context setup/teardown)
@@ -528,12 +573,12 @@ result = await runner.run_worker(
 
 ```typescript
 // Subscribe to tool events via SSE
-eventSource.addEventListener('worker_tool_started', (event) => {
+eventSource.addEventListener("worker_tool_started", (event) => {
   const data = JSON.parse(event.data);
   // data.worker_id, data.tool_name, data.tool_args_preview
 });
 
-eventSource.addEventListener('worker_tool_completed', (event) => {
+eventSource.addEventListener("worker_tool_completed", (event) => {
   const data = JSON.parse(event.data);
   // data.duration_ms, data.result_preview
 });
@@ -578,6 +623,7 @@ redact_sensitive_args({
 ## Open Questions for Future Phases
 
 ### Phase 2 (UI Ticker)
+
 1. **Per-tool preview fields**: Should we create a registry mapping tool names to safe fields?
    - Example: `ssh_exec → {host, command[:120]}`
    - Would avoid generic redaction complexity
@@ -586,6 +632,7 @@ redact_sensitive_args({
 2. **Event buffering**: Should we batch events for performance, or stream individually?
 
 ### Phase 3 (Roundabout Loop)
+
 1. **Concurrent workers**: If supervisor spawns multiple workers, do we have nested roundabouts or combined monitoring?
 
 2. **Worker-to-supervisor communication**: Can a worker explicitly signal "I'm stuck, need help"? Or purely observation-based?
@@ -593,6 +640,7 @@ redact_sensitive_args({
 3. **Intervention depth**: Beyond cancel, can supervisor send instructions to running worker?
 
 ### Phase 5 (Fail-Fast)
+
 1. **Configuration checks**: Where should these live? In tool definitions or as decorators?
 
 2. **Error messages**: Should we use a standard format for "not configured" errors?
@@ -602,16 +650,19 @@ redact_sensitive_args({
 ## Testing Strategy
 
 ### Unit Tests (63 tests)
+
 - Fast, isolated tests for individual components
 - Mock event bus where needed
 - Focus on edge cases and regressions
 
 ### Integration Tests (TODO - Phase 2)
+
 - End-to-end worker execution with event verification
 - Real event bus, real tools
 - Verify events reach SSE subscribers
 
 ### Manual Testing
+
 - Debug scripts in `apps/zerg/backend/scripts/` (cleaned up after verification)
 - Used to validate contextvars propagation and callback behavior
 
@@ -636,6 +687,7 @@ redact_sensitive_args({
 ### Memory Overhead
 
 `WorkerContext.tool_calls` list grows with tool usage:
+
 - ~200 bytes per ToolCall
 - Cleared when worker completes
 - Typical worker: 5-10 tool calls → ~2KB
@@ -655,6 +707,7 @@ redact_sensitive_args({
 ### Soon: Phase 5 (Fail-Fast Tools)
 
 1. Add configuration checks to `ssh_exec`:
+
    ```python
    def ssh_exec(host: str, command: str) -> dict:
        if not settings.SSH_ENABLED or not settings.SSH_KEY:
@@ -675,16 +728,20 @@ Implement the 5s monitoring cycle in supervisor tools.
 ## References
 
 ### Original Specs
+
 - [`docs/specs/worker-supervision-roundabout.md`](./worker-supervision-roundabout.md) - Full architecture
 - [`docs/specs/super-siri-architecture.md`](./super-siri-architecture.md) - Overall system design
 
 ### Related Code
+
 - `apps/zerg/backend/zerg/services/worker_artifact_store.py` - Disk persistence
 - `apps/zerg/backend/zerg/tools/builtin/supervisor_tools.py` - Supervisor capabilities
 - `apps/zerg/backend/zerg/tools/error_envelope.py` - Standardized error format
 
 ### Debug Scripts (Archived)
+
 Debug scripts were created to understand LangGraph/LangChain internals:
+
 - `debug_langgraph_callbacks.py` - Tested callback firing
 - `debug_worker_events.py` - Prototype for event emission pattern
 
@@ -709,6 +766,7 @@ Both deleted after verification (knowledge captured in this doc).
 ## Status: Phase 1 COMPLETE ✅
 
 **What works now**:
+
 - Workers emit real-time tool events
 - Events contain safe, redacted payloads
 - Error detection works for all envelope formats

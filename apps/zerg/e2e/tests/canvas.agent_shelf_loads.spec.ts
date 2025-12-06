@@ -23,13 +23,13 @@ test('Agent shelf loads and displays agents on canvas', async ({ page }) => {
   // 4: Wait (max 10s) until at least one agent-pill is rendered — real agents loaded
   const agentPills = agentShelf.locator('.agent-pill');
   await expect(agentPills.first()).toBeVisible({ timeout: 10000 });
-  
+
   // 5: Optionally validate correct agent pill(s) are visible and not loading/empty
   // If "No agents available" or "Loading agents..." is present, fail
   const shelfText = await agentShelf.textContent();
   expect(shelfText).not.toContain('Loading agents...');
   expect(shelfText).not.toContain('No agents available');
-  
+
   // 6: Optionally (re)visit dashboard and back to canvas to verify shelf rerenders
   // const dashboardTab = page.locator('[data-testid="global-dashboard-tab"]');
   // await dashboardTab.click();

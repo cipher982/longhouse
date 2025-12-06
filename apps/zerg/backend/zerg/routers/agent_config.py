@@ -42,4 +42,3 @@ def read_container_policy() -> ContainerPolicyResponse:
         timeout_secs=settings.container_timeout_secs,
         seccomp_profile=settings.container_seccomp_profile,
     )
-

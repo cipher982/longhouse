@@ -3,6 +3,7 @@
 ## Problem
 
 We encountered unstyled UI elements in production where developers added `className` attributes to JSX elements but forgot to add corresponding CSS rules. This led to:
+
 - **Message action buttons** (copy button) appearing as plain text
 - **Tool buttons** (workflow, export) lacking proper styling
 - Poor user experience and unprofessional appearance
@@ -16,17 +17,20 @@ We've implemented a multi-layered validation system to catch missing CSS classes
 A Node.js script that scans the codebase for className usage and validates against defined CSS rules.
 
 **Usage:**
+
 ```bash
 npm run validate:css
 ```
 
 **What it does:**
+
 - Scans all `.tsx` and `.jsx` files in `apps/zerg/frontend-web/src`
 - Extracts className values (including from `clsx` calls)
 - Parses all `.css` files in `apps/zerg/frontend-web/src/styles`
 - Reports any className that's used but not defined
 
 **Exit codes:**
+
 - `0` - All classes are defined ✅
 - `1` - Found undefined classes ❌
 
@@ -35,12 +39,14 @@ npm run validate:css
 Playwright tests that validate styling at runtime in a real browser environment.
 
 **Usage:**
+
 ```bash
 cd apps/zerg/e2e
 npx playwright test tests/styling-validation.spec.ts
 ```
 
 **What it validates:**
+
 - Interactive elements have proper cursor styles
 - Buttons have visible backgrounds and borders
 - Hover states work correctly
@@ -50,11 +56,13 @@ npx playwright test tests/styling-validation.spec.ts
 ### 3. Combined Validation
 
 Run all validation checks together:
+
 ```bash
 npm run validate:all
 ```
 
 This runs:
+
 1. CSS class validation
 2. Type contract checks
 3. Other validation scripts
@@ -77,11 +85,13 @@ To prevent this issue in the future, add to your CI pipeline:
 ## Development Workflow
 
 ### Before committing:
+
 ```bash
 npm run validate:all
 ```
 
 ### When adding new UI elements:
+
 1. Add the JSX with className
 2. Add corresponding CSS rules to appropriate stylesheet
 3. Run `npm run validate:css` to verify
@@ -113,6 +123,7 @@ All new UI elements should use design tokens from `styles/tokens.css`:
 ## Stylesheet Organization
 
 Follow the existing pattern:
+
 - **Component-specific styles**: Add to relevant file in `styles/css/`
 - **Page-specific styles**: Add to page CSS file (e.g., `chat.css`, `dashboard.css`)
 - **Reusable components**: Consider adding to `styles/css/components/`
@@ -121,6 +132,7 @@ Follow the existing pattern:
 ## Common Patterns
 
 ### Button styling
+
 ```css
 .my-action-btn {
   background: transparent;
@@ -142,7 +154,9 @@ Follow the existing pattern:
 ```
 
 ### Interactive elements
+
 Always include:
+
 - `cursor: pointer` for clickable elements
 - Hover states with `transition` for smooth animations
 - Disabled states with reduced opacity
@@ -153,6 +167,7 @@ Always include:
 ### Script reports false positives
 
 Add className patterns to `IGNORE_PATTERNS` in `validate-css-classes.js`:
+
 ```javascript
 const IGNORE_PATTERNS = [
   /^clsx$/,
@@ -187,6 +202,7 @@ const IGNORE_PATTERNS = [
 ## History
 
 **Fixed Elements (2025-10-26):**
+
 - `.message-action-btn` - Copy message button in chat interface (ChatPage.tsx:744)
 - `.tool-btn` - Workflow and export buttons in chat tools (ChatPage.tsx:782, 790)
 - `.thread-title-input` - Thread title editing input

@@ -3,23 +3,26 @@
 Running log for the Canvas UX refactor (Phases 1–8). Use this to track decisions, quirks, blockers, and test coverage as the work proceeds.
 
 ## Meta
+
 - **Start date:** 2025-10-10
 - **Working session:** React canvas layout + UX rebuild
 - **Notes:** Keep entries concise; mark follow-ups with `TODO`.
 
 ## Phase Tracker
-| Phase | Title | Status | Notes |
-|-------|-------|--------|-------|
-| 1 | Restore Layout Structure | Completed | Tool palette nested inside shelf; npm run build ✅. |
-| 2 | Shelf UX Enhancements | Completed | Added search, collapsible sections, recently-used shelf; npm run build ✅. |
-| 3 | Canvas Interaction Improvements | Completed | Snap/grid toggles, marquee selection, node context menu MVP; npm run build ✅. |
-| 4 | Logging & Execution Panel Rework | Completed | Logs moved to right-hand drawer with responsive layout; build green. |
-| 5 | Visual Polish & Feedback | Completed | Canvas save banner, drawer styling polish, hover/toggle refinements; build rerun. |
-| 6 | Keyboard & Accessibility | Completed | Shortcut modal, aria attributes, drag announcements; build rerun. |
-| 7 | Testing & QA | Completed | npm run test / lint attempted; blocked by missing test env + eslint config whitespace (documented). |
-| 8 | Rollout Sequencing | Completed | Documented final checks: regenerate Storybook, rerun e2e/contract tests before deploy, Coolify redeploy with reset. |
+
+| Phase | Title                            | Status    | Notes                                                                                                               |
+| ----- | -------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1     | Restore Layout Structure         | Completed | Tool palette nested inside shelf; npm run build ✅.                                                                 |
+| 2     | Shelf UX Enhancements            | Completed | Added search, collapsible sections, recently-used shelf; npm run build ✅.                                          |
+| 3     | Canvas Interaction Improvements  | Completed | Snap/grid toggles, marquee selection, node context menu MVP; npm run build ✅.                                      |
+| 4     | Logging & Execution Panel Rework | Completed | Logs moved to right-hand drawer with responsive layout; build green.                                                |
+| 5     | Visual Polish & Feedback         | Completed | Canvas save banner, drawer styling polish, hover/toggle refinements; build rerun.                                   |
+| 6     | Keyboard & Accessibility         | Completed | Shortcut modal, aria attributes, drag announcements; build rerun.                                                   |
+| 7     | Testing & QA                     | Completed | npm run test / lint attempted; blocked by missing test env + eslint config whitespace (documented).                 |
+| 8     | Rollout Sequencing               | Completed | Documented final checks: regenerate Storybook, rerun e2e/contract tests before deploy, Coolify redeploy with reset. |
 
 ## Session Notes
+
 - _2025-10-10 18:45_ – Created refactor log and initialized tracker.
 - _2025-10-10 19:05_ – Phase 1 complete; updated JSX/CSS and `npm run build`.
 - _2025-10-10 19:40_ – Phase 2 complete; shelf search/collapse/recent items added and build passed.

@@ -27,13 +27,13 @@ echo "=== Migration Log $(date) ===" > "$MIGRATION_LOG"
     echo "Alembic module check:"
     python -c 'import alembic; print(f"Alembic version: {alembic.__version__}")' 2>&1 || echo 'ALEMBIC NOT FOUND'
     echo "✅ Runtime validation completed"
-    
+
     echo "Running alembic upgrade head..."
     python -m alembic upgrade head 2>&1 || {
         echo "❌ Migration failed with exit code $?"
         echo "Migration FAILED - server starting anyway"
     }
-    
+
     echo "✅ Migration process complete"
 } 2>&1 | tee "$MIGRATION_LOG"
 

@@ -47,11 +47,11 @@ export function TrustSection() {
 
         <div className="landing-faq-list">
           {faqs.map((faq, index) => (
-            <div 
-              key={index} 
+            <div
+              key={index}
               className={`landing-faq-item ${openIndex === index ? 'open' : ''}`}
             >
-              <button 
+              <button
                 className="landing-faq-question"
                 onClick={() => toggleFAQ(index)}
                 aria-expanded={openIndex === index}
@@ -94,4 +94,3 @@ export function TrustSection() {
     </section>
   );
 }
-

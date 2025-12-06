@@ -140,30 +140,30 @@ def test_security_filtering(credential_context, temp_artifact_path, db_session, 
 def test_security_read_access(credential_context, temp_artifact_path, db_session, test_user):
     """Test that users cannot read artifacts of other users' workers."""
     from zerg.connectors.resolver import CredentialResolver
-    
+
     # 1. Create worker as User A
     res_spawn = spawn_worker(task="Secret Task", model=TEST_WORKER_MODEL)
     lines = res_spawn.split("\n")
     worker_line = [line for line in lines if "Worker" in line][0]
     worker_id = worker_line.split()[1]
-    
+
     # 2. Switch to User B
     user_b_id = test_user.id + 999
     resolver_b = CredentialResolver(agent_id=2, db=db_session, owner_id=user_b_id)
     set_credential_resolver(resolver_b)
-    
+
     # 3. Attempt to read result
     res_read = read_worker_result(worker_id)
     assert "Access denied" in res_read or "Error" in res_read
-    
+
     # 4. Attempt to read file
     res_file = read_worker_file(worker_id, "metadata.json")
     assert "Access denied" in res_file or "Error" in res_file
-    
+
     # 5. Attempt to get metadata
     res_meta = get_worker_metadata(worker_id)
     assert "Access denied" in res_meta or "Error" in res_meta
-    
+
     # 6. Attempt to grep
     res_grep = grep_workers("Secret")
     assert "No matches found" in res_grep

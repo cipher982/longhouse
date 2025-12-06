@@ -39,12 +39,12 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
     <section className="landing-hero">
       <div className="landing-hero-content">
         <SwarmLogo size={100} className="landing-hero-logo" />
-        
+
         <h1 className="landing-hero-headline">
           Your own <span className="gradient-text">super-Siri</span> for email,
           <br />health, chats, and home.
         </h1>
-        
+
         <p className="landing-hero-subhead">
           Link your health data, location, inboxes, chats, and smart home into one brain.
           Get one place where your AI sees everything and quietly handles the annoying stuff.
@@ -61,8 +61,8 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
 
         {/* Hero visual - Connected AI brain */}
         <div className="landing-hero-visual">
-          <img 
-            src="/images/landing/hero-orb.png" 
+          <img
+            src="/images/landing/hero-orb.png"
             alt="AI brain connected to your apps - health, email, home, calendar, and more"
             className="landing-hero-image"
           />
@@ -79,10 +79,10 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
             <SwarmLogo size={48} className="landing-login-logo" />
             <h2>Welcome to Swarmlet</h2>
             <p className="landing-login-subtext">Sign in to start building your personal AI</p>
-            
+
             <div className="landing-login-buttons">
               <GoogleSignInButtonWrapper />
-              
+
               {config.isDevelopment && (
                 <>
                   <div className="landing-login-divider">
@@ -158,4 +158,3 @@ function GoogleSignInButtonWrapper() {
     </div>
   );
 }
-

@@ -4,8 +4,8 @@
    ============================================================ */
 
 /* Import particle background */
-@import url('./css/particle.css');
-@import url('./css/buttons.css');
+@import url("./css/particle.css");
+@import url("./css/buttons.css");
 
 /* --------------------------------------------------------
    Base Layout
@@ -41,8 +41,8 @@
   height: 800px;
   background: radial-gradient(
     circle,
-    rgba(99, 102, 241, 0.15) 0%,
-    rgba(139, 92, 246, 0.08) 30%,
+    rgb(99 102 241 / 15%) 0%,
+    rgb(139 92 246 / 8%) 30%,
     transparent 70%
   );
   pointer-events: none;
@@ -63,8 +63,16 @@
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 0.6; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.05); }
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
 }
 
 /* --------------------------------------------------------
@@ -121,6 +129,7 @@
     opacity: 0;
     transform: translateY(30px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -129,7 +138,7 @@
 
 .landing-hero-logo {
   margin-bottom: var(--space-8);
-  filter: drop-shadow(0 0 40px rgba(139, 92, 246, 0.4));
+  filter: drop-shadow(0 0 40px rgb(139 92 246 / 40%));
 }
 
 .landing-hero-headline {
@@ -142,8 +151,12 @@
 }
 
 .gradient-text {
-  background: linear-gradient(135deg, var(--color-brand-primary) 0%, #a78bfa 50%, var(--color-brand-secondary) 100%);
-  -webkit-background-clip: text;
+  background: linear-gradient(
+    135deg,
+    var(--color-brand-primary) 0%,
+    #a78bfa 50%,
+    var(--color-brand-secondary) 100%
+  );
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
@@ -172,7 +185,7 @@
 }
 
 .landing-cta-main:hover {
-  box-shadow: 0 0 32px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 32px rgb(99 102 241 / 40%);
   transform: translateY(-2px);
 }
 
@@ -196,7 +209,7 @@
 .landing-login-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.8);
+  background: rgb(0 0 0 / 80%);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -206,8 +219,13 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .landing-login-modal {
@@ -228,6 +246,7 @@
     opacity: 0;
     transform: translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -295,7 +314,7 @@
 
 .landing-login-divider::before,
 .landing-login-divider::after {
-  content: '';
+  content: "";
   flex: 1;
   height: 1px;
   background: var(--color-border-subtle);
@@ -314,7 +333,13 @@
 
 .landing-pas {
   padding: var(--space-16) 0;
-  background: linear-gradient(180deg, transparent 0%, var(--color-surface-section) 20%, var(--color-surface-section) 80%, transparent 100%);
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--color-surface-section) 20%,
+    var(--color-surface-section) 80%,
+    transparent 100%
+  );
 }
 
 .landing-pas-problem {
@@ -406,7 +431,9 @@
 .landing-scenario-card:hover {
   border-color: var(--color-brand-primary);
   transform: translateY(-4px);
-  box-shadow: var(--shadow-lg), 0 0 24px rgba(99, 102, 241, 0.1);
+  box-shadow:
+    var(--shadow-lg),
+    0 0 24px rgb(99 102 241 / 10%);
 }
 
 .landing-scenario-image {
@@ -423,7 +450,8 @@
   height: 100%;
   object-fit: cover;
   object-position: center;
-  transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
+  transition: transform var(--motion-duration-normal)
+    var(--motion-easing-standard);
 }
 
 .landing-scenario-card:hover .landing-scenario-image img {
@@ -459,7 +487,7 @@
 }
 
 .landing-scenario-steps li::before {
-  content: '→';
+  content: "→";
   position: absolute;
   left: 0;
   color: var(--color-brand-primary);
@@ -510,7 +538,11 @@
 
 .landing-diff-badge {
   display: inline-block;
-  background: linear-gradient(135deg, var(--color-brand-primary), var(--color-brand-secondary));
+  background: linear-gradient(
+    135deg,
+    var(--color-brand-primary),
+    var(--color-brand-secondary)
+  );
   color: white;
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-full);
@@ -608,7 +640,9 @@
   margin: var(--space-12) 0;
   border-radius: var(--radius-xl);
   overflow: hidden;
-  box-shadow: var(--shadow-lg), 0 0 48px rgba(99, 102, 241, 0.15);
+  box-shadow:
+    var(--shadow-lg),
+    0 0 48px rgb(99 102 241 / 15%);
   border: 1px solid var(--color-border-subtle);
 }
 
@@ -781,7 +815,8 @@
 .landing-faq-answer {
   max-height: 0;
   overflow: hidden;
-  transition: max-height var(--motion-duration-normal) var(--motion-easing-standard);
+  transition: max-height var(--motion-duration-normal)
+    var(--motion-easing-standard);
 }
 
 .landing-faq-item.open .landing-faq-answer {
@@ -930,7 +965,7 @@
    RESPONSIVE
    -------------------------------------------------------- */
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
   .landing-hero-headline {
     font-size: 2rem;
   }
@@ -981,7 +1016,7 @@
   }
 }
 
-@media (max-width: 480px) {
+@media (width <= 480px) {
   .landing-section-inner {
     padding: 0 var(--space-4);
   }
@@ -1007,4 +1042,3 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
-

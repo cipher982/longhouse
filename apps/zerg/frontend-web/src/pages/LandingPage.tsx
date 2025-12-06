@@ -43,7 +43,7 @@ export default function LandingPage() {
     <div className="landing-page">
       {/* Particle background */}
       <div className="particle-bg" />
-      
+
       {/* Gradient orb behind hero */}
       <div className="landing-glow-orb" />
 
@@ -60,4 +60,3 @@ export default function LandingPage() {
     </div>
   );
 }
-

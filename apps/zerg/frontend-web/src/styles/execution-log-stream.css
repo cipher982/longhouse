@@ -5,27 +5,24 @@
   flex-direction: column;
   height: 100%;
   background: #0a0a0a;
-  border: 1px solid #00ff0044;
+  border: 1px solid #0f04;
   border-radius: 4px;
   overflow: hidden;
-  font-family: 'Roboto Mono', 'Courier New', monospace;
+  font-family: "Roboto Mono", "Courier New", monospace;
   position: relative;
 }
 
 /* Subtle scanline effect */
 .execution-log-stream::before {
-  content: '';
+  content: "";
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: repeating-linear-gradient(
     0deg,
-    rgba(0, 255, 0, 0.02) 0px,
+    rgb(0 255 0 / 2%) 0,
     transparent 1px,
     transparent 2px,
-    rgba(0, 255, 0, 0.02) 3px
+    rgb(0 255 0 / 2%) 3px
   );
   pointer-events: none;
   z-index: 1;
@@ -37,7 +34,7 @@
   justify-content: space-between;
   padding: 8px 12px;
   background: #111;
-  border-bottom: 1px solid #00ff0044;
+  border-bottom: 1px solid #0f04;
   position: relative;
   z-index: 2;
 }
@@ -46,19 +43,25 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 1.5px;
-  color: #00ff00;
-  text-shadow: 0 0 8px rgba(0, 255, 0, 0.5);
+  color: #0f0;
+  text-shadow: 0 0 8px rgb(0 255 0 / 50%);
 }
 
 .log-stream-indicator {
-  color: #00ff00;
+  color: #0f0;
   font-size: 12px;
   animation: pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
 }
 
 .log-stream-container {
@@ -68,7 +71,7 @@
   position: relative;
   z-index: 2;
   scrollbar-width: thin;
-  scrollbar-color: #00ff0044 #0a0a0a;
+  scrollbar-color: #0f04 #0a0a0a;
 }
 
 .log-stream-container::-webkit-scrollbar {
@@ -80,12 +83,12 @@
 }
 
 .log-stream-container::-webkit-scrollbar-thumb {
-  background: #00ff0044;
+  background: #0f04;
   border-radius: 4px;
 }
 
 .log-stream-container::-webkit-scrollbar-thumb:hover {
-  background: #00ff0066;
+  background: #0f06;
 }
 
 .log-entry {
@@ -95,7 +98,7 @@
   margin-bottom: 4px;
   font-size: 12px;
   line-height: 1.6;
-  color: #00ff00;
+  color: #0f0;
   animation: fadeIn 0.2s ease-out;
 }
 
@@ -104,6 +107,7 @@
     opacity: 0;
     transform: translateY(-2px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -114,43 +118,43 @@
   flex-shrink: 0;
   opacity: 0.5;
   font-size: 10px;
-  color: #00ff00;
+  color: #0f0;
 }
 
 .log-prefix {
   flex-shrink: 0;
   font-weight: 600;
-  color: #00ff00;
+  color: #0f0;
 }
 
 .log-message {
   flex: 1;
   word-break: break-word;
-  color: #00ff00;
+  color: #0f0;
 }
 
 /* Different log types */
 .log-entry--execution {
-  color: #00ff00;
+  color: #0f0;
   font-weight: 600;
-  text-shadow: 0 0 6px rgba(0, 255, 0, 0.4);
+  text-shadow: 0 0 6px rgb(0 255 0 / 40%);
 }
 
 .log-entry--node {
-  color: #00cc00;
+  color: #0c0;
   padding-left: 12px;
 }
 
 .log-entry--output {
-  color: #009900;
+  color: #090;
   padding-left: 24px;
   opacity: 0.9;
 }
 
 .log-entry--error {
-  color: #ff3333;
+  color: #f33;
   font-weight: 600;
-  text-shadow: 0 0 6px rgba(255, 51, 51, 0.4);
+  text-shadow: 0 0 6px rgb(255 51 51 / 40%);
 }
 
 .log-empty {
@@ -165,21 +169,28 @@
 
 .log-hint {
   font-size: 11px;
-  color: #00ff00;
+  color: #0f0;
   opacity: 0.6;
 }
 
 .cursor-blink {
   display: inline-block;
-  color: #00ff00;
+  color: #0f0;
   animation: blink 1s step-end infinite;
   font-weight: 600;
-  text-shadow: 0 0 8px rgba(0, 255, 0, 0.6);
+  text-shadow: 0 0 8px rgb(0 255 0 / 60%);
 }
 
 @keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
 /* Reduced motion support */

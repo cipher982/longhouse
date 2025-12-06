@@ -44,7 +44,7 @@ test.describe('Chat Debug - Single Message Flow', () => {
     // Send a test message
     const testMessage = 'Debug test message';
     console.log(`📋 Step 4: Sending message: "${testMessage}"`);
-    
+
     await page.locator('.chat-input').fill(testMessage);
     console.log('✅ Message filled in chat input');
 
@@ -95,7 +95,7 @@ test.describe('Chat Debug - Single Message Flow', () => {
     // Try to find the message with more specific selectors
     const possibleSelectors = [
       '.message.user',
-      '.user-message', 
+      '.user-message',
       '.message[data-role="user"]',
       '.chat-message',
       '.thread-message'
@@ -125,13 +125,13 @@ test.describe('Chat Debug - Single Message Flow', () => {
     } catch (error) {
       console.log('❌ FAILED: Message not found in UI');
       console.log(`❌ Error: ${error.message}`);
-      
+
       // Log final state for debugging
       const finalContent = await messagesContainer.textContent();
       const finalHTML = await messagesContainer.innerHTML();
       console.log(`📋 Final container text: "${finalContent}"`);
       console.log(`📋 Final container HTML: ${finalHTML}`);
-      
+
       // Re-throw to fail the test
       throw error;
     }

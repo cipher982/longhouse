@@ -36,7 +36,7 @@ async def test_run_worker_simple_task(worker_runner, temp_store, db_session, tes
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -111,7 +111,7 @@ async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session,
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant with access to tools.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -156,7 +156,7 @@ async def test_run_worker_handles_errors(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -196,7 +196,7 @@ async def test_worker_message_persistence(worker_runner, temp_store, db_session,
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -241,7 +241,7 @@ async def test_worker_result_extraction(worker_runner, temp_store, db_session, t
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant. Always end your response with 'DONE'.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -279,7 +279,7 @@ async def test_worker_config_persistence(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -316,7 +316,7 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-        
+
     )
     db_session.commit()
     db_session.refresh(agent)

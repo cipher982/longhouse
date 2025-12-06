@@ -20,7 +20,7 @@ components:
     # -------------------------------------------------------------------------
     # Core Domain Models (these are your actual data structures)
     # -------------------------------------------------------------------------
-    
+
     WorkflowNode:
       type: object
       required: [id, type, position]
@@ -210,9 +210,9 @@ components:
 
 paths:
   # -------------------------------------------------------------------------
-  # Workflow Execution Operations  
+  # Workflow Execution Operations
   # -------------------------------------------------------------------------
-  
+
   /api/workflow-executions/by-workflow/{workflow_id}/reserve:
     post:
       summary: Reserve execution ID for workflow
@@ -297,7 +297,7 @@ paths:
   # -------------------------------------------------------------------------
   # Workflow Operations
   # -------------------------------------------------------------------------
-  
+
   /api/workflows:
     get:
       summary: List all workflows
@@ -310,7 +310,7 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Workflow'
-    
+
     post:
       summary: Create new workflow
       requestBody:
@@ -364,7 +364,7 @@ paths:
   # -------------------------------------------------------------------------
   # Agent Operations
   # -------------------------------------------------------------------------
-  
+
   /api/agents:
     get:
       summary: List agents
@@ -382,7 +382,7 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Agent'
-    
+
     post:
       summary: Create agent
       requestBody:
@@ -443,7 +443,7 @@ paths:
   # -------------------------------------------------------------------------
   # Thread Operations
   # -------------------------------------------------------------------------
-  
+
   /api/threads:
     get:
       summary: List threads

@@ -93,7 +93,7 @@ components:
             - generate_uuid
 
 # ---------------------------------------------------------------------------
-# Contract Validation Messages  
+# Contract Validation Messages
 # ---------------------------------------------------------------------------
 
   messages:

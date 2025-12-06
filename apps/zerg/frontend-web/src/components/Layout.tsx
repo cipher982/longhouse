@@ -68,9 +68,9 @@ function WelcomeHeader() {
         </button>
       )}
       <div className="header-brand">
-        <img 
-          src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png" 
-          alt="Swarmlet" 
+        <img
+          src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
+          alt="Swarmlet"
           className="header-logo"
         />
         <h1 id="header-title">Swarmlet</h1>
