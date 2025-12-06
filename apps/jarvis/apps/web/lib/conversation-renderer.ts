@@ -9,22 +9,38 @@ import { userIcon, assistantIcon } from '../assets/icons';
 export class ConversationRenderer {
   private messages: Message[] = [];
   private element: HTMLElement;
+  private scrollContainer: HTMLElement;
   private statusText: string | null = null;
   private statusMuted = false;
   private seqCounter = 0;
 
   constructor(element: HTMLElement) {
     this.element = element;
+    // Find the scrollable parent (.chat-container has overflow-y: auto)
+    this.scrollContainer = element.closest('.chat-container') as HTMLElement || element;
+  }
+
+  /**
+   * Check if user is near bottom (within threshold) - if so, auto-scroll is appropriate
+   */
+  private isNearBottom(threshold = 150): boolean {
+    const { scrollTop, scrollHeight, clientHeight } = this.scrollContainer;
+    return scrollHeight - scrollTop - clientHeight < threshold;
+  }
+
+  private scrollToBottom(): void {
+    this.scrollContainer.scrollTop = this.scrollContainer.scrollHeight;
   }
 
   /**
    * Add a message and re-render the conversation
+   * Always scrolls to bottom - new messages should be visible
    */
   addMessage(message: Message): void {
     // Assign monotonic sequence if not present to break timestamp ties
     if (message.seq == null) message.seq = ++this.seqCounter;
     this.messages.push(message);
-    this.renderConversation();
+    this.renderConversation(true); // Always scroll for new messages
   }
 
   /**
@@ -32,6 +48,9 @@ export class ConversationRenderer {
    * Uses targeted DOM updates during streaming to prevent flashing
    */
   updateMessage(id: string, updates: Partial<Message>): void {
+    // Check scroll position BEFORE DOM changes
+    const shouldScroll = this.isNearBottom();
+
     const messageIndex = this.messages.findIndex(m => m.id === id);
     if (messageIndex !== -1) {
       const existing = this.messages[messageIndex];
@@ -43,13 +62,13 @@ export class ConversationRenderer {
 
       // During streaming, do targeted DOM update to prevent flashing
       if (merged.isStreaming && updates.content !== undefined) {
-        const updated = this.updateStreamingContent(id, merged.content);
+        const updated = this.updateStreamingContent(id, merged.content, shouldScroll);
         if (updated) {
           return; // Skip full re-render
         }
       }
 
-      this.renderConversation();
+      this.renderConversation(shouldScroll);
     }
   }
 
@@ -57,7 +76,7 @@ export class ConversationRenderer {
    * Targeted update for streaming content - avoids full DOM replacement
    * Returns true if update was successful, false if full re-render needed
    */
-  private updateStreamingContent(id: string, content: string): boolean {
+  private updateStreamingContent(id: string, content: string, shouldScroll: boolean): boolean {
     const turnElement = this.element.querySelector(`[data-message-id="${id}"]`);
     if (!turnElement) return false;
 
@@ -68,8 +87,9 @@ export class ConversationRenderer {
     const escapedContent = this.escapeHtml(content);
     contentElement.innerHTML = `${escapedContent}<span class="cursor">▋</span>`;
 
-    // Scroll to bottom
-    this.element.scrollTop = this.element.scrollHeight;
+    if (shouldScroll) {
+      this.scrollToBottom();
+    }
 
     return true;
   }
@@ -150,7 +170,7 @@ export class ConversationRenderer {
    * Single render function - handles all message display
    * Uses incremental DOM updates to prevent flashing
    */
-  private renderConversation(): void {
+  private renderConversation(shouldScroll = true): void {
     if (this.messages.length === 0) {
       // Show status if available when there are no messages
       if (this.statusText) {
@@ -168,13 +188,6 @@ export class ConversationRenderer {
       const as = a.seq ?? 0;
       const bs = b.seq ?? 0;
       return as - bs;
-    });
-
-    // Get current DOM message IDs
-    const currentDomIds = new Set<string>();
-    this.element.querySelectorAll('[data-message-id]').forEach(el => {
-      const id = el.getAttribute('data-message-id');
-      if (id) currentDomIds.add(id);
     });
 
     // Build set of message IDs we need
@@ -215,8 +228,9 @@ export class ConversationRenderer {
       }
     }
 
-    // Scroll to bottom
-    this.element.scrollTop = this.element.scrollHeight;
+    if (shouldScroll) {
+      this.scrollToBottom();
+    }
   }
 
   /**
