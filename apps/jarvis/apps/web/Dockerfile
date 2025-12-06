@@ -13,6 +13,10 @@ COPY apps/jarvis/apps/web/package.json ./apps/jarvis/apps/web/package.json
 COPY apps/jarvis/apps/server/package.json ./apps/jarvis/apps/server/package.json
 COPY apps/jarvis/apps/native/package.json ./apps/jarvis/apps/native/package.json
 
+# Copy Zerg workspace package files (required for bun workspace resolution)
+COPY apps/zerg/frontend-web/package.json ./apps/zerg/frontend-web/package.json
+COPY apps/zerg/e2e/package.json ./apps/zerg/e2e/package.json
+
 # Install all dependencies
 RUN bun install
 
