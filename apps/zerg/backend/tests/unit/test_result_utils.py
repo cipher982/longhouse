@@ -11,6 +11,13 @@ from zerg.tools.result_utils import (
 class TestErrorDetection:
     """Tests for check_tool_error function."""
 
+    def test_none_input_handled(self):
+        """Test that None input is handled gracefully."""
+        is_error, error_msg = check_tool_error(None)
+
+        assert is_error is False
+        assert error_msg is None
+
     def test_detects_legacy_tool_error_prefix(self):
         """Test detection of <tool-error> prefix."""
         result = "<tool-error> Connection failed"
@@ -228,6 +235,17 @@ class TestSecretRedaction:
 
 class TestSafePreview:
     """Tests for safe_preview function."""
+
+    def test_none_input_handled(self):
+        """Test that None input is handled gracefully."""
+        preview = safe_preview(None)
+        assert preview == "(None)"
+
+    def test_dict_input_stringified(self):
+        """Test that dict input is converted to string."""
+        preview = safe_preview({"key": "value"})
+        assert "key" in preview
+        assert "value" in preview
 
     def test_short_content_unchanged(self):
         """Test that content shorter than max_len is unchanged."""
