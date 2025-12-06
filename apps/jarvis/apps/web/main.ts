@@ -246,7 +246,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     stateManager.setContext(currentContext);
     
     updateUIForContext(currentContext);
-    contextLoader.createContextSelector('context-selector-container');
+    // Context selector removed as only one context exists
+    // contextLoader.createContextSelector('context-selector-container');
     
     // Initialize Session Manager
     const sessionManager = createSessionManagerForContext(currentContext);
