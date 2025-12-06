@@ -88,16 +88,16 @@ repos:
     hooks:
       - id: stylelint
         name: stylelint (CSS)
-        language: node
+        language: system
         entry: npx --no-install stylelint
-        types: [css, scss]
+        files: \.(css|scss)$
         pass_filenames: true
 
       - id: prettier
         name: prettier (CSS/Markdown)
-        language: node
+        language: system
         entry: npx --no-install prettier --write
-        types: [css, scss, markdown]
+        files: \.(css|scss|md|markdown)$
 
 # ---------------------------------------------------------------------------
 # AsyncAPI validation – ensures spec stays syntactically correct
