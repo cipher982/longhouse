@@ -4,7 +4,7 @@
 @keyframes fadeInUp {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
@@ -25,13 +25,13 @@
 /* Pulse animation for active state */
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 20px rgba(139, 92, 246, 0);
+    box-shadow: 0 0 0 12px rgba(99, 102, 241, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
   }
 }
 
@@ -41,7 +41,7 @@
     filter: brightness(1);
   }
   50% {
-    filter: brightness(1.2);
+    filter: brightness(1.1);
   }
 }
 
@@ -103,14 +103,14 @@
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-10px);
+    transform: translateY(-5px);
   }
 }
 
 /* Scale in animation */
 @keyframes scaleIn {
   from {
-    transform: scale(0);
+    transform: scale(0.95);
     opacity: 0;
   }
   to {
@@ -142,13 +142,13 @@
 /* Connection pulse */
 @keyframes connectionPulse {
   0% {
-    opacity: 0.3;
+    opacity: 0.5;
   }
   50% {
     opacity: 1;
   }
   100% {
-    opacity: 0.3;
+    opacity: 0.5;
   }
 }
 
@@ -158,10 +158,10 @@
     transform: translateX(0);
   }
   10%, 30%, 50%, 70%, 90% {
-    transform: translateX(-5px);
+    transform: translateX(-4px);
   }
   20%, 40%, 60%, 80% {
-    transform: translateX(5px);
+    transform: translateX(4px);
   }
 }
 
@@ -177,19 +177,19 @@
 
 /* Transition utilities */
 .transition-all {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .transition-transform {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .transition-opacity {
-  transition: opacity 0.3s ease;
+  transition: opacity 0.2s ease;
 }
 
 .transition-colors {
-  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 /* Animation utilities */
@@ -198,7 +198,7 @@
 }
 
 .animate-fadeInUp {
-  animation: fadeInUp 0.4s ease;
+  animation: fadeInUp 0.3s ease;
 }
 
 .animate-pulse {
@@ -217,76 +217,9 @@
   animation: shimmer 2s infinite;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.05) 0%,
-    rgba(255, 255, 255, 0.1) 50%,
-    rgba(255, 255, 255, 0.05) 100%
+    var(--color-surface-card) 0%,
+    var(--color-surface-elevated) 50%,
+    var(--color-surface-card) 100%
   );
   background-size: 1000px 100%;
-}
-
-/* Legacy state classes (restored from styles-original.css) */
-
-/* Listening mode - adds glow when voice is active */
-.listening-mode .main-content {
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.5), 0 0 80px rgba(236, 72, 153, 0.25);
-  border-radius: 24px;
-  transition: box-shadow 0.2s ease;
-}
-
-.listening-mode .voice-button {
-  transform: scale(1.12);
-}
-
-/* Audio state visual feedback for microphone levels */
-body.audio-state-2 .main-content,
-body.audio-state-3 .main-content {
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35), 0 0 72px rgba(56, 189, 248, 0.25);
-  border-radius: 24px;
-  transition: box-shadow 0.2s ease;
-}
-
-body.audio-state-2 .voice-button:not(.listening),
-body.audio-state-3 .voice-button:not(.listening) {
-  background: linear-gradient(135deg, #22d3ee 0%, #3b82f6 100%);
-  box-shadow: var(--shadow-xl), 0 0 64px rgba(56, 189, 248, 0.4);
-}
-
-/* Listening indicator */
-.listening-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 8px 16px;
-  border-radius: 999px;
-  background: rgba(59, 130, 246, 0.15);
-  color: #dbeafe;
-  border: 1px solid rgba(59, 130, 246, 0.35);
-  font-size: 13px;
-  font-weight: 500;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  backdrop-filter: blur(8px);
-}
-
-.listening-indicator .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #60a5fa;
-  box-shadow: 0 0 10px #60a5fa;
-  animation: blink 1s infinite ease-in-out;
-}
-
-.listening-mode .listening-indicator {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* Radial visualizer canvas */
-#radialViz {
-  position: absolute;
-  pointer-events: none;
-  z-index: 2;
 }

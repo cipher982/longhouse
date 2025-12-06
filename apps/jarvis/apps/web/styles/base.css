@@ -1,43 +1,96 @@
-/* Base styles and CSS variables */
+/* Base styles and CSS variables - Synced with Zerg Dashboard */
 
 :root {
-  /* Spacing System - 8px base grid (Müller-Brockmann) */
-  --space-1: 4px;   /* 0.5 unit - tight spacing */
-  --space-2: 8px;   /* 1 unit - base grid */
-  --space-3: 16px;  /* 2 units - comfortable spacing */
-  --space-4: 24px;  /* 3 units - section spacing */
-  --space-5: 32px;  /* 4 units - major sections */
-  --space-6: 48px;  /* 6 units - large gaps */
-  --space-7: 64px;  /* 8 units - hero spacing */
-  --space-8: 96px;  /* 12 units - dramatic spacing */
+  /* ------------------------------------------------------------------ */
+  /*  Zerg Design System Tokens                                         */
+  /* ------------------------------------------------------------------ */
 
-  /* Typography Scale (Tschichold-inspired) */
-  --text-xs: 11px;   /* timestamps, meta */
-  --text-sm: 13px;   /* secondary text */
-  --text-base: 15px; /* body text */
-  --text-md: 17px;   /* emphasized body */
-  --text-lg: 20px;   /* section headers */
-  --text-xl: 28px;   /* page titles */
-  --text-2xl: 40px;  /* hero text */
+  /* Colors - Semantic */
+  --color-border-muted: rgba(250, 250, 250, 0.08);
+  --color-border-primary: #3f3f46;
+  --color-border-subtle: #27272a;
+  --color-brand-accent: #f59e0b;
+  --color-brand-primary: #6366f1;
+  --color-brand-primary-hover: #4f46e5;
+  --color-brand-secondary: #818cf8;
+  
+  --color-intent-error: #ef4444;
+  --color-intent-error-muted: rgba(239, 68, 68, 0.15);
+  --color-intent-success: #10b981;
+  --color-intent-success-muted: rgba(16, 185, 129, 0.15);
+  --color-intent-warning: #f59e0b;
+  --color-intent-warning-muted: rgba(245, 158, 11, 0.15);
 
-  /* Modern color palette */
-  --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-  --success-gradient: linear-gradient(135deg, #0ba360 0%, #3cba92 100%);
-  --bg-primary: #0a0e27;
-  --bg-secondary: #151935;
-  --bg-elevated: rgba(255, 255, 255, 0.05);
-  --glass-bg: rgba(255, 255, 255, 0.03);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --text-primary: #ffffff;
-  --text-secondary: rgba(255, 255, 255, 0.7);
-  --text-muted: rgba(255, 255, 255, 0.4);
-  --accent-purple: #8b5cf6;
-  --accent-pink: #ec4899;
-  --accent-blue: #3b82f6;
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
-  --shadow-glow: 0 0 40px rgba(139, 92, 246, 0.3);
-  --shadow-md: 0 12px 24px -6px rgba(0, 0, 0, 0.45);
+  /* Surfaces */
+  --color-surface-page: #09090b;       /* Main background (Zinc 950) */
+  --color-surface-secondary: #18181b;  /* Sidebar/Section (Zinc 900) */
+  --color-surface-card: #27272a;       /* Cards/Inputs (Zinc 800) */
+  --color-surface-elevated: #3f3f46;   /* Hover states (Zinc 700) */
+  --color-surface-overlay: rgba(0, 0, 0, 0.7);
+
+  /* Text */
+  --color-text-primary: #fafafa;       /* Zinc 50 */
+  --color-text-secondary: #a1a1aa;     /* Zinc 400 */
+  --color-text-muted: #71717a;         /* Zinc 500 */
+  --color-text-inverse: #09090b;
+
+  /* Spacing System */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+  --space-10: 64px;
+
+  /* Typography */
+  --font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  --font-size-xs: 0.75rem;    /* 12px */
+  --font-size-sm: 0.875rem;   /* 14px */
+  --font-size-base: 1rem;     /* 16px */
+  --font-size-lg: 1.125rem;   /* 18px */
+  --font-size-xl: 1.25rem;    /* 20px */
+  --font-size-2xl: 1.5rem;    /* 24px */
+  --font-size-3xl: 2rem;      /* 32px */
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+
+  /* ------------------------------------------------------------------ */
+  /*  Legacy Mappings (for compatibility during refactor)               */
+  /* ------------------------------------------------------------------ */
+  
+  --bg-primary: var(--color-surface-page);
+  --bg-secondary: var(--color-surface-secondary);
+  --bg-elevated: var(--color-surface-elevated);
+  --glass-bg: var(--color-surface-card); /* Removing glass, mapping to solid card */
+  --glass-border: var(--color-border-muted);
+  
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  
+  --accent-purple: var(--color-brand-primary);
+  --accent-pink: var(--color-brand-secondary);
+  --accent-blue: var(--color-brand-primary); /* Map to primary */
+  
+  --primary-gradient: linear-gradient(135deg, var(--color-brand-primary) 0%, var(--color-brand-secondary) 100%);
+  --secondary-gradient: linear-gradient(135deg, var(--color-surface-elevated) 0%, var(--color-surface-card) 100%);
 }
 
 /* Reset */
@@ -50,46 +103,37 @@
 html, body {
   min-height: 100vh;
   min-height: 100dvh;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-family-base);
   overflow: hidden;
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  background: var(--color-surface-page);
+  color: var(--color-text-primary);
   font-feature-settings: 'kern' 1, 'liga' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-size: 16px; /* Explicit base */
 }
 
 /* Scrollbar Styling */
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 *::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 4px;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  background: var(--color-surface-elevated);
+  border-radius: 3px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--color-border-primary);
 }
 
 /* Focus styles */
 *:focus-visible {
-  outline: 2px solid var(--accent-purple);
+  outline: 2px solid var(--color-brand-primary);
   outline-offset: 2px;
-}
-
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
 }

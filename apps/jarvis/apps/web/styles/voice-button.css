@@ -9,9 +9,9 @@
 }
 
 .mode-label {
-  font-size: var(--text-sm);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   user-select: none;
   transition: all 0.3s ease;
 }
@@ -19,18 +19,18 @@
 /* Toggle Switch */
 .mode-toggle {
   position: relative;
-  width: 52px;
-  height: 28px;
-  background: var(--glass-bg);
-  border: 2px solid var(--glass-border);
-  border-radius: 14px;
+  width: 48px;
+  height: 26px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-muted);
+  border-radius: 13px;
   cursor: pointer;
   transition: all 0.3s ease;
   padding: 0;
 }
 
 .mode-toggle:hover {
-  border-color: var(--accent-purple);
+  border-color: var(--color-brand-primary);
 }
 
 .mode-toggle-slider {
@@ -39,34 +39,27 @@
   left: 2px;
   width: 20px;
   height: 20px;
-  background: var(--text-muted);
+  background: var(--color-text-muted);
   border-radius: 50%;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Active state (Hands-free enabled) */
 .mode-toggle[aria-checked="true"] {
-  background: var(--accent-purple);
-  border-color: var(--accent-purple);
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
 }
 
 .mode-toggle[aria-checked="true"] .mode-toggle-slider {
-  left: 26px;
+  left: 24px;
   background: white;
 }
 
-/* Subtle glow for active mode label */
-/* PTT mode active (toggle is unchecked) */
-.mode-toggle-container:has(.mode-toggle[aria-checked="false"]) .mode-label:nth-child(1) {
-  color: var(--text-secondary);
-  text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
-}
-
-/* Hands-free mode active (toggle is checked) */
+/* Active Label Highlight */
+.mode-toggle-container:has(.mode-toggle[aria-checked="false"]) .mode-label:nth-child(1),
 .mode-toggle-container:has(.mode-toggle[aria-checked="true"]) .mode-label:nth-child(3) {
-  color: var(--text-secondary);
-  text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
+  color: var(--color-text-primary);
 }
 
 /* Voice Button Wrapper */
@@ -75,36 +68,36 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 24px; /* Space between button and text */
+  gap: var(--space-4);
   position: relative;
 }
 
-/* Main Voice Button - Hero Element with integrated state */
+/* Main Voice Button */
 .voice-button {
   position: relative;
-  width: 120px;
-  height: 120px;
+  width: 112px;
+  height: 112px;
   border-radius: 50%;
-  border: none;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(139, 92, 246, 0.1) 100%);
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-surface-card);
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* Removed padding and gap as text is now external */
-  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.2);
+  box-shadow: var(--shadow-md);
 }
 
 .voice-button:hover {
   transform: translateY(-2px);
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(139, 92, 246, 0.15) 100%);
-  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.3);
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-primary);
+  box-shadow: var(--shadow-lg);
 }
 
 .voice-button:active {
-  transform: scale(0.98);
+  transform: scale(0.96);
 }
 
 /* Animated ring for active state */
@@ -112,7 +105,7 @@
   position: absolute;
   inset: -4px;
   border-radius: 50%;
-  border: 3px solid var(--accent-purple);
+  border: 2px solid var(--color-brand-primary);
   opacity: 0;
   transition: opacity 0.3s ease;
   pointer-events: none;
@@ -120,24 +113,23 @@
 
 /* Icon inside button */
 .voice-icon {
-  color: var(--accent-purple);
+  color: var(--color-text-secondary);
   transition: all 0.3s ease;
   flex-shrink: 0;
-  width: 40px; /* Slightly larger icon since text is gone */
-  height: 40px;
+  width: 32px;
+  height: 32px;
 }
 
-/* Status text external to button */
+/* Status text */
 .voice-status-text {
-  font-size: var(--text-sm); /* Slightly larger */
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   text-align: center;
   transition: all 0.3s ease;
   line-height: 1.4;
   user-select: none;
-  letter-spacing: 0.5px; /* Technical feel */
-  height: 24px; /* Prevent layout shifts */
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -147,100 +139,81 @@
 
 /* Idle state (default) */
 .voice-button.idle {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0.05) 100%);
+  /* default styles apply */
 }
 
-/* Ready state - subtle glow */
+/* Ready state */
 .voice-button.ready {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(139, 92, 246, 0.12) 100%);
-  box-shadow: 0 4px 25px rgba(139, 92, 246, 0.3);
+  border-color: var(--color-brand-primary);
+  background: var(--color-surface-elevated);
 }
 
 .voice-button.ready .voice-icon {
-  color: var(--accent-purple);
-  filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.6));
+  color: var(--color-brand-primary);
 }
 
-/* Speaking/Listening state - active ring + pulse */
+/* Speaking/Listening state */
 .voice-button.speaking,
 .voice-button.listening {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(139, 92, 246, 0.2) 100%);
-  box-shadow: 0 8px 40px rgba(139, 92, 246, 0.5);
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+  box-shadow: var(--shadow-glow);
 }
 
 .voice-button.speaking .voice-button-ring,
 .voice-button.listening .voice-button-ring {
-  opacity: 1;
+  opacity: 0.5;
   animation: pulse-ring 2s ease-in-out infinite;
 }
 
 .voice-button.speaking .voice-icon,
 .voice-button.listening .voice-icon {
-  color: var(--accent-purple);
-  filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.8));
+  color: white;
 }
 
-/* Update status text color using sibling selector */
 .voice-button.speaking + .voice-status-text,
 .voice-button.listening + .voice-status-text {
-  color: var(--accent-purple); /* Match active state */
+  color: var(--color-brand-primary);
   font-weight: 600;
-  text-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
 }
 
-/* Responding state - different color */
+/* Responding state */
 .voice-button.responding {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(59, 130, 246, 0.15) 100%);
-  box-shadow: 0 6px 30px rgba(59, 130, 246, 0.4);
+  background: var(--color-surface-card);
+  border-color: var(--color-brand-secondary);
 }
 
 .voice-button.responding .voice-icon {
-  color: var(--accent-blue);
-  filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.7));
+  color: var(--color-brand-secondary);
+  animation: pulse-opacity 1.5s ease-in-out infinite;
 }
 
 .voice-button.responding + .voice-status-text {
-  color: var(--accent-blue); /* Match responding state */
+  color: var(--color-brand-secondary);
   font-weight: 600;
-  text-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
 }
 
 /* Pulse animation for active ring */
 @keyframes pulse-ring {
   0%, 100% {
     transform: scale(1);
-    opacity: 1;
+    opacity: 0.5;
   }
   50% {
-    transform: scale(1.05);
-    opacity: 0.7;
+    transform: scale(1.15);
+    opacity: 0;
   }
 }
 
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
 
-/* Responsive - smaller on mobile */
+/* Responsive */
 @media (max-width: 768px) {
   .voice-button {
     width: 96px;
     height: 96px;
-  }
-
-  .voice-icon {
-    width: 24px;
-    height: 24px;
-  }
-
-  .voice-status-text {
-    font-size: 10px;
-  }
-
-  .hands-free-button {
-    width: 32px;
-    height: 32px;
-  }
-
-  .hands-free-button svg {
-    width: 14px;
-    height: 14px;
   }
 }
