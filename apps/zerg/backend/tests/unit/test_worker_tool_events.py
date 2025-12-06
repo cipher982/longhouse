@@ -14,6 +14,7 @@ from zerg.context import get_worker_context
 from zerg.context import reset_worker_context
 from zerg.context import set_worker_context
 from zerg.events import EventType
+from zerg.tools.result_utils import redact_sensitive_args
 
 
 class TestWorkerToolEventEmission:
@@ -170,28 +171,29 @@ class TestEventTypeConstants:
         assert EventType.WORKER_TOOL_FAILED == "worker_tool_failed"
 
 
-class TestSecretRedaction:
-    """Tests for secret redaction in WorkerContext."""
+class TestSecretRedactionIntegration:
+    """Tests for secret redaction integration with WorkerContext."""
 
-    def test_worker_context_stores_redacted_args(self):
-        """Test that WorkerContext.tool_calls contains redacted arguments."""
+    def test_worker_context_with_real_redaction_function(self):
+        """Test that redact_sensitive_args properly redacts before storing."""
         ctx = WorkerContext(worker_id="test")
 
-        # Simulate what _call_tool_async does after redaction
+        # Raw args with secrets (what tool receives)
         raw_args = {
             "host": "example.com",
             "api_key": "sk-secret123",
             "token": "Bearer xyz",
         }
 
-        # Redact sensitive fields (simulating _redact_sensitive_args)
-        redacted_args = {
-            "host": "example.com",
-            "api_key": "[REDACTED]",
-            "token": "[REDACTED]",
-        }
+        # Actually call the real redaction function
+        redacted_args = redact_sensitive_args(raw_args)
 
-        # Record with redacted args (what we fixed)
+        # Verify redaction worked
+        assert redacted_args["host"] == "example.com"
+        assert redacted_args["api_key"] == "[REDACTED]"
+        assert redacted_args["token"] == "[REDACTED]"
+
+        # Record with redacted args (what _call_tool_async does)
         tool_call = ctx.record_tool_start(
             tool_name="send_email",
             tool_call_id="call_1",
@@ -201,25 +203,31 @@ class TestSecretRedaction:
         # Verify secrets are not in the preview
         assert "sk-secret123" not in tool_call.args_preview
         assert "Bearer xyz" not in tool_call.args_preview
-        assert "[REDACTED]" in tool_call.args_preview or tool_call.args_preview == ""
 
-    def test_nested_secret_redaction(self):
-        """Test that nested secrets are also redacted."""
+    def test_list_of_dicts_redaction_integration(self):
+        """Test that list-of-dict secrets are redacted (Slack/Discord case)."""
         ctx = WorkerContext(worker_id="test")
 
-        # Nested structure with secrets
-        redacted_args = {
-            "config": {
-                "api_key": "[REDACTED]",
-                "endpoint": "https://api.example.com",
-            },
-            "username": "test_user",
+        # Slack-style attachments with a secret in the list
+        raw_args = {
+            "attachments": [
+                {"title": "Status", "value": "OK"},
+                {"title": "token", "value": "sk-live-abc123"},
+            ],
         }
 
+        # Actually redact using the real function
+        redacted_args = redact_sensitive_args(raw_args)
+
+        # Verify the sensitive item was redacted
+        assert redacted_args["attachments"][0]["value"] == "OK"
+        assert redacted_args["attachments"][1]["value"] == "[REDACTED]"
+
+        # Record with redacted args
         tool_call = ctx.record_tool_start(
-            tool_name="api_call",
+            tool_name="send_slack_message",
             args=redacted_args,
         )
 
-        # The args_preview should contain [REDACTED], not the actual key
-        assert "[REDACTED]" in tool_call.args_preview or "api_key" in tool_call.args_preview
+        # The secret should not appear in the preview
+        assert "sk-live-abc123" not in tool_call.args_preview
