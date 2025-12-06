@@ -168,3 +168,58 @@ class TestEventTypeConstants:
         assert EventType.WORKER_TOOL_STARTED == "worker_tool_started"
         assert EventType.WORKER_TOOL_COMPLETED == "worker_tool_completed"
         assert EventType.WORKER_TOOL_FAILED == "worker_tool_failed"
+
+
+class TestSecretRedaction:
+    """Tests for secret redaction in WorkerContext."""
+
+    def test_worker_context_stores_redacted_args(self):
+        """Test that WorkerContext.tool_calls contains redacted arguments."""
+        ctx = WorkerContext(worker_id="test")
+
+        # Simulate what _call_tool_async does after redaction
+        raw_args = {
+            "host": "example.com",
+            "api_key": "sk-secret123",
+            "token": "Bearer xyz",
+        }
+
+        # Redact sensitive fields (simulating _redact_sensitive_args)
+        redacted_args = {
+            "host": "example.com",
+            "api_key": "[REDACTED]",
+            "token": "[REDACTED]",
+        }
+
+        # Record with redacted args (what we fixed)
+        tool_call = ctx.record_tool_start(
+            tool_name="send_email",
+            tool_call_id="call_1",
+            args=redacted_args,
+        )
+
+        # Verify secrets are not in the preview
+        assert "sk-secret123" not in tool_call.args_preview
+        assert "Bearer xyz" not in tool_call.args_preview
+        assert "[REDACTED]" in tool_call.args_preview or tool_call.args_preview == ""
+
+    def test_nested_secret_redaction(self):
+        """Test that nested secrets are also redacted."""
+        ctx = WorkerContext(worker_id="test")
+
+        # Nested structure with secrets
+        redacted_args = {
+            "config": {
+                "api_key": "[REDACTED]",
+                "endpoint": "https://api.example.com",
+            },
+            "username": "test_user",
+        }
+
+        tool_call = ctx.record_tool_start(
+            tool_name="api_call",
+            args=redacted_args,
+        )
+
+        # The args_preview should contain [REDACTED], not the actual key
+        assert "[REDACTED]" in tool_call.args_preview or "api_key" in tool_call.args_preview

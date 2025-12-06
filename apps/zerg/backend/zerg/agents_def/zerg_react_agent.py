@@ -320,7 +320,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             tool_record = ctx.record_tool_start(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                args=tool_args,  # Full args for internal tracking
+                args=safe_args,  # Redacted args (secrets masked)
             )
             try:
                 await event_bus.publish(
