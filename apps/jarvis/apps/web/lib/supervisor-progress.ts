@@ -38,7 +38,9 @@ export class SupervisorProgressUI {
   private isActive = false;
   private currentRunId: number | null = null;
   private workers: Map<number, WorkerState> = new Map();
+  private workersByWorkerId: Map<string, WorkerState> = new Map(); // Index for tool event lookups
   private unsubscribers: Array<() => void> = [];
+  private tickerInterval: number | null = null; // For live duration updates
 
   constructor() {
     this.subscribeToEvents();
@@ -150,6 +152,8 @@ export class SupervisorProgressUI {
     this.isActive = true;
     this.currentRunId = runId;
     this.workers.clear();
+    this.workersByWorkerId.clear();
+    this.startTicker();
     console.log(`[SupervisorProgress] Started run ${runId}: ${task}`);
     this.render();
   }
@@ -186,6 +190,10 @@ export class SupervisorProgressUI {
     if (worker) {
       worker.status = 'running';
       worker.workerId = workerId;
+      // Index by workerId for tool event lookups
+      if (workerId) {
+        this.workersByWorkerId.set(workerId, worker);
+      }
     }
     console.log(`[SupervisorProgress] Worker started: ${jobId}`);
     this.render();
@@ -218,69 +226,107 @@ export class SupervisorProgressUI {
   }
 
   /**
-   * Find worker by workerId (filesystem artifact ID)
+   * Find or create worker by workerId (filesystem artifact ID).
+   * Creates an orphan worker if tool events arrive before worker_started.
    */
-  private findWorkerByWorkerId(workerId: string): WorkerState | undefined {
-    for (const worker of this.workers.values()) {
-      if (worker.workerId === workerId) {
-        return worker;
+  private findOrCreateWorkerByWorkerId(workerId: string): WorkerState {
+    // Fast path: lookup in index
+    let worker = this.workersByWorkerId.get(workerId);
+    if (worker) return worker;
+
+    // Slow path: scan workers (handles race where index wasn't updated yet)
+    for (const w of this.workers.values()) {
+      if (w.workerId === workerId) {
+        this.workersByWorkerId.set(workerId, w);
+        return w;
       }
     }
-    return undefined;
+
+    // No worker found - create an orphan worker for this workerId
+    // This handles the case where tool events arrive before worker_started
+    console.warn(`[SupervisorProgress] Creating orphan worker for workerId: ${workerId}`);
+    const orphanJobId = -Date.now(); // Negative ID to avoid collisions
+    worker = {
+      jobId: orphanJobId,
+      workerId,
+      task: 'Worker (pending details)',
+      status: 'running',
+      startedAt: Date.now(),
+      toolCalls: new Map(),
+    };
+    this.workers.set(orphanJobId, worker);
+    this.workersByWorkerId.set(workerId, worker);
+    return worker;
   }
 
   /**
    * Handle tool started
    */
   private handleToolStarted(workerId: string, toolCallId: string, toolName: string, argsPreview?: string): void {
-    const worker = this.findWorkerByWorkerId(workerId);
-    if (worker) {
-      worker.toolCalls.set(toolCallId, {
-        toolCallId,
-        toolName,
-        status: 'running',
-        argsPreview,
-        startedAt: Date.now(),
-      });
-      console.log(`[SupervisorProgress] Tool started: ${toolName} (${toolCallId})`);
-      this.render();
-    }
+    const worker = this.findOrCreateWorkerByWorkerId(workerId);
+    worker.toolCalls.set(toolCallId, {
+      toolCallId,
+      toolName,
+      status: 'running',
+      argsPreview,
+      startedAt: Date.now(),
+    });
+    console.log(`[SupervisorProgress] Tool started: ${toolName} (${toolCallId})`);
+    this.render();
   }
 
   /**
    * Handle tool completed
    */
   private handleToolCompleted(workerId: string, toolCallId: string, durationMs: number, resultPreview?: string): void {
-    const worker = this.findWorkerByWorkerId(workerId);
-    if (worker) {
-      const toolCall = worker.toolCalls.get(toolCallId);
-      if (toolCall) {
-        toolCall.status = 'completed';
-        toolCall.durationMs = durationMs;
-        toolCall.resultPreview = resultPreview;
-        toolCall.completedAt = Date.now();
-        console.log(`[SupervisorProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
-        this.render();
-      }
+    const worker = this.findOrCreateWorkerByWorkerId(workerId);
+    let toolCall = worker.toolCalls.get(toolCallId);
+
+    // Create entry if tool_started was missed
+    if (!toolCall) {
+      console.warn(`[SupervisorProgress] Tool completed without prior started: ${toolCallId}`);
+      toolCall = {
+        toolCallId,
+        toolName: 'unknown',
+        status: 'running',
+        startedAt: Date.now() - durationMs, // Backdate based on duration
+      };
+      worker.toolCalls.set(toolCallId, toolCall);
     }
+
+    toolCall.status = 'completed';
+    toolCall.durationMs = durationMs;
+    toolCall.resultPreview = resultPreview;
+    toolCall.completedAt = Date.now();
+    console.log(`[SupervisorProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
+    this.render();
   }
 
   /**
    * Handle tool failed
    */
   private handleToolFailed(workerId: string, toolCallId: string, durationMs: number, error: string): void {
-    const worker = this.findWorkerByWorkerId(workerId);
-    if (worker) {
-      const toolCall = worker.toolCalls.get(toolCallId);
-      if (toolCall) {
-        toolCall.status = 'failed';
-        toolCall.durationMs = durationMs;
-        toolCall.error = error;
-        toolCall.completedAt = Date.now();
-        console.log(`[SupervisorProgress] Tool failed: ${toolCall.toolName} - ${error}`);
-        this.render();
-      }
+    const worker = this.findOrCreateWorkerByWorkerId(workerId);
+    let toolCall = worker.toolCalls.get(toolCallId);
+
+    // Create entry if tool_started was missed
+    if (!toolCall) {
+      console.warn(`[SupervisorProgress] Tool failed without prior started: ${toolCallId}`);
+      toolCall = {
+        toolCallId,
+        toolName: 'unknown',
+        status: 'running',
+        startedAt: Date.now() - durationMs, // Backdate based on duration
+      };
+      worker.toolCalls.set(toolCallId, toolCall);
     }
+
+    toolCall.status = 'failed';
+    toolCall.durationMs = durationMs;
+    toolCall.error = error;
+    toolCall.completedAt = Date.now();
+    console.log(`[SupervisorProgress] Tool failed: ${toolCall.toolName} - ${error}`);
+    this.render();
   }
 
   /**
@@ -312,7 +358,37 @@ export class SupervisorProgressUI {
     this.isActive = false;
     this.currentRunId = null;
     this.workers.clear();
+    this.workersByWorkerId.clear();
+    this.stopTicker();
     this.render();
+  }
+
+  /**
+   * Start the ticker for live duration updates on running tools
+   */
+  private startTicker(): void {
+    if (this.tickerInterval) return; // Already running
+
+    this.tickerInterval = window.setInterval(() => {
+      // Only re-render if there are running tools
+      const hasRunningTools = Array.from(this.workers.values()).some(worker =>
+        Array.from(worker.toolCalls.values()).some(tool => tool.status === 'running')
+      );
+
+      if (hasRunningTools) {
+        this.render();
+      }
+    }, 500); // Update every 500ms for smooth duration display
+  }
+
+  /**
+   * Stop the ticker
+   */
+  private stopTicker(): void {
+    if (this.tickerInterval) {
+      clearInterval(this.tickerInterval);
+      this.tickerInterval = null;
+    }
   }
 
   /**
@@ -479,6 +555,7 @@ export class SupervisorProgressUI {
   destroy(): void {
     this.unsubscribers.forEach(unsub => unsub());
     this.unsubscribers = [];
+    this.stopTicker();
     this.clear();
   }
 }

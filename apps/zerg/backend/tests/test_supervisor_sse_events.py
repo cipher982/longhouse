@@ -214,3 +214,52 @@ async def test_supervisor_sse_filters_tool_events_by_owner():
         assert payload["payload"]["tool_call_id"] == "call_002"
     finally:
         await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_sse_requires_run_id_for_tool_events():
+    """SSE generator should drop tool events that are missing run_id."""
+    run_id = 123
+    owner_id = 456
+
+    gen = _supervisor_event_generator(run_id, owner_id)
+
+    try:
+        # Initial connection frame
+        connected = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+        assert connected["event"] == "connected"
+
+        # Publish a tool event WITHOUT run_id - should be dropped
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": "worker_tool_started",
+                "owner_id": owner_id,  # Has owner but no run_id
+                "worker_id": "some-worker",
+                "tool_name": "ssh_exec",
+                "tool_call_id": "call_001",
+            },
+        )
+
+        # Now publish an event WITH run_id - this should arrive
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": "worker_tool_started",
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "worker_id": "proper-worker",
+                "tool_name": "ssh_exec",
+                "tool_call_id": "call_002",
+            },
+        )
+
+        # Should receive only the second event (with run_id)
+        event = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+        assert event["event"] == "worker_tool_started"
+
+        payload = json.loads(event["data"])
+        assert payload["payload"]["worker_id"] == "proper-worker"
+        assert payload["payload"]["tool_call_id"] == "call_002"
+    finally:
+        await gen.aclose()
