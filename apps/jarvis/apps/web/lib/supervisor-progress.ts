@@ -134,13 +134,13 @@ export class SupervisorProgressUI {
 
     this.unsubscribers.push(
       eventBus.on('worker:tool_completed', (data) => {
-        this.handleToolCompleted(data.workerId, data.toolCallId, data.durationMs, data.resultPreview);
+        this.handleToolCompleted(data.workerId, data.toolCallId, data.toolName, data.durationMs, data.resultPreview);
       })
     );
 
     this.unsubscribers.push(
       eventBus.on('worker:tool_failed', (data) => {
-        this.handleToolFailed(data.workerId, data.toolCallId, data.durationMs, data.error);
+        this.handleToolFailed(data.workerId, data.toolCallId, data.toolName, data.durationMs, data.error);
       })
     );
   }
@@ -263,6 +263,11 @@ export class SupervisorProgressUI {
    * Handle tool started
    */
   private handleToolStarted(workerId: string, toolCallId: string, toolName: string, argsPreview?: string): void {
+    if (!workerId) {
+      console.warn('[SupervisorProgress] Dropping tool_started with empty workerId');
+      return;
+    }
+
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
     worker.toolCalls.set(toolCallId, {
       toolCallId,
@@ -278,7 +283,12 @@ export class SupervisorProgressUI {
   /**
    * Handle tool completed
    */
-  private handleToolCompleted(workerId: string, toolCallId: string, durationMs: number, resultPreview?: string): void {
+  private handleToolCompleted(workerId: string, toolCallId: string, toolName: string, durationMs: number, resultPreview?: string): void {
+    if (!workerId) {
+      console.warn('[SupervisorProgress] Dropping tool_completed with empty workerId');
+      return;
+    }
+
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
     let toolCall = worker.toolCalls.get(toolCallId);
 
@@ -287,11 +297,15 @@ export class SupervisorProgressUI {
       console.warn(`[SupervisorProgress] Tool completed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
-        toolName: 'unknown',
+        toolName: toolName || 'unknown',
         status: 'running',
         startedAt: Date.now() - durationMs, // Backdate based on duration
       };
       worker.toolCalls.set(toolCallId, toolCall);
+    }
+
+    if (toolName && toolCall.toolName === 'unknown') {
+      toolCall.toolName = toolName;
     }
 
     toolCall.status = 'completed';
@@ -305,7 +319,12 @@ export class SupervisorProgressUI {
   /**
    * Handle tool failed
    */
-  private handleToolFailed(workerId: string, toolCallId: string, durationMs: number, error: string): void {
+  private handleToolFailed(workerId: string, toolCallId: string, toolName: string, durationMs: number, error: string): void {
+    if (!workerId) {
+      console.warn('[SupervisorProgress] Dropping tool_failed with empty workerId');
+      return;
+    }
+
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
     let toolCall = worker.toolCalls.get(toolCallId);
 
@@ -314,11 +333,15 @@ export class SupervisorProgressUI {
       console.warn(`[SupervisorProgress] Tool failed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
-        toolName: 'unknown',
+        toolName: toolName || 'unknown',
         status: 'running',
         startedAt: Date.now() - durationMs, // Backdate based on duration
       };
       worker.toolCalls.set(toolCallId, toolCall);
+    }
+
+    if (toolName && toolCall.toolName === 'unknown') {
+      toolCall.toolName = toolName;
     }
 
     toolCall.status = 'failed';
