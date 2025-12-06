@@ -29,6 +29,7 @@ export class ConversationRenderer {
 
   /**
    * Update an existing message (useful for streaming)
+   * Uses targeted DOM updates during streaming to prevent flashing
    */
   updateMessage(id: string, updates: Partial<Message>): void {
     const messageIndex = this.messages.findIndex(m => m.id === id);
@@ -39,8 +40,38 @@ export class ConversationRenderer {
       merged.timestamp = existing.timestamp;
       merged.seq = existing.seq;
       this.messages[messageIndex] = merged;
+
+      // During streaming, do targeted DOM update to prevent flashing
+      if (merged.isStreaming && updates.content !== undefined) {
+        const updated = this.updateStreamingContent(id, merged.content);
+        if (updated) {
+          return; // Skip full re-render
+        }
+      }
+
       this.renderConversation();
     }
+  }
+
+  /**
+   * Targeted update for streaming content - avoids full DOM replacement
+   * Returns true if update was successful, false if full re-render needed
+   */
+  private updateStreamingContent(id: string, content: string): boolean {
+    const turnElement = this.element.querySelector(`[data-message-id="${id}"]`);
+    if (!turnElement) return false;
+
+    const contentElement = turnElement.querySelector('.turn-content');
+    if (!contentElement) return false;
+
+    // Update text content while preserving cursor
+    const escapedContent = this.escapeHtml(content);
+    contentElement.innerHTML = `${escapedContent}<span class="cursor">▋</span>`;
+
+    // Scroll to bottom
+    this.element.scrollTop = this.element.scrollHeight;
+
+    return true;
   }
 
   /**
@@ -117,7 +148,7 @@ export class ConversationRenderer {
 
   /**
    * Single render function - handles all message display
-   * This is the only place that mutates the DOM
+   * Uses incremental DOM updates to prevent flashing
    */
   private renderConversation(): void {
     if (this.messages.length === 0) {
@@ -127,23 +158,91 @@ export class ConversationRenderer {
       } else {
         this.element.innerHTML = '';
       }
-    } else {
-      // Clear status automatically when we have messages
-      // Sort messages by timestamp, then by seq for deterministic order
-      const sortedMessages = [...this.messages].sort((a, b) => {
-        const dt = a.timestamp.getTime() - b.timestamp.getTime();
-        if (dt !== 0) return dt;
-        const as = a.seq ?? 0;
-        const bs = b.seq ?? 0;
-        return as - bs;
-      });
+      return;
+    }
 
-      const html = sortedMessages.map(message => this.messageToHTML(message)).join('');
-      this.element.innerHTML = html;
+    // Sort messages by timestamp, then by seq for deterministic order
+    const sortedMessages = [...this.messages].sort((a, b) => {
+      const dt = a.timestamp.getTime() - b.timestamp.getTime();
+      if (dt !== 0) return dt;
+      const as = a.seq ?? 0;
+      const bs = b.seq ?? 0;
+      return as - bs;
+    });
+
+    // Get current DOM message IDs
+    const currentDomIds = new Set<string>();
+    this.element.querySelectorAll('[data-message-id]').forEach(el => {
+      const id = el.getAttribute('data-message-id');
+      if (id) currentDomIds.add(id);
+    });
+
+    // Build set of message IDs we need
+    const neededIds = new Set(sortedMessages.map(m => m.id));
+
+    // Remove DOM elements that are no longer needed
+    this.element.querySelectorAll('[data-message-id]').forEach(el => {
+      const id = el.getAttribute('data-message-id');
+      if (id && !neededIds.has(id)) {
+        el.remove();
+      }
+    });
+
+    // Add or update messages
+    let lastElement: Element | null = null;
+    for (const message of sortedMessages) {
+      const existingEl = this.element.querySelector(`[data-message-id="${message.id}"]`);
+
+      if (existingEl) {
+        // Update existing element if needed (e.g., streaming state changed)
+        this.updateExistingElement(existingEl, message);
+        lastElement = existingEl;
+      } else {
+        // Create and insert new element
+        const newEl = this.createMessageElement(message);
+        if (lastElement) {
+          lastElement.after(newEl);
+        } else {
+          // Insert at beginning (or after any status element)
+          const firstMessage = this.element.querySelector('[data-message-id]');
+          if (firstMessage) {
+            firstMessage.before(newEl);
+          } else {
+            this.element.appendChild(newEl);
+          }
+        }
+        lastElement = newEl;
+      }
     }
 
     // Scroll to bottom
     this.element.scrollTop = this.element.scrollHeight;
+  }
+
+  /**
+   * Update an existing DOM element with new message state
+   */
+  private updateExistingElement(el: Element, message: Message): void {
+    // Update streaming class
+    if (message.isStreaming) {
+      el.classList.add('streaming');
+    } else {
+      el.classList.remove('streaming');
+      // Update content when streaming ends
+      const contentEl = el.querySelector('.turn-content');
+      if (contentEl) {
+        contentEl.innerHTML = this.escapeHtml(message.content);
+      }
+    }
+  }
+
+  /**
+   * Create a new message DOM element
+   */
+  private createMessageElement(message: Message): HTMLElement {
+    const template = document.createElement('template');
+    template.innerHTML = this.messageToHTML(message).trim();
+    return template.content.firstElementChild as HTMLElement;
   }
 
   /**
@@ -157,7 +256,7 @@ export class ConversationRenderer {
     const streamingClass = message.isStreaming ? ' streaming' : '';
 
     return `
-      <div class="${message.role}-turn${streamingClass}">
+      <div class="${message.role}-turn${streamingClass}" data-message-id="${message.id}">
         <div class="turn-header">${icon} ${roleLabel}</div>
         <div class="turn-content">${this.escapeHtml(message.content)}${streamingCursor}</div>
         <div class="turn-timestamp">${timeStr}</div>

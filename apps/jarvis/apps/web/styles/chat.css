@@ -150,7 +150,6 @@
   margin: 16px 0;
   padding: 16px 20px;
   border-radius: 18px;
-  animation: slideUpFade 0.3s ease forwards;
   position: relative;
   max-width: 85%;
 }
