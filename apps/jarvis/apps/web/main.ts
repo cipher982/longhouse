@@ -52,7 +52,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   remoteAudio = document.getElementById('remoteAudio') as HTMLAudioElement | null || undefined;
   const textInput = document.getElementById('textInput') as HTMLInputElement;
   const sendTextBtn = document.getElementById('sendTextBtn');
-  
+
   // 2. Initialize UI Components
   const conversationRenderer = new ConversationRenderer(transcriptEl);
   conversationController.setRenderer(conversationRenderer);
@@ -61,7 +61,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 2.5. Initialize Supervisor Progress UI (for complex task delegation)
   supervisorProgress.initialize('supervisor-progress');
-  
+
   // 3. Initialize Audio Controller (Visualizer + Remote Audio)
   if (pttBtn && remoteAudio) {
     audioController.initialize(remoteAudio, pttBtn);
@@ -79,9 +79,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     (window as any).audioController = audioController;
     (window as any).appController = appController;
   }
-  
+
   // 5. Wire up State Listeners (Reactive UI) - Direct Subscription Pattern
-  
+
   // Voice State (Input)
   voiceController.addListener((event) => {
     if (event.type === 'stateChange') {
@@ -142,14 +142,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     pttBtn.addEventListener('mouseup', stopTalking);
     pttBtn.addEventListener('mouseleave', stopTalking);
     pttBtn.addEventListener('touchend', stopTalking);
-    
+
     // Keyboard PTT
     voiceController.setupKeyboardHandlers(pttBtn);
     pttBtn.onkeydown = async (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         feedbackSystem.resumeContext().catch(() => {});
-        
+
         if (!voiceController.isConnected()) {
            updateVoiceButtonUI(VoiceButtonState.CONNECTING);
            try {
@@ -159,7 +159,7 @@ document.addEventListener("DOMContentLoaded", async () => {
            }
            return;
         }
-        
+
         if (voiceController.isVoiceMode()) {
           voiceController.startPTT();
         }
@@ -229,7 +229,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const wasEnabled = handsFreeToggle!.getAttribute('aria-checked') === 'true';
       const enabled = !wasEnabled;
       handsFreeToggle!.setAttribute('aria-checked', enabled.toString());
-      
+
       if (enabled && voiceController.isTextMode()) {
         voiceController.transitionToVoice({ handsFree: false });
       }
@@ -237,40 +237,40 @@ document.addEventListener("DOMContentLoaded", async () => {
       uiEnhancements.showToast(enabled ? 'Hands-free enabled' : 'Hands-free disabled', 'info');
     });
   }
-  
+
   // Context Loading (Legacy logic adapted)
   try {
     // Initialize context system
     const contextName = await contextLoader.autoDetectContext();
     const currentContext = await contextLoader.loadContext(contextName);
     stateManager.setContext(currentContext);
-    
+
     updateUIForContext(currentContext);
     // Context selector removed as only one context exists
     // contextLoader.createContextSelector('context-selector-container');
-    
+
     // Initialize Session Manager
     const sessionManager = createSessionManagerForContext(currentContext);
     stateManager.setSessionManager(sessionManager);
     conversationController.setSessionManager(sessionManager);
     conversationUI.setSessionManager(sessionManager);
-    
+
     // Load conversation
     const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
     stateManager.setConversationId(initialConversationId);
     conversationController.setConversationId(initialConversationId);
-    
+
     await conversationUI.loadConversations();
     if (initialConversationId) {
       conversationUI.setActiveConversation(initialConversationId);
       await conversationController.loadHistory();
     }
-    
+
   } catch (error) {
     console.error('Context load failed:', error);
     // Fallback or error handling
   }
-  
+
   // Initialize Zerg Integration (Task Inbox)
   try {
     const taskInboxContainer = document.getElementById('task-inbox-container');
@@ -318,7 +318,7 @@ function renderButtonState() {
     }
 
     if (!voiceController.isConnected()) {
-        return; 
+        return;
     }
 
     let newState = VoiceButtonState.READY;
@@ -329,17 +329,17 @@ function renderButtonState() {
         newState = VoiceButtonState.SPEAKING;
     } else if (voiceState.active) {
         newState = VoiceButtonState.SPEAKING; // or LISTENING
-    } 
+    }
 
     updateVoiceButtonUI(newState);
 }
 
 function updateVoiceButtonUI(state: VoiceButtonState) {
   if (!pttBtn) return;
-  
+
   // Clear classes
   pttBtn.classList.remove('idle', 'connecting', 'ready', 'speaking', 'listening', 'responding');
-  
+
   // Add active class
   switch (state) {
     case VoiceButtonState.IDLE:
@@ -384,7 +384,7 @@ const STOP_ICON = `
 function setMicIcon(listening: boolean) {
   const iconEl = pttBtn?.querySelector('.voice-icon');
   if (!iconEl) return;
-  
+
   iconEl.innerHTML = listening ? STOP_ICON : MIC_ICON;
   if (listening) {
     iconEl.setAttribute('fill', 'currentColor');

@@ -10,19 +10,19 @@
   --color-void-light: #0a0a12;     /* Slightly lighter void */
   --color-glass: rgba(20, 20, 30, 0.6);
   --color-glass-border: rgba(255, 255, 255, 0.08);
-  
+
   /* Neon Accents */
   --color-neon-primary: #6366f1;   /* Electric Indigo */
   --color-neon-secondary: #a855f7; /* Cyber Purple */
   --color-neon-cyan: #06b6d4;      /* Tron Cyan */
   --color-neon-pink: #ec4899;      /* Laser Pink */
-  
+
   /* Functional Colors */
   --color-text-primary: #ffffff;
   --color-text-secondary: #94a3b8; /* Slate 400 */
   --color-text-muted: #475569;     /* Slate 600 */
   --color-border-muted: rgba(255, 255, 255, 0.05);
-  
+
   /* Surfaces */
   --color-surface-page: var(--color-void);
   --color-surface-secondary: rgba(10, 10, 15, 0.4);
@@ -32,21 +32,21 @@
   /* Typography */
   --font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
   --font-family-mono: 'JetBrains Mono', 'Fira Code', monospace;
-  
+
   /* Effects */
   --blur-sm: 8px;
   --blur-md: 16px;
   --blur-lg: 24px;
-  
+
   /* Shadows & Glows */
   --glow-primary: 0 0 20px rgba(99, 102, 241, 0.3);
   --glow-cyan: 0 0 20px rgba(6, 182, 212, 0.3);
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
-  
+
   /* Spacing & Radius */
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 24px; --space-6: 32px; --space-8: 48px;
-  
+
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 16px;
