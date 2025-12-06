@@ -274,15 +274,7 @@
   touch-action: none;
 }
 
-.agent-pill::before {
-  content: "🤖";
-  position: absolute;
-  left: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: var(--font-size-md);
-  opacity: 0.7;
-}
+/* Agent pill icon is now rendered as SVG in the component */
 
 .agent-pill:hover {
   background: var(--color-surface-elevated);

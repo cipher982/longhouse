@@ -26,6 +26,7 @@ import "@xyflow/react/dist/style.css";
 import "../styles/canvas-react.css";
 import toast from "react-hot-toast";
 import { ExecutionLogStream, type LogEntry } from "../components/ExecutionLogStream";
+import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon, ZapIcon } from "../components/icons";
 import {
   fetchAgents,
   fetchCurrentWorkflow,
@@ -75,7 +76,7 @@ const SNAP_GRID_SIZE = 24;
 function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
   return (
     <div className="agent-node">
-      <div className="agent-icon">🤖</div>
+      <div className="agent-icon"><AgentIcon width={20} height={20} /></div>
       <div className="agent-name">{data.label}</div>
     </div>
   );
@@ -83,11 +84,11 @@ function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
 
 // Custom node component for tools
 function ToolNode({ data }: { data: { label: string; toolType?: string } }) {
-  const icon = data.toolType === 'http-request' ? '🌐' : data.toolType === 'url-fetch' ? '📡' : '🔧';
+  const IconComponent = data.toolType === 'http-request' ? GlobeIcon : data.toolType === 'url-fetch' ? SignalIcon : WrenchIcon;
 
   return (
     <div className="tool-node">
-      <div className="tool-icon">{icon}</div>
+      <div className="tool-icon"><IconComponent width={20} height={20} /></div>
       <div className="tool-name">{data.label}</div>
     </div>
   );
@@ -97,7 +98,7 @@ function ToolNode({ data }: { data: { label: string; toolType?: string } }) {
 function TriggerNode({ data }: { data: { label: string } }) {
   return (
     <div className="trigger-node">
-      <div className="trigger-icon">⚡</div>
+      <div className="trigger-icon"><ZapIcon width={20} height={20} /></div>
       <div className="trigger-name">{data.label}</div>
     </div>
   );

@@ -143,3 +143,95 @@
   font-size: 0.8rem;
   opacity: 0.5;
 }
+
+/* Turn-based Message Bubbles (conversation-renderer.ts output) */
+.user-turn,
+.assistant-turn {
+  margin: 16px 0;
+  padding: 16px 20px;
+  border-radius: 18px;
+  animation: slideUpFade 0.3s ease forwards;
+  position: relative;
+  max-width: 85%;
+}
+
+.user-turn {
+  background: linear-gradient(
+    135deg,
+    rgb(99 102 241 / 20%) 0%,
+    rgb(139 92 246 / 20%) 100%
+  );
+  border: 1px solid rgb(139 92 246 / 30%);
+  margin-left: auto;
+  border-bottom-right-radius: 4px;
+}
+
+.assistant-turn {
+  background: rgb(255 255 255 / 3%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  margin-right: auto;
+  border-bottom-left-radius: 4px;
+}
+
+.assistant-turn.streaming {
+  background: linear-gradient(
+    135deg,
+    rgb(6 182 212 / 10%) 0%,
+    rgb(99 102 241 / 10%) 100%
+  );
+  border-color: rgb(6 182 212 / 30%);
+}
+
+/* Turn Header with Role Icon */
+.turn-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* SVG Role Icons */
+.role-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.role-icon.user-icon {
+  color: rgb(139 92 246);
+}
+
+.role-icon.assistant-icon {
+  color: var(--color-neon-cyan, #06b6d4);
+}
+
+.turn-content {
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
+.turn-timestamp {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.user-turn:hover .turn-timestamp,
+.assistant-turn:hover .turn-timestamp {
+  opacity: 0.6;
+}
+
+/* Streaming cursor */
+.cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--color-neon-cyan, #06b6d4);
+  animation: blink 1s steps(2, start) infinite;
+}

@@ -14,6 +14,7 @@
   "include": [
     "*.ts",
     "lib/**/*",
+    "assets/**/*",
     "contexts/**/*",
     "tests/**/*",
     "vite.config.ts",

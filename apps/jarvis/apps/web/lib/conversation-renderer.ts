@@ -4,6 +4,7 @@
  */
 
 import type { Message, ConversationTurn } from '@jarvis/data-local';
+import { userIcon, assistantIcon } from '../assets/icons';
 
 export class ConversationRenderer {
   private messages: Message[] = [];
@@ -150,14 +151,14 @@ export class ConversationRenderer {
    */
   private messageToHTML(message: Message): string {
     const timeStr = message.timestamp.toLocaleTimeString();
-    const emoji = message.role === 'user' ? '👤' : '🤖';
+    const icon = message.role === 'user' ? userIcon : assistantIcon;
     const roleLabel = message.role === 'user' ? 'You' : 'Assistant';
     const streamingCursor = message.isStreaming ? '<span class="cursor">▋</span>' : '';
     const streamingClass = message.isStreaming ? ' streaming' : '';
 
     return `
       <div class="${message.role}-turn${streamingClass}">
-        <div class="turn-header">${emoji} ${roleLabel}</div>
+        <div class="turn-header">${icon} ${roleLabel}</div>
         <div class="turn-content">${this.escapeHtml(message.content)}${streamingCursor}</div>
         <div class="turn-timestamp">${timeStr}</div>
       </div>

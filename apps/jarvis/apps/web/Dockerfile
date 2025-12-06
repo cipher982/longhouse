@@ -20,6 +20,9 @@ COPY apps/zerg/e2e/package.json ./apps/zerg/e2e/package.json
 # Install all dependencies
 RUN bun install
 
+# Copy Jarvis configs (required for tsconfig.json extends)
+COPY apps/jarvis/configs ./apps/jarvis/configs
+
 # Copy web app source
 COPY apps/jarvis/apps/web ./apps/jarvis/apps/web
 

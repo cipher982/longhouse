@@ -56,7 +56,4 @@
 
 /* Removed unused .drag-handle variation */
 
-.personal-context h1::before {
-  content: "🤖 ";
-  margin-right: 0.5rem;
-}
+/* Removed emoji prefix - using clean typography instead */
