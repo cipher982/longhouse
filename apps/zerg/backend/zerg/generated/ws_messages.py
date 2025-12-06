@@ -21,14 +21,14 @@ from pydantic import Field
 
 class Envelope(BaseModel):
     """Unified envelope for all WebSocket messages with validation."""
-    
+
     v: int = Field(default=1, description="Protocol version")
-    type: str = Field(description="Message type identifier") 
+    type: str = Field(description="Message type identifier")
     topic: str = Field(description="Topic routing string")
     req_id: Optional[str] = Field(default=None, description="Request correlation ID")
     ts: int = Field(description="Timestamp in milliseconds since epoch")
     data: Dict[str, Any] = Field(description="Message payload")
-    
+
     @classmethod
     def create(
         cls,
@@ -276,11 +276,11 @@ class MessageType(str, Enum):
 
 class TypedEmitter(Protocol):
     """Protocol for typed WebSocket message emission."""
-    
+
     async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
+        self,
+        topic: str,
+        message_type: MessageType,
         payload: BaseModel
     ) -> None:
         """Send a typed message with validation."""
@@ -288,28 +288,28 @@ class TypedEmitter(Protocol):
 
 class TypedEmitterImpl:
     """Implementation of typed emitter with runtime validation."""
-    
+
     def __init__(self, raw_emitter):
         """Initialize with raw broadcast function."""
         self.raw_emitter = raw_emitter
-        
+
     async def send_typed(
-        self, 
-        topic: str, 
-        message_type: MessageType, 
+        self,
+        topic: str,
+        message_type: MessageType,
         payload: BaseModel
     ) -> None:
         """Send a typed message with full validation."""
         # Validate payload matches expected type for message
         validate_payload_for_message_type(message_type, payload)
-        
+
         # Create envelope with validation
         envelope = Envelope.create(
             message_type=message_type.value,
             topic=topic,
             data=payload.model_dump()
         )
-        
+
         # Send via raw emitter
         await self.raw_emitter(topic, envelope.model_dump_validated())
 
@@ -347,4 +347,3 @@ ENVELOPE_SCHEMA = {
         "data": {"type": "object"}
     }
 }
-

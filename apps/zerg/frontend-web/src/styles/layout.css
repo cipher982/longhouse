@@ -40,7 +40,9 @@
 }
 
 /* --------------------------------------------------------- */
+
 /* Application grid layout (header, tabs, content, status)   */
+
 /* --------------------------------------------------------- */
 
 html,
@@ -51,7 +53,7 @@ body {
 /* Body simply hosts the React root */
 body {
   margin: 0;
-  overflow-y: auto;  /* Allow vertical scrolling naturally */
+  overflow-y: auto; /* Allow vertical scrolling naturally */
 }
 
 /* The React root acts as the application grid */
@@ -65,9 +67,17 @@ body {
 }
 
 /* Place elements explicitly so order in DOM does not matter */
-.header { grid-row: 1; }
-.tabs-container { grid-row: 2; }
-.status-bar { grid-row: 4; }
+.header {
+  grid-row: 1;
+}
+
+.tabs-container {
+  grid-row: 2;
+}
+
+.status-bar {
+  grid-row: 4;
+}
 
 /* Content containers occupy the main viewport row */
 #app-container {
@@ -78,8 +88,7 @@ body {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  overflow-y: auto;    /* Allow vertical scrolling */
-  overflow-x: hidden;  /* Prevent horizontal scroll */
+  overflow: hidden auto; /* Allow vertical scrolling */ /* Prevent horizontal scroll */
   position: relative;
 }
 

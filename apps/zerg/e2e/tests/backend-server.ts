@@ -1,6 +1,6 @@
 /**
  * Backend server management for E2E tests
- * 
+ *
  * This module provides utilities to start and stop isolated backend servers
  * for each test worker, ensuring complete test isolation.
  */
@@ -16,7 +16,7 @@ function getBackendPort(): number {
   if (process.env.BACKEND_PORT) {
     return parseInt(process.env.BACKEND_PORT);
   }
-  
+
   // Load from .env file
   const envPath = path.resolve(__dirname, '../../../.env');
   if (fs.existsSync(envPath)) {
@@ -29,7 +29,7 @@ function getBackendPort(): number {
       }
     }
   }
-  
+
   return 8001; // Default fallback
 }
 
@@ -84,7 +84,7 @@ async function waitForServer(baseUrl: string, maxAttempts = 30): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
     }
   }
-  
+
   throw new Error(`Backend server at ${baseUrl} did not start within ${maxAttempts} seconds`);
 }
 

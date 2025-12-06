@@ -25,7 +25,7 @@ export interface ExecutionMonitor {
 export async function navigateToCanvas(page: Page): Promise<void> {
   await page.getByTestId('global-canvas-tab').click();
   await page.waitForTimeout(2000);
-  
+
   // Verify canvas loaded
   await expect(page.locator('#canvas-container')).toBeVisible({ timeout: 10000 });
   await expect(page.locator('#canvas-container canvas')).toBeVisible({ timeout: 5000 });
@@ -45,13 +45,13 @@ export async function waitForAgentShelf(page: Page, minCount: number = 1): Promi
  * Drag an agent from shelf to canvas at specified position
  */
 export async function dragAgentToCanvas(
-  page: Page, 
-  agentIndex: number = 0, 
+  page: Page,
+  agentIndex: number = 0,
   position: { x: number; y: number } = { x: 200, y: 150 }
 ): Promise<void> {
   const agentPill = page.locator('#agent-shelf .agent-pill').nth(agentIndex);
   const canvasArea = page.locator('#canvas-container canvas');
-  
+
   await agentPill.dragTo(canvasArea, { targetPosition: position });
   await page.waitForTimeout(1000);
 }
@@ -71,7 +71,7 @@ export async function dragToolToCanvas(
     `[data-tool-name="${toolName}"]`,
     `.tool-palette-item:has-text("${toolName}")`
   ];
-  
+
   let toolElement = null;
   for (const selector of toolSelectors) {
     const element = page.locator(selector);
@@ -80,13 +80,13 @@ export async function dragToolToCanvas(
       break;
     }
   }
-  
+
   if (!toolElement) {
     throw new Error(`Tool "${toolName}" not found in palette. Available selectors tried: ${toolSelectors.join(', ')}`);
   }
-  
+
   await expect(toolElement).toBeVisible({ timeout: 10000 });
-  
+
   const canvasArea = page.locator('#canvas-container canvas');
   await toolElement.dragTo(canvasArea, { targetPosition: position });
   await page.waitForTimeout(1000);
@@ -98,19 +98,19 @@ export async function dragToolToCanvas(
 export async function getCanvasNodes(page: Page): Promise<CanvasNode[]> {
   const nodeElements = await page.locator('.canvas-node, .generic-node').all();
   const nodes: CanvasNode[] = [];
-  
+
   for (const element of nodeElements) {
     const boundingBox = await element.boundingBox();
     // Determine node type based on class names or content
     const nodeType = await determineNodeType(element);
-    
+
     nodes.push({
       element,
       boundingBox,
       type: nodeType
     });
   }
-  
+
   return nodes;
 }
 
@@ -120,7 +120,7 @@ export async function getCanvasNodes(page: Page): Promise<CanvasNode[]> {
 async function determineNodeType(element: Locator): Promise<'agent' | 'tool' | 'trigger'> {
   const classList = await element.getAttribute('class') || '';
   const content = await element.textContent() || '';
-  
+
   if (classList.includes('agent') || content.includes('Agent')) {
     return 'agent';
   } else if (classList.includes('tool') || content.includes('HTTP') || content.includes('Request')) {
@@ -141,14 +141,14 @@ export async function connectNodes(
   if (!fromNode.boundingBox || !toNode.boundingBox) {
     throw new Error('Node bounding boxes not available for connection');
   }
-  
+
   // Calculate handle positions
   const outputHandleX = fromNode.boundingBox.x + fromNode.boundingBox.width / 2;
   const outputHandleY = fromNode.boundingBox.y + fromNode.boundingBox.height - 10;
-  
+
   const inputHandleX = toNode.boundingBox.x + toNode.boundingBox.width / 2;
   const inputHandleY = toNode.boundingBox.y + 10;
-  
+
   // Perform drag connection
   await page.mouse.move(outputHandleX, outputHandleY);
   await page.mouse.down();
@@ -168,7 +168,7 @@ export async function configureTool(
   // Double-click to open config
   await toolNode.element.dblclick();
   await page.waitForTimeout(1000);
-  
+
   // Look for configuration modal
   const configModal = page.locator('#tool-config-modal, .modal:has-text("Config"), .config-modal');
   if (await configModal.count() > 0) {
@@ -180,7 +180,7 @@ export async function configureTool(
         `input[placeholder*="${fieldName}"]`,
         `textarea[name="${fieldName}"]`
       ];
-      
+
       for (const selector of fieldSelectors) {
         const field = page.locator(selector);
         if (await field.count() > 0) {
@@ -189,7 +189,7 @@ export async function configureTool(
         }
       }
     }
-    
+
     // Save configuration
     const saveBtn = page.locator('button:has-text("Save"), #save-config, .save-btn');
     if (await saveBtn.count() > 0) {
@@ -209,7 +209,7 @@ export function startExecutionMonitoring(page: Page): ExecutionMonitor {
     httpRequestLogs: [],
     networkRequests: []
   };
-  
+
   // Monitor console logs for different types of events
   page.on('console', msg => {
     const text = msg.text();
@@ -218,19 +218,19 @@ export function startExecutionMonitoring(page: Page): ExecutionMonitor {
       if (text.includes('connection') || text.includes('Connected') || text.includes('edge') || text.includes('handle')) {
         monitor.connectionLogs.push(text);
       }
-      
+
       // Execution logs
       if (text.includes('execution') || text.includes('workflow') || text.includes('running')) {
         monitor.executionLogs.push(text);
       }
-      
+
       // HTTP request logs
       if (text.includes('http') || text.includes('request') || text.includes('response') || text.includes('200')) {
         monitor.httpRequestLogs.push(text);
       }
     }
   });
-  
+
   // Monitor network requests
   page.on('request', request => {
     const url = request.url();
@@ -238,14 +238,14 @@ export function startExecutionMonitoring(page: Page): ExecutionMonitor {
       monitor.networkRequests.push(`${request.method()} ${url}`);
     }
   });
-  
+
   page.on('response', response => {
     const url = response.url();
     if (url.includes('api/') || url.includes('jsonplaceholder') || url.includes('httpbin')) {
       monitor.networkRequests.push(`Response ${response.status()} ${url}`);
     }
   });
-  
+
   return monitor;
 }
 
@@ -279,34 +279,34 @@ export function analyzeExecutionResults(monitor: ExecutionMonitor): {
   hasSuccessfulHttpResponse: boolean;
   summary: string;
 } {
-  const hasExecutionStart = monitor.executionLogs.some(log => 
+  const hasExecutionStart = monitor.executionLogs.some(log =>
     log.includes('execution') || log.includes('running') || log.includes('workflow')
   );
-  
+
   const hasHttpActivity = monitor.httpRequestLogs.length > 0 || monitor.networkRequests.length > 0;
-  
-  const hasValidWorkflowId = !monitor.executionLogs.some(log => 
+
+  const hasValidWorkflowId = !monitor.executionLogs.some(log =>
     log.includes('404') || log.includes('invalid')
   );
-  
-  const hasSuccessfulHttpResponse = monitor.networkRequests.some(request => 
+
+  const hasSuccessfulHttpResponse = monitor.networkRequests.some(request =>
     request.includes('Response 200') || request.includes('Response 201')
   );
-  
+
   const summary = `
 🎯 EXECUTION RESULTS SUMMARY:
   Execution Started: ${hasExecutionStart ? '✅' : '❌'}
   HTTP Activity Detected: ${hasHttpActivity ? '✅' : '❌'}
   Valid Workflow ID: ${hasValidWorkflowId ? '✅' : '❌'}
   Successful HTTP Response: ${hasSuccessfulHttpResponse ? '✅' : '❌'}
-  
+
 📋 Log Counts:
   Connection Logs: ${monitor.connectionLogs.length}
   Execution Logs: ${monitor.executionLogs.length}
   HTTP Request Logs: ${monitor.httpRequestLogs.length}
   Network Requests: ${monitor.networkRequests.length}
   `;
-  
+
   return {
     hasExecutionStart,
     hasHttpActivity,
@@ -336,34 +336,34 @@ export async function createAgentToolWorkflow(
     toolPosition = { x: 400, y: 150 },
     toolConfig = {}
   } = options;
-  
+
   // Drag agent to canvas
   await dragAgentToCanvas(page, agentIndex, agentPosition);
-  
+
   // Drag tool to canvas
   await dragToolToCanvas(page, toolName, toolPosition);
-  
+
   // Get nodes
   const nodes = await getCanvasNodes(page);
   if (nodes.length < 2) {
     throw new Error(`Expected at least 2 nodes, got ${nodes.length}`);
   }
-  
+
   const agentNode = nodes.find(n => n.type === 'agent');
   const toolNode = nodes.find(n => n.type === 'tool');
-  
+
   if (!agentNode || !toolNode) {
     throw new Error('Could not identify agent and tool nodes');
   }
-  
+
   // Connect nodes
   await connectNodes(page, agentNode, toolNode);
-  
+
   // Configure tool if config provided
   if (Object.keys(toolConfig).length > 0) {
     await configureTool(page, toolNode, toolConfig);
   }
-  
+
   return { agentNode, toolNode };
 }
 

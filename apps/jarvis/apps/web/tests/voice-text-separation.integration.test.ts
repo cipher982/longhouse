@@ -88,7 +88,7 @@ describe('Voice/Text Separation Integration', () => {
     it('should only receive transcripts when track is enabled', () => {
       voiceController.startPTT();
       voiceController.handleTranscript('Hello', false);
-      voiceController.stopPTT(); 
+      voiceController.stopPTT();
 
       // Should only have the first transcript from when track was enabled
       const transcripts = voiceListener.mock.calls.filter((call: any[]) => call[0].type === 'transcript');
@@ -283,12 +283,12 @@ describe('Voice/Text Separation Integration', () => {
     it('should handle voice controller errors gracefully', async () => {
       const consoleSpy = vi.spyOn(console, 'warn');
       voiceController.setSession(null); // Ensure no session
-      
+
       // Force clear internal stream to trigger warning
       (voiceController as any).micStream = null;
-      
+
       voiceController.startPTT();
-      
+
       expect(consoleSpy).toHaveBeenCalled();
       expect(consoleSpy.mock.calls[0][0]).toContain('No session available');
     });
@@ -431,7 +431,7 @@ describe('Voice/Text Separation Integration', () => {
       // In the new architecture, VoiceController emits events to listeners directly.
       // It relies on TextChannelController or UI logic to emit 'sending' / 'sent' for text.
       // For voice, we verify that listeners are notified.
-      
+
       voiceController.startPTT();
       voiceController.handleTranscript('Test', false);
       voiceController.stopPTT();
@@ -450,7 +450,7 @@ describe('Voice/Text Separation Integration', () => {
       eventBus.on('text_channel:sending', () => events.push('sending'));
       eventBus.on('text_channel:sent', () => events.push('sent'));
       // state:changed is emitted by transitionToText
-      // eventBus.on('state:changed', () => events.push('state_changed')); 
+      // eventBus.on('state:changed', () => events.push('state_changed'));
 
       await textController.sendText('Hello');
 

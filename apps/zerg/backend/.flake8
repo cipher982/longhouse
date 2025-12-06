@@ -2,4 +2,4 @@
 max-line-length = 120
 per-file-ignores =
     tests/*:E402
-    tests/**/*:E402 
+    tests/**/*:E402

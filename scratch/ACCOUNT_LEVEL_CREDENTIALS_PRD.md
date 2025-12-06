@@ -153,6 +153,3 @@ Add GitHub workflow step running new backend tests plus Cypress (or Playwright) 
 3. Build `/account/connectors` API + UI page.
 4. Wire migration script and remove old drawer UI.
 5. Plan org-level follow-up once teams feature is scheduled.
-
-
-

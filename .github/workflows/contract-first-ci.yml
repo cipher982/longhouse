@@ -8,7 +8,7 @@ on:
 
 # Cancel previous runs for the same PR
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}  
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -16,33 +16,33 @@ jobs:
   contract-validation:
     runs-on: ubuntu-latest
     name: "🔒 Contract Validation (Fail-Fast)"
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        
-    - name: Set up Node.js  
+
+    - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        
+
     - name: Install AsyncAPI CLI
       run: npm install -g @asyncapi/cli
-      
+
     - name: Install Python dependencies
       run: |
         pip install -U pip
         pip install pydantic jsonschema pyyaml
-        
+
     - name: Validate AsyncAPI Schema
       run: |
         echo "🔍 Validating AsyncAPI 3.0 schema..."
         asyncapi validate ws-protocol-asyncapi.yml
-        
+
     - name: Validate OpenAPI Schema
       run: |
         echo "🔍 Validating OpenAPI 3.0 schema..."
@@ -65,18 +65,18 @@ except Exception as e:
     print(f'❌ OpenAPI schema validation failed: {e}')
     exit(1)
 EOF
-        
-    - name: Generate WebSocket Types  
+
+    - name: Generate WebSocket Types
       run: |
         echo "🚀 Generating WebSocket types..."
         python3 scripts/generate-ws-types-modern.py ws-protocol-asyncapi.yml
-        
+
     - name: Check for Schema Drift
       run: |
         echo "🔍 Checking for uncommitted schema changes..."
         git diff --exit-code || (echo "❌ Generated files are out of sync with schema. Run 'make ws-code-gen' and commit changes." && exit 1)
         echo "✅ All generated files are up-to-date"
-        
+
     - name: Validate Generated Contracts
       run: |
         echo "🔍 Validating generated contract files..."
@@ -90,15 +90,15 @@ EOF
     runs-on: ubuntu-latest
     needs: contract-validation
     name: "⚒️ Tool Contract Validation"
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        
+
     - name: Validate Tool Contracts
       run: make tool-check
 
@@ -107,26 +107,26 @@ EOF
     runs-on: ubuntu-latest
     needs: contract-validation
     name: "🐍 Backend Tests (Contract-Enforced)"
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        
+
     - name: Install dependencies
       run: |
         cd backend
         pip install -e .[dev]
-        
+
     - name: Run Contract Tests First
       run: |
         cd backend
         # Run Pact contract tests as gate-zero
         python -m pytest tests/test_pact_contracts.py -v || (echo "⚠️ Pact tests failed - install pact_verifier for full validation" && true)
-        
+
     - name: Run Backend Tests
       run: |
         cd backend
@@ -161,19 +161,19 @@ EOF
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-tests]
     name: "🔗 Integration Smoke Test"
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python & Node
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-        
+
     - uses: actions/setup-node@v4
       with:
         node-version: '18'
-        
+
     - name: Quick E2E Contract Validation
       run: |
         echo "🧪 Running basic E2E contract validation..."
@@ -182,13 +182,13 @@ EOF
 
   # PHASE 5: Security & Performance Contract Validation
   contract-security:
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
     needs: contract-validation
     name: "🔒 Security & Performance Contract Validation"
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Validate Security Contracts
       run: |
         echo "🔒 Validating security contracts..."
@@ -202,8 +202,8 @@ EOF
         assert 'authorization_checks' in security, 'Missing authorization checks'
         print('✅ Security contracts validated')
         "
-        
-    - name: Validate Performance Contracts  
+
+    - name: Validate Performance Contracts
       run: |
         echo "⚡ Validating performance contracts..."
         # Check for performance contract violations
@@ -222,13 +222,13 @@ EOF
     runs-on: ubuntu-latest
     needs: [tool-contracts, backend-tests, frontend-tests, integration-smoke, contract-security]
     name: "✅ All Contracts Validated"
-    
+
     steps:
     - name: Success
       run: |
         echo "🎉 All contract validations passed!"
         echo "✅ Schema contracts validated"
-        echo "✅ Tool contracts validated"  
+        echo "✅ Tool contracts validated"
         echo "✅ Backend contracts validated"
         echo "✅ Frontend contracts validated"
         echo "✅ Integration contracts validated"

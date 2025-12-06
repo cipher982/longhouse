@@ -12,25 +12,25 @@
  */
 
 /* Base styles and variables (70 lines) */
-@import './base.css';
+@import url("./base.css");
 
 /* Layout and grid system (130 lines) */
-@import './layout.css';
+@import url("./layout.css");
 
 /* Sidebar component (170 lines) */
-@import './sidebar.css';
+@import url("./sidebar.css");
 
 /* Chat and conversation UI (200 lines) */
-@import './chat.css';
+@import url("./chat.css");
 
 /* Voice button and controls (180 lines) */
-@import './voice-button.css';
+@import url("./voice-button.css");
 
 /* Animations and transitions (200 lines) */
-@import './animations.css';
+@import url("./animations.css");
 
 /* Supervisor progress indicator */
-@import './supervisor-progress.css';
+@import url("./supervisor-progress.css");
 
 /* Additional component styles can be added here as needed */
 
@@ -92,22 +92,66 @@
 }
 
 /* Spacing utilities */
-.mt-1 { margin-top: 4px; }
-.mt-2 { margin-top: 8px; }
-.mt-3 { margin-top: 12px; }
-.mt-4 { margin-top: 16px; }
+.mt-1 {
+  margin-top: 4px;
+}
 
-.mb-1 { margin-bottom: 4px; }
-.mb-2 { margin-bottom: 8px; }
-.mb-3 { margin-bottom: 12px; }
-.mb-4 { margin-bottom: 16px; }
+.mt-2 {
+  margin-top: 8px;
+}
 
-.p-1 { padding: 4px; }
-.p-2 { padding: 8px; }
-.p-3 { padding: 12px; }
-.p-4 { padding: 16px; }
+.mt-3 {
+  margin-top: 12px;
+}
 
-.gap-1 { gap: 4px; }
-.gap-2 { gap: 8px; }
-.gap-3 { gap: 12px; }
-.gap-4 { gap: 16px; }
+.mt-4 {
+  margin-top: 16px;
+}
+
+.mb-1 {
+  margin-bottom: 4px;
+}
+
+.mb-2 {
+  margin-bottom: 8px;
+}
+
+.mb-3 {
+  margin-bottom: 12px;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
+
+.p-1 {
+  padding: 4px;
+}
+
+.p-2 {
+  padding: 8px;
+}
+
+.p-3 {
+  padding: 12px;
+}
+
+.p-4 {
+  padding: 16px;
+}
+
+.gap-1 {
+  gap: 4px;
+}
+
+.gap-2 {
+  gap: 8px;
+}
+
+.gap-3 {
+  gap: 12px;
+}
+
+.gap-4 {
+  gap: 16px;
+}

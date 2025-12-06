@@ -62,14 +62,14 @@ WebSocket (admin‑only subscription)
 - Example:
   ```json
   {
-    "v":1,
-    "type":"ops_event",
-    "topic":"ops:events",
-    "ts":1712345678901,
-    "data":{
-      "type":"run_success",
-      "agent_id":42,
-      "run_id":31337,
+    "v": 1,
+    "type": "ops_event",
+    "topic": "ops:events",
+    "ts": 1712345678901,
+    "data": {
+      "type": "run_success",
+      "agent_id": 42,
+      "run_id": 31337,
       "duration_ms": 1288
     }
   }
@@ -142,9 +142,9 @@ Risks & Mitigations
 
 Rollout Phases
 
-1) Backend MVP (done): /api/ops/*, ops:events, budget alerts (100% deny; warn at 80%), Discord wiring
-2) Frontend: dashboard + HUD; timeseries; top agents; admin‑gated WS; optional daily digest
-3) Optional: rollups, model breakdowns, spike detection/alerts
+1. Backend MVP (done): /api/ops/\*, ops:events, budget alerts (100% deny; warn at 80%), Discord wiring
+2. Frontend: dashboard + HUD; timeseries; top agents; admin‑gated WS; optional daily digest
+3. Optional: rollups, model breakdowns, spike detection/alerts
 
 Operational Notes
 
@@ -163,4 +163,3 @@ Appendix: Developer Runbook
   - `GET /api/ops/top?kind=agents&window=today&limit=5`
 - Test WS:
   - Connect `/api/ws`, subscribe to `ops:events`, trigger runs; watch `ops_event` frames.
-

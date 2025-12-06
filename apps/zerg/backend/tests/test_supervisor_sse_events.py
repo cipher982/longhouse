@@ -40,4 +40,3 @@ async def test_supervisor_sse_emits_named_events():
         assert payload["payload"]["run_id"] == run_id
     finally:
         await gen.aclose()
-

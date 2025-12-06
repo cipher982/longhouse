@@ -4,9 +4,9 @@ test.describe('API Server Endpoints', () => {
   test('should return valid session token from /session endpoint', async ({ request }) => {
     const response = await request.get('http://localhost:8787/session');
     expect(response.status()).toBe(200);
-    
+
     const data = await response.json();
-    
+
     // Validate response structure
     expect(data.value).toMatch(/^ek_[a-f0-9]+$/);
     expect(data.expires_at).toBeGreaterThan(Date.now() / 1000);
@@ -23,10 +23,10 @@ test.describe('API Server Endpoints', () => {
         args: { date: '2025-01-01' }
       }
     });
-    
+
     expect(response.status()).toBe(200);
     const data = await response.json();
-    
+
     expect(data.date).toBe('2025-01-01');
     expect(data.recovery_score).toBe(62);
     expect(data.sleep).toBeDefined();
@@ -40,10 +40,10 @@ test.describe('API Server Endpoints', () => {
         args: { test: 'data' }
       }
     });
-    
+
     expect(response.status()).toBe(200);
     const data = await response.json();
-    
+
     expect(data.ok).toBe(true);
     expect(data.echo.name).toBe('unknown.tool');
     expect(data.echo.args.test).toBe('data');
@@ -52,7 +52,7 @@ test.describe('API Server Endpoints', () => {
   test('should handle /tool endpoint with no body', async ({ request }) => {
     const response = await request.post('http://localhost:8787/tool');
     expect(response.status()).toBe(200);
-    
+
     const data = await response.json();
     expect(data.ok).toBe(true);
     expect(data.echo.name).toBeUndefined();
@@ -65,7 +65,7 @@ test.describe('API Server Endpoints', () => {
         'Access-Control-Request-Method': 'GET'
       }
     });
-    
+
     expect(response.status()).toBe(200);
     // CORS headers should be present due to app.use(cors())
   });
@@ -74,7 +74,7 @@ test.describe('API Server Endpoints', () => {
     // Test that server is responsive
     const response = await request.get('http://localhost:8787/session');
     expect(response.status()).toBe(200);
-    
+
     // Response should be fast (< 2 seconds for token generation)
     const startTime = Date.now();
     await request.get('http://localhost:8787/session');
@@ -84,22 +84,22 @@ test.describe('API Server Endpoints', () => {
 
   test('should handle multiple concurrent session requests', async ({ request }) => {
     // Test that server can handle concurrent requests
-    const promises = Array.from({ length: 5 }, () => 
+    const promises = Array.from({ length: 5 }, () =>
       request.get('http://localhost:8787/session')
     );
-    
+
     const responses = await Promise.all(promises);
-    
+
     // All should succeed
     responses.forEach(response => {
       expect(response.status()).toBe(200);
     });
-    
+
     // All should have unique tokens
     const tokens = await Promise.all(
       responses.map(r => r.json().then(data => data.value))
     );
-    
+
     const uniqueTokens = new Set(tokens);
     expect(uniqueTokens.size).toBe(5);
   });
@@ -107,10 +107,10 @@ test.describe('API Server Endpoints', () => {
   test('should validate session token format', async ({ request }) => {
     const response = await request.get('http://localhost:8787/session');
     const data = await response.json();
-    
+
     // Token should be ephemeral key format
     expect(data.value).toMatch(/^ek_[a-f0-9]{32}$/);
-    
+
     // Session should have required Realtime API fields
     expect(data.session.object).toBe('realtime.session');
     expect(data.session.id).toMatch(/^sess_/);

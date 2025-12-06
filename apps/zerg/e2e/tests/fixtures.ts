@@ -20,7 +20,7 @@ function getBackendPort(): number {
   if (process.env.BACKEND_PORT) {
     return parseInt(process.env.BACKEND_PORT);
   }
-  
+
   // Load from .env file
   const envPath = path.resolve(__dirname, '../../.env');
   if (fs.existsSync(envPath)) {
@@ -33,7 +33,7 @@ function getBackendPort(): number {
       }
     }
   }
-  
+
   return 8001; // Default fallback
 }
 
@@ -48,7 +48,7 @@ export const test = base.extend<TestFixtures>({
     const basePort = getBackendPort();
     await use(`http://127.0.0.1:${basePort}`);
   },
-  
+
   request: async ({ playwright, backendUrl }, use, testInfo) => {
     const workerId = String(testInfo.workerIndex);
     const request = await playwright.request.newContext({
@@ -60,7 +60,7 @@ export const test = base.extend<TestFixtures>({
     await use(request);
     await request.dispose();
   },
-  
+
   context: async ({ browser }, use, testInfo) => {
     const workerId = String(testInfo.workerIndex);
 

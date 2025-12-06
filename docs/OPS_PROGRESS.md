@@ -8,7 +8,7 @@ Backend (Completed)
 - [x] API: `GET /api/ops/timeseries?metric=...&window=today`
 - [x] API: `GET /api/ops/top?kind=agents&window=today&limit=5`
 - [x] Service: summary/timeseries/top (zero‑fill, percentile calc, nullable cost)
-- [x] WS: `ops:events` ticker (run_*, agent_*, thread_message_created, budget_denied)
+- [x] WS: `ops:events` ticker (run*\*, agent*\*, thread_message_created, budget_denied)
 - [x] Admin gating: ops APIs + ops:events subscription
 - [x] Budget guard: 80% warn, 100% deny (Discord alerts; de‑bounced)
 - [x] Config: `DISCORD_WEBHOOK_URL`, `DISCORD_ENABLE_ALERTS`, `DISCORD_DAILY_DIGEST_CRON`
@@ -32,8 +32,8 @@ Lessons Learned
 Frontend (Next)
 
 - [ ] Page `/admin/ops`: KPI cards, budget gauges, sparklines, top agents, live ticker (cap N=200)
- - [ ] TV mode: `?tv=1` fullscreen, large fonts, hide nav; 15s auto‑refresh fallback
- - [ ] Ops HUD: compact metrics across admin routes; poll summary every ~25s; thresholds (runs, cost, errors, budget%)
+- [ ] TV mode: `?tv=1` fullscreen, large fonts, hide nav; 15s auto‑refresh fallback
+- [ ] Ops HUD: compact metrics across admin routes; poll summary every ~25s; thresholds (runs, cost, errors, budget%)
 - [ ] WS integration: subscribe to `ops:events`; append frames; color‑coded types
 - [ ] Error/loading states; skeletons; retry logic
 - [ ] Tests: component render, admin gating, ticker behavior, zero‑fill charts

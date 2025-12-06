@@ -11,24 +11,24 @@ for file in tests/*.spec.ts tests/helpers/*.ts; do
     # Check if file contains hardcoded URLs
     if grep -q "http://localhost:8001" "$file"; then
       echo "Updating $file..."
-      
+
       # Replace direct API calls to use the backendUrl fixture
       sed -i.bak "s|await page\.request\.get('http://localhost:8001|await page.request.get(backendUrl + '|g" "$file"
       sed -i.bak "s|await page\.request\.post('http://localhost:8001|await page.request.post(backendUrl + '|g" "$file"
       sed -i.bak "s|await page\.request\.patch('http://localhost:8001|await page.request.patch(backendUrl + '|g" "$file"
       sed -i.bak "s|await page\.request\.put('http://localhost:8001|await page.request.put(backendUrl + '|g" "$file"
       sed -i.bak "s|await page\.request\.delete('http://localhost:8001|await page.request.delete(backendUrl + '|g" "$file"
-      
+
       # Replace fetch calls
       sed -i.bak "s|fetch('http://localhost:8001|fetch(backendUrl + '|g" "$file"
-      
+
       # Replace WebSocket URLs
       sed -i.bak "s|'ws://localhost:8001|backendUrl.replace('http', 'ws') + '|g" "$file"
       sed -i.bak "s|\"ws://localhost:8001|backendUrl.replace('http', 'ws') + '|g" "$file"
-      
+
       # Replace string concatenations
       sed -i.bak "s|http://localhost:8001/|\" + backendUrl + \"/|g" "$file"
-      
+
       # Clean up backup files
       rm -f "${file}.bak"
     fi

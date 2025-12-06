@@ -32,6 +32,7 @@ The `send_email` tool allows Zerg agents to send emails via the [Resend API](htt
 4. Wait for verification (usually takes a few minutes)
 
 For development/testing, you can use Resend's test email addresses:
+
 - From: `onboarding@resend.dev`
 - To: `delivered@resend.dev`
 
@@ -187,27 +188,30 @@ The tool returns a dictionary with the following structure:
 
 ### Common Errors
 
-| Error | Cause | Solution |
-|-------|-------|----------|
-| Invalid API key format | API key doesn't start with `re_` | Check your API key from Resend dashboard |
-| Invalid API key | API key is incorrect or revoked | Generate a new API key |
-| Access forbidden | Domain not verified | Verify your domain in Resend |
-| Validation error | Invalid email addresses or missing required fields | Check email format and required parameters |
-| Rate limit exceeded | Too many requests | Slow down or upgrade plan |
+| Error                  | Cause                                              | Solution                                   |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------ |
+| Invalid API key format | API key doesn't start with `re_`                   | Check your API key from Resend dashboard   |
+| Invalid API key        | API key is incorrect or revoked                    | Generate a new API key                     |
+| Access forbidden       | Domain not verified                                | Verify your domain in Resend               |
+| Validation error       | Invalid email addresses or missing required fields | Check email format and required parameters |
+| Rate limit exceeded    | Too many requests                                  | Slow down or upgrade plan                  |
 
 ## Rate Limits and Pricing
 
 ### Free Tier
+
 - 100 emails per day
 - 3,000 emails per month
 - 2 API requests per second
 
 ### Pro Plan ($20/month)
+
 - 50,000 emails per month
 - No daily limit
 - 2+ requests per second
 
 ### Important Limits
+
 - Must maintain < 4% bounce rate
 - Must maintain < 0.08% spam rate
 - Exceeding these may pause sending temporarily
@@ -215,19 +219,23 @@ The tool returns a dictionary with the following structure:
 ## Best Practices
 
 ### 1. Domain Verification
+
 Always verify your domain before sending production emails. Using unverified domains will result in errors.
 
 ### 2. Email Content
+
 - Always provide both `text` and `html` versions when possible
 - Use semantic HTML for better email client compatibility
 - Test emails in multiple clients (Gmail, Outlook, etc.)
 
 ### 3. From Address
+
 - Use a valid email from your verified domain
 - Use descriptive display names: `"Team Name <noreply@mydomain.com>"`
 - Avoid using `noreply@` if you expect responses (use `reply_to` instead)
 
 ### 4. Error Handling
+
 Always check the `success` field and handle errors gracefully:
 
 ```python
@@ -239,6 +247,7 @@ if not result["success"]:
 ```
 
 ### 5. Rate Limiting
+
 Implement backoff strategies if sending many emails:
 
 ```python
@@ -253,6 +262,7 @@ for email in email_list:
 ## Testing
 
 ### Validation Script (Mock Mode)
+
 Test your email logic without making API calls:
 
 ```bash
@@ -260,6 +270,7 @@ python scripts/validate_email_resend.py
 ```
 
 ### Integration Test
+
 Test the tool registration and invocation:
 
 ```bash
@@ -267,6 +278,7 @@ cd apps/zerg/backend && uv run python ../../../scripts/test_email_tool.py
 ```
 
 ### Send Test Email
+
 Use the Resend test addresses for end-to-end testing:
 
 ```python
@@ -282,18 +294,22 @@ result = send_email(
 ## Security Considerations
 
 ### API Key Storage
+
 - Never commit API keys to version control
 - Store API keys securely (environment variables, secrets manager)
 - Use separate API keys for development and production
 - Rotate keys periodically
 
 ### Email Validation
+
 The tool validates email addresses, but always sanitize user input:
+
 - Validate email format before passing to tool
 - Sanitize subject lines and content
 - Prevent email injection attacks
 
 ### Content Security
+
 - Escape HTML content to prevent XSS
 - Validate attachment URLs
 - Limit attachment sizes
@@ -302,26 +318,32 @@ The tool validates email addresses, but always sanitize user input:
 ## Troubleshooting
 
 ### "Domain not verified" Error
+
 **Problem:** Trying to send from unverified domain
 
 **Solution:**
+
 1. Go to Resend dashboard > Domains
 2. Add your domain
 3. Add DNS records to your domain provider
 4. Wait for verification
 
 ### "Rate limit exceeded" Error
+
 **Problem:** Sending too many emails too quickly
 
 **Solution:**
+
 - Implement exponential backoff
 - Batch email sends
 - Upgrade to Pro plan for higher limits
 
 ### "Invalid email address" Error
+
 **Problem:** Email format validation failed
 
 **Solution:**
+
 - Check email format is valid
 - Remove extra spaces
 - Ensure domain has valid TLD
@@ -337,10 +359,12 @@ The tool validates email addresses, but always sanitize user input:
 While this tool is implemented for Resend, SendGrid is also a popular option:
 
 **Resend vs SendGrid:**
+
 - Resend: Simpler API, modern design, better DX, free tier suitable for most use cases
 - SendGrid: More enterprise features, larger scale, more complex API, established platform
 
 If you need SendGrid instead, the implementation would be similar but using:
+
 - Endpoint: `https://api.sendgrid.com/v3/mail/send`
 - Different payload structure (see SendGrid docs)
 - Bearer token authentication
@@ -348,11 +372,13 @@ If you need SendGrid instead, the implementation would be similar but using:
 ## Support
 
 For issues with the email tool:
+
 1. Check this documentation
 2. Review error messages (they're descriptive)
 3. Test with validation scripts
 4. Check Resend dashboard for delivery status
 
 For Resend service issues:
+
 - Resend Status: https://status.resend.com
 - Resend Support: support@resend.com

@@ -382,13 +382,13 @@ class WorkflowEngine:
             True if execution completed, False if timed out or not found
         """
         start_time = utc_now_naive()
-        
+
         # Retry loop to handle startup delay (race between /start response and background task registration)
         while True:
             task = self._running_tasks.get(execution_id)
             if task:
                 break
-            
+
             # Check if execution already completed or is pending
             session_factory = get_session_factory()
             with session_factory() as db:
@@ -399,12 +399,12 @@ class WorkflowEngine:
                 if not execution:
                     logger.warning(f"[WorkflowEngine] Execution {execution_id} not found in DB")
                     return False
-            
+
             # Check timeout
             if timeout and (utc_now_naive() - start_time).total_seconds() > timeout:
                 logger.warning(f"[WorkflowEngine] Timeout waiting for task registration execution_id={execution_id}")
                 return False
-                
+
             # Wait for task to appear (handle the 100ms delay in start_workflow_execution)
             await asyncio.sleep(0.05)
 
@@ -414,7 +414,7 @@ class WorkflowEngine:
             if timeout:
                 elapsed = (utc_now_naive() - start_time).total_seconds()
                 remaining_timeout = max(0.1, timeout - elapsed)
-                
+
             await asyncio.wait_for(task, timeout=remaining_timeout)
             return True
         except asyncio.TimeoutError:

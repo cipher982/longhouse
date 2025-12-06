@@ -1,28 +1,33 @@
 Title: Usage Controls, Safety Caps, and Platform Hardening (PRD)
 
 Objective
+
 - Introduce immediate, low‑risk guardrails to control cost, abuse, and latency.
 - Add lightweight observability to inform quotas and alerts.
 - Tighten platform boundaries (CORS) for safer browser access.
 
 Non‑Goals
+
 - Full multi‑tenant rate‑limiting infra; Redis optional later.
 - Complex billing/recon; only coarse cost estimates.
 - External account provisioning or SSO changes.
 
 Rollout Plan (phased)
-1) Set OpenAI project budgets (external)
-2) Output cap (LLM) + Model allowlist for non‑admins
-3) Per‑user runs/day caps (non‑admins)
-4) Token usage capture + threshold alerts (user and global)
-5) Tighten CORS to exact origin(s)
+
+1. Set OpenAI project budgets (external)
+2. Output cap (LLM) + Model allowlist for non‑admins
+3. Per‑user runs/day caps (non‑admins)
+4. Token usage capture + threshold alerts (user and global)
+5. Tighten CORS to exact origin(s)
 
 Key Decisions
+
 - Admin users are exempt from caps and model restrictions.
 - Start with DB aggregation for usage/cost; add Redis counters later if needed.
 - Default output cap 1000 tokens; configurable via env.
 
 Environment Variables
+
 - MAX_OUTPUT_TOKENS (int, default 1000; 0 disables)
 - ALLOWED_MODELS_NON_ADMIN (csv; e.g., gpt-4o-mini)
 - DAILY_RUNS_PER_USER (int; 0 disables)
@@ -33,6 +38,7 @@ Environment Variables
 Tasks & Acceptance Criteria
 
 Task A: Output Cap (LLM max tokens)
+
 - Implementation
   - Add `MAX_OUTPUT_TOKENS` to settings.
   - Pass `max_tokens` into `ChatOpenAI` in `zerg/agents_def/zerg_react_agent._make_llm` when >0.
@@ -47,6 +53,7 @@ Task A: Output Cap (LLM max tokens)
   - Added tests `backend/tests/test_output_cap.py` verifying the constructor receives `max_tokens` from env.
 
 Task B: Model Allowlist for Non‑Admins
+
 - Implementation
   - Extend agents create/update routes to enforce allowlist when `current_user.role != ADMIN`.
   - If disallowed/empty: reject (422).
@@ -64,6 +71,7 @@ Task B: Model Allowlist for Non‑Admins
   - Added tests: non‑admin blocked on disallowed model; allowed model passes; admin bypass; models endpoint filtering.
 
 Task C: Per‑User Runs/Day (non‑admins)
+
 - Implementation
   - Add guard helper that computes today’s run count per user via `AgentRun` joined to `Agent.owner_id` and UTC date.
   - Enforce in both:
@@ -82,6 +90,7 @@ Task C: Per‑User Runs/Day (non‑admins)
   - Added tests (`test_daily_runs_cap.py`) covering non‑admin blocking, admin exemption, and both thread/task entrypoints.
 
 Task D: Token Usage Capture + Cost Estimate
+
 - Implementation
   - In `AgentRunner.run_thread`, aggregate `prompt_tokens`/`completion_tokens` from `AIMessage.response_metadata.usage` across model turns.
   - Add `MODEL_PRICES` map (per 1K tokens in/out) and compute `total_cost_usd`.
@@ -103,6 +112,7 @@ Task D: Token Usage Capture + Cost Estimate
   - Tests cover metadata present and missing; cache cleared per test for deterministic behavior.
 
 Task E: Budget Thresholds (User + Global, per day)
+
 - Implementation
   - In the same pre‑check as runs/day, aggregate today’s user and global cost from `AgentRun.finished_at`.
   - Log warning at ≥80%; deny non‑admin at ≥100%.
@@ -116,6 +126,7 @@ Task E: Budget Thresholds (User + Global, per day)
 - Status: [ ] Not started
 
 Task F: CORS Tightening
+
 - Implementation
   - Use exact origins from `ALLOWED_CORS_ORIGINS` in prod; wildcard only in dev/test.
   - Update error handler to only set `Access-Control-Allow-Origin` when request origin is allowed; add `Vary: Origin`.
@@ -127,22 +138,26 @@ Task F: CORS Tightening
 - Status: [ ] Not started
 
 Task G: Admin Exemptions Audit
+
 - Implementation
   - Ensure all caps and allowlists skip `role=ADMIN`.
   - Unit tests assert exemption across tasks B–E.
 - Status: [ ] Not started
 
 Task H: Cleanup & Registry
+
 - Implementation
   - Remove unused `OpenAI` client in `routers/agents.py`.
   - Ensure model registry includes any IDs referenced by allowlist defaults.
 - Status: [ ] Not started
 
 Risks & Mitigations
+
 - Race conditions on counters: start with DB aggregation which is eventually consistent per request; add Redis `INCR` later for atomicity.
 - Provider param naming drift: monitor `langchain-openai` releases; use `max_tokens` compatible with current version.
 - Over‑blocking: start with warning logs before turning denials on by default; ship with conservative thresholds.
 
 Operations
+
 - Set OpenAI budgets in the dashboard per project.
 - Configure env vars in production and staging.

@@ -37,7 +37,7 @@ describe('ConversationController', () => {
     it('should set conversation ID', () => {
       controller.setConversationId('test-id');
       expect(controller.getConversationId()).toBe('test-id');
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'conversationIdChange',
@@ -112,11 +112,11 @@ describe('ConversationController', () => {
           isStreaming: true
         })
       );
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'streamingStart' })
       );
-      
+
       // Note: controller internal state tracking of streaming might be implicit via renderer or state
       // If isStreaming() method exists, check it
       // The controller implementation has `state.streamingMessageId`
@@ -140,7 +140,7 @@ describe('ConversationController', () => {
       controller.setConversationId('conv-123');
       controller.startStreaming();
       controller.appendStreaming('Complete message');
-      
+
       listener.mockClear();
       await controller.finalizeStreaming();
 
@@ -151,7 +151,7 @@ describe('ConversationController', () => {
         })
       );
       expect(mockSessionManager.addConversationTurn).toHaveBeenCalled();
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'streamingStop' })
       );
@@ -165,7 +165,7 @@ describe('ConversationController', () => {
       // Verify state is cleared (assuming getter exists or implementation detail)
       // The new implementation has getStreamingText()
       // And we can check if appendStreaming starts a NEW message
-      
+
       controller.appendStreaming('New');
       expect(mockRenderer.addMessage).toHaveBeenCalledTimes(2); // Once for first stream, once for new
     });

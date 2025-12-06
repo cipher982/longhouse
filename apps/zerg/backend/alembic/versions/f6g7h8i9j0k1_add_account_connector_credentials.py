@@ -51,4 +51,3 @@ def downgrade() -> None:
     """Drop account_connector_credentials table."""
     op.drop_constraint('uix_account_owner_connector', 'account_connector_credentials', type_='unique')
     op.drop_table('account_connector_credentials')
-

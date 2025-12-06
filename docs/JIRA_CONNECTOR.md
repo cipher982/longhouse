@@ -15,11 +15,11 @@ The Jira connector enables Zerg agents to interact with Jira Cloud projects thro
 
 Agents using the Jira connector need the following configuration parameters:
 
-| Parameter | Required | Description | Example |
-|-----------|----------|-------------|---------|
-| `domain` | Yes | Jira Cloud domain | `yourcompany.atlassian.net` |
-| `email` | Yes | User email for authentication | `agent@yourcompany.com` |
-| `api_token` | Yes | API token from Atlassian account | `abc123xyz...` |
+| Parameter   | Required | Description                      | Example                     |
+| ----------- | -------- | -------------------------------- | --------------------------- |
+| `domain`    | Yes      | Jira Cloud domain                | `yourcompany.atlassian.net` |
+| `email`     | Yes      | User email for authentication    | `agent@yourcompany.com`     |
+| `api_token` | Yes      | API token from Atlassian account | `abc123xyz...`              |
 
 ### Generating API Tokens
 
@@ -36,6 +36,7 @@ Agents using the Jira connector need the following configuration parameters:
 Create a new issue in a Jira project.
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
@@ -48,6 +49,7 @@ Create a new issue in a Jira project.
 - `assignee` (optional): Assignee account ID (NOT email or display name)
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -58,6 +60,7 @@ Create a new issue in a Jira project.
 ```
 
 **Example Usage:**
+
 ```python
 result = jira_create_issue(
     domain="company.atlassian.net",
@@ -79,6 +82,7 @@ result = jira_create_issue(
 Search for issues in a Jira project using JQL (Jira Query Language).
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
@@ -87,6 +91,7 @@ Search for issues in a Jira project using JQL (Jira Query Language).
 - `max_results` (optional): Maximum results to return (default: 50, max: 100)
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -109,6 +114,7 @@ Search for issues in a Jira project using JQL (Jira Query Language).
 ```
 
 **Example JQL Queries:**
+
 ```python
 # All issues in project
 jql = "project = PROJ ORDER BY created DESC"
@@ -130,12 +136,14 @@ jql = "project = PROJ AND updated >= -7d"
 Get detailed information about a specific Jira issue.
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
 - `issue_key` (required): Issue key (e.g., "PROJ-123")
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -163,6 +171,7 @@ Get detailed information about a specific Jira issue.
 Add a comment to an existing Jira issue.
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
@@ -170,6 +179,7 @@ Add a comment to an existing Jira issue.
 - `body` (required): Comment text in plain text
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -178,6 +188,7 @@ Add a comment to an existing Jira issue.
 ```
 
 **Example Usage:**
+
 ```python
 result = jira_add_comment(
     domain="company.atlassian.net",
@@ -195,6 +206,7 @@ result = jira_add_comment(
 Transition an issue to a new status (e.g., "To Do" → "In Progress" → "Done").
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
@@ -202,6 +214,7 @@ Transition an issue to a new status (e.g., "To Do" → "In Progress" → "Done")
 - `transition_id` (required): Transition ID as string
 
 **Returns:**
+
 ```json
 {
   "success": true
@@ -219,6 +232,7 @@ Transition IDs are workflow-specific and vary by project. To find available tran
    - `"31"`: In Progress → To Do
 
 **Example Usage:**
+
 ```python
 # Move issue from "In Progress" to "Done"
 result = jira_transition_issue(
@@ -237,6 +251,7 @@ result = jira_transition_issue(
 Update fields on an existing Jira issue.
 
 **Parameters:**
+
 - `domain` (required): Jira Cloud domain
 - `email` (required): User email for authentication
 - `api_token` (required): API token
@@ -244,6 +259,7 @@ Update fields on an existing Jira issue.
 - `fields` (required): Dictionary of field updates
 
 **Returns:**
+
 ```json
 {
   "success": true
@@ -251,6 +267,7 @@ Update fields on an existing Jira issue.
 ```
 
 **Example Usage:**
+
 ```python
 # Update summary and priority
 result = jira_update_issue(
@@ -283,13 +300,13 @@ All tools return a consistent error structure:
 
 ### Common Error Codes
 
-| Code | Error | Meaning |
-|------|-------|---------|
-| 401 | Authentication failed | Invalid email or API token |
-| 403 | Permission denied | User lacks required permissions |
-| 404 | Resource not found | Invalid project key, issue key, or field name |
-| 429 | Rate limit exceeded | Too many requests, includes `rate_limit_retry_after` |
-| 500+ | Server error | Jira service issue, retry later |
+| Code | Error                 | Meaning                                              |
+| ---- | --------------------- | ---------------------------------------------------- |
+| 401  | Authentication failed | Invalid email or API token                           |
+| 403  | Permission denied     | User lacks required permissions                      |
+| 404  | Resource not found    | Invalid project key, issue key, or field name        |
+| 429  | Rate limit exceeded   | Too many requests, includes `rate_limit_retry_after` |
+| 500+ | Server error          | Jira service issue, retry later                      |
 
 ### Rate Limiting
 
@@ -301,6 +318,7 @@ Jira Cloud enforces per-tenant burst rate limits:
 - **Best Practice**: Batch operations and avoid tight loops
 
 **Example Rate Limit Response:**
+
 ```json
 {
   "success": false,
@@ -341,6 +359,7 @@ python scripts/validate_jira_connector.py
 ```
 
 This script validates:
+
 - Authentication header format
 - Payload structures for all operations
 - URL construction
@@ -352,6 +371,7 @@ This script validates:
 ## Integration Example
 
 **Agent Configuration (JSON):**
+
 ```json
 {
   "agent_id": "project-manager-agent",
@@ -367,6 +387,7 @@ This script validates:
 ```
 
 **Agent Workflow Example:**
+
 ```python
 # 1. Search for open bugs
 issues = jira_list_issues(
@@ -404,6 +425,7 @@ jira_add_comment(
 ## API Reference
 
 For complete Jira Cloud REST API v3 documentation:
+
 - **Base URL**: `https://{domain}/rest/api/3/`
 - **API Docs**: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
 - **ADF Format**: https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/
@@ -414,21 +436,25 @@ For complete Jira Cloud REST API v3 documentation:
 ## Troubleshooting
 
 ### "Authentication failed" Error
+
 - Verify email is correct
 - Ensure API token is valid and not expired
 - Check that domain includes `.atlassian.net`
 
 ### "Permission denied" Error
+
 - Verify user has permission to perform action
 - Check project permissions in Jira settings
 - Ensure user is part of the project
 
 ### "Resource not found" Error
+
 - Verify project key is correct and exists
 - Check issue key format (PROJ-123)
 - Ensure field names match Jira configuration
 
 ### Transition Not Working
+
 - Transition IDs are workflow-specific
 - Query `/issue/{issueKey}/transitions` to find valid IDs
 - Ensure issue's current status allows the transition
@@ -464,6 +490,7 @@ Potential additions to the connector:
 ## Support
 
 For issues or questions about the Jira connector:
+
 1. Check this documentation
 2. Review the validation script output
 3. Consult Jira Cloud REST API documentation

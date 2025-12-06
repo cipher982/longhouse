@@ -32,7 +32,7 @@ describe('ConversationManager', () => {
 
   it('should add and retrieve conversation turns', async () => {
     const conversationId = await manager.createNewConversation()
-    
+
     const turn: ConversationTurn = {
       id: 'test-turn-1',
       timestamp: new Date(),
@@ -41,7 +41,7 @@ describe('ConversationManager', () => {
     }
 
     await manager.addTurn(turn)
-    
+
     const history = await manager.getConversationHistory()
     expect(history).toHaveLength(1)
     expect(history[0].userTranscript).toBe('Hello, how are you?')
@@ -51,7 +51,7 @@ describe('ConversationManager', () => {
     await manager.loadSampleData()
     const documents = await manager.getAllDocuments()
     expect(documents.length).toBeGreaterThan(0)
-    
+
     // Verify sample document structure
     const doc = documents[0]
     expect(doc.id).toBeDefined()

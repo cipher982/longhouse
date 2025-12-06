@@ -3,66 +3,68 @@
    ------------------------------------------------------------------ */
 
 .btn-primary {
-    align-self: flex-start;
-    background-color: var(--color-brand-primary);
-    border: none;
-    padding: var(--component-button-padding-y) var(--component-button-padding-x);
-    font-size: var(--component-button-font-size);
-    font-weight: var(--component-button-font-weight);
-    border-radius: var(--radius-md);
-    color: var(--color-surface-page);
-    cursor: pointer;
-    transition:
-        background-color var(--motion-duration-fast) var(--motion-easing-standard),
-        transform var(--motion-duration-fast) var(--motion-easing-standard);
+  align-self: flex-start;
+  background-color: var(--color-brand-primary);
+  border: none;
+  padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  font-size: var(--component-button-font-size);
+  font-weight: var(--component-button-font-weight);
+  border-radius: var(--radius-md);
+  color: var(--color-surface-page);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .btn-primary:hover {
-    background-color: var(--color-brand-secondary);
-    transform: translateY(-1px);
+  background-color: var(--color-brand-secondary);
+  transform: translateY(-1px);
 }
 
 /* Secondary (neutral surface) */
 .btn,
 .btn-secondary {
-    background-color: var(--color-surface-card);
-    color: var(--color-text-primary);
-    border: 1px solid var(--color-border-subtle);
-    padding: var(--component-button-padding-y) var(--component-button-padding-x);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition:
-        background-color var(--motion-duration-fast) var(--motion-easing-standard),
-        transform var(--motion-duration-fast) var(--motion-easing-standard);
+  background-color: var(--color-surface-card);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .btn:hover,
 .btn-secondary:hover {
-    background-color: var(--color-surface-section);
-    transform: translateY(-1px);
+  background-color: var(--color-surface-section);
+  transform: translateY(-1px);
 }
 
 /* Ghost button – transparent, coloured outline */
 .btn-ghost {
-    background: transparent;
-    color: var(--color-brand-primary);
-    border: 1px solid var(--color-brand-primary);
-    padding: var(--component-button-padding-y) var(--component-button-padding-x);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition:
-        background-color var(--motion-duration-fast) var(--motion-easing-standard),
-        color var(--motion-duration-fast) var(--motion-easing-standard),
-        transform var(--motion-duration-fast) var(--motion-easing-standard);
+  background: transparent;
+  color: var(--color-brand-primary);
+  border: 1px solid var(--color-brand-primary);
+  padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .btn-ghost:hover {
-    background: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
-    transform: translateY(-1px);
+  background: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
+  transform: translateY(-1px);
 }
 
 /* --------------------------------------------------------- */
+
 /* Micro-interaction additions (Phase-4)                     */
+
 /* --------------------------------------------------------- */
 
 /* Slightly scale down on active press for tactile feedback */
@@ -70,7 +72,7 @@
 .btn-primary:active,
 .btn-secondary:active,
 .btn-ghost:active {
-    transform: scale(0.97);
+  transform: scale(0.97);
 }
 
 /* Ensure buttons don’t jump when both translateY and scale are applied */
@@ -78,17 +80,16 @@
 .btn-primary:hover:active,
 .btn-secondary:hover:active,
 .btn-ghost:hover:active {
-    transform: scale(0.97) translateY(-1px);
+  transform: scale(0.97) translateY(-1px);
 }
-
 
 /* Size modifiers */
 .btn-sm {
-    padding: var(--space-xs) var(--space-md);
-    font-size: var(--font-size-xs);
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--font-size-xs);
 }
 
 .btn-lg {
-    padding: var(--space-md) var(--space-xl);
-    font-size: var(--font-size-lg);
+  padding: var(--space-md) var(--space-xl);
+  font-size: var(--font-size-lg);
 }

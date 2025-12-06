@@ -32,12 +32,14 @@ docker-compose --env-file .env.local up --build
 ## 🌐 **Coolify Deployment**
 
 ### **Step 1: Create New Service**
+
 1. In Coolify: **New Resource** → **Docker Compose**
 2. **Repository**: Paste your git repository URL
 3. **Branch**: `main`
 4. **Docker Compose File**: `docker-compose.yml`
 
 ### **Step 2: Configure Environment Variables**
+
 In Coolify environment settings, add these variables:
 
 ```bash
@@ -65,11 +67,13 @@ OPENAI_API_KEY=sk-your_production_openai_key
 ```
 
 ### **Step 3: Network Configuration**
+
 - Coolify automatically creates the `web` network for Traefik
 - No port exposure needed - reverse proxy handles everything
 - Services communicate internally via Docker networks
 
 ### **Step 4: Deploy**
+
 1. Click **Deploy** in Coolify
 2. Monitor logs for successful startup
 3. Check health at `https://your-domain.com/health`
@@ -77,15 +81,18 @@ OPENAI_API_KEY=sk-your_production_openai_key
 ## 🔍 **Post-Deployment Verification**
 
 ### **Health Checks**
+
 - **Frontend**: `https://your-domain.com/health` → "healthy"
 - **Backend API**: `https://your-domain.com/api/` → proxied by frontend Nginx
 - **WebSocket**: Check browser console for successful WS connection
 
 ### **Database Connection**
+
 - Check backend logs for successful PostgreSQL connection
 - Tables are created automatically on first run
 
 ### **Authentication**
+
 - Visit your domain and try Google Sign-In
 - Verify JWT tokens are working properly
 
@@ -94,23 +101,28 @@ OPENAI_API_KEY=sk-your_production_openai_key
 ### **Common Issues**
 
 **1. Frontend 404 errors**
+
 - Check that `frontend/www/` contains built WASM files
 - Run `cd frontend && ./build-only.sh` before deployment
 
 **2. Database connection errors**
+
 - Verify `POSTGRES_PASSWORD` matches in both services
 - Check PostgreSQL container logs for startup issues
 
 **3. CORS errors**
+
 - Production uses same-origin proxying; no CORS should be required. If you see
   CORS errors, verify frontend Nginx has `/api/` and `/api/ws` proxy rules and
   backend runs with `--proxy-headers`.
 
 **4. Google OAuth issues**
+
 - Update Google OAuth redirect URIs to include your production domain
 - Verify `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 
 ### **Debugging Commands**
+
 ```bash
 # View logs in Coolify
 # Or via docker:
@@ -128,17 +140,21 @@ docker-compose exec backend curl http://postgres:5432
 ## 📊 **Monitoring & Maintenance**
 
 ### **Backup Strategy**
+
 - PostgreSQL data is persisted in `postgres_data` volume
 - Consider setting up automated database backups via Coolify
 - Static files persisted in `backend_static` volume
 
 ### **Updates**
+
 1. Push changes to your git repository
 2. Coolify can auto-deploy on git push (configure webhook)
 3. Or manually trigger deployment in Coolify UI
 
 ### **Scaling**
+
 Current setup is single-instance. For scaling:
+
 - Add Redis for distributed event bus
 - Use external PostgreSQL (managed service)
 - Load balance multiple backend instances
@@ -154,6 +170,7 @@ Current setup is single-instance. For scaling:
 ## 📞 **Support**
 
 If deployment fails:
+
 1. Check Coolify deployment logs
 2. Verify all environment variables are set
 3. Ensure domain DNS points to your VPS

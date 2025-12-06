@@ -963,9 +963,9 @@ export default function DashboardPage() {
               <tr>
                 <td colSpan={emptyColspan}>
                   <div className="empty-state">
-                    <img 
-                      src={appLogo} 
-                      alt="Swarmlet Logo" 
+                    <img
+                      src={appLogo}
+                      alt="Swarmlet Logo"
                       className="empty-state-illustration"
                     />
                     <p className="empty-state-text">

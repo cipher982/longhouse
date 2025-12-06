@@ -1,6 +1,7 @@
 # Linear Connector - Quick Reference
 
 ## Setup
+
 ```bash
 # 1. Get API key from https://linear.app/settings/api
 # 2. Configure agent with:
@@ -12,16 +13,17 @@
 
 ## Tools Overview
 
-| Tool | Purpose | Key Parameters |
-|------|---------|----------------|
-| `linear_list_teams` | Get team IDs | `api_key` |
-| `linear_create_issue` | Create issue | `api_key`, `team_id`, `title` |
-| `linear_list_issues` | List issues | `api_key`, `team_id` (optional), `state` (optional) |
-| `linear_get_issue` | Get issue details | `api_key`, `issue_id` |
-| `linear_update_issue` | Update issue | `api_key`, `issue_id`, (at least one field) |
-| `linear_add_comment` | Add comment | `api_key`, `issue_id`, `body` |
+| Tool                  | Purpose           | Key Parameters                                      |
+| --------------------- | ----------------- | --------------------------------------------------- |
+| `linear_list_teams`   | Get team IDs      | `api_key`                                           |
+| `linear_create_issue` | Create issue      | `api_key`, `team_id`, `title`                       |
+| `linear_list_issues`  | List issues       | `api_key`, `team_id` (optional), `state` (optional) |
+| `linear_get_issue`    | Get issue details | `api_key`, `issue_id`                               |
+| `linear_update_issue` | Update issue      | `api_key`, `issue_id`, (at least one field)         |
+| `linear_add_comment`  | Add comment       | `api_key`, `issue_id`, `body`                       |
 
 ## Priority Values
+
 ```
 0 = None/No Priority
 1 = Urgent
@@ -33,6 +35,7 @@
 ## Common Workflows
 
 ### Create an Issue
+
 ```python
 # 1. Get team ID
 teams = linear_list_teams(api_key="lin_api_xxxxx")
@@ -53,6 +56,7 @@ issue_identifier = result["data"]["identifier"]  # e.g., "ENG-42"
 ```
 
 ### Update and Comment
+
 ```python
 # 1. Update issue
 linear_update_issue(
@@ -71,6 +75,7 @@ linear_add_comment(
 ```
 
 ### List and Filter
+
 ```python
 # List all issues for a team
 issues = linear_list_issues(
@@ -84,6 +89,7 @@ issues = linear_list_issues(
 ## Error Handling
 
 ### Check Success
+
 ```python
 result = linear_create_issue(...)
 if result["success"]:
@@ -93,12 +99,14 @@ else:
 ```
 
 ### Common Errors
+
 - **401**: Invalid API key
 - **403**: Rate limit exceeded
 - **404**: Resource not found
 - **Validation**: Missing required fields
 
 ## Rate Limits
+
 - **Requests**: 1,500/hour
 - **Complexity**: 250,000 points/hour
 - Check headers: `x-ratelimit-requests-remaining`
@@ -118,11 +126,13 @@ else:
    - Get state IDs from issue objects
 
 ## Files
+
 - **Implementation**: `apps/zerg/backend/zerg/tools/builtin/linear_tools.py`
 - **Full Docs**: `docs/LINEAR_CONNECTOR.md`
 - **Validation**: `scripts/validate_linear_connector.py`
 
 ## Testing
+
 ```bash
 # Validate implementation
 python scripts/validate_linear_connector.py
@@ -132,6 +142,7 @@ python -m py_compile apps/zerg/backend/zerg/tools/builtin/linear_tools.py
 ```
 
 ## Resources
+
 - API Docs: https://linear.app/docs/api/graphql
 - API Keys: https://linear.app/settings/api
 - GraphQL Explorer: https://linear.app/docs/graphql/explorer

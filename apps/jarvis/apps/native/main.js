@@ -69,7 +69,7 @@ function createWindow() {
 function createTray() {
   // Use a simple system icon that exists
   const iconPath = '/System/Library/CoreServices/Menu Extras/Volume.menu/Contents/Resources/Volume.icns';
-  
+
   try {
     tray = new Tray(iconPath);
   } catch (error) {
@@ -78,7 +78,7 @@ function createTray() {
     tray = new Tray(nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
   }
   tray.setToolTip('Jarvis Voice Agent');
-  
+
   const contextMenu = Menu.buildFromTemplate([
     {
       label: 'Show Jarvis',
@@ -103,9 +103,9 @@ function createTray() {
       click: () => quitApp()
     }
   ]);
-  
+
   tray.setContextMenu(contextMenu);
-  
+
   // Single click to toggle (like Spotlight)
   tray.on('click', () => {
     toggleWindow();
@@ -119,16 +119,16 @@ function showWindow() {
     const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
-    
+
     const windowWidth = 720;
     const windowHeight = 520;
     const x = Math.floor((width - windowWidth) / 2);
     const y = Math.floor((height - windowHeight) / 3); // Slightly higher than center
-    
+
     mainWindow.setPosition(x, y);
     mainWindow.show();
     mainWindow.focus();
-    
+
     console.log('👁️ Jarvis window shown');
   }
 }
@@ -157,7 +157,7 @@ function quitApp() {
 // App event handlers
 app.whenReady().then(async () => {
   console.log('🚀 Jarvis native app starting...');
-  
+
   // Request microphone permission upfront
   try {
     const micAccess = await systemPreferences.askForMediaAccess('microphone');

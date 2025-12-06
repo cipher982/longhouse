@@ -9,6 +9,7 @@
 ## Context
 
 Building "Super Siri" - a unified AI assistant with supervisor/worker architecture. Think personal intern that:
+
 - Handles simple requests directly
 - Delegates complex work to disposable workers
 - Maintains context across all interactions
@@ -19,6 +20,7 @@ Building "Super Siri" - a unified AI assistant with supervisor/worker architectu
 ## What's Built (Complete ✅)
 
 ### Milestones 1-3: Foundation
+
 - **PostgresSaver**: Durable checkpointing (replaces MemorySaver)
 - **WorkerArtifactStore**: Filesystem persistence for worker outputs at `/data/swarmlet/workers/`
 - **WorkerRunner**: Executes agents as disposable workers
@@ -144,6 +146,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
 **File:** `zerg/services/worker_artifact_store.py`
 
 Add method:
+
 ```python
 def update_summary(self, worker_id: str, summary: str, summary_meta: dict) -> None:
     """Update worker metadata with extracted summary.
@@ -163,6 +166,7 @@ def update_summary(self, worker_id: str, summary: str, summary_meta: dict) -> No
 ```
 
 Add to top of file (invariants comment):
+
 ```python
 """Worker Artifact Store – filesystem persistence.
 
@@ -211,6 +215,7 @@ def list_workers(limit: int = 20, status: str = None, since_hours: int = None) -
 ```
 
 Update docstring:
+
 ```python
 """List recent worker executions with SUMMARIES ONLY.
 
@@ -326,6 +331,7 @@ From the spec:
 > Without summaries, the supervisor cannot scan 50+ workers without hitting context limits. Summary extraction is NOT metadata - it's a **compression layer** that makes the architecture scale. Full result.txt remains the source of truth.
 
 LLM cost is cheap in 2025. We use multiple LLM calls:
+
 - Worker execution (gpt-4o-mini): ~$0.005
 - Summary extraction (gpt-4o-mini): ~$0.00001
 - Supervisor synthesis (gpt-4o): ~$0.02
@@ -334,4 +340,4 @@ Total: ~$0.025/complex task. The summary extraction is negligible but enables sc
 
 ---
 
-*Ready to implement Phase 2.5*
+_Ready to implement Phase 2.5_

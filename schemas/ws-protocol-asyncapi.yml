@@ -7,7 +7,7 @@ info:
     Comprehensive WebSocket protocol for the Zerg Agent Platform.
     Consolidates message types, payload schemas, and routing patterns into
     a single source of truth for contract-first development.
-    
+
     Features:
     - Topic-based routing with parameterized channels
     - Strongly-typed message payloads
@@ -115,34 +115,34 @@ channels:
 # ---------------------------------------------------------------------------
 
 operations:
-  # System operations  
+  # System operations
   SystemOperations:
     action: send
     channel:
       $ref: '#/channels/SystemChannel'
     summary: Handle system-level WebSocket operations
-    
+
   # Thread operations
   ThreadOperations:
-    action: send  
+    action: send
     channel:
       $ref: '#/channels/ThreadChannel'
     summary: Handle thread-level WebSocket operations
-    
+
   # Agent operations
   AgentOperations:
     action: send
     channel:
-      $ref: '#/channels/AgentChannel' 
+      $ref: '#/channels/AgentChannel'
     summary: Handle agent-level WebSocket operations
-    
+
   # User operations
   UserOperations:
     action: send
     channel:
       $ref: '#/channels/UserChannel'
     summary: Handle user-level WebSocket operations
-      
+
   # Workflow execution operations
   WorkflowOperations:
     action: send
@@ -802,7 +802,7 @@ x-handler-groups:
       - "agent:*"
       - "workflow_execution:*"
       - "ops:*"
-      
+
   chat:
     description: Handles thread messages and streaming events
     handles:

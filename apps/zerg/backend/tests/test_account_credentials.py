@@ -11,7 +11,7 @@ from zerg.utils.crypto import encrypt
 def test_credential_resolver_fallback(db_session, test_user, sample_agent):
     """Test that CredentialResolver correctly prioritizes agent overrides over account credentials."""
     connector_type = ConnectorType.SLACK.value
-    
+
     # 1. Setup: Create account-level credential
     account_creds = {"webhook_url": "https://account-level.com"}
     account_cred = AccountConnectorCredential(
@@ -86,7 +86,7 @@ def test_credential_resolver_no_owner(db_session, sample_agent):
 
 def test_account_connectors_api_lifecycle(client, db_session, test_user):
     """Test the full lifecycle of account-level connectors via API."""
-    
+
     # 1. List connectors - initially empty configuration
     response = client.get("/api/account/connectors")
     assert response.status_code == 200
@@ -125,7 +125,7 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
             "message": "Connected to Slack",
             "metadata": {"workspace": "TestWorkspace"}
         }
-        
+
         response = client.post("/api/account/connectors/slack/test")
         assert response.status_code == 200
         assert response.json()["success"] is True
@@ -139,7 +139,7 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
     # 5. Test "before save" endpoint
     with patch("zerg.routers.account_connectors.test_connector") as mock_test:
         mock_test.return_value = {"success": False, "message": "Invalid token"}
-        
+
         test_payload = {
             "connector_type": "slack",
             "credentials": {"webhook_url": "bad_url"}
@@ -161,4 +161,3 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
     data = response.json()
     slack_status = next(c for c in data if c["type"] == "slack")
     assert slack_status["configured"] is False
-

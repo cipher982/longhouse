@@ -8,11 +8,11 @@ import type { VoiceAgentConfig } from '../types';
 export const personalConfig: VoiceAgentConfig = {
   name: 'Jarvis',
   description: 'Your personal AI assistant with access to health data, location, notes, and smart home',
-  
+
   instructions: `You are Jarvis, a helpful personal AI assistant. You have access to personal data and can help with:
 
 - Health and fitness tracking (WHOOP data, workout analysis)
-- Location services (GPS coordinates, travel assistance)  
+- Location services (GPS coordinates, travel assistance)
 - Personal productivity (calendar, notes, reminders)
 - Smart home control and automation
 - Personal knowledge base and memory
@@ -23,7 +23,7 @@ Keep responses concise but informative. When using tools, explain what you're ch
 
   theme: {
     primaryColor: '#0891b2',      // Cyan-600
-    secondaryColor: '#334155',    // Slate-700  
+    secondaryColor: '#334155',    // Slate-700
     backgroundColor: '#0b1220',   // Dark blue-gray
     textColor: '#e5e7eb',        // Gray-200
     accentColor: '#06b6d4',      // Cyan-500
@@ -45,7 +45,7 @@ Keep responses concise but informative. When using tools, explain what you're ch
       mcpFunction: 'location.get_current'
     },
     {
-      name: 'get_whoop_data', 
+      name: 'get_whoop_data',
       description: 'Get WHOOP health metrics (recovery, sleep, strain)',
       enabled: true,
       mcpServer: 'whoop-mcp',
@@ -76,7 +76,7 @@ Keep responses concise but informative. When using tools, explain what you're ch
     voiceModel: 'gpt-realtime',
     defaultPrompts: [
       "What's my current location?",
-      "How's my recovery today?", 
+      "How's my recovery today?",
       "Show me my recent notes",
       "What should I focus on today?"
     ]

@@ -14,6 +14,7 @@ MemGPT provides a three-tier memory architecture (main context, external context
 MemGPT solves the fixed context window problem by organizing memory into three distinct tiers, analogous to CPU registers, RAM, and disk storage:
 
 #### 1. Main Context (In-Context Memory)
+
 - **Equivalent to:** CPU registers / L1 cache
 - **Purpose:** The LLM's immediate working memory within its fixed context window
 - **Content:** Current conversation state, recent messages, active task details
@@ -22,6 +23,7 @@ MemGPT solves the fixed context window problem by organizing memory into three d
 - **In MemGPT:** This is the actual prompt sent to the LLM, carefully curated to stay within limits
 
 #### 2. External Context (Recall Storage - Active)
+
 - **Equivalent to:** RAM / Main memory
 - **Purpose:** Medium-term memory of important facts and conversation details
 - **Content:** Summarized conversation history, user preferences, agent persona, key facts
@@ -30,6 +32,7 @@ MemGPT solves the fixed context window problem by organizing memory into three d
 - **In MemGPT:** Stored in `core_memory` which has sections for persona and human info
 
 #### 3. Archival Storage (Long-Term Memory)
+
 - **Equivalent to:** Disk storage / Database
 - **Purpose:** Unbounded long-term storage of all historical interactions
 - **Content:** Full message history, documents, past conversations, archived facts
@@ -49,6 +52,7 @@ MemGPT gives the agent explicit tools to manage its own memory (self-editing):
 6. **`conversation_search_date(start_date, end_date)`** - Time-based retrieval
 
 The agent actively decides when to:
+
 - Compress recent messages into summary form (external context)
 - Archive old details that might be needed later
 - Search archives when current context lacks necessary information
@@ -57,23 +61,27 @@ The agent actively decides when to:
 ### Data Movement Between Tiers
 
 **Main → External (Summarization):**
+
 - Triggered when main context approaches token limit
 - Agent uses LLM to generate summary of recent conversation segment
 - Summary stored in structured external context (core_memory)
 - Original detailed messages moved to archival
 
 **External → Main (Context Loading):**
+
 - On every turn, external context loaded into prompt header
 - Agent sees: system prompt + core_memory + recent messages
 - Core memory stays stable across turns until explicitly updated
 
 **Archival → Main (Retrieval):**
+
 - Agent explicitly calls search tools when needed
 - Semantic similarity search finds relevant past interactions
 - Retrieved content temporarily added to main context for current turn
 - Agent decides what to remember long-term vs. one-time retrieval
 
 **External → Archival (Eviction):**
+
 - When external context grows too large for efficient management
 - Older summarized segments moved to archival
 - Core facts remain in external context (persona, preferences)
@@ -83,6 +91,7 @@ The agent actively decides when to:
 MemGPT implements pause/resume for long-running operations:
 
 **Yield/Interrupt Flow:**
+
 1. Agent executing multi-step task
 2. User sends new message (interrupt signal)
 3. System captures current state snapshot:
@@ -93,6 +102,7 @@ MemGPT implements pause/resume for long-running operations:
 5. After response, agent can resume or pivot based on new context
 
 **State Maintenance:**
+
 - State snapshot stored in persistent memory tier
 - Includes: conversation context, core memory, task progress
 - Resume restores full state and continues from checkpoint
@@ -103,6 +113,7 @@ MemGPT implements pause/resume for long-running operations:
 ### Data Model
 
 **Thread Table** (`agent_threads`):
+
 - `id` - Primary key
 - `agent_id` - Foreign key to agents
 - `title` - Human-readable thread name
@@ -113,6 +124,7 @@ MemGPT implements pause/resume for long-running operations:
 - `created_at`, `updated_at` - Timestamps
 
 **ThreadMessage Table** (`thread_messages`):
+
 - `id` - Primary key
 - `thread_id` - Foreign key to threads
 - `role` - "system", "user", "assistant", "tool"
@@ -126,6 +138,7 @@ MemGPT implements pause/resume for long-running operations:
 - `parent_id` - Self-referential FK for tool message grouping
 
 **AgentRun Table** (`agent_runs`):
+
 - `id` - Primary key
 - `agent_id`, `thread_id` - Foreign keys
 - `status` - Enum: queued, running, success, failed
@@ -138,6 +151,7 @@ MemGPT implements pause/resume for long-running operations:
 ### Current Context Building Process
 
 **AgentRunner.run_thread()** flow:
+
 1. Load all ThreadMessages for thread via `get_thread_messages_as_langchain()`
 2. Prepend connector protocols to system message
 3. Inject ephemeral connector status context (not persisted)
@@ -147,6 +161,7 @@ MemGPT implements pause/resume for long-running operations:
 7. No summarization or eviction occurs
 
 **Current Limitations:**
+
 - **No memory management** - All messages kept indefinitely in flat structure
 - **Token limit risk** - Long threads will eventually hit context window limits
 - **No compression** - Full message content always loaded
@@ -157,6 +172,7 @@ MemGPT implements pause/resume for long-running operations:
 ### Temporal Awareness
 
 Zerg already implements temporal awareness (connector-aware agents PRD P1.2):
+
 - Messages timestamped with `sent_at` field
 - Timestamps prepended to user/assistant messages: `[2025-12-03T14:23:00Z] message content`
 - System/tool messages not timestamped (static or immediate)
@@ -166,18 +182,18 @@ Zerg already implements temporal awareness (connector-aware agents PRD P1.2):
 
 ### Direct Architectural Mappings
 
-| MemGPT Concept | Zerg Equivalent | Status | Notes |
-|----------------|-----------------|--------|-------|
-| Main Context | Messages loaded in AgentRunner | ✅ Exists | Currently loads ALL messages |
-| External Context (core_memory) | Thread.agent_state JSON field | 🟡 Unused | Field exists but empty |
-| Archival Storage | N/A | ❌ Missing | Need new table or service |
-| core_memory_append | New supervisor tool | ❌ Missing | Would write to agent_state |
-| core_memory_replace | New supervisor tool | ❌ Missing | Would update agent_state |
-| archival_memory_insert | New supervisor tool | ❌ Missing | Would write to archival table |
-| archival_memory_search | New supervisor tool | ❌ Missing | Would query archival table |
-| conversation_search | ThreadMessage query | 🟡 Partial | DB query exists, no tool |
-| Interrupt mechanism | AgentRun + Run status | 🟡 Partial | Basic pause exists via status |
-| State snapshots | Thread.agent_state | 🟡 Unused | Field available |
+| MemGPT Concept                 | Zerg Equivalent                | Status     | Notes                         |
+| ------------------------------ | ------------------------------ | ---------- | ----------------------------- |
+| Main Context                   | Messages loaded in AgentRunner | ✅ Exists  | Currently loads ALL messages  |
+| External Context (core_memory) | Thread.agent_state JSON field  | 🟡 Unused  | Field exists but empty        |
+| Archival Storage               | N/A                            | ❌ Missing | Need new table or service     |
+| core_memory_append             | New supervisor tool            | ❌ Missing | Would write to agent_state    |
+| core_memory_replace            | New supervisor tool            | ❌ Missing | Would update agent_state      |
+| archival_memory_insert         | New supervisor tool            | ❌ Missing | Would write to archival table |
+| archival_memory_search         | New supervisor tool            | ❌ Missing | Would query archival table    |
+| conversation_search            | ThreadMessage query            | 🟡 Partial | DB query exists, no tool      |
+| Interrupt mechanism            | AgentRun + Run status          | 🟡 Partial | Basic pause exists via status |
+| State snapshots                | Thread.agent_state             | 🟡 Unused  | Field available               |
 
 ### Implementation Strategy
 
@@ -222,6 +238,7 @@ CREATE TABLE archived_messages (
 
 **Phase 3: Smart Context Loading**
 Modify `AgentRunner.run_thread()` to:
+
 1. Load core_memory from thread.agent_state
 2. Load only recent N messages (e.g., last 50 turns or 8k tokens)
 3. Check if summarization threshold reached
@@ -230,6 +247,7 @@ Modify `AgentRunner.run_thread()` to:
 
 **Phase 4: Supervisor Memory Tools**
 Implement tools as callables available to agent:
+
 - `update_core_memory(section, content)` - Updates thread.agent_state
 - `summarize_recent_conversation(turn_count)` - Generates summary, updates agent_state
 - `archive_old_messages(before_turn)` - Moves messages to archived_messages table
@@ -239,12 +257,14 @@ Implement tools as callables available to agent:
 ### Key Differences from MemGPT
 
 **What to Keep:**
+
 - Three-tier memory model concept
 - Self-editing via explicit tools
 - Summarization to compress context
 - Search-based archival retrieval
 
 **What to Adapt:**
+
 - **Use Thread.agent_state** instead of separate core_memory DB
 - **Leverage existing Run model** for interrupt/resume state
 - **Keep ThreadMessage as source of truth** - archival is copy, not move
@@ -252,6 +272,7 @@ Implement tools as callables available to agent:
 - **Temporal awareness already exists** - Timestamps in messages
 
 **Zerg-Specific Advantages:**
+
 - Already have Run model for execution tracking
 - agent_state field purpose-built for state persistence
 - Thread isolation - each agent/thread has independent memory
@@ -498,9 +519,11 @@ Result: "Archived 150 messages to long-term storage. Summary preserved in core m
 ### Phased Implementation Plan
 
 #### Phase 1: Core Memory Foundation (2-3 days)
+
 **Goal:** Enable basic core memory persistence without changing context loading
 
 **Tasks:**
+
 1. Define core_memory schema in `Thread.agent_state`
 2. Implement `update_core_memory` tool
 3. Implement `view_core_memory` tool
@@ -508,39 +531,47 @@ Result: "Archived 150 messages to long-term storage. Summary preserved in core m
 5. Test: Agent can store/retrieve preferences and facts
 
 **Deliverables:**
+
 - `zerg/tools/memory/core_memory_tools.py` - Tool implementations
 - `zerg/services/memory_service.py` - Core memory CRUD helpers
 - Updated `AgentRunner` to inject core_memory into prompt
 - Unit tests for memory tools
 
 **Success Criteria:**
+
 - Agent can store facts in core_memory
 - Core_memory persists across conversation turns
 - Core_memory visible in prompt (via debug logging)
 
 #### Phase 2: Conversation Summarization (3-4 days)
+
 **Goal:** Enable automatic context compression
 
 **Tasks:**
+
 1. Implement `summarize_conversation` tool
 2. Add conversation_summary schema to agent_state
 3. Create summarization prompt template
 4. Test: Long conversations get compressed into summaries
 
 **Deliverables:**
+
 - Summarization tool with LLM-based compression
 - Conversation summary storage in agent_state
 - Test fixtures with long conversation threads
 
 **Success Criteria:**
+
 - Agent can summarize past conversation segments
 - Summaries stored in structured format
 - Summaries include key facts and decisions
 
 #### Phase 3: Smart Context Loading (2-3 days)
+
 **Goal:** Load only recent messages + core memory instead of full history
 
 **Tasks:**
+
 1. Add `max_context_messages` config to Agent model
 2. Modify `AgentRunner.run_thread()` to:
    - Load only recent N messages
@@ -550,19 +581,23 @@ Result: "Archived 150 messages to long-term storage. Summary preserved in core m
 4. Test: Long threads stay under token limits
 
 **Deliverables:**
+
 - Updated context loading logic in AgentRunner
 - Configuration for context window management
 - Logging for context usage metrics
 
 **Success Criteria:**
+
 - Only recent messages loaded from DB
 - Core memory injected correctly
 - Token usage stays bounded for long threads
 
 #### Phase 4: Archival Storage (4-5 days)
+
 **Goal:** Store old messages in searchable archival tier
 
 **Tasks:**
+
 1. Create `archived_messages` migration
 2. Implement `archive_old_messages` tool
 3. Implement `search_conversation_history` tool
@@ -570,31 +605,37 @@ Result: "Archived 150 messages to long-term storage. Summary preserved in core m
 5. Test: Archived messages searchable and retrievable
 
 **Deliverables:**
+
 - `archived_messages` table with indexes
 - Archival tools (archive + search)
 - Optional: Embedding generation pipeline
 - Migration to handle existing long threads
 
 **Success Criteria:**
+
 - Old messages copied to archival table
 - Search returns relevant results
 - Archived messages excluded from default context loading
 
 #### Phase 5: Supervisor Agent Integration (2-3 days)
+
 **Goal:** Enable supervisor agent to use memory tools
 
 **Tasks:**
+
 1. Add memory tools to supervisor agent allowlist
 2. Update supervisor system prompt to include memory protocol
 3. Add memory management guidance to supervisor instructions
 4. Test: Supervisor uses memory tools appropriately
 
 **Deliverables:**
+
 - Updated supervisor agent definition
 - Memory management system prompt additions
 - Documentation for supervisor memory usage
 
 **Success Criteria:**
+
 - Supervisor can manage memory for child agents
 - Memory tools appear in supervisor's tool list
 - Supervisor makes intelligent decisions about summarization
@@ -602,6 +643,7 @@ Result: "Archived 150 messages to long-term storage. Summary preserved in core m
 ### Database Schema Changes
 
 **New Table: archived_messages**
+
 ```sql
 CREATE TABLE archived_messages (
     id SERIAL PRIMARY KEY,
@@ -628,6 +670,7 @@ CREATE INDEX idx_archived_messages_content_gin ON archived_messages
 ```
 
 **Modified Column: thread_messages.is_archived**
+
 ```sql
 ALTER TABLE thread_messages
 ADD COLUMN is_archived BOOLEAN DEFAULT FALSE;
@@ -637,6 +680,7 @@ ON thread_messages(thread_id, is_archived);
 ```
 
 **Agent State Schema (JSON in Thread.agent_state):**
+
 ```json
 {
   "core_memory": {
@@ -664,23 +708,27 @@ ON thread_messages(thread_id, is_archived);
 ### Testing Strategy
 
 **Unit Tests:**
+
 - Each memory tool in isolation
 - Core memory CRUD operations
 - Summarization with mock LLM responses
 - Archival storage and retrieval
 
 **Integration Tests:**
+
 - Full conversation flow with memory management
 - Context loading with core_memory injection
 - Archival + search round-trip
 - Memory tools via AgentRunner
 
 **Performance Tests:**
+
 - Context loading speed with large threads
 - Search performance in archival storage
 - Embedding generation latency (if used)
 
 **User Acceptance Tests:**
+
 - Supervisor agent manages memory appropriately
 - Long conversation remains coherent
 - Memory persists across sessions
@@ -786,6 +834,7 @@ ON thread_messages(thread_id, is_archived);
 ---
 
 **Next Steps:**
+
 1. Review and validate this research with team/stakeholders
 2. Prioritize phases based on immediate needs
 3. Create detailed implementation tickets for Phase 1

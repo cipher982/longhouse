@@ -1,6 +1,6 @@
 /**
  * ADVANCED TEST UTILITIES AND HELPERS
- * 
+ *
  * This module provides comprehensive utilities for E2E testing including:
  * - Data generation and seeding
  * - Performance measurement utilities
@@ -72,7 +72,7 @@ export class TestDataGenerator {
    * Generate batch of test agents
    */
   static generateAgents(count: number, prefix = 'Batch Agent'): Omit<TestAgent, 'id'>[] {
-    return Array.from({ length: count }, (_, i) => 
+    return Array.from({ length: count }, (_, i) =>
       this.generateAgent(prefix, i + 1)
     );
   }
@@ -81,7 +81,7 @@ export class TestDataGenerator {
    * Generate test workflow data
    */
   static generateWorkflow(
-    agents: TestAgent[], 
+    agents: TestAgent[],
     name = 'Test Workflow'
   ): Omit<TestWorkflow, 'id'> {
     const suffix = this.counter++;
@@ -198,7 +198,7 @@ export class APITestHelper {
     totalTime: number;
   }> {
     const startTime = Date.now();
-    
+
     const promises = agentDataList.map(async (agentData) => {
       const result = await this.createAgent(agentData);
       return { ...result, originalData: agentData };
@@ -209,9 +209,9 @@ export class APITestHelper {
 
     return {
       successful: results.filter(r => r.success).map(r => r.agent!),
-      failed: results.filter(r => !r.success).map(r => ({ 
-        data: r.originalData, 
-        error: r.error! 
+      failed: results.filter(r => !r.success).map(r => ({
+        data: r.originalData,
+        error: r.error!
       })),
       totalTime
     };
@@ -220,10 +220,10 @@ export class APITestHelper {
   /**
    * Create workflow with validation
    */
-  async createWorkflow(workflowData: Omit<TestWorkflow, 'id'>): Promise<{ 
-    success: boolean; 
-    workflow?: TestWorkflow; 
-    error?: string 
+  async createWorkflow(workflowData: Omit<TestWorkflow, 'id'>): Promise<{
+    success: boolean;
+    workflow?: TestWorkflow;
+    error?: string
   }> {
     try {
       const response = await this.request.post('http://localhost:8001/api/workflows', {
@@ -250,8 +250,8 @@ export class APITestHelper {
    * Execute workflow and monitor status
    */
   async executeWorkflowAndWait(
-    workflowId: number, 
-    inputs: any = {}, 
+    workflowId: number,
+    inputs: any = {},
     timeoutMs = 30000
   ): Promise<{
     success: boolean;
@@ -275,7 +275,7 @@ export class APITestHelper {
       }
 
       const execution = await executeResponse.json();
-      
+
       // Monitor status
       const startTime = Date.now();
       let attempts = 0;
@@ -283,14 +283,14 @@ export class APITestHelper {
 
       while (attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
         const statusResponse = await this.request.get(`http://localhost:8001/api/workflow-executions/${execution.id}`, {
           headers: { 'X-Test-Worker': this.workerId }
         });
 
         if (statusResponse.ok()) {
           const status = await statusResponse.json();
-          
+
           if (['completed', 'failed', 'cancelled'].includes(status.status)) {
             return {
               success: status.status === 'completed',
@@ -319,10 +319,10 @@ export class APITestHelper {
     try {
       let url = 'http://localhost:8001/api/agents';
       const params = new URLSearchParams();
-      
+
       if (filters?.limit) params.append('limit', filters.limit.toString());
       if (filters?.name) params.append('name', filters.name);
-      
+
       if (params.toString()) {
         url += '?' + params.toString();
       }
@@ -334,7 +334,7 @@ export class APITestHelper {
       if (response.ok()) {
         return await response.json();
       }
-      
+
       return [];
     } catch (error) {
       console.error('Error fetching agents:', error);
@@ -354,16 +354,16 @@ export class PerformanceTestHelper {
    */
   async measurePageLoad(url: string): Promise<PerformanceMetrics> {
     const startTime = Date.now();
-    
+
     await this.page.goto(url);
     await this.page.waitForLoadState('networkidle');
-    
+
     const loadTime = Date.now() - startTime;
 
     // Get browser performance metrics
     const metrics = await this.page.evaluate(() => {
       return {
-        navigationTime: performance.timing ? 
+        navigationTime: performance.timing ?
           performance.timing.loadEventEnd - performance.timing.navigationStart : 0,
         memoryUsage: (performance as any).memory ? {
           used: (performance as any).memory.usedJSHeapSize,
@@ -384,14 +384,14 @@ export class PerformanceTestHelper {
    * Measure interaction response time
    */
   async measureInteraction(
-    selector: string, 
+    selector: string,
     action: 'click' | 'hover' | 'focus' = 'click'
   ): Promise<number> {
     const element = this.page.locator(selector);
     await element.waitFor();
 
     const startTime = Date.now();
-    
+
     switch (action) {
       case 'click':
         await element.click();
@@ -406,7 +406,7 @@ export class PerformanceTestHelper {
 
     // Wait for potential UI updates
     await this.page.waitForTimeout(100);
-    
+
     return Date.now() - startTime;
   }
 
@@ -423,7 +423,7 @@ export class PerformanceTestHelper {
     const startTime = Date.now();
 
     // Get initial memory
-    const initial = await this.page.evaluate(() => 
+    const initial = await this.page.evaluate(() =>
       (performance as any).memory ? {
         used: (performance as any).memory.usedJSHeapSize,
         total: (performance as any).memory.totalJSHeapSize,
@@ -436,8 +436,8 @@ export class PerformanceTestHelper {
     // Monitor periodically
     while (Date.now() - startTime < durationMs) {
       await new Promise(resolve => setTimeout(resolve, intervalMs));
-      
-      const sample = await this.page.evaluate(() => 
+
+      const sample = await this.page.evaluate(() =>
         (performance as any).memory ? {
           used: (performance as any).memory.usedJSHeapSize,
           total: (performance as any).memory.totalJSHeapSize,
@@ -450,7 +450,7 @@ export class PerformanceTestHelper {
 
     // Get final memory
     const final = samples[samples.length - 1];
-    const peak = samples.reduce((max, current) => 
+    const peak = samples.reduce((max, current) =>
       current && current.used > (max?.used || 0) ? current : max
     );
 
@@ -504,7 +504,7 @@ export class WebSocketTestHelper {
     while (Date.now() - startTime < timeoutMs) {
       const message = this.wsMessages.find(predicate);
       if (message) return message;
-      
+
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
@@ -515,7 +515,7 @@ export class WebSocketTestHelper {
    * Get messages by event type
    */
   getMessagesByType(eventType: string): WebSocketMessage[] {
-    return this.wsMessages.filter(msg => 
+    return this.wsMessages.filter(msg =>
       msg.event_type === eventType || msg.type === eventType
     );
   }
@@ -524,7 +524,7 @@ export class WebSocketTestHelper {
    * Get messages in time range
    */
   getMessagesInTimeRange(startTime: number, endTime: number): WebSocketMessage[] {
-    return this.wsMessages.filter(msg => 
+    return this.wsMessages.filter(msg =>
       msg.receivedAt >= startTime && msg.receivedAt <= endTime
     );
   }
@@ -551,7 +551,7 @@ export class WebSocketTestHelper {
     this.wsMessages.forEach(msg => {
       const type = msg.event_type || msg.type || 'unknown';
       byType[type] = (byType[type] || 0) + 1;
-      
+
       if (msg.receivedAt < earliest) earliest = msg.receivedAt;
       if (msg.receivedAt > latest) latest = msg.receivedAt;
     });
@@ -574,7 +574,7 @@ export class UITestHelper {
    * Wait for element with comprehensive error handling
    */
   async waitForElementSafe(
-    selector: string, 
+    selector: string,
     options: { timeout?: number; state?: 'visible' | 'attached' | 'hidden' } = {}
   ): Promise<{ found: boolean; error?: string }> {
     try {
@@ -598,11 +598,11 @@ export class UITestHelper {
     hasRole: boolean;
   }> {
     const element = this.page.locator(selector);
-    
+
     const [clickable, focusable, ariaLabel, role] = await Promise.all([
       element.isEnabled().catch(() => false),
       element.evaluate(el => {
-        return el.tabIndex >= 0 || 
+        return el.tabIndex >= 0 ||
                ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'A'].includes(el.tagName);
       }).catch(() => false),
       element.getAttribute('aria-label').then(val => !!val).catch(() => false),
@@ -625,7 +625,7 @@ export class UITestHelper {
     options: { fullPage?: boolean; clip?: any } = {}
   ): Promise<{ path: string; matches?: boolean }> {
     const screenshotPath = `screenshots/${name}-${Date.now()}.png`;
-    
+
     await this.page.screenshot({
       path: screenshotPath,
       fullPage: options.fullPage || false,
@@ -657,7 +657,7 @@ export class UITestHelper {
       await this.page.waitForTimeout(1000);
 
       // Check if page renders without horizontal scroll
-      const hasHorizontalScroll = await this.page.evaluate(() => 
+      const hasHorizontalScroll = await this.page.evaluate(() =>
         document.body.scrollWidth > window.innerWidth
       );
 
@@ -701,7 +701,7 @@ export class UITestHelper {
       });
 
       const elementKey = `${currentElement.tagName}#${currentElement.id || currentElement.testId || i}`;
-      
+
       if (elementKey === previousElement) {
         // Focus is trapped or cycling
         break;
@@ -739,7 +739,7 @@ export class DatabaseTestHelper {
     consistent: boolean;
   }> {
     const agents = await this.apiHelper.getAgents();
-    
+
     // For workflows, we'd need to implement similar logic
     // This is a placeholder for comprehensive database validation
     return {
@@ -765,10 +765,10 @@ export class DatabaseTestHelper {
 
     const config = configs[scenario];
     const agentData = TestDataGenerator.generateAgents(config.agents, `Seed Agent ${scenario}`);
-    
+
     // Create agents
     const agentResults = await this.apiHelper.createAgentsBatch(agentData);
-    
+
     // Create workflows using the created agents
     const workflows: TestWorkflow[] = [];
     for (let i = 0; i < config.workflows && agentResults.successful.length > 0; i++) {
@@ -776,7 +776,7 @@ export class DatabaseTestHelper {
         agentResults.successful.slice(0, Math.min(3, agentResults.successful.length)),
         `Seed Workflow ${scenario} ${i + 1}`
       );
-      
+
       const workflowResult = await this.apiHelper.createWorkflow(workflowData);
       if (workflowResult.success && workflowResult.workflow) {
         workflows.push(workflowResult.workflow);
@@ -816,7 +816,7 @@ export class TestHelperFactory {
 
   static createAllHelpers(page: Page, request: APIRequestContext, workerId: string) {
     const apiHelper = this.createAPIHelper(request, workerId);
-    
+
     return {
       api: apiHelper,
       performance: this.createPerformanceHelper(page),

@@ -112,7 +112,7 @@ app.get("/session", async (req, res) => {
 app.post("/tool", async (req, res) => {
   const { name, args } = req.body || {};
   console.log(`🔧 Tool call: ${name}`, args);
-  
+
   try {
     // Location tools via traccar MCP
     if (name === "location.get_current") {
@@ -128,7 +128,7 @@ app.post("/tool", async (req, res) => {
       console.log('📍 Location data:', result);
       return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
-    
+
     if (name === "location.get_history") {
       // Real location history via Traccar MCP
       const client = mcpClients.get('traccar');
@@ -141,7 +141,7 @@ app.post("/tool", async (req, res) => {
       });
       return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
-    
+
     // WHOOP health data via WHOOP MCP
     if (name === "whoop.get_daily") {
       const client = mcpClients.get('whoop');
@@ -179,13 +179,13 @@ app.post("/tool", async (req, res) => {
       });
       return res.json(result.content?.[0]?.text ? JSON.parse(result.content[0].text) : result);
     }
-    
+
     return res.json({ ok: true, echo: { name, args } });
   } catch (error) {
     console.error('❌ Tool execution failed:', error);
-    return res.status(500).json({ 
-      error: 'Tool execution failed', 
-      details: error.message 
+    return res.status(500).json({
+      error: 'Tool execution failed',
+      details: error.message
     });
   }
 });
@@ -276,7 +276,7 @@ const host = process.env.HOST || '0.0.0.0';
 // Graceful shutdown handler
 async function shutdown(signal) {
   console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
-  
+
   // Close MCP connections
   for (const [name, client] of mcpClients) {
     try {
@@ -286,7 +286,7 @@ async function shutdown(signal) {
       console.error(`❌ Error closing MCP client ${name}:`, error.message);
     }
   }
-  
+
   process.exit(0);
 }
 
@@ -299,7 +299,7 @@ loadOps().then(() => initMCPClients()).then(() => {
   const server = app.listen(port, host, () => {
     console.log(`🚀 Jarvis server listening on ${host}:${port}`);
   });
-  
+
   // Store server reference for potential cleanup
   process.server = server;
 }).catch(error => {

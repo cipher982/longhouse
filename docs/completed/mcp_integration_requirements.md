@@ -1,6 +1,6 @@
 # MCP Integration Requirements - Single Source of Truth
 
-*Status: ✅ COMPLETED*  ·  *Completed: May 2025*  ·  *Moved to completed: June 15, 2025*
+_Status: ✅ COMPLETED_ · _Completed: May 2025_ · _Moved to completed: June 15, 2025_
 
 ---
 
@@ -39,14 +39,14 @@ All tools (built-in and MCP) appear in the same registry:
 ```python
 class MCPManager:
     """Manages connections to multiple MCP servers."""
-    
+
     def add_server(self, url: str, name: str, auth_token: str = None) -> None:
         """Add any MCP server - customer's primary use case."""
         client = MCPClient(url, auth_token)
         tools = client.discover_tools()
         for tool in tools:
             self.registry.register_mcp_tool(f"mcp_{name}_{tool.name}", tool)
-    
+
     def add_preset(self, preset_name: str, auth_token: str) -> None:
         """Convenience method for popular services."""
         config = PRESET_CONFIGS[preset_name]
@@ -59,7 +59,7 @@ class MCPManager:
 # backend/zerg/models/models.py
 class Agent(Base):
     # ... existing fields ...
-    
+
     # Option 1: Store MCP config in existing JSON config field
     config = Column(JSON, nullable=True)
     # config = {
@@ -167,9 +167,10 @@ Available Tools
    - ✅ Support for temporary tool overrides
    - ✅ Proper handling of overrides in all registry methods
 
-3. **Integration with agent factory** 
+3. **Integration with agent factory**
    - ✅ Implemented in `zerg_react_agent.py`
    - ✅ Clean integration without monkey patching
+
    ```python
    # In get_runnable()
    if agent.config and 'mcp_servers' in agent.config:
@@ -191,6 +192,7 @@ Available Tools
    - ✅ `MCPConfigurationError` for config issues
 
 ### Database Updates ✅ COMPLETED
+
 - ✅ Store MCP server configs in agent.config JSON field
 - ✅ Add API endpoints for MCP server management:
   - `GET /api/agents/{agent_id}/mcp-servers/` - List configured servers
@@ -205,7 +207,7 @@ Available Tools
 
 1. **Popular service presets** ✅ COMPLETED
    - ✅ GitHub - with 5 tools configured
-   - ✅ Linear - with 5 tools configured  
+   - ✅ Linear - with 5 tools configured
    - ✅ Slack - with 4 tools configured
    - ✅ Notion - with 7 tools configured
    - ✅ Asana - with 7 tools configured
@@ -232,11 +234,11 @@ Available Tools
   - Built-in tools section
   - Connected servers list with status and removal
   - Connection testing and error handling
-- **Agent Configuration Modal**: 
+- **Agent Configuration Modal**:
   - Added a third "Tools" tab (now `ToolsIntegrations`) to the modal in `frontend/src/components/agent_config_modal.rs`
   - Tab switching logic and content containers for all three tabs
   - Tools tab renders the MCP Server Manager UI
-- **Message System**: 
+- **Message System**:
   - All MCP UI messages added to `frontend/src/messages.rs`
   - Update logic in `frontend/src/update.rs` now handles all MCP UI messages (stubs for future logic, no more non-exhaustive match error)
 
@@ -281,7 +283,7 @@ Available Tools
 
 ---
 
-*This section will be updated as further MCP UI logic and integration are completed.*
+_This section will be updated as further MCP UI logic and integration are completed._
 
 ## Security Considerations
 
@@ -305,6 +307,7 @@ Available Tools
 ## API Examples
 
 ### Add MCP Server
+
 ```http
 POST /api/agents/{agent_id}/mcp-servers
 {
@@ -315,6 +318,7 @@ POST /api/agents/{agent_id}/mcp-servers
 ```
 
 ### Add Preset
+
 ```http
 POST /api/agents/{agent_id}/mcp-servers
 {
@@ -324,6 +328,7 @@ POST /api/agents/{agent_id}/mcp-servers
 ```
 
 ### List Available Tools
+
 ```http
 GET /api/agents/{agent_id}/available-tools
 {
@@ -356,4 +361,4 @@ GET /api/agents/{agent_id}/available-tools
 
 ---
 
-*This document supersedes all previous MCP-related documentation and represents our final architectural decision.*
+_This document supersedes all previous MCP-related documentation and represents our final architectural decision._

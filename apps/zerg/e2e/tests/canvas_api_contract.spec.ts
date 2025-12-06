@@ -6,28 +6,28 @@ import { test, expect } from './fixtures';
  * API contract validation is handled by backend tests (test_api_contract_canvas.py)
  */
 test.describe('Canvas UI Tests', () => {
-  
+
   test('Canvas tab loads successfully without errors', async ({ page }) => {
     // User navigates to the app
     await page.goto('/');
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
-    
+
     // Wait for app header/tabs to render
     await expect(page.getByTestId('global-dashboard-tab')).toBeVisible({ timeout: 15000 });
     // User clicks on Canvas tab
     const canvasTab = page.getByTestId('global-canvas-tab');
     await expect(canvasTab).toBeVisible({ timeout: 15000 });
     await canvasTab.click();
-    
+
     // Canvas should load without errors
     // Check for common canvas elements that indicate successful load
     const canvasContainer = page.locator('#canvas-container, [data-testid="canvas-container"], .canvas-wrapper');
     await expect(canvasContainer).toBeVisible({ timeout: 5000 });
-    
+
     // No error messages should be present
     const errorElements = page.locator('.error-message, .error-banner, [data-testid="error"], .alert-danger');
     await expect(errorElements).not.toBeVisible();
-    
+
     // Agent/Tool shelf should be visible (left panel)
     const shelf = page.locator('#agent-shelf');
     await expect(shelf).toBeVisible();
@@ -39,16 +39,16 @@ test.describe('Canvas UI Tests', () => {
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
     await expect(page.getByTestId('global-canvas-tab')).toBeVisible({ timeout: 15000 });
     await page.getByTestId('global-canvas-tab').click();
-    
+
     // Wait for canvas to load
     const canvasContainer = page.locator('#canvas-container, [data-testid="canvas-container"], .canvas-wrapper');
     await expect(canvasContainer).toBeVisible({ timeout: 5000 });
-    
+
     // Switch to dashboard and back
     await page.getByTestId('global-dashboard-tab').click();
     await page.waitForTimeout(500);
     await page.getByTestId('global-canvas-tab').click();
-    
+
     // Canvas should still be visible without errors
     await expect(canvasContainer).toBeVisible({ timeout: 5000 });
     const errorElements = page.locator('.error-message, .error-banner, [data-testid="error"]');
@@ -61,7 +61,7 @@ test.describe('Canvas UI Tests', () => {
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
     await expect(page.getByTestId('global-canvas-tab')).toBeVisible({ timeout: 15000 });
     await page.getByTestId('global-canvas-tab').click();
-    
+
     // Wait for canvas to load
     const canvasContainer = page.locator('[data-testid="canvas-container"], #canvas-container');
     await expect(canvasContainer).toBeVisible({ timeout: 10000 });

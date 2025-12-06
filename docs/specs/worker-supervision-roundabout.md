@@ -9,6 +9,7 @@ The roundabout is like a highway interchange: the main thread (linear conversati
 ## The Problem This Solves
 
 ### Without Roundabout (Current State)
+
 ```
 Supervisor spawns worker
     ↓
@@ -18,12 +19,14 @@ Supervisor spawns worker
 ```
 
 Problems:
+
 - Supervisor has no visibility into worker progress
 - User sees nothing happening
 - If worker is stuck, nobody knows until timeout
 - No opportunity for early exit or intervention
 
 ### With Roundabout
+
 ```
 Supervisor spawns worker
     ↓
@@ -36,6 +39,7 @@ Supervisor spawns worker
 ```
 
 Benefits:
+
 - Supervisor sees real-time activity
 - Can exit early if answer is visible in logs
 - Can intervene if worker is stuck/wrong path
@@ -63,6 +67,7 @@ Everything is logged to disk. Always.
 ```
 
 This enables:
+
 - `grep_workers` for searching across workers
 - Full debugging capability
 - Audit trail for compliance
@@ -73,12 +78,14 @@ This enables:
 The conversation history the LLM accumulates. This is the "brain" that persists across sessions.
 
 **What goes in the thread:**
+
 - User messages
 - Assistant responses
 - Tool calls and their final results
 - Worker completion summaries
 
 **What does NOT go in the thread:**
+
 - Roundabout monitoring checks
 - "Continue waiting" decisions
 - Intermediate activity logs
@@ -171,6 +178,7 @@ Every 5 seconds, supervisor receives a status prompt:
 When roundabout exits, a single tool response is added to the supervisor thread:
 
 ### Success Case
+
 ```json
 {
   "status": "complete",
@@ -188,6 +196,7 @@ When roundabout exits, a single tool response is added to the supervisor thread:
 ```
 
 ### Early Exit Case
+
 ```json
 {
   "status": "early_exit",
@@ -203,6 +212,7 @@ When roundabout exits, a single tool response is added to the supervisor thread:
 ```
 
 ### Failure Case
+
 ```json
 {
   "status": "failed",
@@ -234,6 +244,7 @@ While the roundabout executes, the Jarvis UI shows an activity ticker:
 ```
 
 This streams via SSE events:
+
 - `worker_tool_started` - tool call begins
 - `worker_tool_completed` - tool call finished
 - `worker_status_update` - periodic status (every 5s)
@@ -271,6 +282,7 @@ UI receives events, displays ticker, clears when roundabout exits.
 ### Phase 1: Tool Activity Events
 
 Add events for tool execution:
+
 - `worker_tool_started` - emitted before tool call
 - `worker_tool_completed` - emitted after tool call
 
@@ -279,6 +291,7 @@ Modify `WorkerRunner` to emit these events.
 ### Phase 2: UI Activity Ticker
 
 Frontend component that:
+
 - Subscribes to tool events
 - Displays scrolling activity log
 - Shows elapsed time per operation
@@ -287,6 +300,7 @@ Frontend component that:
 ### Phase 3: Roundabout Loop
 
 Implement the supervision loop:
+
 - Polling interval (default 5s)
 - Status aggregation
 - Decision prompt to supervisor
@@ -295,6 +309,7 @@ Implement the supervision loop:
 ### Phase 4: Supervisor Decision Handling
 
 Handle supervisor decisions:
+
 - Continue (default)
 - Exit early
 - Cancel worker
@@ -303,6 +318,7 @@ Handle supervisor decisions:
 ### Phase 5: Graceful Failure Handling
 
 Workers fail fast and report clearly:
+
 - Tool errors return immediately (no hanging)
 - Clear error messages in worker result
 - Supervisor can reason about failure

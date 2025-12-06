@@ -14,7 +14,7 @@ async function globalSetup(config) {
   process.env.TESTING = '1';
 
   // Clean up any leftover database files from previous runs
-  
+
   try {
     // Resolve a Python interpreter ('python' or 'python3')
     const pythonCmd = (() => {
@@ -52,7 +52,7 @@ print("✅ Pre-test cleanup completed")
   } catch (error) {
     console.warn('⚠️  Pre-test cleanup failed (this is ok for first run):', error.message);
   }
-  
+
   console.log('✅ Test environment setup completed');
 }
 

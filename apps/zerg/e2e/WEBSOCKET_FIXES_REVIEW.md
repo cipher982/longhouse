@@ -31,21 +31,28 @@ This document provides a comprehensive code review and test analysis of the WebS
 **Status:** ✅ Correctly Implemented
 
 **Files Modified:**
+
 - `/apps/zerg/frontend-web/src/pages/DashboardPage.tsx`
 
 **Key Changes:**
 
 1. **Pending Subscription Tracking** (Line 64)
+
    ```typescript
-   const pendingSubscriptionsRef = useRef<Map<string, { topics: string[]; timeoutId: number }>>(new Map());
+   const pendingSubscriptionsRef = useRef<
+     Map<string, { topics: string[]; timeoutId: number }>
+   >(new Map());
    ```
+
    - ✅ Tracks pending subscriptions by message ID
    - ✅ Stores topics and timeout ID for cleanup
 
 2. **Message Handler for Acks/Errors** (Lines 79-101)
+
    ```typescript
    if (message.type === "subscribe_ack" || message.type === "subscribe_error") {
-     const messageId = typeof message.message_id === "string" ? message.message_id : "";
+     const messageId =
+       typeof message.message_id === "string" ? message.message_id : "";
      if (messageId && pendingSubscriptionsRef.current.has(messageId)) {
        const pending = pendingSubscriptionsRef.current.get(messageId);
        if (pending) {
@@ -66,12 +73,14 @@ This document provides a comprehensive code review and test analysis of the WebS
      }
    }
    ```
+
    - ✅ Properly validates message structure with runtime type checks
    - ✅ Clears timeout on acknowledgment
    - ✅ Removes failed subscriptions from set to enable retry
    - ✅ Safe parsing of topic strings
 
 3. **Subscription with Timeout** (Lines 366-392)
+
    ```typescript
    const messageId = generateMessageId();
 
@@ -90,7 +99,10 @@ This document provides a comprehensive code review and test analysis of the WebS
      }
    }, 5000);
 
-   pendingSubscriptionsRef.current.set(messageId, { topics: topicsToSubscribe, timeoutId });
+   pendingSubscriptionsRef.current.set(messageId, {
+     topics: topicsToSubscribe,
+     timeoutId,
+   });
 
    sendMessageRef.current?.({
      type: "subscribe",
@@ -98,12 +110,14 @@ This document provides a comprehensive code review and test analysis of the WebS
      message_id: messageId,
    });
    ```
+
    - ✅ Unique message ID generation prevents collisions
    - ✅ 5-second timeout is reasonable
    - ✅ Cleanup on timeout allows retry
    - ✅ Proper ordering: set tracking, then send message
 
 4. **Cleanup on Reconnect** (Lines 224-237)
+
    ```typescript
    onConnect: () => {
      subscribedAgentIdsRef.current.clear();
@@ -113,13 +127,15 @@ This document provides a comprehensive code review and test analysis of the WebS
      });
      pendingSubscriptionsRef.current.clear();
      setWsReconnectToken((token) => token + 1);
-   }
+   };
    ```
+
    - ✅ Clears stale subscriptions
    - ✅ Cleans up all timeouts to prevent leaks
    - ✅ Reconnect token forces re-subscription
 
 5. **Cleanup on Unmount** (Lines 422-442)
+
    ```typescript
    useEffect(() => {
      return () => {
@@ -131,6 +147,7 @@ This document provides a comprehensive code review and test analysis of the WebS
      };
    }, []);
    ```
+
    - ✅ Proper cleanup prevents memory leaks
    - ✅ Empty dependency array ensures single registration
 
@@ -141,11 +158,13 @@ This document provides a comprehensive code review and test analysis of the WebS
 **Critical Issue:** The backend does not send `subscribe_ack` or `subscribe_error` messages.
 
 **Current Behavior:**
+
 - `handle_subscribe` function (lines 425-473) processes subscriptions
 - Calls topic-specific handlers like `_subscribe_agent` which send **initial state** but not **acknowledgment**
 - Only sends errors via `send_error()` which creates generic error envelopes, not `subscribe_error` type
 
 **Evidence from Backend Code:**
+
 ```python
 # handlers.py:215-263 (_subscribe_agent example)
 async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: Session) -> None:
@@ -167,6 +186,7 @@ async def _subscribe_agent(client_id: str, agent_id: int, message_id: str, db: S
 ```
 
 **Impact:**
+
 - All subscriptions timeout after 5 seconds
 - Subscriptions are removed from `subscribedAgentIdsRef`
 - Next useEffect cycle attempts to re-subscribe (subscription churn)
@@ -242,53 +262,66 @@ class SubscribeErrorData(BaseModel):
 **Status:** ✅ Production Ready
 
 **Files Modified:**
+
 - `/apps/zerg/frontend-web/src/lib/useWebSocket.tsx`
 
 **Key Changes:**
 
 1. **Queue Size Constant** (Lines 6-8)
+
    ```typescript
    // Maximum number of messages to queue when disconnected
    // Prevents memory leak if user performs many actions while offline
    const MAX_QUEUED_MESSAGES = 100;
    ```
+
    - ✅ Clear documentation
    - ✅ Reasonable limit (100 messages)
    - ✅ Prevents memory exhaustion
 
 2. **FIFO Eviction Logic** (Lines 329-337)
+
    ```typescript
-   const sendMessage = useCallback((message: WebSocketMessage) => {
-     if (wsRef.current?.readyState === WebSocket.OPEN) {
-       wsRef.current.send(JSON.stringify(message));
-     } else {
-       // Queue message if not connected, but enforce bounds
-       if (messageQueueRef.current.length >= MAX_QUEUED_MESSAGES) {
-         console.warn(
-           `[WS] Message queue full (${MAX_QUEUED_MESSAGES} messages). Dropping oldest message.`
-         );
-         messageQueueRef.current.shift(); // Remove oldest (FIFO)
+   const sendMessage = useCallback(
+     (message: WebSocketMessage) => {
+       if (wsRef.current?.readyState === WebSocket.OPEN) {
+         wsRef.current.send(JSON.stringify(message));
+       } else {
+         // Queue message if not connected, but enforce bounds
+         if (messageQueueRef.current.length >= MAX_QUEUED_MESSAGES) {
+           console.warn(
+             `[WS] Message queue full (${MAX_QUEUED_MESSAGES} messages). Dropping oldest message.`,
+           );
+           messageQueueRef.current.shift(); // Remove oldest (FIFO)
+         }
+         messageQueueRef.current.push(message);
+         // ... reconnection logic
        }
-       messageQueueRef.current.push(message);
-       // ... reconnection logic
-     }
-   }, [connectionStatus, connect]);
+     },
+     [connectionStatus, connect],
+   );
    ```
+
    - ✅ Correct FIFO behavior using `shift()` (remove oldest)
    - ✅ Check happens before push (prevents overflow)
    - ✅ Warning log for observability
    - ✅ No race conditions
 
 3. **Queue Flush on Connect** (Lines 190-197)
+
    ```typescript
    const handleConnect = useCallback(() => {
-     console.log('[WS] ✅ WebSocket connected successfully');
+     console.log("[WS] ✅ WebSocket connected successfully");
      setConnectionStatus(ConnectionStatus.CONNECTED);
      reconnectAttemptsRef.current = 0;
 
      if (wsRef.current && messageQueueRef.current.length > 0) {
-       console.log('[WS] 📬 Sending', messageQueueRef.current.length, 'queued messages');
-       messageQueueRef.current.forEach(message => {
+       console.log(
+         "[WS] 📬 Sending",
+         messageQueueRef.current.length,
+         "queued messages",
+       );
+       messageQueueRef.current.forEach((message) => {
          wsRef.current?.send(JSON.stringify(message));
        });
        messageQueueRef.current = [];
@@ -297,6 +330,7 @@ class SubscribeErrorData(BaseModel):
      onConnectRef.current?.();
    }, []);
    ```
+
    - ✅ Flushes all queued messages on connection
    - ✅ Clears queue after flush
    - ✅ Logs for debugging
@@ -304,6 +338,7 @@ class SubscribeErrorData(BaseModel):
 #### Code Analysis
 
 **Correctness:**
+
 - ✅ Proper bounds checking
 - ✅ FIFO eviction (oldest first)
 - ✅ No off-by-one errors
@@ -311,6 +346,7 @@ class SubscribeErrorData(BaseModel):
 - ✅ No memory leaks
 
 **Edge Cases Handled:**
+
 - ✅ Empty queue: No-op, works correctly
 - ✅ Queue at 99: Accepts 1 more, then evicts on 101st
 - ✅ Queue at 100: Evicts before adding
@@ -318,16 +354,19 @@ class SubscribeErrorData(BaseModel):
 - ✅ Reconnect during queueing: Queue persists, flushes on connect
 
 **Performance:**
+
 - ✅ O(1) check for queue length
 - ✅ O(1) shift operation (acceptable for 100 items)
 - ✅ O(n) flush on connect (acceptable, happens once)
 
 **Observability:**
+
 - ✅ Warning log when dropping messages
 - ✅ Info log showing queue size on flush
 - ✅ Clear message format
 
 **Minor Suggestions:**
+
 1. Consider adding a counter metric for dropped messages
 2. Consider making MAX_QUEUED_MESSAGES configurable
 3. Could add debug log showing which message was dropped
@@ -350,6 +389,7 @@ class SubscribeErrorData(BaseModel):
 **Results:** 9 passed, 1 failed (minor test issue, not implementation bug)
 
 **Passing Tests:**
+
 1. ✅ Should send subscribe message with unique message_id
 2. ✅ Should handle subscription timeout (backend not responding)
 3. ✅ Should handle multiple rapid subscribe/unsubscribe cycles
@@ -361,12 +401,14 @@ class SubscribeErrorData(BaseModel):
 9. ✅ Should handle subscription to non-existent agent
 
 **Failed Test:**
+
 - ⚠️ Should clear pending subscriptions on WebSocket reconnect
   - **Reason:** Test infrastructure issue, not implementation bug
   - **Issue:** Test doesn't actually force WebSocket to close/reconnect
   - **Impact:** None - the cleanup code is correct (verified by code review)
 
 **Key Findings from Tests:**
+
 - Message IDs are unique and properly formatted: `dashboard-{timestamp}-{counter}`
 - Timeouts fire correctly after 5 seconds when backend doesn't respond
 - Cleanup on unmount prevents memory leaks
@@ -378,6 +420,7 @@ class SubscribeErrorData(BaseModel):
 **Results:** ✅ 14/14 tests passed
 
 **All Tests Passing:**
+
 1. ✅ Should queue messages when WebSocket is disconnected
 2. ✅ Should enforce queue limit of 100 messages
 3. ✅ Should drop oldest message when queue exceeds 100 (FIFO)
@@ -394,6 +437,7 @@ class SubscribeErrorData(BaseModel):
 14. ✅ Should handle queue with 99 messages (one below limit)
 
 **Key Findings from Tests:**
+
 - Queue correctly enforces 100 message limit
 - FIFO eviction works: oldest (ID 0) dropped first, new message added at end
 - Queue flushes on connection establishment
@@ -457,6 +501,7 @@ class SubscribeErrorData(BaseModel):
 **Good Practices Identified:**
 
 1. **Message Type Validation** (DashboardPage.tsx:75-76)
+
    ```typescript
    if (!message || typeof message !== "object") {
      return;
@@ -464,11 +509,14 @@ class SubscribeErrorData(BaseModel):
    ```
 
 2. **Message ID Validation** (DashboardPage.tsx:81)
+
    ```typescript
-   const messageId = typeof message.message_id === "string" ? message.message_id : "";
+   const messageId =
+     typeof message.message_id === "string" ? message.message_id : "";
    ```
 
 3. **Topic Parsing Safety** (DashboardPage.tsx:92-96)
+
    ```typescript
    const [, agentIdRaw] = topic.split(":");
    const agentId = Number.parseInt(agentIdRaw ?? "", 10);
@@ -479,23 +527,30 @@ class SubscribeErrorData(BaseModel):
 
 4. **Data Payload Validation** (DashboardPage.tsx:116-118)
    ```typescript
-   const dataPayload = typeof message.data === "object" && message.data !== null
-     ? (message.data as Record<string, unknown>)
-     : {};
+   const dataPayload =
+     typeof message.data === "object" && message.data !== null
+       ? (message.data as Record<string, unknown>)
+       : {};
    ```
 
 **Suggestions for Improvement:**
 
 1. **Type Guards for Message Types:**
+
    ```typescript
-   function isSubscribeAck(message: WebSocketMessage): message is SubscribeAckMessage {
-     return message.type === "subscribe_ack" &&
-            typeof message.message_id === "string" &&
-            Array.isArray(message.topics);
+   function isSubscribeAck(
+     message: WebSocketMessage,
+   ): message is SubscribeAckMessage {
+     return (
+       message.type === "subscribe_ack" &&
+       typeof message.message_id === "string" &&
+       Array.isArray(message.topics)
+     );
    }
    ```
 
 2. **Explicit Message Interfaces:**
+
    ```typescript
    interface SubscribeAckMessage {
      type: "subscribe_ack";
@@ -522,6 +577,7 @@ class SubscribeErrorData(BaseModel):
 **Confidence Level:** High
 
 **Reasons:**
+
 - Implementation is correct and complete
 - All tests pass
 - Edge cases handled
@@ -530,6 +586,7 @@ class SubscribeErrorData(BaseModel):
 - No performance concerns
 
 **Deployment Checklist:**
+
 - ✅ Code review complete
 - ✅ Tests passing (14/14)
 - ✅ Edge cases validated
@@ -546,12 +603,14 @@ class SubscribeErrorData(BaseModel):
 **Blocking Issue:** Backend implementation missing
 
 **Required Before Production:**
+
 1. ❌ Backend must send `subscribe_ack` messages
 2. ❌ Backend must send `subscribe_error` messages
 3. ❌ Backend schemas must be updated
 4. ⚠️ Tests must pass with real acks (currently testing timeout behavior)
 
 **Deployment Checklist:**
+
 - ✅ Frontend code correct
 - ✅ Frontend tests written
 - ❌ Backend implementation
@@ -560,6 +619,7 @@ class SubscribeErrorData(BaseModel):
 - ❌ Performance testing (subscription load)
 
 **Estimated Effort for Backend:**
+
 - 2-4 hours development
 - 1-2 hours testing
 - 1 hour review
@@ -619,6 +679,7 @@ class SubscribeErrorData(BaseModel):
 ### Current Performance (Without Backend Acks)
 
 **Negative Impacts:**
+
 - Every subscription times out after 5 seconds
 - Subscriptions churn every 5 seconds (unsubscribe + resubscribe)
 - 2-3x unnecessary WebSocket traffic
@@ -626,6 +687,7 @@ class SubscribeErrorData(BaseModel):
 - Wasted CPU cycles on timeout management
 
 **Estimated Impact:**
+
 - Per agent subscription: +1 timeout, +2 messages (unsub + resub) every 5s
 - Dashboard with 50 agents: +50 timeouts, +100 messages every 5s
 - **Traffic overhead:** ~200% increase
@@ -633,12 +695,14 @@ class SubscribeErrorData(BaseModel):
 ### Expected Performance (With Backend Acks)
 
 **Benefits:**
+
 - Zero timeouts (unless real network issues)
 - Zero subscription churn
 - Clean WebSocket traffic (only subscribe + ack)
 - No timeout overhead
 
 **Estimated Improvement:**
+
 - Reduce WebSocket traffic by 66%
 - Eliminate 50+ timeouts per dashboard load
 - Reduce CPU usage on timeout management
@@ -647,11 +711,13 @@ class SubscribeErrorData(BaseModel):
 ### Bounded Queue Performance
 
 **Overhead:** Minimal
+
 - Queue check: O(1)
 - FIFO shift: O(n) where n ≤ 100, typically empty
 - Queue flush: O(n) where n ≤ 100, happens once per connect
 
 **Memory Impact:** Bounded
+
 - Max 100 messages × ~200 bytes = ~20KB max
 - Prevents unbounded growth
 - Acceptable memory footprint
@@ -663,6 +729,7 @@ class SubscribeErrorData(BaseModel):
 ### Test Coverage
 
 **Subscription Confirmation:**
+
 - ✅ Message format validation
 - ✅ Timeout behavior
 - ✅ Cleanup on reconnect
@@ -674,6 +741,7 @@ class SubscribeErrorData(BaseModel):
 - 📝 ACK reception (documents expected behavior)
 
 **Bounded Message Queue:**
+
 - ✅ Queue enforcement (100 messages)
 - ✅ FIFO eviction
 - ✅ Queue flush on connect
@@ -685,6 +753,7 @@ class SubscribeErrorData(BaseModel):
 - ✅ Empty queue handling
 
 **Gap:**
+
 - ❌ Backend ack/error message generation (not tested yet)
 - ❌ Load testing (many subscriptions)
 - ❌ Stress testing (queue overflow scenarios)
@@ -692,6 +761,7 @@ class SubscribeErrorData(BaseModel):
 ### Recommended Additional Tests
 
 1. **Backend Unit Tests** (New)
+
    ```python
    async def test_subscribe_sends_ack():
        # Verify subscribe_ack message format
@@ -700,6 +770,7 @@ class SubscribeErrorData(BaseModel):
    ```
 
 2. **Backend Integration Tests** (New)
+
    ```python
    async def test_subscription_error_handling():
        # Subscribe to non-existent agent
@@ -738,11 +809,13 @@ class SubscribeErrorData(BaseModel):
 ### Risk Assessment
 
 **Issue #8 (Queue):**
+
 - **Risk Level:** Low
 - **Confidence:** High
 - **Blocker:** None
 
 **Issue #7 (Subscription):**
+
 - **Risk Level:** Medium (incomplete)
 - **Confidence:** High (frontend), N/A (backend)
 - **Blocker:** Backend implementation required
@@ -750,12 +823,15 @@ class SubscribeErrorData(BaseModel):
 ### Deployment Recommendation
 
 **Approved for Production:**
+
 - ✅ Bounded Message Queue (Issue #8)
 
 **Blocked from Production:**
+
 - ❌ Subscription Confirmation (Issue #7) - requires backend work
 
 **Timeline to Complete:**
+
 - Backend changes: 1-2 days
 - Testing & validation: 1 day
 - **Total: 2-3 days** to full production readiness
@@ -787,10 +863,12 @@ npx playwright test websocket_*.spec.ts
 ### Key Files Modified
 
 **Frontend:**
+
 - `/apps/zerg/frontend-web/src/lib/useWebSocket.tsx` (bounded queue)
 - `/apps/zerg/frontend-web/src/pages/DashboardPage.tsx` (subscription confirmation)
 
 **Backend (Requires Changes):**
+
 - `/apps/zerg/backend/zerg/websocket/handlers.py` (needs ack/error messages)
 - `/apps/zerg/backend/zerg/schemas/ws_messages.py` (needs new schemas)
 

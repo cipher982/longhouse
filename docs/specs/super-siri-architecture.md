@@ -9,6 +9,7 @@
 ## Executive Summary
 
 Super Siri is a unified AI assistant that combines:
+
 - **Jarvis**: Simple voice/text interface (the "face")
 - **Zerg Supervisor**: Backend orchestration brain (the "brain")
 - **Workers**: Disposable task executors (the "hands")
@@ -37,6 +38,7 @@ The architecture enables natural conversation for simple tasks while seamlessly 
 ### 1.1 The "Intern" Mental Model
 
 Super Siri behaves like a capable intern who:
+
 - Handles simple requests directly ("What time is it?")
 - Delegates complex investigations ("Check why the server is slow")
 - Maintains context across all interactions ("Remember yesterday's backup failure?")
@@ -45,13 +47,13 @@ Super Siri behaves like a capable intern who:
 
 ### 1.2 Core Principles
 
-| Principle | Description |
-|-----------|-------------|
-| **One Brain** | Single unified intelligence, not isolated agents |
-| **Simple Interface** | Voice or text, no complex UI required |
-| **Powerful Backend** | Full orchestration capabilities hidden from user |
-| **Transparent Debugging** | Power users can inspect everything |
-| **Context Preservation** | Nothing is lost, supervisor remembers all |
+| Principle                 | Description                                      |
+| ------------------------- | ------------------------------------------------ |
+| **One Brain**             | Single unified intelligence, not isolated agents |
+| **Simple Interface**      | Voice or text, no complex UI required            |
+| **Powerful Backend**      | Full orchestration capabilities hidden from user |
+| **Transparent Debugging** | Power users can inspect everything               |
+| **Context Preservation**  | Nothing is lost, supervisor remembers all        |
 
 ### 1.3 Success Metrics
 
@@ -123,23 +125,27 @@ Super Siri behaves like a capable intern who:
 ### 2.2 Request Flow Modes
 
 #### Mode A: Quick Mode (Simple Tasks)
+
 ```
 User → Jarvis → OpenAI Realtime → Response
        (< 2 seconds, voice-to-voice)
 ```
 
 **Examples:**
+
 - "What time is it?"
 - "Tell me a joke"
 - "What's on my calendar today?"
 
 #### Mode B: Supervisor Mode (Complex Tasks)
+
 ```
 User → Jarvis → Zerg Supervisor → Workers → Synthesis → Jarvis → User
        (5-60 seconds, with progress updates)
 ```
 
 **Examples:**
+
 - "Check my server health"
 - "Research robot vacuums under $500"
 - "Why did the backup fail last night?"
@@ -148,12 +154,12 @@ User → Jarvis → Zerg Supervisor → Workers → Synthesis → Jarvis → Use
 
 Jarvis determines mode based on:
 
-| Signal | Quick Mode | Supervisor Mode |
-|--------|------------|-----------------|
-| Keywords | "what", "when", "tell me" | "check", "investigate", "research", "why" |
-| Complexity | Single fact/action | Multi-step process |
-| Data needs | None or cached | Requires tool calls |
-| Expected time | < 5 seconds | > 5 seconds |
+| Signal        | Quick Mode                | Supervisor Mode                           |
+| ------------- | ------------------------- | ----------------------------------------- |
+| Keywords      | "what", "when", "tell me" | "check", "investigate", "research", "why" |
+| Complexity    | Single fact/action        | Multi-step process                        |
+| Data needs    | None or cached            | Requires tool calls                       |
+| Expected time | < 5 seconds               | > 5 seconds                               |
 
 **Implementation:** OpenAI Realtime function calling with `route_to_supervisor` tool.
 
@@ -165,17 +171,18 @@ Jarvis determines mode based on:
 
 **Primary Role:** User-facing interface for voice and text interaction.
 
-| Responsibility | Implementation |
-|----------------|----------------|
-| Voice I/O | OpenAI Realtime API (WebRTC) |
-| Text fallback | Standard input field |
-| Quick responses | Direct OpenAI Realtime |
-| Complex delegation | POST to Zerg Supervisor API |
-| Progress display | SSE subscription |
-| Result rendering | Text + optional TTS |
-| Session management | JWT from Zerg |
+| Responsibility     | Implementation               |
+| ------------------ | ---------------------------- |
+| Voice I/O          | OpenAI Realtime API (WebRTC) |
+| Text fallback      | Standard input field         |
+| Quick responses    | Direct OpenAI Realtime       |
+| Complex delegation | POST to Zerg Supervisor API  |
+| Progress display   | SSE subscription             |
+| Result rendering   | Text + optional TTS          |
+| Session management | JWT from Zerg                |
 
 **Does NOT:**
+
 - Store long-term conversation history (Zerg does this)
 - Make orchestration decisions (Supervisor does this)
 - Execute tools directly (Workers do this)
@@ -184,16 +191,17 @@ Jarvis determines mode based on:
 
 **Primary Role:** Central intelligence that delegates and synthesizes.
 
-| Responsibility | Implementation |
-|----------------|----------------|
-| Intent analysis | GPT-4o reasoning |
-| Worker delegation | `spawn_worker` tool |
-| Result synthesis | Combine worker outputs |
-| Context maintenance | Thread + core_memory |
-| Past work queries | `list_workers`, `grep_workers` |
-| Error handling | Retry logic, fallbacks |
+| Responsibility      | Implementation                 |
+| ------------------- | ------------------------------ |
+| Intent analysis     | GPT-4o reasoning               |
+| Worker delegation   | `spawn_worker` tool            |
+| Result synthesis    | Combine worker outputs         |
+| Context maintenance | Thread + core_memory           |
+| Past work queries   | `list_workers`, `grep_workers` |
+| Error handling      | Retry logic, fallbacks         |
 
 **Tools Available:**
+
 ```python
 # Delegation
 spawn_worker(task, model)      # Spawn worker agent
@@ -213,15 +221,16 @@ send_email(to, subject, body)  # Notifications
 
 **Primary Role:** Disposable task executors that persist everything.
 
-| Responsibility | Implementation |
-|----------------|----------------|
-| Execute single task | AgentRunner with task |
-| Use domain tools | SSH, HTTP, Docker, etc. |
-| Persist all outputs | WorkerArtifactStore |
+| Responsibility          | Implementation          |
+| ----------------------- | ----------------------- |
+| Execute single task     | AgentRunner with task   |
+| Use domain tools        | SSH, HTTP, Docker, etc. |
+| Persist all outputs     | WorkerArtifactStore     |
 | Return natural language | Final assistant message |
-| Die after completion | No persistent state |
+| Die after completion    | No persistent state     |
 
 **Worker Lifecycle:**
+
 ```
 1. Supervisor calls spawn_worker("Check disk on cube")
 2. WorkerRunner creates worker directory
@@ -235,15 +244,15 @@ send_email(to, subject, body)  # Notifications
 
 **Primary Role:** Power user interface for debugging and configuration.
 
-| Feature | Purpose |
-|---------|---------|
-| Agent list | View/edit all agents including supervisor |
-| Worker browser | Inspect `/data/swarmlet/workers/` |
-| Thread inspector | View full conversation history |
-| Tool outputs | Raw tool call results |
-| Cost analytics | Token usage, costs per agent |
-| Schedule manager | Cron jobs for background agents |
-| Connector config | API keys, OAuth tokens |
+| Feature          | Purpose                                   |
+| ---------------- | ----------------------------------------- |
+| Agent list       | View/edit all agents including supervisor |
+| Worker browser   | Inspect `/data/swarmlet/workers/`         |
+| Thread inspector | View full conversation history            |
+| Tool outputs     | Raw tool call results                     |
+| Cost analytics   | Token usage, costs per agent              |
+| Schedule manager | Cron jobs for background agents           |
+| Connector config | API keys, OAuth tokens                    |
 
 ### 3.5 Worker Tool Philosophy
 
@@ -254,19 +263,21 @@ Workers are LLMs with shell access. They already know `df -h`, `docker ps`, `jou
 
 **Worker capabilities:**
 
-| Capability | Tool | Purpose |
-|------------|------|---------|
-| Remote shell | `ssh_exec` | Execute commands on cube, clifford, zerg, slim |
-| Local sandbox | `container_exec` | Sandboxed shell for safe experimentation |
-| HTTP | `http_request` | curl-equivalent for APIs |
-| Connectors | `send_email`, `send_slack`, etc. | Side effects shell can't do |
+| Capability    | Tool                             | Purpose                                        |
+| ------------- | -------------------------------- | ---------------------------------------------- |
+| Remote shell  | `ssh_exec`                       | Execute commands on cube, clifford, zerg, slim |
+| Local sandbox | `container_exec`                 | Sandboxed shell for safe experimentation       |
+| HTTP          | `http_request`                   | curl-equivalent for APIs                       |
+| Connectors    | `send_email`, `send_slack`, etc. | Side effects shell can't do                    |
 
 **What we DON'T do:**
+
 - No tool profiles (INFRA, RESEARCH, COMMS)
 - No auxiliary LLM "tool planner"
 - No per-task tool restrictions
 
 **Safety boundaries:**
+
 - Host allowlist in `ssh_exec` (only known servers)
 - Audit trail via `tool_calls/*.txt` artifacts
 - Connector gating by owner_id if needed
@@ -418,14 +429,13 @@ Workers are LLMs with shell access. They already know `df -h`, `docker ps`, `jou
 **Purpose:** Dispatch a task to the supervisor agent.
 
 **Request:**
+
 ```json
 {
   "task": "Check my server health",
   "context": {
     "conversation_id": "jarvis-session-123",
-    "previous_messages": [
-      {"role": "user", "content": "..."}
-    ]
+    "previous_messages": [{ "role": "user", "content": "..." }]
   },
   "preferences": {
     "verbosity": "concise",
@@ -435,6 +445,7 @@ Workers are LLMs with shell access. They already know `df -h`, `docker ps`, `jou
 ```
 
 **Response:**
+
 ```json
 {
   "run_id": 456,
@@ -450,6 +461,7 @@ Workers are LLMs with shell access. They already know `df -h`, `docker ps`, `jou
 **Purpose:** SSE stream for supervisor progress.
 
 **Events:**
+
 ```
 event: supervisor_thinking
 data: {"message": "Analyzing your request..."}
@@ -472,6 +484,7 @@ data: {"error": "Worker failed", "details": "SSH connection refused"}
 **Purpose:** Get details of a supervisor run.
 
 **Response:**
+
 ```json
 {
   "run_id": 456,
@@ -551,6 +564,7 @@ Thread:
 #### Canonical Artifact Principle
 
 **Core Invariants:**
+
 - `result.txt` is the canonical worker output (source of truth)
 - `thread.jsonl` is the canonical execution trace
 - `metadata.json` contains derived views (summary, future extractions)
@@ -558,6 +572,7 @@ Thread:
 - Derived data (summary, extractions) is rebuildable and can fail safely
 
 **Status vs Summary:**
+
 - `status` field: System-determined from exit codes and exceptions
 - `summary` field: LLM-generated description for human consumption
 - **Always trust `status` for system decisions**
@@ -638,13 +653,13 @@ Thread:
 
 **Goal:** Connect Jarvis to Zerg supervisor
 
-| Task | Description | Status |
-|------|-------------|--------|
-| Supervisor endpoint | `POST /api/jarvis/supervisor` | ✅ Done |
-| SSE supervisor events | Stream progress to Jarvis | ✅ Done |
-| Jarvis intent detection | Route simple vs complex | ⏳ TODO |
-| Jarvis progress UI | Show "Investigating..." state | ⏳ TODO |
-| Result rendering | Display supervisor findings | ⏳ TODO |
+| Task                    | Description                   | Status  |
+| ----------------------- | ----------------------------- | ------- |
+| Supervisor endpoint     | `POST /api/jarvis/supervisor` | ✅ Done |
+| SSE supervisor events   | Stream progress to Jarvis     | ✅ Done |
+| Jarvis intent detection | Route simple vs complex       | ⏳ TODO |
+| Jarvis progress UI      | Show "Investigating..." state | ⏳ TODO |
+| Result rendering        | Display supervisor findings   | ⏳ TODO |
 
 **Deliverable:** User can say "check my servers" and get synthesized result.
 
@@ -654,18 +669,19 @@ Thread:
 
 **Why now:** Without summaries, cannot scan 50+ workers without hitting context window limits.
 
-| Task | Description | Status |
-|------|-------------|--------|
-| Summary extraction | Extract 150-char summary on worker completion | ✅ Done |
-| Update metadata schema | Add summary + summary_meta fields | ✅ Done |
-| Graceful degradation | Fallback to truncation if LLM fails | ✅ Done |
-| Update list_workers() | Return summaries only, not full results | ✅ Done |
-| Update tools docstring | Clarify list_workers contract | ✅ Done |
-| Add tests | Test extraction, fallback, list behavior | ✅ Done |
+| Task                   | Description                                   | Status  |
+| ---------------------- | --------------------------------------------- | ------- |
+| Summary extraction     | Extract 150-char summary on worker completion | ✅ Done |
+| Update metadata schema | Add summary + summary_meta fields             | ✅ Done |
+| Graceful degradation   | Fallback to truncation if LLM fails           | ✅ Done |
+| Update list_workers()  | Return summaries only, not full results       | ✅ Done |
+| Update tools docstring | Clarify list_workers contract                 | ✅ Done |
+| Add tests              | Test extraction, fallback, list behavior      | ✅ Done |
 
 **Deliverable:** Supervisor can scan 100+ workers (1500 tokens) vs 25,000 tokens without summaries.
 
 **Key Design:**
+
 - Summary = compression layer for context, NOT metadata
 - Full result.txt remains canonical
 - Summary can fail → fallback to truncation
@@ -677,11 +693,11 @@ Thread:
 
 **Prerequisite:** Add `ssh_exec` tool for remote host access.
 
-| Worker | What it does |
-|--------|--------------|
-| Backup monitor | Check Kopia snapshots, verify backup health |
-| Disk health | Check disk usage, SMART status across servers |
-| Docker health | Verify containers running, check for restarts |
+| Worker               | What it does                                     |
+| -------------------- | ------------------------------------------------ |
+| Backup monitor       | Check Kopia snapshots, verify backup health      |
+| Disk health          | Check disk usage, SMART status across servers    |
+| Docker health        | Verify containers running, check for restarts    |
 | Infrastructure check | Connectivity, service health, certificate expiry |
 
 Workers use shell-first approach: `ssh_exec` + connectors (email for alerts).
@@ -693,11 +709,11 @@ No per-worker tool profiles needed.
 
 **Goal:** Supervisor maintains long-term memory
 
-| Task | Description | Effort |
-|------|-------------|--------|
-| Core memory | Facts stored in agent_state | 3 days |
-| Summarization | Compress old conversations | 3 days |
-| Cross-session context | Remember past interactions | 2 days |
+| Task                  | Description                 | Effort |
+| --------------------- | --------------------------- | ------ |
+| Core memory           | Facts stored in agent_state | 3 days |
+| Summarization         | Compress old conversations  | 3 days |
+| Cross-session context | Remember past interactions  | 2 days |
 
 **Deliverable:** "Did we check this before?" works correctly.
 
@@ -705,12 +721,12 @@ No per-worker tool profiles needed.
 
 **Goal:** Scheduled supervisor runs with notifications
 
-| Task | Description | Effort |
-|------|-------------|--------|
-| Scheduled supervisor | Morning health check | 2 days |
-| Severity assessment | Determine alert level | 2 days |
-| Multi-channel notify | Email, SMS, push | 3 days |
-| Jarvis Task Inbox | Show background results | 2 days |
+| Task                 | Description             | Effort |
+| -------------------- | ----------------------- | ------ |
+| Scheduled supervisor | Morning health check    | 2 days |
+| Severity assessment  | Determine alert level   | 2 days |
+| Multi-channel notify | Email, SMS, push        | 3 days |
+| Jarvis Task Inbox    | Show background results | 2 days |
 
 **Deliverable:** Morning digest of overnight activity.
 
@@ -718,11 +734,11 @@ No per-worker tool profiles needed.
 
 **Goal:** User can reply to alerts
 
-| Task | Description | Effort |
-|------|-------------|--------|
-| Reply parsing | Email/SMS reply detection | 3 days |
-| Reply → trigger | Resume supervisor context | 2 days |
-| Directive handling | "Make this weekly" | 2 days |
+| Task               | Description               | Effort |
+| ------------------ | ------------------------- | ------ |
+| Reply parsing      | Email/SMS reply detection | 3 days |
+| Reply → trigger    | Resume supervisor context | 2 days |
+| Directive handling | "Make this weekly"        | 2 days |
 
 **Deliverable:** Full two-way conversation with background agents.
 
@@ -732,43 +748,43 @@ No per-worker tool profiles needed.
 
 ### 8.1 Latency Budget
 
-| Component | Target | Notes |
-|-----------|--------|-------|
-| Quick mode (total) | < 2s | OpenAI Realtime direct |
-| Supervisor mode (total) | < 60s | Complex tasks |
-| Intent detection | < 500ms | Must feel instant |
-| Supervisor startup | < 2s | Thread creation, context load |
-| Worker execution | < 30s | Depends on task |
-| Result synthesis | < 5s | GPT-4o response |
+| Component               | Target  | Notes                         |
+| ----------------------- | ------- | ----------------------------- |
+| Quick mode (total)      | < 2s    | OpenAI Realtime direct        |
+| Supervisor mode (total) | < 60s   | Complex tasks                 |
+| Intent detection        | < 500ms | Must feel instant             |
+| Supervisor startup      | < 2s    | Thread creation, context load |
+| Worker execution        | < 30s   | Depends on task               |
+| Result synthesis        | < 5s    | GPT-4o response               |
 
 ### 8.2 Cost Considerations
 
-| Component | Model | Est. Cost/Interaction |
-|-----------|-------|----------------------|
-| Quick mode | Realtime model (voice) | ~$0.01 |
-| Supervisor | High-intelligence model (configurable) | ~$0.02-0.05 |
-| Worker | Efficient model (configurable) | ~$0.005 |
-| Typical complex task | 1 supervisor + 2 workers | ~$0.03-0.06 |
+| Component            | Model                                  | Est. Cost/Interaction |
+| -------------------- | -------------------------------------- | --------------------- |
+| Quick mode           | Realtime model (voice)                 | ~$0.01                |
+| Supervisor           | High-intelligence model (configurable) | ~$0.02-0.05           |
+| Worker               | Efficient model (configurable)         | ~$0.005               |
+| Typical complex task | 1 supervisor + 2 workers               | ~$0.03-0.06           |
 
-*Models are env-configurable via `DEFAULT_MODEL_ID` and `DEFAULT_WORKER_MODEL_ID`.*
+_Models are env-configurable via `DEFAULT_MODEL_ID` and `DEFAULT_WORKER_MODEL_ID`._
 
 ### 8.3 Security
 
-| Concern | Mitigation |
-|---------|------------|
-| Cross-tenant data | Owner ID filtering on all queries |
-| Worker artifacts | Filesystem permissions + owner check |
-| Tool access | Allowed tools per agent |
-| Jarvis auth | Device secret → JWT (7-day expiry) |
+| Concern           | Mitigation                           |
+| ----------------- | ------------------------------------ |
+| Cross-tenant data | Owner ID filtering on all queries    |
+| Worker artifacts  | Filesystem permissions + owner check |
+| Tool access       | Allowed tools per agent              |
+| Jarvis auth       | Device secret → JWT (7-day expiry)   |
 
 ### 8.4 Error Handling
 
-| Error | Response |
-|-------|----------|
-| Worker timeout | Supervisor reports partial results + retry option |
-| Worker failure | Supervisor explains error, suggests next steps |
-| Supervisor failure | Jarvis falls back to direct mode with apology |
-| SSE disconnect | Auto-reconnect with 5s backoff |
+| Error              | Response                                          |
+| ------------------ | ------------------------------------------------- |
+| Worker timeout     | Supervisor reports partial results + retry option |
+| Worker failure     | Supervisor explains error, suggests next steps    |
+| Supervisor failure | Jarvis falls back to direct mode with apology     |
+| SSE disconnect     | Auto-reconnect with 5s backoff                    |
 
 ---
 
@@ -825,6 +841,7 @@ No per-worker tool profiles needed.
 See `/apps/zerg/backend/zerg/prompts/supervisor_prompt.py` for the full prompt.
 
 Key sections:
+
 - Role definition ("one brain" coordinator)
 - When to spawn workers vs handle directly
 - Querying past work
@@ -835,16 +852,16 @@ Key sections:
 
 ## Appendix B: File Locations
 
-| Component | Location |
-|-----------|----------|
-| Supervisor prompt | `zerg/prompts/supervisor_prompt.py` |
-| Supervisor tools | `zerg/tools/builtin/supervisor_tools.py` |
+| Component             | Location                                 |
+| --------------------- | ---------------------------------------- |
+| Supervisor prompt     | `zerg/prompts/supervisor_prompt.py`      |
+| Supervisor tools      | `zerg/tools/builtin/supervisor_tools.py` |
 | Worker artifact store | `zerg/services/worker_artifact_store.py` |
-| Worker runner | `zerg/services/worker_runner.py` |
-| Checkpointer | `zerg/services/checkpointer.py` |
-| Jarvis router | `zerg/routers/jarvis.py` |
-| Jarvis frontend | `apps/jarvis/apps/web/` |
-| Research docs | `docs/research/` |
+| Worker runner         | `zerg/services/worker_runner.py`         |
+| Checkpointer          | `zerg/services/checkpointer.py`          |
+| Jarvis router         | `zerg/routers/jarvis.py`                 |
+| Jarvis frontend       | `apps/jarvis/apps/web/`                  |
+| Research docs         | `docs/research/`                         |
 
 ---
 
@@ -858,7 +875,7 @@ Key sections:
 
 ---
 
-*End of Specification*
+_End of Specification_
 
 ---
 
@@ -867,6 +884,7 @@ Key sections:
 These notes remove ambiguity for Jarvis → Supervisor integration and worker execution.
 
 ### A. Supervisor Endpoint Contract
+
 - **Endpoint:** `POST /api/jarvis/supervisor`
 - **Auth:** Jarvis session cookie (from `/api/jarvis/auth`); resolves to `owner_id`.
 - **Request body:**
@@ -887,20 +905,23 @@ These notes remove ambiguity for Jarvis → Supervisor integration and worker ex
 - **Response:** `{ "run_id": int, "thread_id": int, "status": "running", "stream_url": "/api/jarvis/supervisor/events?run_id=..." }`
 
 ### B. SSE Events for Supervisor + Workers
+
 Event names/payloads for `GET /api/jarvis/supervisor/events`:
+
 - `supervisor_started`: `{run_id, thread_id, task}`
 - `supervisor_thinking`: `{message}`
-- `worker_spawned`: `{job_id, task, model}` — *Note: `worker_id` not yet assigned*
-- `worker_started`: `{job_id, worker_id}` — *`worker_id` (filesystem artifact ID) assigned here*
+- `worker_spawned`: `{job_id, task, model}` — _Note: `worker_id` not yet assigned_
+- `worker_started`: `{job_id, worker_id}` — _`worker_id` (filesystem artifact ID) assigned here_
 - `worker_complete`: `{job_id, worker_id, status, duration_ms}` (status = success|failed|timeout)
 - `worker_summary_ready`: `{job_id, worker_id, summary}`
 - `supervisor_complete`: `{run_id, result}`
 - `error`: `{run_id, message, details?}`
 - `heartbeat`: `{timestamp}` every 30s
 
-*`job_id` = DB integer (stable handle), `worker_id` = filesystem artifact ID (appears after execution starts).*
+_`job_id` = DB integer (stable handle), `worker_id` = filesystem artifact ID (appears after execution starts)._
 
 ### C. Intent Routing Rules (Jarvis → quick vs supervisor)
+
 - Inputs: user utterance, optional history, latency budget.
 - Quick mode if: single-fact/question, no external tools needed, expected <5s.
 - Supervisor mode if: investigation, multi-step, or tools/files/SSH/HTTP needed.
@@ -908,6 +929,7 @@ Event names/payloads for `GET /api/jarvis/supervisor/events`:
 - Fallback: if intent uncertain, default to supervisor (keeps context clean).
 
 ### D. Supervisor Thread Lifecycle (“One Brain”)
+
 - Key: **one supervisor thread per user**, long-lived, never recreated unless missing.
 - Idempotency: thread lookup keyed by owner_id; create if absent.
 - Each `POST /api/jarvis/supervisor` → new Run attached to that thread.
@@ -915,15 +937,18 @@ Event names/payloads for `GET /api/jarvis/supervisor/events`:
 - Summarize old content when needed (future Phase 4), but keep thread identity stable.
 
 ### E. Ownership / Tenancy Defaults
+
 - `owner_id` **required** on worker creation; reject missing owner_id in production paths.
 - `list_workers`, `read_worker_result`, `read_worker_file`, `search_workers` must default-filter by owner_id; no owner → no data.
 - SSE streams emit only events scoped to the authenticated owner.
 
 ### F. Worker Job Processor
+
 - Must start at app boot; poll interval 5s; max concurrency 5 (configurable).
 - Emits worker events (`worker_spawned/started/complete/summary_ready/error`) onto the supervisor SSE stream when applicable.
 
 ### G. Timeouts and Error Semantics
+
 - Supervisor run timeout default: 60s (configurable); emits `error` with partial results if any.
 - Worker timeout default: 300s; statuses are system-determined (`success|failed|timeout`), never taken from LLM.
 - On timeout/failure, supervisor may synthesize partial results and suggest next steps; summaries are best-effort and can fall back to truncation.

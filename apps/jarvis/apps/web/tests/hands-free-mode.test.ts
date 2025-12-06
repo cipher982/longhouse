@@ -131,7 +131,7 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(true);
       expect(state.active).toBe(true);
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
            type: 'vadStateChange',
@@ -151,7 +151,7 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
       expect(state.active).toBe(false);
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
            type: 'vadStateChange',
@@ -171,7 +171,7 @@ describe('Hands-Free Mode', () => {
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
       expect(state.active).toBe(false);
-      
+
       // Should NOT emit vadStateChange
       expect(listener).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: 'vadStateChange' })
@@ -384,7 +384,7 @@ describe('Hands-Free Mode', () => {
 
       const state = controller.getState();
       expect(state.vadActive).toBe(false);
-      
+
       expect(listener).not.toHaveBeenCalledWith(
          expect.objectContaining({ type: 'vadStateChange' })
       );

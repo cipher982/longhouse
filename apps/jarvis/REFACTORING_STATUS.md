@@ -42,6 +42,7 @@ main.ts (1,927 lines)
 ## What Was Accomplished
 
 ### ✅ Architectural Wins
+
 1. **Eliminated circular dependencies** - Clean dependency tree
 2. **Fixed critical bugs**:
    - Hot-mic keyboard handler bug
@@ -52,6 +53,7 @@ main.ts (1,927 lines)
 5. **Added callback API** - Can use VoiceController without events
 
 ### ❌ Goals Not Achieved
+
 1. **Line count reduction** - Grew by 201 lines instead of shrinking to 1,800
 2. **Event bus removal** - Still has 14 active emissions for test compatibility
 3. **Main.ts simplification** - Still 1,927 lines (goal was ~350)
@@ -62,14 +64,15 @@ main.ts (1,927 lines)
 
 The refactoring prioritized **architectural quality** over **code quantity**:
 
-| Decision | Lines Added | Reason |
-|----------|-------------|---------|
-| Callback API | +150 | Eliminate circular deps |
-| ConversationController extraction | +310 | Separate concerns |
-| Keep StateManager | +279 | Persistence works |
-| Keep EventBus | +194 | Tests depend on it |
+| Decision                          | Lines Added | Reason                  |
+| --------------------------------- | ----------- | ----------------------- |
+| Callback API                      | +150        | Eliminate circular deps |
+| ConversationController extraction | +310        | Separate concerns       |
+| Keep StateManager                 | +279        | Persistence works       |
+| Keep EventBus                     | +194        | Tests depend on it      |
 
 **Key insight**: We now maintain three parallel state systems:
+
 1. **EventBus** - For test compatibility (can't remove without rewriting 98 tests)
 2. **Callbacks** - For application code (cleaner than events)
 3. **StateManager** - For persistence (saves/loads from localStorage)
@@ -81,6 +84,7 @@ This is architectural debt from maintaining backward compatibility while improvi
 ## Module Details
 
 ### Active Modules
+
 - `main.ts` - 1,927 lines (UI orchestration, still too large)
 - `lib/voice-controller.ts` - 680 lines (consolidated voice handling)
 - `lib/conversation-controller.ts` - 310 lines (turn management)
@@ -91,6 +95,7 @@ This is architectural debt from maintaining backward compatibility while improvi
 - `lib/feedback-system.ts` - 283 lines (audio/visual feedback)
 
 ### Modules Removed (Consolidated)
+
 - ~~voice-manager.ts~~ → merged into voice-controller.ts
 - ~~voice-channel-controller.ts~~ → merged into voice-controller.ts
 - ~~interaction-state-machine.ts~~ → distributed across modules
@@ -112,7 +117,9 @@ All tests depend on the EventBus, which is why we can't remove it without a majo
 ## Paths Forward
 
 ### Option 1: Ship As-Is ✅ (Recommended)
+
 The code is production-ready:
+
 - Well-organized architecture
 - Comprehensive test coverage
 - Fixed critical bugs
@@ -121,14 +128,18 @@ The code is production-ready:
 **Action**: Ship it and focus on user features.
 
 ### Option 2: Continue Simplification
+
 To significantly reduce line count:
+
 1. Choose ONE state management approach (breaking change)
 2. Rewrite all 98 tests to not depend on EventBus (2-3 days)
 3. Consolidate StateManager into VoiceController
 4. **Best case**: Reach ~2,400 lines (still won't hit 1,800)
 
 ### Option 3: Radical Rewrite
+
 Start fresh with single-file approach:
+
 - One 800-1,000 line main.ts
 - No abstractions, direct DOM manipulation
 - **Cost**: Lose testability, persistence, maintainability
@@ -149,6 +160,7 @@ Start fresh with single-file approach:
 ## Conclusion
 
 This refactoring was a **success from an engineering perspective**:
+
 - Better architecture
 - More reliable code
 - Comprehensive tests

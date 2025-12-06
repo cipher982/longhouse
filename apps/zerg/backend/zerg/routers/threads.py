@@ -155,11 +155,11 @@ def read_thread_messages(
 ):
     """
     Get all messages for a thread.
-    
+
     IMPORTANT: Messages are returned strictly ordered by database ID (insertion order).
     This provides deterministic ordering regardless of timestamp precision or creation time.
     The client MUST NOT sort these messages client-side; the server ordering is authoritative.
-    
+
     See crud.get_thread_messages() for implementation details on the .order_by(ThreadMessage.id) guarantee.
     """
     # First check if thread exists

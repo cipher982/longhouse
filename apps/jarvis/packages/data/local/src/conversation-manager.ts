@@ -333,7 +333,7 @@ export class ConversationManager {
       // Sort by timestamp and delete oldest
       turns.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       const turnsToDelete = turns.slice(0, turns.length - this.maxHistoryTurns)
-      
+
       const tx = this.db.transaction('turns', 'readwrite')
       for (const turn of turnsToDelete) {
         await tx.objectStore('turns').delete(turn.id)
@@ -355,16 +355,16 @@ export class ConversationManager {
 
   async switchToConversation(conversationId: string): Promise<void> {
     if (!this.db) throw new Error('ConversationManager not initialized')
-    
+
     const conversation = await this.db.get('conversations', conversationId)
     if (!conversation) throw new Error('Conversation not found')
-    
+
     this.currentConversationId = conversationId
   }
 
   async getAllConversations(): Promise<Array<{id: string, name: string, createdAt: Date, updatedAt: Date}>> {
     if (!this.db) return []
-    
+
     const conversations = await this.db.getAll('conversations')
     return conversations.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
   }
@@ -375,7 +375,7 @@ export class ConversationManager {
     // Delete all turns for this conversation
     const turns = await this.db.getAllFromIndex('turns', 'by-conversation', conversationId)
     const tx = this.db.transaction(['conversations', 'turns'], 'readwrite')
-    
+
     for (const turn of turns) {
       await tx.objectStore('turns').delete(turn.id)
     }
@@ -404,10 +404,10 @@ export class ConversationManager {
 
     const conversations = await this.db.count('conversations')
     const turns = await this.db.count('turns')
-    
+
     // Rough size estimation (this would need more sophisticated calculation in real app)
     const totalSize = turns * 1024 // Estimate 1KB per turn
-    
+
     return {
       conversationCount: conversations,
       turnCount: turns,
@@ -474,7 +474,7 @@ export class ConversationManager {
     if (category) {
       return await this.db.getAllFromIndex('documents', 'by-category', category)
     }
-    
+
     return await this.db.getAll('documents')
   }
 
@@ -500,7 +500,7 @@ export class ConversationManager {
         }
       },
       {
-        id: 'doc_2', 
+        id: 'doc_2',
         content: 'Our new AI-powered analytics platform helps customers reduce processing time by 40% and improve accuracy by 25%.',
         embedding: new Array(1536).fill(0).map(() => Math.random()),
         metadata: {
@@ -517,7 +517,7 @@ export class ConversationManager {
         embedding: new Array(1536).fill(0).map(() => Math.random()),
         metadata: {
           source: 'employee-handbook-2024.pdf',
-          type: 'policy', 
+          type: 'policy',
           lastUpdated: '2024-01-15',
           category: 'hr-policies',
           department: 'human-resources'

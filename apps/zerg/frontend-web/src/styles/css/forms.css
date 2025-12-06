@@ -8,22 +8,22 @@ input[type="email"],
 input[type="password"],
 textarea,
 select {
-    width: 100%;
-    padding: var(--spacing-sm) var(--spacing-md);
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-base);
-    transition:
-        border-color var(--motion-duration-fast) var(--motion-easing-standard),
-        box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
-    box-sizing: border-box;
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  box-sizing: border-box;
 }
 
 input::placeholder,
 textarea::placeholder {
-    color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
 }
 
 input:focus,
@@ -33,28 +33,28 @@ select:focus,
 .modal textarea:focus,
 .modal input[type="text"]:focus,
 .scope-select:focus {
-    outline: none;
-    border-color: var(--color-brand-primary);
-    box-shadow: 0 0 0 2px rgba(100, 255, 218, 0.25);
+  outline: none;
+  border-color: var(--color-brand-primary);
+  box-shadow: 0 0 0 2px rgb(100 255 218 / 25%);
 }
 
 /* Error state */
 .input-error {
-    border-color: var(--color-intent-error) !important;
+  border-color: var(--color-intent-error) !important;
 }
 
 .input-error:focus {
-    border-color: var(--color-intent-error) !important;
-    box-shadow: 0 0 0 2px rgba(244, 67, 54, 0.25);
+  border-color: var(--color-intent-error) !important;
+  box-shadow: 0 0 0 2px rgb(244 67 54 / 25%);
 }
 
 /* Form layout helpers */
 .form-row {
-    margin-top: 12px;
+  margin-top: 12px;
 }
 
 .form-row-sm {
-    margin-top: 8px;
+  margin-top: 8px;
 }
 
 /* -------------------------------------------------------------
@@ -84,7 +84,7 @@ select:focus,
 }
 
 #sched-summary {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-    margin-top: var(--spacing-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin-top: var(--spacing-md);
 }

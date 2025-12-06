@@ -29,13 +29,13 @@ test.describe('Chat Token Streaming Tests', () => {
     await page.getByTestId('send-message-btn').click();
 
     // Wait for user message to appear
-    await expect(page.getByTestId('messages-container')).toContainText(testMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
     });
 
     // Look for streaming indicator - check for message with data-streaming attribute
     const streamingMessage = page.locator('[data-streaming="true"]').first();
-    
+
     // Wait for streaming to start (assistant message starts appearing)
     // We expect to see at least some content appearing character by character
     await expect(streamingMessage.or(page.locator('.message.streaming')).or(
@@ -71,27 +71,27 @@ test.describe('Chat Token Streaming Tests', () => {
     await page.getByTestId('send-message-btn').click();
 
     // Wait for user message
-    await expect(page.getByTestId('messages-container')).toContainText(testMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
     });
 
     // Get the assistant message element
     const assistantMessage = page.locator('[data-role="chat-message-assistant"]').last();
-    
+
     // Wait for streaming to start
     await expect(assistantMessage).toBeVisible({ timeout: 15000 });
 
     // Capture initial content length
     let previousLength = 0;
     let contentGrew = false;
-    
+
     // Check multiple times that content is growing (tokens accumulating)
     for (let i = 0; i < 5; i++) {
       await page.waitForTimeout(1000); // Wait 1 second between checks
-      
+
       const currentContent = await assistantMessage.locator('.message-content').textContent();
       const currentLength = currentContent?.length || 0;
-      
+
       if (currentLength > previousLength) {
         contentGrew = true;
         previousLength = currentLength;
@@ -102,8 +102,8 @@ test.describe('Chat Token Streaming Tests', () => {
     expect(contentGrew).toBe(true);
 
     // Wait for streaming to complete
-    await expect(assistantMessage).not.toHaveAttribute('data-streaming', 'true', { 
-      timeout: 30000 
+    await expect(assistantMessage).not.toHaveAttribute('data-streaming', 'true', {
+      timeout: 30000
     });
 
     // Verify final message has substantial content
@@ -121,8 +121,8 @@ test.describe('Chat Token Streaming Tests', () => {
     await page.getByTestId('chat-input').fill(testMessage);
     await page.getByTestId('send-message-btn').click();
 
-    await expect(page.getByTestId('messages-container')).toContainText(testMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
     });
 
     const assistantMessage = page.locator('[data-role="chat-message-assistant"]').last();
@@ -130,14 +130,14 @@ test.describe('Chat Token Streaming Tests', () => {
 
     // Track content changes over time
     const contentSnapshots: string[] = [];
-    
+
     for (let i = 0; i < 10; i++) {
       await page.waitForTimeout(500); // Check every 500ms
       const content = await assistantMessage.locator('.message-content').textContent();
       if (content) {
         contentSnapshots.push(content);
       }
-      
+
       // If we see streaming has ended, break early
       const isStreaming = await assistantMessage.getAttribute('data-streaming');
       if (isStreaming !== 'true') {
@@ -169,13 +169,13 @@ test.describe('Chat Token Streaming Tests', () => {
     await page.getByTestId('chat-input').fill(testMessage);
     await page.getByTestId('send-message-btn').click();
 
-    await expect(page.getByTestId('messages-container')).toContainText(testMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
     });
 
     // Look for streaming message
     const streamingMessage = page.locator('[data-streaming="true"]').first();
-    
+
     // Wait for streaming to start
     await expect(streamingMessage).toBeVisible({ timeout: 15000 }).catch(() => {
       // If streaming message not found, check for assistant message with cursor
@@ -375,4 +375,3 @@ test.describe('Chat Token Streaming Tests', () => {
     console.log('✅ Writing indicator badge test completed');
   });
 });
-

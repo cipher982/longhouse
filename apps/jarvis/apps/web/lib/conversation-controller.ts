@@ -20,7 +20,7 @@ export interface ConversationState {
   pendingUserMessageId: string | null;
 }
 
-export type ConversationEvent = 
+export type ConversationEvent =
   | { type: 'streamingStart' }
   | { type: 'streamingStop' }
   | { type: 'conversationIdChange', id: string | null };

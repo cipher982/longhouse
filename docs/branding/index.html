@@ -239,11 +239,11 @@
             h1 {
                 font-size: 2.5em;
             }
-            
+
             .hero-description {
                 font-size: 1.2em;
             }
-            
+
             .nav-grid {
                 grid-template-columns: 1fr;
             }
@@ -254,7 +254,7 @@
     <!-- Hero Section -->
     <section class="hero">
         <div class="hero-particles" id="particles"></div>
-        
+
         <div class="hero-content">
             <div class="hero-logo">
                 <svg viewBox="0 0 200 200">
@@ -262,7 +262,7 @@
                     <circle cx="100" cy="100" r="20" fill="var(--secondary)" opacity="0.8">
                         <animate attributeName="r" values="20;25;20" dur="3s" repeatCount="indefinite"/>
                     </circle>
-                    
+
                     <!-- Orbiting Agents -->
                     <g transform="translate(100,100)">
                         <circle r="8" fill="var(--primary)">
@@ -278,7 +278,7 @@
                             <animateMotion path="M 0,0 m -60,0 a 60,60 0 1,1 120,0 a 60,60 0 1,1 -120,0" dur="12s" repeatCount="indefinite"/>
                         </circle>
                     </g>
-                    
+
                     <!-- Connection Lines -->
                     <line x1="100" y1="100" x2="100" y2="40" stroke="var(--primary)" stroke-width="1" opacity="0.3">
                         <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite"/>
@@ -291,13 +291,13 @@
                     </line>
                 </svg>
             </div>
-            
+
             <h1>Agent Platform Design System</h1>
             <p class="hero-description">
-                A comprehensive collection of logo designs, brand identity elements, and interactive tools 
+                A comprehensive collection of logo designs, brand identity elements, and interactive tools
                 for the next generation of AI agent orchestration.
             </p>
-            
+
             <div class="nav-grid">
                 <a href="logo_design_showcase.html" class="nav-card">
                     <div class="nav-icon">
@@ -313,7 +313,7 @@
                     <h3 class="nav-title">Logo Showcase</h3>
                     <p class="nav-description">Explore foundational logo concepts with interactive demonstrations</p>
                 </a>
-                
+
                 <a href="logo_design_advanced.html" class="nav-card">
                     <div class="nav-icon">
                         <svg viewBox="0 0 80 80">
@@ -337,7 +337,7 @@
                     <h3 class="nav-title">Advanced Concepts</h3>
                     <p class="nav-description">Sophisticated animations and interactive logo experiments</p>
                 </a>
-                
+
                 <a href="logo_brand_identity.html" class="nav-card">
                     <div class="nav-icon">
                         <svg viewBox="0 0 80 80">
@@ -349,7 +349,7 @@
                     <h3 class="nav-title">Brand Identity</h3>
                     <p class="nav-description">Complete brand system with applications and guidelines</p>
                 </a>
-                
+
                 <a href="agent_platform_design_system.html" class="nav-card">
                     <div class="nav-icon">
                         <svg viewBox="0 0 80 80">
@@ -370,38 +370,38 @@
     <section class="features">
         <div class="features-container">
             <h2 class="features-title">What's Included</h2>
-            
+
             <div class="features-grid">
                 <div class="feature-item">
                     <div class="feature-icon">🎨</div>
                     <h3 class="feature-title">15+ Logo Variations</h3>
                     <p class="feature-description">From minimalist to complex, animated to static</p>
                 </div>
-                
+
                 <div class="feature-item">
                     <div class="feature-icon">⚡</div>
                     <h3 class="feature-title">Interactive Playground</h3>
                     <p class="feature-description">Customize colors, animations, and compositions in real-time</p>
                 </div>
-                
+
                 <div class="feature-item">
                     <div class="feature-icon">🎯</div>
                     <h3 class="feature-title">Brand Guidelines</h3>
                     <p class="feature-description">Comprehensive documentation for consistent implementation</p>
                 </div>
-                
+
                 <div class="feature-item">
                     <div class="feature-icon">💎</div>
                     <h3 class="feature-title">Premium Animations</h3>
                     <p class="feature-description">Smooth, purposeful motion that brings the brand to life</p>
                 </div>
-                
+
                 <div class="feature-item">
                     <div class="feature-icon">🔧</div>
                     <h3 class="feature-title">Export Tools</h3>
                     <p class="feature-description">Generate production-ready assets in multiple formats</p>
                 </div>
-                
+
                 <div class="feature-item">
                     <div class="feature-icon">🌈</div>
                     <h3 class="feature-title">Color System</h3>
@@ -419,7 +419,7 @@
     <script>
         // Create floating particles
         const particlesContainer = document.getElementById('particles');
-        
+
         for (let i = 0; i < 30; i++) {
             const particle = document.createElement('div');
             particle.className = 'particle';
@@ -435,7 +435,7 @@
                 const icon = this.querySelector('svg');
                 icon.style.transform = 'scale(1.1)';
             });
-            
+
             card.addEventListener('mouseleave', function() {
                 const icon = this.querySelector('svg');
                 icon.style.transform = 'scale(1)';

@@ -8,7 +8,7 @@ import path from 'path';
 
 async function globalTeardown(config) {
   console.log('🧹 Starting test environment cleanup...');
-  
+
   try {
     // Resolve a Python interpreter ('python' or 'python3')
     const pythonCmd = (() => {
@@ -33,7 +33,7 @@ print("✅ Test database cleanup completed")
       stdio: 'inherit'
     });
     // If this fails, the environment must expose 'python' on PATH.
-    
+
     await new Promise((resolve, reject) => {
       cleanup.on('close', (code) => {
         if (code === 0) {
@@ -43,9 +43,9 @@ print("✅ Test database cleanup completed")
         }
       });
     });
-    
+
     console.log('✅ Test environment cleanup completed');
-    
+
   } catch (error) {
     console.error('❌ Test cleanup failed:', error.message);
     // Continue anyway - don't fail the entire test run due to cleanup issues

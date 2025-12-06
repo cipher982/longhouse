@@ -32,6 +32,7 @@ The Linear connector enables Zerg agents to interact with Linear's issue trackin
 Create a new issue in Linear.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 - `team_id` (string, required): ID of the team to create the issue in
 - `title` (string, required): Issue title
@@ -47,6 +48,7 @@ Create a new issue in Linear.
 - `label_ids` (list, optional): List of label IDs to apply
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -64,6 +66,7 @@ Create a new issue in Linear.
 ```
 
 **Example:**
+
 ```python
 result = linear_create_issue(
     api_key="lin_api_xxxxx",
@@ -81,12 +84,14 @@ result = linear_create_issue(
 List issues in Linear with optional filtering.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 - `team_id` (string, optional): Filter by team ID
 - `state` (string, optional): Filter by workflow state name (e.g., "In Progress", "Done")
 - `first` (integer, optional): Number of results to return (1-250, default: 50)
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -109,6 +114,7 @@ List issues in Linear with optional filtering.
 ```
 
 **Example:**
+
 ```python
 result = linear_list_issues(
     api_key="lin_api_xxxxx",
@@ -125,10 +131,12 @@ result = linear_list_issues(
 Get detailed information about a specific Linear issue.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 - `issue_id` (string, required): Issue ID (UUID, not identifier like "ENG-42")
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -158,6 +166,7 @@ Get detailed information about a specific Linear issue.
 ```
 
 **Example:**
+
 ```python
 result = linear_get_issue(
     api_key="lin_api_xxxxx",
@@ -172,6 +181,7 @@ result = linear_get_issue(
 Update an existing Linear issue.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 - `issue_id` (string, required): Issue ID to update (UUID)
 - `title` (string, optional): New issue title
@@ -182,6 +192,7 @@ Update an existing Linear issue.
 **Note:** At least one field to update must be provided.
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -198,6 +209,7 @@ Update an existing Linear issue.
 ```
 
 **Example:**
+
 ```python
 result = linear_update_issue(
     api_key="lin_api_xxxxx",
@@ -214,11 +226,13 @@ result = linear_update_issue(
 Add a comment to a Linear issue.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 - `issue_id` (string, required): Issue ID to comment on (UUID)
 - `body` (string, required): Comment text
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -234,6 +248,7 @@ Add a comment to a Linear issue.
 ```
 
 **Example:**
+
 ```python
 result = linear_add_comment(
     api_key="lin_api_xxxxx",
@@ -249,9 +264,11 @@ result = linear_add_comment(
 List all teams accessible to the API key.
 
 **Parameters:**
+
 - `api_key` (string, required): Linear Personal API Key
 
 **Returns:**
+
 ```json
 {
   "success": true,
@@ -274,6 +291,7 @@ List all teams accessible to the API key.
 ```
 
 **Example:**
+
 ```python
 result = linear_list_teams(
     api_key="lin_api_xxxxx"
@@ -285,23 +303,30 @@ result = linear_list_teams(
 Linear enforces rate limits to ensure fair usage:
 
 ### Request Limits
+
 - **API Key Authentication**: 1,500 requests per hour per user
 - **OAuth Application**: 500 requests per hour per user/application
 
 ### Complexity Limits
+
 Linear uses complexity-based rate limiting where each query is assigned complexity points:
+
 - **API Key Authentication**: 250,000 complexity points per hour per user
 - **OAuth Application**: 200,000 complexity points per hour per user/application
 
 ### Rate Limit Headers
+
 Response headers include rate limit information:
+
 - `x-ratelimit-requests-remaining`: Remaining requests in the current window
 - `x-ratelimit-requests-reset`: Unix timestamp when the rate limit resets
 - `x-complexity-remaining`: Remaining complexity points
 - `x-complexity-reset`: Unix timestamp when complexity resets
 
 ### Handling Rate Limits
+
 When rate limit is exceeded, the API returns:
+
 ```json
 {
   "success": false,
@@ -315,6 +340,7 @@ When rate limit is exceeded, the API returns:
 ### Common Errors
 
 **Authentication Failed (401)**
+
 ```json
 {
   "success": false,
@@ -324,6 +350,7 @@ When rate limit is exceeded, the API returns:
 ```
 
 **Resource Not Found (404)**
+
 ```json
 {
   "success": false,
@@ -333,6 +360,7 @@ When rate limit is exceeded, the API returns:
 ```
 
 **Invalid Input (400)**
+
 ```json
 {
   "success": false,
@@ -341,6 +369,7 @@ When rate limit is exceeded, the API returns:
 ```
 
 **Rate Limit Exceeded (403)**
+
 ```json
 {
   "success": false,
@@ -350,7 +379,9 @@ When rate limit is exceeded, the API returns:
 ```
 
 ### GraphQL Errors
+
 Linear's GraphQL API may return specific error details:
+
 ```json
 {
   "success": false,
@@ -403,6 +434,7 @@ Linear's GraphQL API may return specific error details:
 ## Testing
 
 ### Validation Script
+
 Run the validation script to verify GraphQL patterns without making API calls:
 
 ```bash
@@ -410,6 +442,7 @@ python scripts/validate_linear_connector.py
 ```
 
 ### Manual Testing
+
 1. Generate a test API key from Linear
 2. Export it: `export LINEAR_API_KEY='lin_api_xxxxx'`
 3. Use the Zerg dashboard to configure an agent with the Linear connector

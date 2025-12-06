@@ -16,6 +16,7 @@ Letta's Filesystem approach treats agent memory as a hierarchical file/folder st
 ### Core Principles
 
 **1. Documents as Folders**
+
 - Files are organized into folders with descriptive names and descriptions
 - Each folder becomes a coherent memory space for related information
 - Agents manage context by opening/closing folders dynamically
@@ -37,17 +38,20 @@ Letta exposes three primary filesystem tools to agents:
   - Cross-file semantic search within a folder
 
 **3. Automatic Chunking and Embedding**
+
 - Files are chunked automatically for semantic search
 - Embeddings generated without agent intervention
 - Enables semantic retrieval across large document sets
 
 **4. Context Window Management**
+
 - Only limited portions of files visible at once
 - Agents open/close files to manage their context
 - Prevents context overflow in long conversations
 - Complete transparency into what's loaded
 
 **5. Attachment Model**
+
 - Folders can be attached/detached from agents
 - Dynamic memory management based on task needs
 - Future-proof for multi-tenant scenarios
@@ -101,6 +105,7 @@ Letta's research compared their filesystem approach against MemGPT's specialized
 ### File Specifications
 
 **metadata.json**
+
 ```json
 {
   "worker_id": "worker-abc123",
@@ -114,6 +119,7 @@ Letta's research compared their filesystem approach against MemGPT's specialized
 ```
 
 **index.json** (Master Index)
+
 ```json
 {
   "workers": [
@@ -141,6 +147,7 @@ Letta's research compared their filesystem approach against MemGPT's specialized
 **Purpose**: Browse available worker outputs
 
 **Signature**:
+
 ```python
 def list_worker_artifacts(
     status_filter: Optional[str] = None,  # "completed", "failed", "running"
@@ -151,12 +158,14 @@ def list_worker_artifacts(
 ```
 
 **Implementation Notes**:
+
 - Reads `/data/swarmlet/workers/index.json`
 - Applies filters to worker list
 - Returns metadata for matching workers
 - Fast operation (index-based, no file scanning)
 
 **Example Usage**:
+
 ```python
 # Supervisor: "Show me completed research tasks"
 artifacts = list_worker_artifacts(
@@ -170,6 +179,7 @@ artifacts = list_worker_artifacts(
 **Purpose**: Read specific files from worker directories
 
 **Signature**:
+
 ```python
 def read_worker_file(
     worker_id: str,
@@ -180,12 +190,14 @@ def read_worker_file(
 ```
 
 **Implementation Notes**:
+
 - Validates worker_id exists
 - Enforces path restrictions (no `../` escapes)
 - Supports optional line limiting for large files
 - Returns file content as string
 
 **Example Usage**:
+
 ```python
 # Supervisor: "Read the report from worker-abc123"
 report = read_worker_file(
@@ -199,6 +211,7 @@ report = read_worker_file(
 **Purpose**: Search across worker outputs using patterns
 
 **Signature**:
+
 ```python
 def search_worker_artifacts(
     query: str,
@@ -210,12 +223,14 @@ def search_worker_artifacts(
 ```
 
 **Implementation Notes**:
+
 - **Grep mode**: Uses regex pattern matching (fast)
 - **Semantic mode**: Uses embeddings for meaning-based search (future)
 - Searches across specified file patterns
 - Returns matches with context (file path, line number, surrounding lines)
 
 **Example Usage**:
+
 ```python
 # Supervisor: "Find all mentions of 'embedding' in worker outputs"
 results = search_worker_artifacts(
@@ -230,6 +245,7 @@ results = search_worker_artifacts(
 **Purpose**: Get AI-generated summary of worker deliverables
 
 **Signature**:
+
 ```python
 def summarize_worker_output(
     worker_id: str,
@@ -239,12 +255,14 @@ def summarize_worker_output(
 ```
 
 **Implementation Notes**:
+
 - Reads key files (report.md, data.json)
 - Uses LLM to generate 2-3 sentence summary
 - Optionally focuses on specific aspects
 - Caches summaries in metadata for performance
 
 **Example Usage**:
+
 ```python
 # Supervisor: "Summarize what worker-abc123 found about memory systems"
 summary = summarize_worker_output(
@@ -258,6 +276,7 @@ summary = summarize_worker_output(
 **Purpose**: Compare outputs from multiple workers
 
 **Signature**:
+
 ```python
 def compare_worker_outputs(
     worker_ids: List[str],
@@ -267,12 +286,14 @@ def compare_worker_outputs(
 ```
 
 **Implementation Notes**:
+
 - Loads outputs from specified workers
 - Uses LLM to identify commonalities and differences
 - Returns structured comparison
 - Useful for synthesis phase
 
 **Example Usage**:
+
 ```python
 # Supervisor: "Compare findings from these three research workers"
 comparison = compare_worker_outputs(
@@ -288,11 +309,13 @@ comparison = compare_worker_outputs(
 ### Current Tool Infrastructure
 
 **Zerg's Tool Registry** (`zerg/tools/registry.py`):
+
 - **ImmutableToolRegistry**: Thread-safe, built once at startup
 - **ToolRegistry**: Mutable singleton for backwards compatibility
 - Tools registered from multiple sources (builtin, MCP, custom)
 
 **Tool Categories** (from `zerg/tools/builtin/`):
+
 - Container tools
 - HTTP tools
 - Datetime tools
@@ -305,6 +328,7 @@ comparison = compare_worker_outputs(
 **1. Create New Module**: `zerg/tools/builtin/swarmlet_tools.py`
 
 **2. Follow Existing Pattern**:
+
 ```python
 """Swarmlet filesystem tools for supervisor agents."""
 
@@ -330,6 +354,7 @@ TOOLS = [
 ```
 
 **3. Register in `zerg/tools/builtin/__init__.py`**:
+
 ```python
 from zerg.tools.builtin.swarmlet_tools import TOOLS as SWARMLET_TOOLS
 
@@ -340,6 +365,7 @@ BUILTIN_TOOLS = (
 ```
 
 **4. Tool Allowlist Configuration**:
+
 - Supervisor agents get `swarmlet_*` tool pattern in `allowed_tools`
 - Worker agents do NOT get swarmlet tools (they write, don't read)
 - Prevents workers from browsing each other's outputs
@@ -349,11 +375,13 @@ BUILTIN_TOOLS = (
 **Storage Location**: `/data/swarmlet/` (container volume mount)
 
 **Model Extensions** (if needed):
+
 - Current `Agent` model already has JSON `config` field
 - Store swarmlet-specific config there: `config.swarmlet_role = "supervisor"`
 - No schema migration needed initially
 
 **Thread Relationship**:
+
 - Workers are created as child threads of supervisor
 - `Thread.agent_state` stores worker_id mapping
 - `ThreadMessage.message_metadata` stores artifact references
@@ -367,12 +395,14 @@ BUILTIN_TOOLS = (
 **Goal**: Workers write artifacts to structured directories
 
 **Tasks**:
+
 1. Create directory structure initialization
 2. Implement worker artifact writer utility
 3. Generate `metadata.json` and `index.json` on worker completion
 4. Add integration tests for file generation
 
 **Deliverables**:
+
 - `zerg/services/swarmlet_storage.py` - Storage abstraction
 - `/data/swarmlet/` directory structure
 - Tests confirming file creation
@@ -382,6 +412,7 @@ BUILTIN_TOOLS = (
 **Goal**: Supervisor can read worker outputs
 
 **Tasks**:
+
 1. Implement `list_worker_artifacts` (index-based listing)
 2. Implement `read_worker_file` (direct file access)
 3. Create `swarmlet_tools.py` module
@@ -389,6 +420,7 @@ BUILTIN_TOOLS = (
 5. Add unit tests for each tool
 
 **Deliverables**:
+
 - `zerg/tools/builtin/swarmlet_tools.py`
 - Tool registration in `__init__.py`
 - Passing unit tests
@@ -398,12 +430,14 @@ BUILTIN_TOOLS = (
 **Goal**: Supervisor can search across artifacts
 
 **Tasks**:
+
 1. Implement `search_worker_artifacts` (grep mode only)
 2. Add file pattern matching logic
 3. Return search results with context
 4. Add integration tests for search
 
 **Deliverables**:
+
 - Grep-based search functionality
 - Search result formatting
 - Integration tests
@@ -413,12 +447,14 @@ BUILTIN_TOOLS = (
 **Goal**: Supervisor gets summarization and comparison
 
 **Tasks**:
+
 1. Implement `summarize_worker_output` with LLM
 2. Add summary caching to metadata
 3. Implement `compare_worker_outputs`
 4. End-to-end testing with real supervisor agent
 
 **Deliverables**:
+
 - Summary and comparison tools
 - Cached summaries in metadata
 - E2E supervisor tests
@@ -428,12 +464,14 @@ BUILTIN_TOOLS = (
 **Goal**: Enable embedding-based semantic search
 
 **Tasks**:
+
 1. Add embedding generation on artifact creation
 2. Store embeddings in vector DB or file-based index
 3. Implement semantic mode for `search_worker_artifacts`
 4. Benchmark performance vs grep search
 
 **Deliverables**:
+
 - Semantic search functionality
 - Performance benchmarks
 - Documentation on when to use semantic vs grep
@@ -449,6 +487,7 @@ BUILTIN_TOOLS = (
 **Workflow**:
 
 1. **Supervisor delegates tasks**:
+
 ```python
 # Supervisor creates 3 worker agents, each researching a different approach
 worker1 = create_worker(task="Research Letta's filesystem approach")
@@ -457,6 +496,7 @@ worker3 = create_worker(task="Research RAG-based approaches")
 ```
 
 2. **Workers complete and write artifacts**:
+
 ```
 /data/swarmlet/workers/
   ├── worker-abc123/outputs/report.md (Letta findings)
@@ -465,6 +505,7 @@ worker3 = create_worker(task="Research RAG-based approaches")
 ```
 
 3. **Supervisor browses completed work**:
+
 ```python
 # Supervisor: "Show me completed research tasks"
 artifacts = list_worker_artifacts(
@@ -475,6 +516,7 @@ artifacts = list_worker_artifacts(
 ```
 
 4. **Supervisor reads individual reports**:
+
 ```python
 # Supervisor: "Read the Letta research report"
 letta_report = read_worker_file(
@@ -484,6 +526,7 @@ letta_report = read_worker_file(
 ```
 
 5. **Supervisor compares findings**:
+
 ```python
 # Supervisor: "Compare all three research approaches"
 comparison = compare_worker_outputs(
@@ -493,6 +536,7 @@ comparison = compare_worker_outputs(
 ```
 
 6. **Supervisor synthesizes final report**:
+
 ```python
 # Supervisor uses comparison to write unified analysis
 # References specific worker IDs in final output
@@ -506,6 +550,7 @@ final_report = synthesize(comparison, source_workers=[...])
 **Workflow**:
 
 1. **Supervisor creates specialized workers**:
+
 ```python
 worker1 = create_worker(task="Analyze authentication module")
 worker2 = create_worker(task="Analyze database layer")
@@ -513,6 +558,7 @@ worker3 = create_worker(task="Analyze API endpoints")
 ```
 
 2. **Workers produce structured output**:
+
 ```
 /data/swarmlet/workers/
   ├── worker-auth/
@@ -527,6 +573,7 @@ worker3 = create_worker(task="Analyze API endpoints")
 ```
 
 3. **Supervisor searches for security issues**:
+
 ```python
 # Supervisor: "Find all security vulnerabilities mentioned"
 security_issues = search_worker_artifacts(
@@ -537,6 +584,7 @@ security_issues = search_worker_artifacts(
 ```
 
 4. **Supervisor generates summary**:
+
 ```python
 # Supervisor: "Summarize security findings"
 for worker in ["worker-auth", "worker-db", "worker-api"]:
@@ -547,6 +595,7 @@ for worker in ["worker-auth", "worker-db", "worker-api"]:
 ```
 
 5. **Supervisor creates action plan**:
+
 ```python
 # Supervisor synthesizes findings into prioritized action items
 # Cross-references worker outputs in recommendations
@@ -559,11 +608,13 @@ for worker in ["worker-auth", "worker-db", "worker-api"]:
 **Workflow**:
 
 1. **Worker completes initial task**:
+
 ```
 /data/swarmlet/workers/worker-v1/outputs/report.md
 ```
 
 2. **Supervisor reviews output**:
+
 ```python
 report = read_worker_file(
     worker_id="worker-v1",
@@ -573,6 +624,7 @@ report = read_worker_file(
 ```
 
 3. **Supervisor creates follow-up worker**:
+
 ```python
 worker_v2 = create_worker(
     task="Expand section 3 of previous report",
@@ -584,6 +636,7 @@ worker_v2 = create_worker(
 ```
 
 4. **Supervisor compares versions**:
+
 ```python
 comparison = compare_worker_outputs(
     worker_ids=["worker-v1", "worker-v2"],
@@ -592,6 +645,7 @@ comparison = compare_worker_outputs(
 ```
 
 5. **Supervisor selects best output**:
+
 ```python
 # Supervisor merges insights from both versions
 # Keeps worker-v2's section 3, worker-v1's other sections
@@ -604,6 +658,7 @@ comparison = compare_worker_outputs(
 ### Why Filesystem Over Database?
 
 **Advantages**:
+
 1. **Simplicity**: No ORM, no schema migrations, just files
 2. **Transparency**: Easy to inspect/debug with standard tools
 3. **Flexibility**: Schema-free JSON for extensibility
@@ -612,11 +667,13 @@ comparison = compare_worker_outputs(
 6. **Letta Validation**: Proven approach with benchmark results
 
 **Trade-offs**:
+
 - **Query Performance**: Index.json helps, but not as fast as SQL
 - **Concurrency**: Need file locking for writes (not an issue with immutable artifacts)
 - **Relationships**: No foreign keys (but workers are hierarchical by design)
 
 **Mitigation**:
+
 - Master index.json provides fast filtering
 - Artifacts are write-once, read-many (no locking needed)
 - Future: Add SQLite index if query performance becomes issue
@@ -634,6 +691,7 @@ Following Letta's research findings:
 ### Why Not Semantic Search Initially?
 
 **Rationale**:
+
 1. **MVP Speed**: Grep search is faster to implement
 2. **Cost**: Embeddings add inference cost per artifact
 3. **Scale**: Semantic search benefits appear at larger scales
@@ -641,6 +699,7 @@ Following Letta's research findings:
 5. **Flexibility**: Can add semantic later without breaking changes
 
 **Future Trigger Points**:
+
 - 100+ worker artifacts per session
 - User feedback requesting "find by meaning"
 - Grep search becoming slow or inadequate
@@ -655,6 +714,7 @@ Following Letta's research findings:
 **Question**: How long do we keep worker artifacts?
 
 **Options**:
+
 - Keep forever (storage grows unbounded)
 - Time-based expiration (30 days)
 - Size-based LRU eviction
@@ -667,6 +727,7 @@ Following Letta's research findings:
 **Question**: Can supervisors reference artifacts from previous sessions?
 
 **Implications**:
+
 - Richer context across conversations
 - Enables learning from past work
 - Requires artifact addressing scheme
@@ -680,6 +741,7 @@ Following Letta's research findings:
 **Use Case**: Worker-B builds on Worker-A's research
 
 **Trade-offs**:
+
 - **Pro**: Enables collaborative workflows
 - **Con**: Violates clean separation of concerns
 - **Con**: Risk of circular dependencies
@@ -689,6 +751,7 @@ Following Letta's research findings:
 ### 4. Embedding Strategy for Semantic Search
 
 **Options**:
+
 1. **Embed on write**: Generate embeddings when artifact created
 2. **Embed on demand**: Generate when first searched
 3. **Batch embedding**: Nightly job embeds all artifacts
@@ -701,6 +764,7 @@ Following Letta's research findings:
 **Question**: How do we prevent tool misuse?
 
 **Risks**:
+
 - Supervisor reading non-existent worker IDs (handled by validation)
 - Path traversal attacks (prevented by path sanitization)
 - Large file reads exhausting context (mitigated by max_lines)
@@ -724,8 +788,8 @@ Following Letta's research findings:
    - Index size: < 1MB for 1000 workers
 
 3. **Context Window Savings**:
-   - Without tools: Supervisor loads all worker outputs (100KB * 5 = 500KB)
-   - With tools: Supervisor loads summaries only (2KB * 5 = 10KB)
+   - Without tools: Supervisor loads all worker outputs (100KB \* 5 = 500KB)
+   - With tools: Supervisor loads summaries only (2KB \* 5 = 10KB)
    - Savings: 98% context reduction
 
 ### Behavioral Metrics

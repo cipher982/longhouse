@@ -6,41 +6,52 @@
   /* Unified design tokens (no legacy vars) */
   --bg-primary: #0b1220;
   --bg-secondary: #0f172a;
-  --bg-elevated: rgba(255,255,255,0.05);
-  --glass-bg: rgba(255,255,255,0.03);
+  --bg-elevated: rgb(255 255 255 / 5%);
+  --glass-bg: rgb(255 255 255 / 3%);
   --glass-border: #1f2937;
   --text-primary: #e5e7eb;
   --text-secondary: #9ca3af;
-  --text-muted: rgba(229,231,235,0.6);
+  --text-muted: rgb(229 231 235 / 60%);
   --accent-purple: #06b6d4;
   --accent-pink: #22d3ee;
   --accent-blue: #38bdf8;
   --primary-gradient: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
   --secondary-gradient: linear-gradient(135deg, #38bdf8 0%, #06b6d4 100%);
   --success-gradient: linear-gradient(135deg, #0ba360 0%, #3cba92 100%);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
-  --shadow-glow: 0 0 40px rgba(6, 182, 212, 0.3);
+  --shadow-xl:
+    0 20px 25px -5px rgb(0 0 0 / 50%), 0 10px 10px -5px rgb(0 0 0 / 30%);
+  --shadow-glow: 0 0 40px rgb(6 182 212 / 30%);
 }
 
 /* Personal branding customizations */
 .personal-context {
-  background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+  background: linear-gradient(
+    135deg,
+    var(--bg-primary) 0%,
+    var(--bg-secondary) 100%
+  );
 }
 
 /* Remove unused legacy .card styling for minimalism */
 
 .personal-context .streaming {
-  background: linear-gradient(90deg, 
-    transparent 0%, 
-    rgba(34, 211, 238, 0.1) 50%, 
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(34 211 238 / 10%) 50%,
     transparent 100%
   );
   animation: pulse-personal 2s ease-in-out infinite alternate;
 }
 
 @keyframes pulse-personal {
-  from { background-color: rgba(34, 211, 238, 0.05); }
-  to { background-color: rgba(34, 211, 238, 0.15); }
+  from {
+    background-color: rgb(34 211 238 / 5%);
+  }
+
+  to {
+    background-color: rgb(34 211 238 / 15%);
+  }
 }
 
 /* Removed unused .drag-handle variation */

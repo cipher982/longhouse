@@ -26,7 +26,7 @@ describe('TextChannelController', () => {
         getTracks: () => [{ stop: vi.fn(), enabled: true }]
       } as any)
     };
-    
+
     voiceController = new VoiceController();
 
     // Mock session

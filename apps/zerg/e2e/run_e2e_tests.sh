@@ -228,12 +228,12 @@ echo "Exit Code: $TEST_EXIT_CODE"
 # Parse test results from output for pytest-style summary
 if [[ -f "$TEMP_OUTPUT" ]]; then
     echo ""
-    
+
     # Extract basic stats from Playwright output (works with different reporters)
     PASSED=$(grep -o "[0-9]\+ passed" "$TEMP_OUTPUT" | grep -o "[0-9]\+" | head -1 || echo 0)
     FAILED=$(grep -o "[0-9]\+ failed" "$TEMP_OUTPUT" | grep -o "[0-9]\+" | head -1 || echo 0)
     SKIPPED=$(grep -o "[0-9]\+ skipped" "$TEMP_OUTPUT" | grep -o "[0-9]\+" | head -1 || echo 0)
-    
+
     # If we can't parse the numbers, try to get them from the exit code and output patterns
     if [[ "$PASSED" == "0" && "$FAILED" == "0" && "$SKIPPED" == "0" ]]; then
         if [[ $TEST_EXIT_CODE -eq 0 ]]; then
@@ -246,7 +246,7 @@ if [[ -f "$TEMP_OUTPUT" ]]; then
             PASSED=$(grep -c "✓\|PASS" "$TEMP_OUTPUT" 2>/dev/null || echo "0")
         fi
     fi
-    
+
     # Summary line like pytest
     if [[ $TEST_EXIT_CODE -eq 0 ]]; then
         STATUS_COLOR=$GREEN
@@ -255,7 +255,7 @@ if [[ -f "$TEMP_OUTPUT" ]]; then
         STATUS_COLOR=$RED
         STATUS_ICON="❌"
     fi
-    
+
     printf "${STATUS_COLOR}${STATUS_ICON} "
     if [[ "$PASSED" != "0" ]]; then
         printf "${GREEN}$PASSED passed${NC}"
@@ -269,7 +269,7 @@ if [[ -f "$TEMP_OUTPUT" ]]; then
         printf "${YELLOW}$SKIPPED skipped${NC}"
     fi
     echo " in ${DURATION}s"
-    
+
     # Show failing test names if we can extract them
     if [[ $TEST_EXIT_CODE -ne 0 ]]; then
         echo ""

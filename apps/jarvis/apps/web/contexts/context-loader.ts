@@ -63,19 +63,19 @@ export class ContextLoader {
       }
 
       const configKey = `${contextName}Config`;
-      
+
       if (!configModule[configKey]) {
         throw new Error(`Config export "${configKey}" not found in ${contextName} context`);
       }
 
       const config: VoiceAgentConfig = configModule[configKey];
-      
+
       // Validate required environment variables
       if (manifest.requiredEnvVars) {
-        const missingVars = manifest.requiredEnvVars.filter(varName => 
+        const missingVars = manifest.requiredEnvVars.filter(varName =>
           !import.meta.env?.[`VITE_${varName}`]
         );
-        
+
         if (missingVars.length > 0) {
           logger.warn(`Missing environment variables for ${contextName}`, missingVars);
         }
@@ -88,7 +88,7 @@ export class ContextLoader {
 
       this.currentContext = contextName;
       this.currentConfig = config;
-      
+
       logger.success(`Context loaded: ${contextName} (${config.name})`);
       return config;
 
@@ -114,9 +114,9 @@ export class ContextLoader {
       link.id = 'context-theme';
       link.rel = 'stylesheet';
       link.href = `./contexts/${contextName}/${themeFile}`;
-      
+
       document.head.appendChild(link);
-      
+
       // Update body class for context-specific styling
       document.body.className = document.body.className
         .replace(/\w+-context/g, '')  // Remove existing context classes
@@ -177,13 +177,13 @@ export class ContextLoader {
    */
   async switchContext(contextName: string): Promise<VoiceAgentConfig> {
     const config = await this.loadContext(contextName);
-    
+
     // Save preference
     localStorage.setItem('voice-agent-context', contextName);
-    
+
     // Dispatch event for UI updates
-    window.dispatchEvent(new CustomEvent('contextChanged', { 
-      detail: { contextName, config } 
+    window.dispatchEvent(new CustomEvent('contextChanged', {
+      detail: { contextName, config }
     }));
 
     return config;
@@ -202,17 +202,17 @@ export class ContextLoader {
     const selector = document.createElement('select');
     selector.id = 'context-selector';
     selector.className = 'context-selector';
-    
+
     // Add options for available contexts
     for (const [contextName, manifest] of this.availableContexts) {
       const option = document.createElement('option');
       option.value = contextName;
       option.textContent = manifest.name;
-      
+
       if (contextName === this.currentContext) {
         option.selected = true;
       }
-      
+
       selector.appendChild(option);
     }
 
@@ -220,7 +220,7 @@ export class ContextLoader {
     selector.addEventListener('change', async (event) => {
       const target = event.target as HTMLSelectElement;
       const newContext = target.value;
-      
+
       if (newContext !== this.currentContext) {
         try {
           selector.disabled = true;

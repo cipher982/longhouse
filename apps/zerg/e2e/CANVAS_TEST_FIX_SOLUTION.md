@@ -14,7 +14,7 @@ The canvas e2e tests were failing because the `#canvas-container` element was ne
 ### Current State
 
 - ✅ Backend test server is running on port 8001
-- ✅ Frontend server is running on port 8002  
+- ✅ Frontend server is running on port 8002
 - ❌ Frontend fails to initialize due to missing API endpoints
 - ❌ Canvas tab never appears due to failed initialization
 - ❌ #canvas-container never gets created
@@ -32,12 +32,12 @@ Add these missing endpoints to the test backend:
 async def system_info():
     return {
         "status": "healthy",
-        "version": "test-1.0.0", 
+        "version": "test-1.0.0",
         "environment": "test",
         "features": ["canvas", "agents", "workflows"]
     }
 
-@app.get("/api/models")  
+@app.get("/api/models")
 async def models():
     return [
         {"id": "gpt-4", "name": "GPT-4", "provider": "openai", "enabled": true},
@@ -54,40 +54,45 @@ Modify the test helper functions to handle the initialization properly:
 
 export async function navigateToCanvas(page: Page): Promise<void> {
   // First, ensure the page is fully initialized
-  await page.goto('/');
-  
+  await page.goto("/");
+
   // Wait for the WASM to load and initialize
-  await page.waitForFunction(() => {
-    return window.__WASM_INITIALIZED__ || document.querySelector('#canvas-root');
-  }, { timeout: 10000 });
-  
+  await page.waitForFunction(
+    () => {
+      return (
+        window.__WASM_INITIALIZED__ || document.querySelector("#canvas-root")
+      );
+    },
+    { timeout: 10000 },
+  );
+
   // Force show the canvas root if it's hidden
   await page.evaluate(() => {
-    const canvasRoot = document.querySelector('#canvas-root');
+    const canvasRoot = document.querySelector("#canvas-root");
     if (canvasRoot) {
-      canvasRoot.style.display = 'block';
-      canvasRoot.style.visibility = 'visible';
+      canvasRoot.style.display = "block";
+      canvasRoot.style.visibility = "visible";
     }
   });
-  
+
   // Try to click canvas tab if it exists, otherwise force canvas initialization
   try {
-    await page.getByTestId('global-canvas-tab').click({ timeout: 5000 });
+    await page.getByTestId("global-canvas-tab").click({ timeout: 5000 });
   } catch {
     // If no tab exists, force canvas to show directly
-    console.log('Canvas tab not found, forcing canvas initialization');
-    
+    console.log("Canvas tab not found, forcing canvas initialization");
+
     // Trigger canvas initialization manually
     await page.evaluate(() => {
       // This may need to be adjusted based on the actual frontend implementation
-      window.dispatchEvent(new CustomEvent('force-canvas-init'));
+      window.dispatchEvent(new CustomEvent("force-canvas-init"));
     });
   }
-  
+
   await page.waitForTimeout(2000);
-  
+
   // Verify canvas loaded - adjust timeout as needed
-  await page.waitForSelector('#canvas-container', { timeout: 10000 });
+  await page.waitForSelector("#canvas-container", { timeout: 10000 });
 }
 ```
 
@@ -98,38 +103,51 @@ Create a test configuration file that can be loaded in test environments:
 ```javascript
 // frontend/www/test-config.js
 
-if (typeof window !== 'undefined' && window.__TEST_MODE__) {
-  console.log('🔧 Loading test configuration overrides');
-  
+if (typeof window !== "undefined" && window.__TEST_MODE__) {
+  console.log("🔧 Loading test configuration overrides");
+
   // Mock fetch for missing API endpoints
   const originalFetch = window.fetch;
-  window.fetch = function(url, options) {
+  window.fetch = function (url, options) {
     console.log(`📡 Intercepted fetch: ${url}`);
-    
-    if (url.includes('/api/system/info')) {
-      return Promise.resolve(new Response(JSON.stringify({
-        status: 'healthy',
-        version: 'test-1.0.0',
-        environment: 'test'
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    if (url.includes("/api/system/info")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            status: "healthy",
+            version: "test-1.0.0",
+            environment: "test",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
     }
-    
-    if (url.includes('/api/models')) {
-      return Promise.resolve(new Response(JSON.stringify([
-        { id: 'gpt-4', name: 'GPT-4', provider: 'openai', enabled: true }
-      ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    if (url.includes("/api/models")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            { id: "gpt-4", name: "GPT-4", provider: "openai", enabled: true },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
     }
-    
+
     return originalFetch.apply(this, arguments);
   };
-  
+
   // Mock authentication
-  localStorage.setItem('auth_token', 'test-token');
-  localStorage.setItem('user_info', JSON.stringify({
-    id: 'test-user',
-    email: 'test@example.com',
-    name: 'Test User'
-  }));
+  localStorage.setItem("auth_token", "test-token");
+  localStorage.setItem(
+    "user_info",
+    JSON.stringify({
+      id: "test-user",
+      email: "test@example.com",
+      name: "Test User",
+    }),
+  );
 }
 ```
 
@@ -140,7 +158,7 @@ Update the Playwright fixtures to set up the test environment properly:
 ```typescript
 // tests/fixtures.ts
 
-import { test as base, Page } from '@playwright/test';
+import { test as base, Page } from "@playwright/test";
 
 export const test = base.extend({
   page: async ({ page }, use) => {
@@ -149,15 +167,15 @@ export const test = base.extend({
       window.__TEST_MODE__ = true;
       window.__DISABLE_AUTH__ = true;
     });
-    
+
     // Load test configuration
-    await page.addInitScript({ path: './test-config.js' });
-    
+    await page.addInitScript({ path: "./test-config.js" });
+
     await use(page);
-  }
+  },
 });
 
-export { expect } from '@playwright/test';
+export { expect } from "@playwright/test";
 ```
 
 ### Step 5: Fix Individual Test Files
@@ -168,17 +186,17 @@ Update the workflow animation tests to use the new helper:
 // tests/workflow_execution_animations.spec.ts
 
 async function createConnectedWorkflow(page) {
-    // Reset database
-    await page.request.post('http://localhost:8001/admin/reset-database');
-    
-    // Navigate to canvas using the fixed helper
-    await navigateToCanvas(page);
-    
-    // Wait for canvas to be fully initialized
-    await page.waitForSelector('#canvas-container', { timeout: 10_000 });
-    await page.waitForSelector('#agent-shelf .agent-pill', { timeout: 10_000 });
-    
-    // Rest of the function remains the same...
+  // Reset database
+  await page.request.post("http://localhost:8001/admin/reset-database");
+
+  // Navigate to canvas using the fixed helper
+  await navigateToCanvas(page);
+
+  // Wait for canvas to be fully initialized
+  await page.waitForSelector("#canvas-container", { timeout: 10_000 });
+  await page.waitForSelector("#agent-shelf .agent-pill", { timeout: 10_000 });
+
+  // Rest of the function remains the same...
 }
 ```
 
@@ -190,30 +208,30 @@ For immediate testing without backend changes, you can use this test setup scrip
 // Run before each test
 await page.addInitScript(() => {
   window.__TEST_MODE__ = true;
-  
+
   // Mock API endpoints
   const originalFetch = window.fetch;
-  window.fetch = function(url, options) {
-    if (url.includes('/api/system/info') || url.includes('/api/models')) {
-      return Promise.resolve(new Response('{}', { status: 200 }));
+  window.fetch = function (url, options) {
+    if (url.includes("/api/system/info") || url.includes("/api/models")) {
+      return Promise.resolve(new Response("{}", { status: 200 }));
     }
     return originalFetch.apply(this, arguments);
   };
-  
+
   // Force canvas root to be visible after DOM loads
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
       setTimeout(() => {
-        const canvasRoot = document.querySelector('#canvas-root');
+        const canvasRoot = document.querySelector("#canvas-root");
         if (canvasRoot) {
-          canvasRoot.style.display = 'block';
+          canvasRoot.style.display = "block";
         }
       }, 1000);
     });
   } else {
-    const canvasRoot = document.querySelector('#canvas-root');
+    const canvasRoot = document.querySelector("#canvas-root");
     if (canvasRoot) {
-      canvasRoot.style.display = 'block';
+      canvasRoot.style.display = "block";
     }
   }
 });
@@ -222,6 +240,7 @@ await page.addInitScript(() => {
 ## Verification Steps
 
 1. **Backend Health**: Verify test backend has required endpoints
+
    ```bash
    curl http://localhost:8001/api/system/info
    curl http://localhost:8001/api/models

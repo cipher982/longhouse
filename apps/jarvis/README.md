@@ -5,6 +5,7 @@ Personal voice AI assistant with real-time speech interaction and agent orchestr
 ## Quick Start
 
 ### Option A: Unified Docker Compose (Recommended)
+
 ```bash
 # Start all services together (Jarvis + Zerg) from repo root
 cd ../../../
@@ -14,6 +15,7 @@ cd ../../../
 ```
 
 ### Option B: Standalone
+
 ```bash
 # Install dependencies
 make install
@@ -30,6 +32,7 @@ Access at **http://localhost:8080** (standalone) or **http://localhost:30080** (
 ## Features
 
 ### Personal Context (Jarvis) 🤖
+
 - **Voice Interface**: Real-time speech with OpenAI Realtime API
 - **Text Input**: Type commands when voice isn't convenient
 - **Task Inbox**: See background agent runs in real-time
@@ -59,6 +62,7 @@ Try these voice commands:
 ## Configuration
 
 **Environment Variables:**
+
 ```bash
 # Required
 OPENAI_API_KEY=sk-your-key-here
@@ -74,6 +78,7 @@ VITE_JARVIS_DEVICE_SECRET=your-secret
 **Task Inbox Setup:**
 
 **Unified Docker Compose:**
+
 ```bash
 # 1. Start all services
 cd ../../../../
@@ -84,6 +89,7 @@ docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
 ```
 
 **Traditional Setup:**
+
 ```bash
 # 1. Start Zerg backend
 cd ../../../ && make zerg-up

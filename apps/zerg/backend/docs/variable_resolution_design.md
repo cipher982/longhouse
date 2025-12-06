@@ -47,11 +47,11 @@ def resolve_variables(data: Any, node_outputs: Dict[str, Any]) -> Any:
 ```python
 class VariableResolver:
     """Enhanced variable resolution with type preservation and aliases."""
-    
+
     def resolve_variables(self, data: Any, node_outputs: Dict[str, Any]) -> Any:
         """
         Resolve variables maintaining original types.
-        
+
         Process:
         1. Find all ${...} patterns in strings
         2. Parse variable paths (node.field.subfield)
@@ -59,11 +59,11 @@ class VariableResolver:
         4. Substitute with resolved value (preserving type)
         5. Handle special cases (aliases, compatibility)
         """
-        
+
     def resolve_variable_path(self, path: str, node_outputs: Dict[str, Any]) -> Any:
         """
         Resolve a single variable path to its value.
-        
+
         Examples:
         - "tool-1" → node_outputs["tool-1"]["value"]
         - "tool-1.result" → node_outputs["tool-1"]["value"] (alias)
@@ -81,10 +81,10 @@ class VariableResolver:
 def parse_variable_path(path: str) -> Tuple[str, List[str]]:
     """
     Parse variable path into node_id and field path.
-    
+
     Examples:
     - "tool-1" → ("tool-1", [])
-    - "tool-1.result" → ("tool-1", ["result"])  
+    - "tool-1.result" → ("tool-1", ["result"])
     - "tool-1.meta.status" → ("tool-1", ["meta", "status"])
     - "tool-1.result.score" → ("tool-1", ["result", "score"])
     """
@@ -96,42 +96,42 @@ def parse_variable_path(path: str) -> Tuple[str, List[str]]:
 
 ### Resolution Rules Table
 
-| Path Pattern | Resolution Logic | Example |
-|-------------|------------------|---------|
-| `${node}` | `node_output["value"]` | `${tool-1}` → tool result |
-| `${node.value}` | `node_output["value"]` | `${tool-1.value}` → tool result |
-| `${node.result}` | `node_output["value"]` (alias) | `${tool-1.result}` → tool result |
-| `${node.meta.field}` | `node_output["meta"]["field"]` | `${tool-1.meta.status}` → "completed" |
-| `${node.result.field}` | `node_output["value"]["field"]` | `${tool-1.result.score}` → 85 |
-| `${node.value.field}` | `node_output["value"]["field"]` | `${tool-1.value.score}` → 85 |
+| Path Pattern           | Resolution Logic                | Example                               |
+| ---------------------- | ------------------------------- | ------------------------------------- |
+| `${node}`              | `node_output["value"]`          | `${tool-1}` → tool result             |
+| `${node.value}`        | `node_output["value"]`          | `${tool-1.value}` → tool result       |
+| `${node.result}`       | `node_output["value"]` (alias)  | `${tool-1.result}` → tool result      |
+| `${node.meta.field}`   | `node_output["meta"]["field"]`  | `${tool-1.meta.status}` → "completed" |
+| `${node.result.field}` | `node_output["value"]["field"]` | `${tool-1.result.score}` → 85         |
+| `${node.value.field}`  | `node_output["value"]["field"]` | `${tool-1.value.score}` → 85          |
 
 ### Alias Resolution
 
 ```python
 class AliasResolver:
     """Handle variable path aliases for backward compatibility."""
-    
+
     ALIASES = {
         "result": "value",  # ${node.result} → ${node.value}
     }
-    
+
     def resolve_alias(self, field_path: List[str]) -> List[str]:
         """
         Resolve field path aliases.
-        
+
         Examples:
         - ["result"] → ["value"]
-        - ["result", "score"] → ["value", "score"] 
+        - ["result", "score"] → ["value", "score"]
         - ["meta", "status"] → ["meta", "status"] (no change)
         """
         if not field_path:
             return field_path
-            
+
         first_field = field_path[0]
         if first_field in self.ALIASES:
             resolved_path = [self.ALIASES[first_field]] + field_path[1:]
             return resolved_path
-        
+
         return field_path
 ```
 
@@ -150,12 +150,12 @@ return str(node_output[output_key])  # 85 becomes "85", True becomes "True"
 def resolve_with_type_preservation(self, node_output: Dict, field_path: List[str]) -> Any:
     """
     Resolve field path while preserving original types.
-    
+
     Returns:
         Original Python object (int, bool, dict, list, str, etc.)
     """
     current = node_output
-    
+
     for field in field_path:
         if isinstance(current, dict) and field in current:
             current = current[field]
@@ -163,7 +163,7 @@ def resolve_with_type_preservation(self, node_output: Dict, field_path: List[str
             raise VariableResolutionError(
                 f"Field '{field}' not found in path {'.'.join(field_path)}"
             )
-    
+
     return current  # Return actual object, not string representation
 ```
 
@@ -174,7 +174,7 @@ def resolve_with_type_preservation(self, node_output: Dict, field_path: List[str
 
 # Variable resolution results:
 "${tool-1.result.score}" → 85 (int, not "85")
-"${tool-1.result.passed}" → True (bool, not "True") 
+"${tool-1.result.passed}" → True (bool, not "True")
 "${tool-1.result}" → {"score": 85, "passed": True} (dict, not str repr)
 "${tool-1.meta.status}" → "completed" (str)
 ```
@@ -189,13 +189,13 @@ When variables are used in string contexts, handle appropriately:
 def resolve_in_string_context(self, template: str, node_outputs: Dict[str, Any]) -> str:
     """
     Resolve variables within string templates.
-    
+
     Example:
     "Score: ${tool-1.result.score} (${tool-1.meta.status})"
     → "Score: 85 (completed)"
     """
     pattern = r'\${([^}]+)}'
-    
+
     def replace_var(match):
         var_path = match.group(1)
         try:
@@ -205,7 +205,7 @@ def resolve_in_string_context(self, template: str, node_outputs: Dict[str, Any])
         except VariableResolutionError:
             # Keep original if resolution fails
             return match.group(0)
-    
+
     return re.sub(pattern, replace_var, template)
 ```
 
@@ -217,7 +217,7 @@ When the entire value is a variable, return the actual object:
 def resolve_data_structure(self, data: Any, node_outputs: Dict[str, Any]) -> Any:
     """
     Resolve variables in data structures while preserving types.
-    
+
     Examples:
     - "${tool-1.result.score}" → 85 (int)
     - "Score: ${tool-1.result.score}" → "Score: 85" (str)
@@ -234,15 +234,15 @@ def resolve_data_structure(self, data: Any, node_outputs: Dict[str, Any]) -> Any
         else:
             # String interpolation (convert to string)
             return self.resolve_in_string_context(data, node_outputs)
-    
+
     elif isinstance(data, dict):
-        return {key: self.resolve_data_structure(value, node_outputs) 
+        return {key: self.resolve_data_structure(value, node_outputs)
                 for key, value in data.items()}
-    
+
     elif isinstance(data, list):
-        return [self.resolve_data_structure(item, node_outputs) 
+        return [self.resolve_data_structure(item, node_outputs)
                 for item in data]
-    
+
     else:
         return data  # Return non-string data as-is
 ```
@@ -275,24 +275,24 @@ class InvalidPathError(VariableResolutionError):
 def resolve_variable_path_safe(self, path: str, node_outputs: Dict[str, Any]) -> Any:
     """
     Safely resolve variable path with helpful error messages.
-    
+
     Returns:
         Resolved value or raises descriptive error
     """
     try:
         node_id, field_path = self.parse_variable_path(path)
-        
+
         if node_id not in node_outputs:
             available_nodes = list(node_outputs.keys())
             raise NodeNotFoundError(
                 f"Node '{node_id}' not found. Available nodes: {available_nodes}"
             )
-        
+
         node_output = node_outputs[node_id]
         resolved_path = self.resolve_alias(field_path)
-        
+
         return self.resolve_with_type_preservation(node_output, resolved_path)
-        
+
     except Exception as e:
         logger.warning(f"Variable resolution failed for path '{path}': {e}")
         raise VariableResolutionError(f"Failed to resolve ${{{path}}}: {e}")
@@ -306,13 +306,13 @@ def resolve_variable_path_safe(self, path: str, node_outputs: Dict[str, Any]) ->
 def detect_output_format(self, node_output: Any) -> str:
     """
     Detect if node output uses legacy or new envelope format.
-    
+
     Returns:
         "envelope" for new {"value": ..., "meta": ...} format
         "legacy" for old format
     """
-    if (isinstance(node_output, dict) and 
-        "value" in node_output and 
+    if (isinstance(node_output, dict) and
+        "value" in node_output and
         "meta" in node_output):
         return "envelope"
     else:
@@ -325,10 +325,10 @@ def detect_output_format(self, node_output: Any) -> str:
 def resolve_legacy_format(self, node_output: Any, field_path: List[str]) -> Any:
     """
     Handle legacy node output formats.
-    
+
     For ToolNodeExecutor legacy format:
     {"tool_name": "...", "result": {...}, "status": "..."}
-    
+
     Mapping:
     - ${node.result} → legacy_output["result"]
     - ${node.meta.status} → legacy_output["status"]
@@ -337,9 +337,9 @@ def resolve_legacy_format(self, node_output: Any, field_path: List[str]) -> Any:
     if not field_path:
         # ${node} → return the "result" field for tools, or entire output
         return node_output.get("result", node_output)
-    
+
     first_field = field_path[0]
-    
+
     if first_field in ["result", "value"]:
         # ${node.result} or ${node.value} → legacy result field
         result_value = node_output.get("result", node_output)
@@ -348,18 +348,18 @@ def resolve_legacy_format(self, node_output: Any, field_path: List[str]) -> Any:
             return self.resolve_with_type_preservation({"result": result_value}, field_path)
         else:
             return result_value
-    
+
     elif first_field == "meta":
         # ${node.meta.field} → map to legacy top-level fields
         if len(field_path) < 2:
             raise FieldNotFoundError("meta access requires field specification")
-        
+
         meta_field = field_path[1]
         if meta_field in node_output:
             return node_output[meta_field]
         else:
             raise FieldNotFoundError(f"Legacy format doesn't have meta field '{meta_field}'")
-    
+
     else:
         # Direct field access: ${node.field}
         if first_field in node_output:
@@ -378,7 +378,7 @@ def resolve_legacy_format(self, node_output: Any, field_path: List[str]) -> Any:
 ```python
 def check_deprecated_patterns(self, path: str):
     """Check for deprecated variable access patterns."""
-    
+
     # Check for nested .result.result pattern
     if ".result.result" in path:
         logger.warning(
@@ -386,7 +386,7 @@ def check_deprecated_patterns(self, path: str):
             f"Use ${{node.result}} instead of ${{node.result.result}}. "
             "The nested .result.result pattern will be removed in a future version."
         )
-    
+
     # Check for legacy direct field access that should use meta
     deprecated_direct_fields = ["status", "tool_name", "agent_id"]
     parts = path.split('.')
@@ -404,12 +404,12 @@ def check_deprecated_patterns(self, path: str):
 ```python
 class CachedVariableResolver(VariableResolver):
     """Variable resolver with path parsing cache."""
-    
+
     def __init__(self):
         super().__init__()
         self._path_cache = {}  # Cache parsed paths
         self._alias_cache = {}  # Cache alias resolutions
-    
+
     def parse_variable_path_cached(self, path: str) -> Tuple[str, List[str]]:
         """Parse variable path with caching."""
         if path not in self._path_cache:
@@ -423,7 +423,7 @@ class CachedVariableResolver(VariableResolver):
 def resolve_variables_optimized(self, data: Any, node_outputs: Dict[str, Any]) -> Any:
     """
     Optimized variable resolution with early exit conditions.
-    
+
     Optimizations:
     1. Skip processing if no ${} patterns detected
     2. Cache regex compilation
@@ -434,10 +434,10 @@ def resolve_variables_optimized(self, data: Any, node_outputs: Dict[str, Any]) -
         # Quick check: does string contain variables?
         if '${' not in data:
             return data  # Early exit
-        
+
         # Use compiled regex for better performance
         return self._resolve_string_variables(data, node_outputs)
-    
+
     # ... rest of implementation
 ```
 
@@ -449,35 +449,35 @@ def resolve_variables_optimized(self, data: Any, node_outputs: Dict[str, Any]) -
 def prepare_variables_for_evaluation(self, expression: str, node_outputs: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     """
     Prepare expression and variables for safe evaluation.
-    
+
     Process:
     1. Find all ${...} patterns in expression
     2. Resolve each to actual value (preserving type)
     3. Replace with temporary variable names
     4. Return modified expression + variable mapping
-    
+
     Example:
     Input: "${tool-1.result.score} >= 80"
     Output: ("__var_0 >= 80", {"__var_0": 85})
     """
     variables = {}
     var_counter = 0
-    
+
     def replace_with_temp_var(match):
         nonlocal var_counter
         var_path = match.group(1)
         temp_var = f"__var_{var_counter}"
         var_counter += 1
-        
+
         # Resolve to actual value
         resolved_value = self.resolve_variable_path(var_path, node_outputs)
         variables[temp_var] = resolved_value
-        
+
         return temp_var
-    
+
     pattern = r'\${([^}]+)}'
     modified_expression = re.sub(pattern, replace_with_temp_var, expression)
-    
+
     return modified_expression, variables
 ```
 
@@ -494,9 +494,9 @@ def test_type_preservation():
             "meta": {"status": "completed"}
         }
     }
-    
+
     resolver = VariableResolver()
-    
+
     # Test type preservation
     assert resolver.resolve_variables("${tool-1.result.score}", node_outputs) == 85
     assert resolver.resolve_variables("${tool-1.result.passed}", node_outputs) is True
@@ -507,7 +507,7 @@ def test_alias_resolution():
     """Test that aliases work correctly."""
     node_outputs = {"tool-1": {"value": 42, "meta": {}}}
     resolver = VariableResolver()
-    
+
     # All should resolve to same value
     assert resolver.resolve_variables("${tool-1}", node_outputs) == 42
     assert resolver.resolve_variables("${tool-1.value}", node_outputs) == 42
@@ -518,9 +518,9 @@ def test_backward_compatibility():
     legacy_output = {
         "tool-1": {"tool_name": "processor", "result": {"score": 85}, "status": "completed"}
     }
-    
+
     resolver = VariableResolver()
-    
+
     # Should work with legacy format
     assert resolver.resolve_variables("${tool-1.result.score}", legacy_output) == 85
     assert resolver.resolve_variables("${tool-1.meta.status}", legacy_output) == "completed"
@@ -528,5 +528,5 @@ def test_backward_compatibility():
 
 ---
 
-**Status:** Design Complete ✅  
+**Status:** Design Complete ✅
 **Next Phase:** Ready to begin implementation (Task 2.1: Implement Safe AST Evaluator)

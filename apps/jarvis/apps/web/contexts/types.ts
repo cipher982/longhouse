@@ -7,7 +7,7 @@ export interface VoiceAgentConfig {
   name: string;
   description: string;
   instructions: string;
-  
+
   // UI/Branding
   theme: {
     primaryColor: string;
@@ -17,17 +17,17 @@ export interface VoiceAgentConfig {
     accentColor: string;
     borderColor: string;
   };
-  
+
   branding: {
     title: string;
     subtitle?: string;
     logoUrl?: string;
     favicon?: string;
   };
-  
+
   // Tools and capabilities
   tools: ToolConfig[];
-  
+
   // API endpoints and configuration
   apiEndpoints: {
     tokenMinting: string;
@@ -39,7 +39,7 @@ export interface VoiceAgentConfig {
     baseUrl?: string;
     headers?: Record<string, string>;
   };
-  
+
   // Context-specific settings
   settings: {
     maxHistoryTurns: number;
@@ -58,7 +58,7 @@ export interface ToolConfig {
   // For MCP tools
   mcpServer?: string;
   mcpFunction?: string;
-  // For RAG tools  
+  // For RAG tools
   ragDatabase?: string;
   ragCollection?: string;
 }

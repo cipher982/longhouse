@@ -21,4 +21,3 @@ def run_async_safely(coroutine: Awaitable[T]) -> T:
     """
     from zerg.utils.async_runner import run_in_shared_loop
     return run_in_shared_loop(coroutine)
-

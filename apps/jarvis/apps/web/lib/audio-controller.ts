@@ -15,7 +15,7 @@ export enum AudioState {
 export class AudioController {
   private micStream: MediaStream | null = null;
   private radialViz: RadialVisualizer | null = null;
-  
+
   // Speaker monitoring
   private audioState: AudioState = AudioState.IDLE;
   private speakerAudioCtx: AudioContext | null = null;
@@ -26,11 +26,11 @@ export class AudioController {
   private speakerRafId: number | null = null;
   private speakerSilenceFrames = 0;
   private speakerMonitorUnavailable = false;
-  
+
   // State
   private micLevel = 0;
   private speakerLevel = 0;
-  
+
   // DOM references
   private remoteAudio: HTMLAudioElement | null = null;
   private visualizationContainer: HTMLElement | null = null;
@@ -74,10 +74,10 @@ export class AudioController {
         }
       });
       logger.info('✅ Microphone access granted');
-      
+
       // Update visualizer
       this.radialViz?.provideStream(this.micStream);
-      
+
       return this.micStream;
     } catch (error) {
       logger.error('❌ Failed to request microphone:', error);
@@ -98,7 +98,7 @@ export class AudioController {
       this.micStream = null;
       this.radialViz?.provideStream(null);
     }
-    
+
     this.setAudioStateFlag(AudioState.MIC_ACTIVE, false);
   }
 
@@ -222,12 +222,12 @@ export class AudioController {
   dispose(): void {
     this.releaseMicrophone();
     this.stopSpeakerMonitor();
-    
+
     if (this.speakerAudioCtx) {
       this.speakerAudioCtx.close().catch(() => undefined);
       this.speakerAudioCtx = null;
     }
-    
+
     this.speakerAnalyser = null;
     this.speakerDataArray = null;
     this.speakerSource = null;
@@ -240,7 +240,7 @@ export class AudioController {
 
   private setupRemoteAudioListeners(): void {
     if (!this.remoteAudio) return;
-    
+
     const handleStart = () => { void this.startSpeakerMonitor(); };
     const handleStop = () => { this.stopSpeakerMonitor(); };
 
@@ -323,7 +323,7 @@ export class AudioController {
     if (this.radialViz) {
       this.radialViz.render(level, color, this.audioState);
     }
-    
+
     // Sync with DOM for CSS states
     if (this.visualizationContainer) {
       this.visualizationContainer.dataset.state = `${this.audioState}`;

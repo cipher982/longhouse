@@ -29,8 +29,8 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     await page.getByTestId('send-message-btn').click();
 
     // **CRITICAL: Verify message actually appears in the UI**
-    await expect(page.getByTestId('messages-container')).toContainText(testMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(testMessage, {
+      timeout: 10000
     });
 
     // Verify message appears with correct metadata (user message)
@@ -47,7 +47,7 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     const message1 = 'First message';
     await page.getByTestId('chat-input').fill(message1);
     await page.getByTestId('send-message-btn').click();
-    
+
     // Verify first message appears
     await expect(page.getByTestId('messages-container')).toContainText(message1, { timeout: 10000 });
 
@@ -78,12 +78,12 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     // Reload page and navigate back to chat
     await page.reload();
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
-    
+
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // **CRITICAL: Verify message persisted**
-    await expect(page.getByTestId('messages-container')).toContainText(persistentMessage, { 
-      timeout: 10000 
+    await expect(page.getByTestId('messages-container')).toContainText(persistentMessage, {
+      timeout: 10000
     });
   });
 
@@ -99,12 +99,12 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     const thread1Message = 'Message in thread 1';
     await page.getByTestId('chat-input').fill(thread1Message);
     await page.getByTestId('send-message-btn').click();
-    
+
     await expect(page.getByTestId('messages-container')).toContainText(thread1Message, { timeout: 10000 });
 
     // Create new thread
     await page.locator('.new-thread-btn').click();
-    
+
     // Wait for new thread to load (should be empty)
     await expect(page.getByTestId('messages-container')).not.toContainText(thread1Message, { timeout: 5000 });
 
@@ -112,7 +112,7 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     const thread2Message = 'Message in thread 2';
     await page.getByTestId('chat-input').fill(thread2Message);
     await page.getByTestId('send-message-btn').click();
-    
+
     await expect(page.getByTestId('messages-container')).toContainText(thread2Message, { timeout: 10000 });
 
     // Switch back to first thread

@@ -102,12 +102,12 @@ def migrate_credentials(db: Session, dry_run: bool = False):
             # Group by encrypted value to find duplicates
             # We want to promote the "best" one.
             # Strategy: Use the most recently updated credential as the source of truth.
-            
+
             # Sort items by updated_at desc
             items.sort(key=lambda x: x[0].updated_at or x[0].created_at, reverse=True)
-            
+
             best_cred, best_agent = items[0]
-            
+
             logger.info(
                 f"  [PROMOTE] {conn_type}: Promoting credential from Agent {best_agent.id} ({best_agent.name})"
             )
@@ -150,7 +150,7 @@ def migrate_credentials(db: Session, dry_run: bool = False):
         # But for dry run rollback, we need control.
         # The db_session context manager rolls back on exception.
         # If we want dry run, we should probably raise an exception or manually rollback?
-        pass 
+        pass
     else:
         # For dry run, we might want to rollback if we made changes?
         # But we didn't make changes if dry_run=True (logic above skipped adds/deletes).
@@ -177,4 +177,3 @@ if __name__ == "__main__":
         except Exception as e:
             logger.exception("Migration failed")
             sys.exit(1)
-

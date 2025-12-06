@@ -69,4 +69,3 @@ describe('ConversationRenderer', () => {
     expect(html.indexOf('First')).toBeLessThan(html.indexOf('Second'))
   })
 })
-

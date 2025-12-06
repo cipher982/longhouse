@@ -71,7 +71,7 @@ Inject the session or session factory:
 class MyService:
     def __init__(self, session_factory=None):
         self.session_factory = session_factory or default_session_factory
-        
+
     def do_something(self):
         # Create a session when needed
         db = self.session_factory()
@@ -118,6 +118,7 @@ POST /admin/reset-database
 ```
 
 This endpoint:
+
 1. Drops all tables
 2. Recreates them with empty data
 
@@ -146,4 +147,4 @@ def db_session():
 3. **Create short-lived sessions** and close them properly
 4. **Only create tables in application startup** or test setup
 
-By following these patterns, we ensure that our database access is clean, testable, and free from common pitfalls like session leaks. 
+By following these patterns, we ensure that our database access is clean, testable, and free from common pitfalls like session leaks.

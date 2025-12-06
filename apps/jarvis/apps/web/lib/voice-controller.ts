@@ -27,7 +27,7 @@ export interface VoiceConfig {
 }
 
 // Events emitted by VoiceController
-export type VoiceEvent = 
+export type VoiceEvent =
   | { type: 'stateChange', state: VoiceState }
   | { type: 'transcript', text: string, isFinal: boolean }
   | { type: 'error', error: Error }
@@ -153,7 +153,7 @@ export class VoiceController {
 
   handleVADStateChange(active: boolean): void {
     if (this.state.mode !== 'vad' && !this.state.handsFree) {
-      return; 
+      return;
     }
 
     this.setState({
@@ -317,11 +317,11 @@ export class VoiceController {
     this.listeners.clear();
     logger.info('Voice controller disposed');
   }
-  
+
   // ============= Compatibility Methods (Deprecated) =============
   // Kept for existing tests that might call these directly
   // These will be removed in future cleanups
-  
+
   handleSpeechStart(): void {
     this.handleVADStateChange(true);
   }
@@ -329,7 +329,7 @@ export class VoiceController {
   handleSpeechStop(): void {
     this.handleVADStateChange(false);
   }
-  
+
   async initialize(): Promise<void> {}
 }
 

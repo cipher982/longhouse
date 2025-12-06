@@ -20,13 +20,13 @@ interface ChatMessageListProps {
 const CodeBlock = ({ inline, className, children, ...props }: any) => {
   const [copied, setCopied] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
-  
+
   if (inline) {
     return <code className={className} {...props}>{children}</code>;
   }
 
   const codeString = String(children).replace(/\n$/, '');
-  
+
   const handleCopy = () => {
     navigator.clipboard.writeText(codeString);
     setCopied(true);
@@ -37,8 +37,8 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
     <div className="code-block-wrapper">
       <div className="code-block-header">
         <span className="code-language">{match ? match[1] : 'text'}</span>
-        <button 
-          className="code-copy-btn" 
+        <button
+          className="code-copy-btn"
           onClick={handleCopy}
           title="Copy code"
         >

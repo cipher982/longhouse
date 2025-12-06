@@ -16,11 +16,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load dynamic port from .env file  
+// Load dynamic port from .env file
 function getPortsFromEnv() {
     let BACKEND_PORT = 8001;
     let FRONTEND_PORT = 8002;
-    
+
     // Load from .env file
     const envPath = path.resolve(__dirname, '../.env');
     if (fs.existsSync(envPath)) {
@@ -32,11 +32,11 @@ function getPortsFromEnv() {
             if (key === 'FRONTEND_PORT') FRONTEND_PORT = parseInt(value) || 8002;
         }
     }
-    
+
     // Allow env vars to override
     BACKEND_PORT = process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : BACKEND_PORT;
     FRONTEND_PORT = process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : FRONTEND_PORT;
-    
+
     return { BACKEND_PORT, FRONTEND_PORT };
 }
 

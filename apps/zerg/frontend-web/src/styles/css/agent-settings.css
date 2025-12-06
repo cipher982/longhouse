@@ -5,7 +5,7 @@
 .agent-settings-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(9, 9, 11, 0.6);
+  background: rgb(9 9 11 / 60%);
   display: none;
   align-items: stretch;
   justify-content: flex-end;
@@ -22,12 +22,12 @@
   color: var(--color-text-primary);
   height: 100%;
   transform: translateX(100%);
-  transition: transform var(--motion-duration-normal) var(--motion-easing-standard);
+  transition: transform var(--motion-duration-normal)
+    var(--motion-easing-standard);
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-xl);
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden auto;
 }
 
 .agent-settings-drawer.open {
@@ -76,7 +76,8 @@
   cursor: pointer;
   padding: var(--space-1);
   border-radius: var(--radius-md);
-  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  transition: background-color var(--motion-duration-fast)
+    var(--motion-easing-standard);
 }
 
 .close-btn:hover {
@@ -209,7 +210,8 @@
   cursor: pointer;
   font-family: var(--font-family-base);
   font-size: var(--font-size-sm);
-  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  transition: background-color var(--motion-duration-fast)
+    var(--motion-easing-standard);
 }
 
 .custom-tool-input button:hover {
@@ -415,19 +417,21 @@
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.5;
   }
 }
 
-@media (max-width: 640px) {
+@media (width <= 640px) {
   .agent-settings-drawer {
     width: 100%;
   }
-  
+
   .agent-settings-header,
   .agent-settings-footer,
   .agent-settings-section {
@@ -537,16 +541,13 @@
 .slider {
   position: absolute;
   cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background-color: var(--color-surface-elevated);
   transition: 0.4s;
   border-radius: 34px;
 }
 
-.slider:before {
+.slider::before {
   position: absolute;
   content: "";
   height: 16px;
@@ -566,7 +567,7 @@ input:focus + .slider {
   box-shadow: 0 0 1px var(--color-brand-primary);
 }
 
-input:checked + .slider:before {
+input:checked + .slider::before {
   transform: translateX(16px);
 }
 
@@ -614,7 +615,7 @@ input:checked + .slider:before {
 .connector-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgb(0 0 0 / 50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -789,17 +790,17 @@ input:checked + .slider:before {
 }
 
 .status-badge.account-level {
-  background: var(--color-intent-success-muted, rgba(16, 185, 129, 0.15));
+  background: var(--color-intent-success-muted, rgb(16 185 129 / 15%));
   color: var(--color-intent-success);
 }
 
 .status-badge.agent-override {
-  background: var(--color-accent-muted, rgba(139, 92, 246, 0.15));
+  background: var(--color-accent-muted, rgb(139 92 246 / 15%));
   color: var(--color-accent-primary);
 }
 
 .status-badge.needs-setup {
-  background: var(--color-intent-warning-muted, rgba(245, 158, 11, 0.15));
+  background: var(--color-intent-warning-muted, rgb(245 158 11 / 15%));
   color: var(--color-intent-warning);
 }
 

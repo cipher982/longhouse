@@ -51,4 +51,3 @@ describe('Realtime conversation flow', () => {
     expect(assistantTurns.length).toBe(1)
   })
 })
-

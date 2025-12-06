@@ -42,7 +42,7 @@ export class RadialVisualizer {
     this.canvas.style.pointerEvents = 'none';
     this.canvas.style.filter = 'drop-shadow(0 0 32px rgba(139,92,246,0.45))';
     this.canvas.style.zIndex = '5';
-    
+
     // robust positioning: pin to corners instead of center transform
     this.canvas.style.top = `-${this.outerInset}px`;
     this.canvas.style.left = `-${this.outerInset}px`;
@@ -156,13 +156,13 @@ export class RadialVisualizer {
   private resize = (): void => {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
-    
+
     if (rect.width === 0 || rect.height === 0) return;
 
     // Sync internal bitmap size to CSS size
     this.canvas.width = Math.floor(rect.width * dpr);
     this.canvas.height = Math.floor(rect.height * dpr);
-    
+
     if (this.ctx) {
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }

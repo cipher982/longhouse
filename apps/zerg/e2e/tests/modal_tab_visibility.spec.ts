@@ -11,7 +11,7 @@ test('Agent modal – only one tab-content is visible', async ({ page }) => {
 
   // 2) First create an agent so we have something to edit
   await page.click('text="Create Agent"');
-  
+
   // 3) Wait for the agent to appear in the table - should be fast
   await page.waitForSelector('.edit-btn', { timeout: 3000 });
 

@@ -111,7 +111,7 @@ case "$SERVICE" in
     "backend"|"all")
         log_info "Building backend (target: $TARGET)..."
         backend_start=$(date +%s)
-        
+
         docker buildx build \
             --target "$TARGET" \
             --cache-from type=local,src=/tmp/docker-cache/backend \
@@ -120,7 +120,7 @@ case "$SERVICE" in
             -f docker/backend.dockerfile \
             -t zerg-backend:latest \
             backend/
-            
+
         backend_end=$(date +%s)
         backend_duration=$((backend_end - backend_start))
         log_info "Backend build completed in ${backend_duration}s"
@@ -131,7 +131,7 @@ case "$SERVICE" in
     "frontend"|"all")
         log_info "Building frontend (target: $TARGET)..."
         frontend_start=$(date +%s)
-        
+
         docker buildx build \
             --target "$TARGET" \
             --cache-from type=local,src=/tmp/docker-cache/frontend \
@@ -140,7 +140,7 @@ case "$SERVICE" in
             -f docker/frontend.dockerfile \
             -t zerg-frontend:latest \
             frontend/
-            
+
         frontend_end=$(date +%s)
         frontend_duration=$((frontend_end - frontend_start))
         log_info "Frontend build completed in ${frontend_duration}s"

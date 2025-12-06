@@ -102,18 +102,18 @@ export class AppController {
     this.connecting = true;
 
     logger.info('🔗 Connect sequence starting...');
-    
+
     let loadingOverlay: HTMLDivElement | null = null;
-    
+
     try {
       uiController.updateButtonState(VoiceButtonState.CONNECTING);
       loadingOverlay = uiEnhancements.showLoading('Requesting microphone access...');
 
       const currentContext = stateManager.getState().currentContext;
-      
+
       // 1. Acquire Microphone (via AudioController)
       const micStream = await audioController.requestMicrophone();
-      
+
       // PRIVACY-CRITICAL: Mute immediately
       audioController.muteMicrophone();
 
@@ -125,14 +125,14 @@ export class AppController {
       if (!currentContext) {
         throw new Error('No active context loaded');
       }
-      
+
       // Create tools using factory
       const tools = createContextTools(currentContext, stateManager.getState().sessionManager);
 
       const { session, agent } = await sessionHandler.connect({
         context: currentContext,
         mediaStream: micStream,
-        audioElement: undefined, 
+        audioElement: undefined,
         tools: tools,
         onTokenRequest: this.getSessionToken
       });
@@ -140,7 +140,7 @@ export class AppController {
       // 3. Update State
       stateManager.setSession(session);
       stateManager.setAgent(agent);
-      
+
       // 4. Wire up Session Events
       this.setupSessionEvents(session);
 
@@ -164,11 +164,11 @@ export class AppController {
     } catch (error: any) {
       logger.error('Connection failed', error);
       this.connecting = false;
-      
+
       // Cleanup
       audioController.releaseMicrophone();
       uiController.updateButtonState(VoiceButtonState.IDLE);
-      
+
       if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
       uiEnhancements.showToast(`Connection failed: ${error.message}`, 'error');
       feedbackSystem.playErrorTone();
@@ -190,7 +190,7 @@ export class AppController {
    */
   async disconnect(): Promise<void> {
     logger.info('🔌 Disconnect sequence starting...');
-    
+
     // UI Feedback
     uiEnhancements.showToast('Disconnecting...', 'info');
     audioController.setListeningMode(false);
@@ -198,13 +198,13 @@ export class AppController {
     try {
       // 1. Disconnect Session
       await sessionHandler.disconnect();
-      
+
       // 2. Cleanup State
       stateManager.setSession(null);
       voiceController.setSession(null);
       voiceController.reset(); // Clears mic, flags, but keeps listeners
       this.textChannelController?.setSession(null);
-      
+
       // 3. Cleanup Audio
       audioController.dispose(); // Releases mic and stops monitor
 
@@ -276,7 +276,7 @@ export class AppController {
   private setupSessionEvents(session: RealtimeSession) {
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
-      
+
       // Forward to VoiceController
       if (t === 'conversation.item.input_audio_transcription.delta') {
         voiceController.handleTranscript(event.delta || '', false);
@@ -312,7 +312,7 @@ export class AppController {
           uiController.updateButtonState(VoiceButtonState.READY);
         }
       }
-      
+
       // Item handling
       if (t === 'conversation.item.added') {
         conversationController.handleItemAdded(event);
@@ -320,7 +320,7 @@ export class AppController {
       if (t === 'conversation.item.done') {
         conversationController.handleItemDone(event);
       }
-      
+
       // Error handling
       if (t === 'error') {
         logger.error('Session error event', event);

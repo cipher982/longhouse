@@ -1,14 +1,17 @@
 # Email Integration Testing Guide
 
 ## Overview
+
 Testing email integrations is complex because they involve external services (Gmail API, Pub/Sub), OAuth flows, and asynchronous processing. This guide covers strategies for testing at different levels.
 
 ## Testing Levels
 
 ### 1. Unit Tests (What We Have)
+
 Located in `backend/tests/`:
+
 - `test_gmail_webhook_trigger.py` - Tests webhook → trigger firing
-- `test_gmail_webhook_history_progress.py` - Tests history tracking and deduplication  
+- `test_gmail_webhook_history_progress.py` - Tests history tracking and deduplication
 - `test_pubsub_webhook.py` - Tests Pub/Sub endpoint and OIDC validation
 - `test_connectors_api.py` - Tests connector CRUD operations
 
@@ -17,6 +20,7 @@ These use mocks and stubs to avoid real API calls.
 ### 2. Integration Tests (Local Development)
 
 #### A. Using Gmail API Test Mode
+
 ```python
 # In your .env.local
 GMAIL_TEST_MODE=1
@@ -26,10 +30,12 @@ GMAIL_TEST_EMAIL=your-test@gmail.com
 This enables test endpoints that simulate Gmail behavior without real emails.
 
 #### B. Using a Test Gmail Account
+
 1. Create a dedicated Gmail account for testing
 2. Enable Gmail API in Google Cloud Console
 3. Set up OAuth 2.0 credentials
 4. Configure test environment:
+
 ```bash
 # .env.test
 GOOGLE_CLIENT_ID=your-client-id
@@ -40,6 +46,7 @@ APP_PUBLIC_URL=https://your-ngrok-url.ngrok.io
 ### 3. End-to-End Testing Strategies
 
 #### Option 1: Gmail + Ngrok (Recommended for Development)
+
 ```bash
 # 1. Start ngrok tunnel
 ngrok http 8000
@@ -56,6 +63,7 @@ export APP_PUBLIC_URL=https://abc123.ngrok.io
 **Cons:** Requires internet, ngrok URL changes
 
 #### Option 2: Gmail + Cloud Pub/Sub (Production-like)
+
 ```bash
 # 1. Set up Google Cloud project
 gcloud pubsub topics create gmail-push
@@ -71,6 +79,7 @@ gcloud pubsub subscriptions create gmail-push-sub \
 **Cons:** Requires GCP setup, public server
 
 #### Option 3: Local IMAP Server (Alternative)
+
 ```bash
 # 1. Install Dovecot on your VPS
 sudo apt install dovecot-imapd dovecot-pop3d
@@ -106,18 +115,18 @@ from googleapiclient.discovery import build
 @pytest.mark.skipif(not os.getenv("RUN_E2E_TESTS"), reason="E2E tests disabled")
 async def test_full_email_flow():
     """Test complete email flow from connection to trigger firing."""
-    
+
     # 1. Connect Gmail account
     response = await client.post(
         "/api/auth/google/gmail",
         json={"auth_code": os.getenv("TEST_AUTH_CODE")}
     )
     connector_id = response.json()["connector_id"]
-    
+
     # 2. Create agent and trigger
     agent = await create_test_agent()
     trigger = await create_email_trigger(agent.id, connector_id)
-    
+
     # 3. Send test email via Gmail API
     service = build('gmail', 'v1', credentials=test_credentials)
     message = create_test_email(
@@ -126,11 +135,11 @@ async def test_full_email_flow():
         body="This should trigger the agent"
     )
     service.users().messages().send(userId='me', body=message).execute()
-    
+
     # 4. Wait for webhook (with timeout)
     triggered = await wait_for_trigger_fire(trigger.id, timeout=30)
     assert triggered, "Trigger did not fire within timeout"
-    
+
     # 5. Verify agent execution
     run = await get_latest_run(agent.id)
     assert run.status == "completed"
@@ -140,8 +149,9 @@ async def test_full_email_flow():
 ### 5. Testing Checklist
 
 #### For Each Email Provider (Gmail, Outlook, etc):
+
 - [ ] OAuth connection flow
-- [ ] Webhook registration 
+- [ ] Webhook registration
 - [ ] Message filtering (labels, folders)
 - [ ] History tracking
 - [ ] Deduplication
@@ -150,12 +160,14 @@ async def test_full_email_flow():
 - [ ] Rate limiting
 
 #### Security Testing:
+
 - [ ] OIDC token validation (Pub/Sub)
 - [ ] Webhook signature verification
 - [ ] Token encryption/decryption
 - [ ] Permission scoping
 
 #### Performance Testing:
+
 ```python
 # Load test with multiple webhooks
 async def test_webhook_load():
@@ -163,7 +175,7 @@ async def test_webhook_load():
     for i in range(100):
         task = send_webhook_async(message_id=f"msg-{i}")
         tasks.append(task)
-    
+
     results = await asyncio.gather(*tasks)
     assert all(r.status_code == 202 for r in results)
 ```
@@ -171,6 +183,7 @@ async def test_webhook_load():
 ## Local Development Setup
 
 ### Quick Start with Test Email
+
 ```bash
 # 1. Create test Gmail account
 # 2. Enable Gmail API in Google Cloud Console
@@ -188,6 +201,7 @@ python scripts/send_test_email.py
 ```
 
 ### Test Email Script
+
 ```python
 # scripts/send_test_email.py
 import pickle
@@ -199,20 +213,20 @@ def send_test_email():
     # Load credentials from OAuth flow
     with open('token.pickle', 'rb') as token:
         creds = pickle.load(token)
-    
+
     service = build('gmail', 'v1', credentials=creds)
-    
+
     message = MIMEText('Test email body')
     message['to'] = 'me'
     message['subject'] = 'Test Trigger Email'
-    
+
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    
+
     result = service.users().messages().send(
         userId='me',
         body={'raw': raw}
     ).execute()
-    
+
     print(f"Sent message ID: {result['id']}")
 
 if __name__ == '__main__':
@@ -222,6 +236,7 @@ if __name__ == '__main__':
 ## Debugging Tips
 
 ### 1. Check Webhook Receipt
+
 ```bash
 # Watch logs for webhook calls
 tail -f logs/app.log | grep webhook
@@ -231,6 +246,7 @@ curl localhost:8000/api/connectors
 ```
 
 ### 2. Verify Gmail Watch
+
 ```python
 # Check watch status
 from zerg.services import gmail_api
@@ -240,6 +256,7 @@ print(f"Expires: {watch_info['expiration']}")
 ```
 
 ### 3. Test Pub/Sub Locally
+
 ```bash
 # Use Pub/Sub emulator
 gcloud beta emulators pubsub start
@@ -250,6 +267,7 @@ python scripts/setup_pubsub_emulator.py
 ```
 
 ### 4. Monitor Metrics
+
 ```bash
 # Check Prometheus metrics
 curl localhost:8000/metrics | grep gmail
@@ -263,6 +281,7 @@ curl localhost:8000/metrics | grep gmail
 ## CI/CD Integration
 
 ### GitHub Actions
+
 ```yaml
 name: Email Integration Tests
 
@@ -271,7 +290,7 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     services:
       postgres:
         image: postgres:14
@@ -280,29 +299,29 @@ jobs:
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
-    
+
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        pip install uv
-        uv pip install -r requirements.txt
-    
-    - name: Run unit tests
-      run: |
-        pytest tests/test_gmail*.py tests/test_pubsub*.py
-    
-    - name: Run integration tests (mocked)
-      env:
-        GMAIL_TEST_MODE: 1
-      run: |
-        pytest tests/integration/
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install uv
+          uv pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: |
+          pytest tests/test_gmail*.py tests/test_pubsub*.py
+
+      - name: Run integration tests (mocked)
+        env:
+          GMAIL_TEST_MODE: 1
+        run: |
+          pytest tests/integration/
 ```
 
 ## Troubleshooting
@@ -333,6 +352,7 @@ jobs:
 ## Production Deployment
 
 ### Pre-deployment Checklist
+
 - [ ] Set APP_PUBLIC_URL to production domain
 - [ ] Configure Pub/Sub topic and subscription
 - [ ] Set up OIDC authentication
@@ -343,6 +363,7 @@ jobs:
 - [ ] Set up log aggregation
 
 ### Monitoring
+
 ```python
 # Add custom alerts
 if gmail_webhook_error_total > 10:

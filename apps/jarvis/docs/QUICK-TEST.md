@@ -3,6 +3,7 @@
 **5-Minute Validation** - Run this before physical device testing
 
 **🆕 Voice/Text Separation Features (Phase 11)**:
+
 - Hands-free mode toggle for continuous voice listening
 - Text input now properly mutes voice channel (no VAD activation during typing)
 - Ambient noise won't trigger transcription when using text input
@@ -99,18 +100,18 @@ Open browser console (Cmd+Option+J / F12):
 
 ```javascript
 // Test all sounds
-testAudioFeedback()
+testAudioFeedback();
 // Should hear: chime → tick → error tone
 
 // Check preferences
-getFeedbackPreferences()
+getFeedbackPreferences();
 // Should show: { haptics: true, audio: true }
 
 // Disable audio
-setAudioFeedback(false)
+setAudioFeedback(false);
 
 // Re-enable
-setAudioFeedback(true)
+setAudioFeedback(true);
 ```
 
 ---
@@ -118,6 +119,7 @@ setAudioFeedback(true)
 ## Test 5: Reduced Motion (30 seconds)
 
 **macOS:**
+
 1. System Preferences → Accessibility → Display → Reduce motion
 2. Reload page
 3. ✅ All animations disabled?
@@ -198,6 +200,7 @@ setAudioFeedback(true)
 ## Expected Results
 
 ### All Tests Pass ✅
+
 - States transition smoothly
 - Keyboard navigation works
 - Audio feedback plays
@@ -212,6 +215,7 @@ setAudioFeedback(true)
 ## If Something Fails
 
 ### Button doesn't appear / stuck loading
+
 ```bash
 # Check backend is running
 curl http://localhost:47300/api/session
@@ -222,23 +226,26 @@ curl http://localhost:47300/api/session
 ```
 
 ### No audio feedback
+
 ```javascript
 // Check if disabled
-getFeedbackPreferences()
+getFeedbackPreferences();
 
 // Re-enable
-setAudioFeedback(true)
+setAudioFeedback(true);
 
 // Test
-testAudioFeedback()
+testAudioFeedback();
 ```
 
 ### Keyboard navigation not working
+
 - Check browser console for JavaScript errors
 - Try clicking with mouse first to ensure connection works
 - Verify button has focus (should see focus ring)
 
 ### States not changing
+
 - Check browser console for errors
 - Look for state transition logs: "Voice button state transition: idle → connecting"
 

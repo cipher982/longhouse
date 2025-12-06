@@ -1,6 +1,6 @@
 /**
  * Unit test for streaming message handler logic
- * 
+ *
  * This validates the exact event sequence that causes the bug:
  * tokens arriving before assistant_id
  */
@@ -168,4 +168,3 @@ describe('Streaming Message Handler', () => {
     expect(result.current.getVisibleContent()).toBe('Test');
   });
 });
-

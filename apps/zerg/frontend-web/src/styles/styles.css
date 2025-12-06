@@ -1,5 +1,7 @@
 /* ------------------------------------------------------------------ */
+
 /*  Base stylesheet – imports dedicated CSS modules                   */
+
 /* ------------------------------------------------------------------ */
 
 /* Design tokens & utilities */
@@ -7,13 +9,16 @@
 
 @layer base {
   /* ------------------------------------------------------------------ */
+
   /*  Global base styles not scoped to a particular module              */
+
   /* ------------------------------------------------------------------ */
 
   /* Reset & base */
   body {
     margin: 0;
     padding: 0;
+
     /* overflow handled in layout.css */
     font-family: var(--font-family-base);
     background-color: var(--color-surface-page);
@@ -23,9 +28,14 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-  
+
   /* Display typography for headings */
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     font-family: var(--font-family-display);
     font-weight: 600;
     letter-spacing: var(--font-tracking-tight);
@@ -33,16 +43,36 @@
     color: var(--color-text-primary);
     margin: 0;
   }
-  
-  h1 { font-size: var(--font-size-3xl); }
-  h2 { font-size: var(--font-size-2xl); }
-  h3 { font-size: var(--font-size-xl); }
-  h4 { font-size: var(--font-size-lg); }
-  h5 { font-size: var(--font-size-md); }
-  h6 { font-size: var(--font-size-base); }
-  
+
+  h1 {
+    font-size: var(--font-size-3xl);
+  }
+
+  h2 {
+    font-size: var(--font-size-2xl);
+  }
+
+  h3 {
+    font-size: var(--font-size-xl);
+  }
+
+  h4 {
+    font-size: var(--font-size-lg);
+  }
+
+  h5 {
+    font-size: var(--font-size-md);
+  }
+
+  h6 {
+    font-size: var(--font-size-base);
+  }
+
   /* Code and monospace */
-  code, pre, kbd, samp {
+  code,
+  pre,
+  kbd,
+  samp {
     font-family: var(--font-family-mono);
   }
 
@@ -69,7 +99,7 @@
   .modal-select:focus {
     outline: none;
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 5px rgba(100, 255, 218, 0.5);
+    box-shadow: 0 0 5px rgb(100 255 218 / 50%);
   }
 
   .modal-select option {

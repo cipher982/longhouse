@@ -45,7 +45,9 @@ Zerg combines chat-based AI agents, a visual workflow canvas, and per-token LLM 
 ## ✨ Key Features
 
 ### Visual Workflow Canvas
+
 Drag-and-drop workflow builder with four node types:
+
 - **Triggers** — Gmail, webhooks, cron schedules
 - **Agents** — LangGraph-powered with tool access
 - **Tools** — HTTP calls, math, containers, MCP tools
@@ -54,6 +56,7 @@ Drag-and-drop workflow builder with four node types:
 Parallel execution is native. The StateGraph engine handles concurrent branches with typed reducers—no race conditions, no manual synchronization.
 
 ### Per-Token LLM Streaming
+
 Every token streams over WebSocket as it's generated. The `WsTokenCallback` handler forwards chunks in real-time, so your UI updates character-by-character instead of waiting for complete responses.
 
 ```python
@@ -64,19 +67,21 @@ class WsTokenCallback(AsyncCallbackHandler):
 ```
 
 ### MCP Integration
+
 First-class [Model Context Protocol](https://modelcontextprotocol.io/) support. Connect any MCP server or use built-in presets:
 
-| Service | Capabilities |
-|---------|-------------|
-| GitHub | Issues, PRs, repos, code search |
-| Slack | Messages, channels, threads |
-| Linear | Issues, projects, cycles |
-| Notion | Pages, databases, blocks |
-| Custom | Any MCP-compliant server |
+| Service | Capabilities                    |
+| ------- | ------------------------------- |
+| GitHub  | Issues, PRs, repos, code search |
+| Slack   | Messages, channels, threads     |
+| Linear  | Issues, projects, cycles        |
+| Notion  | Pages, databases, blocks        |
+| Custom  | Any MCP-compliant server        |
 
 MCP tools coexist with built-in tools in a unified registry. The adapter handles connection pooling, retries (3× with 30s timeout), and HTTP/2 multiplexing.
 
 ### Two-Tier Credential Management
+
 Enterprise-ready credential resolution:
 
 1. **Account-level** — Shared org credentials (e.g., team Slack workspace)
@@ -85,6 +90,7 @@ Enterprise-ready credential resolution:
 Credentials resolve at runtime through a cascading lookup with Fernet encryption at rest.
 
 ### Jarvis Integration
+
 Voice and device UI powered by the same backend. Jarvis is a PWA that dispatches to Zerg agents via device-secret authentication:
 
 ```
@@ -98,21 +104,25 @@ One platform, multiple interfaces.
 ## ⚙️ Technical Highlights
 
 **LangGraph Agent Execution**
+
 - Functional ReAct agents compiled to async runnables
 - Process-local cache with edit-based invalidation
 - Full async execution—no blocking thread pools
 
 **Workflow Engine** (~150 LOC)
+
 - StateGraph with typed state and `Annotated` reducers
 - Fail-fast semantics: `first_error` reducer halts on exception
 - Envelope-based outputs with node metadata
 
 **WebSocket Architecture**
+
 - Topic-based pub/sub (`agent:123`, `thread:45`, `workflow:99`)
 - JWT pre-authentication before handshake acceptance
 - Custom close codes (4401 for invalid JWT)
 
 **Trigger System**
+
 - Gmail OAuth with push notifications via Cloud Pub/Sub
 - Webhook endpoints with signature verification
 - APScheduler for cron/interval jobs
@@ -121,15 +131,15 @@ One platform, multiple interfaces.
 
 ## 🛠️ Stack
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React, TypeScript, Vite |
-| Backend | FastAPI, Python 3.12, LangGraph |
-| Database | PostgreSQL (prod), SQLite (test) |
-| Real-time | WebSocket with topic pub/sub |
-| Auth | JWT, Google OAuth, device secrets |
-| Tools | MCP protocol, built-in registry |
-| Observability | LangSmith tracing (optional) |
+| Layer         | Technology                        |
+| ------------- | --------------------------------- |
+| Frontend      | React, TypeScript, Vite           |
+| Backend       | FastAPI, Python 3.12, LangGraph   |
+| Database      | PostgreSQL (prod), SQLite (test)  |
+| Real-time     | WebSocket with topic pub/sub      |
+| Auth          | JWT, Google OAuth, device secrets |
+| Tools         | MCP protocol, built-in registry   |
+| Observability | LangSmith tracing (optional)      |
 
 ---
 

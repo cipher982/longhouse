@@ -7,11 +7,11 @@ def test_max_output_tokens_is_passed_to_chat_openai(monkeypatch):
 
     # Prevent load_dotenv from overwriting our env vars from .env file
     monkeypatch.setattr(zerg.config, "load_dotenv", lambda *args, **kwargs: None)
-    
+
     # Set env var
     monkeypatch.setenv("MAX_OUTPUT_TOKENS", "777")
     monkeypatch.setenv("LLM_TOKEN_STREAM", "false")
-    
+
     # We must ensure get_settings re-reads the environment.
     # Since get_settings() calls _load_settings() which reads os.environ, this should work
     # provided we bypass the load_dotenv override logic.

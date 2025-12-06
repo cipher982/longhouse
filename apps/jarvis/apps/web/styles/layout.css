@@ -5,16 +5,20 @@
   grid-template-columns: 280px 1fr;
   height: 100vh;
   position: relative;
-  background: radial-gradient(circle at 50% -20%, #1a1a2e 0%, var(--color-void) 60%);
+  background: radial-gradient(
+    circle at 50% -20%,
+    #1a1a2e 0%,
+    var(--color-void) 60%
+  );
 }
 
 /* Ambient Background Glows */
 .app-container::after {
-  content: '';
+  content: "";
   position: absolute;
   width: 600px;
   height: 600px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, rgb(99 102 241 / 8%) 0%, transparent 70%);
   top: -200px;
   right: -200px;
   border-radius: 50%;
@@ -32,7 +36,7 @@
   overflow: hidden;
   position: relative;
   z-index: 1;
-  background: rgba(3, 3, 5, 0.3);
+  background: rgb(3 3 5 / 30%);
   backdrop-filter: blur(var(--blur-sm));
 }
 
@@ -44,7 +48,7 @@
   align-items: center;
   justify-content: space-between;
   height: 72px;
-  background: linear-gradient(180deg, rgba(0,0,0,0.2) 0%, transparent 100%);
+  background: linear-gradient(180deg, rgb(0 0 0 / 20%) 0%, transparent 100%);
 }
 
 .main-header h1 {
@@ -52,9 +56,9 @@
   font-weight: 700;
   letter-spacing: -0.02em;
   background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
-  -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
-  text-shadow: 0 0 30px rgba(255,255,255,0.1);
+  text-shadow: 0 0 30px rgb(255 255 255 / 10%);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -67,7 +71,7 @@
 }
 
 .header-button {
-  background: rgba(255,255,255,0.03);
+  background: rgb(255 255 255 / 3%);
   border: 1px solid var(--color-border-muted);
   color: var(--color-text-secondary);
   padding: var(--space-2) var(--space-3);
@@ -79,24 +83,25 @@
 }
 
 .header-button:hover {
-  background: rgba(255,255,255,0.1);
+  background: rgb(255 255 255 / 10%);
   border-color: var(--color-neon-primary);
   color: #fff;
-  box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 15px rgb(99 102 241 / 20%);
   transform: translateY(-1px);
 }
 
 .header-button svg {
-  width: 14px; height: 14px;
+  width: 14px;
+  height: 14px;
 }
 
 /* Context Selector */
 .context-selector {
-  appearance: none; /* Remove default arrow */
-  -webkit-appearance: none;
+  /* Remove default arrow */
+  appearance: none;
   padding: var(--space-2) var(--space-3);
   padding-right: var(--space-6); /* Space for arrow */
-  background-color: rgba(255,255,255,0.03);
+  background-color: rgb(255 255 255 / 3%);
   background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2394a3b8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
   background-repeat: no-repeat;
   background-position: right 10px top 50%;
@@ -112,10 +117,10 @@
 }
 
 .context-selector:hover {
-  background-color: rgba(255,255,255,0.1);
+  background-color: rgb(255 255 255 / 10%);
   border-color: var(--color-neon-primary);
   color: #fff;
-  box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 15px rgb(99 102 241 / 20%);
   transform: translateY(-1px);
 }
 
@@ -136,8 +141,14 @@
   overflow-y: auto;
   padding: 0;
   position: relative;
+
   /* Mask for fading content at top */
-  mask-image: linear-gradient(to bottom, transparent 0%, black 40px, black 100%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 40px,
+    black 100%
+  );
 }
 
 /* Voice Controls - Floating Island */
@@ -149,7 +160,7 @@
   gap: var(--space-4);
   padding: var(--space-6);
   position: relative;
-  background: linear-gradient(0deg, var(--color-void) 0%, rgba(3,3,5,0) 100%);
+  background: linear-gradient(0deg, var(--color-void) 0%, rgb(3 3 5 / 0%) 100%);
 }
 
 /* Text Input - Floating Capsule */
@@ -165,7 +176,7 @@
 
 .text-input {
   flex: 1;
-  background: rgba(20, 20, 30, 0.6);
+  background: rgb(20 20 30 / 60%);
   border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-xl);
   padding: var(--space-3) var(--space-5);
@@ -173,22 +184,25 @@
   font-size: var(--font-size-base);
   transition: all 0.3s ease;
   backdrop-filter: blur(12px);
-  box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 24px rgb(0 0 0 / 20%);
 }
 
 .text-input:focus {
   outline: none;
   border-color: var(--color-neon-primary);
-  background: rgba(30, 30, 45, 0.8);
-  box-shadow: 0 0 0 1px var(--color-neon-primary), 0 0 20px rgba(99, 102, 241, 0.15);
+  background: rgb(30 30 45 / 80%);
+  box-shadow:
+    0 0 0 1px var(--color-neon-primary),
+    0 0 20px rgb(99 102 241 / 15%);
 }
 
 .text-input::placeholder {
-  color: rgba(255,255,255,0.3);
+  color: rgb(255 255 255 / 30%);
 }
 
 .send-button {
-  width: 48px; height: 48px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   background: var(--color-neon-primary);
   border: none;
@@ -198,24 +212,45 @@
   align-items: center;
   justify-content: center;
   transition: all 0.3s ease;
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 20px rgb(99 102 241 / 40%);
 }
 
 .send-button:hover {
   background: #4f46e5;
   transform: scale(1.05);
-  box-shadow: 0 0 30px rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 30px rgb(99 102 241 / 60%);
 }
 
 /* Responsive */
-@media (max-width: 768px) {
-  .app-container { grid-template-columns: 1fr; }
-  .sidebar { position: fixed; transform: translateX(-100%); z-index: 100; }
-  .sidebar.open { transform: translateX(0); }
-  .main-header { padding: var(--space-3) var(--space-4); height: 60px; }
+@media (width <= 768px) {
+  .app-container {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    transform: translateX(-100%);
+    z-index: 100;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .main-header {
+    padding: var(--space-3) var(--space-4);
+    height: 60px;
+  }
 }
 
 @keyframes pulse-glow {
-  0% { opacity: 0.4; transform: scale(1); }
-  100% { opacity: 0.7; transform: scale(1.1); }
+  0% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
 }

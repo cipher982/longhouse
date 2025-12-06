@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 /**
  * MIDDLEWARE DEBUG TEST
- * 
+ *
  * This test specifically validates that:
  * 1. The middleware is receiving requests
  * 2. Headers are being processed correctly
@@ -12,12 +12,12 @@ import { test, expect } from './fixtures';
 test.describe('Middleware Debug', () => {
   test('Middleware header processing validation', async ({ page }, testInfo) => {
     console.log('🔍 Starting middleware debug test...');
-    
+
     // Get the worker ID from test info
     const workerId = String(testInfo.workerIndex);
     console.log('📊 Worker ID:', workerId);
     console.log('📊 NODE_ENV:', process.env.NODE_ENV);
-    
+
     // Make a simple API request to trigger middleware
     console.log('🔍 Making API request to trigger middleware...');
     try {
@@ -27,7 +27,7 @@ test.describe('Middleware Debug', () => {
     } catch (error) {
       console.log('❌ Health check error:', error);
     }
-    
+
     // Try agent endpoint
     console.log('🔍 Making agent API request...');
     try {
@@ -38,7 +38,7 @@ test.describe('Middleware Debug', () => {
     } catch (error) {
       console.log('❌ Agent API error:', error);
     }
-    
+
     console.log('✅ Middleware debug test complete');
   });
 });

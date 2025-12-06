@@ -12,7 +12,7 @@ export class ConversationUI {
 
   constructor() {
     this.conversationListEl = document.getElementById('conversationList')!;
-    
+
     // Update timestamps every 30 seconds
     this.updateInterval = window.setInterval(() => {
       this.updateTimestamps();
@@ -53,7 +53,7 @@ export class ConversationUI {
     this.conversationListEl.innerHTML = conversations.map((conv, index) => {
       const displayName = this.generateBetterName(conv, index);
       const timeAgo = this.formatRelativeTime(conv.updatedAt);
-      
+
       return `
         <div class="conversation-item" data-conversation-id="${conv.id}">
           <div class="conversation-name">${this.escapeHtml(displayName)}</div>
@@ -94,11 +94,11 @@ export class ConversationUI {
     try {
       // Update UI to show loading
       this.setActiveConversation(conversationId);
-      
+
       // Switch conversation in session manager
       await this.sessionManager.switchToConversation(conversationId);
       this.currentConversationId = conversationId;
-      
+
       // Dispatch event for main app to handle
       window.dispatchEvent(new CustomEvent('conversationSwitched', {
         detail: { conversationId }
@@ -115,7 +115,7 @@ export class ConversationUI {
    */
   setActiveConversation(conversationId: string): void {
     this.currentConversationId = conversationId;
-    
+
     // Remove active class from all items
     this.conversationListEl.querySelectorAll('.conversation-item').forEach(item => {
       item.classList.remove('active');
@@ -134,7 +134,7 @@ export class ConversationUI {
   async addNewConversation(conversationId: string, name?: string): Promise<void> {
     // Refresh the conversation list
     await this.loadConversations();
-    
+
     // Set as active
     this.setActiveConversation(conversationId);
   }
@@ -157,15 +157,15 @@ export class ConversationUI {
    */
   private generateBetterName(conversation: {name: string, createdAt: Date, updatedAt: Date}, index: number): string {
     const timeAgo = this.formatRelativeTime(conversation.updatedAt);
-    
+
     // If it's an auto-generated timestamp name (contains colons and numbers)
     if (conversation.name.includes(':') && /\d+/.test(conversation.name)) {
       // Use time-based naming for clarity
       if (index === 0) return `Latest conversation`;
       return `Chat from ${timeAgo}`;
     }
-    
-    // If it's a proper name, keep it but show time more prominently  
+
+    // If it's a proper name, keep it but show time more prominently
     return conversation.name;
   }
 
@@ -185,7 +185,7 @@ export class ConversationUI {
     if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
     if (days < 7) return `${days}d ago`;
-    
+
     return date.toLocaleDateString();
   }
 

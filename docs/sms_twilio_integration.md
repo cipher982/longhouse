@@ -13,22 +13,24 @@ The Zerg platform now includes SMS messaging capability via Twilio's Programmabl
 ## Tool: `send_sms`
 
 ### Purpose
+
 Send SMS messages via Twilio API to any phone number. Supports delivery status tracking via webhooks.
 
 ### Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `account_sid` | string | Yes | Twilio Account SID (starts with 'AC', 34 characters) |
-| `auth_token` | string | Yes | Twilio Auth Token (32 hexadecimal characters) |
-| `from_number` | string | Yes | Sender phone number in E.164 format (must be a Twilio-owned number) |
-| `to_number` | string | Yes | Recipient phone number in E.164 format |
-| `message` | string | Yes | SMS message body (max 1600 characters) |
-| `status_callback` | string | No | Webhook URL to receive delivery status updates |
+| Parameter         | Type   | Required | Description                                                         |
+| ----------------- | ------ | -------- | ------------------------------------------------------------------- |
+| `account_sid`     | string | Yes      | Twilio Account SID (starts with 'AC', 34 characters)                |
+| `auth_token`      | string | Yes      | Twilio Auth Token (32 hexadecimal characters)                       |
+| `from_number`     | string | Yes      | Sender phone number in E.164 format (must be a Twilio-owned number) |
+| `to_number`       | string | Yes      | Recipient phone number in E.164 format                              |
+| `message`         | string | Yes      | SMS message body (max 1600 characters)                              |
+| `status_callback` | string | No       | Webhook URL to receive delivery status updates                      |
 
 ### Phone Number Format (E.164)
 
 All phone numbers must be in E.164 format:
+
 - Start with `+` followed by country code
 - No spaces, dashes, or parentheses
 - Example: `+14155552671` (US number)
@@ -37,6 +39,7 @@ All phone numbers must be in E.164 format:
 ### Response Format
 
 **Success Response:**
+
 ```json
 {
   "success": true,
@@ -52,6 +55,7 @@ All phone numbers must be in E.164 format:
 ```
 
 **Error Response:**
+
 ```json
 {
   "success": false,
@@ -68,10 +72,10 @@ All phone numbers must be in E.164 format:
 
 SMS messages are split into segments based on character encoding:
 
-| Encoding | Single Segment | Multi-Part Segment | Max Total |
-|----------|---------------|-------------------|-----------|
-| GSM-7 (ASCII) | 160 chars | 153 chars/segment | 1600 chars (10 segments) |
-| UCS-2 (Unicode) | 70 chars | 67 chars/segment | 1600 chars (24 segments) |
+| Encoding        | Single Segment | Multi-Part Segment | Max Total                |
+| --------------- | -------------- | ------------------ | ------------------------ |
+| GSM-7 (ASCII)   | 160 chars      | 153 chars/segment  | 1600 chars (10 segments) |
+| UCS-2 (Unicode) | 70 chars       | 67 chars/segment   | 1600 chars (24 segments) |
 
 **Cost Implication**: Each segment is billed separately by Twilio.
 
@@ -83,14 +87,14 @@ SMS messages are split into segments based on character encoding:
 
 ### Common Error Codes
 
-| Code | Description | Resolution |
-|------|-------------|-----------|
-| 21211 | Invalid phone number | Verify E.164 format and number validity |
-| 21408 | Permission denied | Verify Twilio account has SMS capability |
-| 21610 | Unsubscribed recipient | Recipient opted out of SMS |
-| 21614 | Invalid 'From' number | Verify 'From' number is owned by your Twilio account |
-| 20003 | Authentication failed | Verify Account SID and Auth Token are correct |
-| 429 | Rate limit exceeded | Implement backoff/retry logic |
+| Code  | Description            | Resolution                                           |
+| ----- | ---------------------- | ---------------------------------------------------- |
+| 21211 | Invalid phone number   | Verify E.164 format and number validity              |
+| 21408 | Permission denied      | Verify Twilio account has SMS capability             |
+| 21610 | Unsubscribed recipient | Recipient opted out of SMS                           |
+| 21614 | Invalid 'From' number  | Verify 'From' number is owned by your Twilio account |
+| 20003 | Authentication failed  | Verify Account SID and Auth Token are correct        |
+| 429   | Rate limit exceeded    | Implement backoff/retry logic                        |
 
 Full error reference: https://www.twilio.com/docs/api/errors
 
@@ -146,6 +150,7 @@ curl -X POST https://api.swarmlet.com/api/connectors \
 ```
 
 **Response**:
+
 ```json
 {
   "id": 1,
@@ -184,6 +189,7 @@ Twilio can send delivery status updates to a webhook endpoint.
 ### Status Callback Flow
 
 1. When sending SMS, provide `status_callback` parameter:
+
    ```python
    result = send_sms(
        # ... other params ...
@@ -216,6 +222,7 @@ To implement delivery tracking:
 4. Log delivery failures for investigation
 
 **Security Note**: Validate webhook requests are from Twilio by checking:
+
 - Request signature (X-Twilio-Signature header)
 - Source IP is from Twilio's IP ranges
 
@@ -248,6 +255,7 @@ python scripts/validate_twilio_sms.py
 ```
 
 This validates:
+
 - Phone number formatting
 - Message validation
 - Credential format checking
@@ -257,6 +265,7 @@ This validates:
 ### Test Accounts
 
 Twilio provides test credentials for development:
+
 - Test Account SID: `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
 - Test Auth Token: Test tokens work only in test mode
 - Test numbers: Use Twilio's magic numbers for testing (e.g., `+15005550006` always succeeds)
@@ -303,6 +312,7 @@ print(result)
 ## Support
 
 For issues with the SMS tool implementation:
+
 1. Check validation script passes: `python scripts/validate_twilio_sms.py`
 2. Verify Twilio credentials are correct
 3. Check phone numbers are in E.164 format

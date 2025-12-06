@@ -310,4 +310,3 @@ def delete_account_connector(
         current_user.id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-

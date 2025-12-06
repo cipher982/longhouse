@@ -7,32 +7,32 @@ export async function setupDebugCapture(page: Page, testName: string) {
   const logs: string[] = [];
   const errors: string[] = [];
   const networkErrors: string[] = [];
-  
+
   // Capture console logs
   page.on('console', (msg) => {
     const text = `[${msg.type()}] ${msg.text()}`;
     logs.push(text);
-    
+
     // Log errors and warnings to console in real-time
     if (msg.type() === 'error' || msg.type() === 'warning') {
       console.log(`Browser ${msg.type()}: ${msg.text()}`);
     }
   });
-  
+
   // Capture page errors
   page.on('pageerror', (error) => {
     const errorText = `Page error: ${error.message}\n${error.stack || ''}`;
     errors.push(errorText);
     console.error(errorText);
   });
-  
+
   // Capture failed network requests
   page.on('requestfailed', (request) => {
     const failure = `Network request failed: ${request.method()} ${request.url()} - ${request.failure()?.errorText || 'Unknown error'}`;
     networkErrors.push(failure);
     console.error(failure);
   });
-  
+
   // Return a function to dump all captured logs
   return {
     dumpLogs: () => {
@@ -58,13 +58,13 @@ export async function waitForWasmInit(page: Page, timeout: number = 30000): Prom
       () => {
         // Check for any signs that WASM has loaded
         // Look for window.__wasm_initialized or similar flags
-        return (window as any).__wasm_initialized || 
+        return (window as any).__wasm_initialized ||
                (document.querySelector('#app-container')?.children.length ?? 0) > 0 ||
                (document.querySelector('#dashboard-root')?.children.length ?? 0) > 0;
       },
       { timeout }
     );
-    
+
     return !!wasmLoaded;
   } catch (error) {
     console.error('WASM initialization timeout:', error);
@@ -85,7 +85,7 @@ export async function debugDomState(page: Page) {
       dashboardContainer: document.querySelector('#dashboard-container')?.innerHTML.substring(0, 200) || 'Not found',
       visibleElements: []
     };
-    
+
     // Find all visible elements
     const allElements = document.querySelectorAll('*');
     allElements.forEach((el: any) => {
@@ -97,10 +97,10 @@ export async function debugDomState(page: Page) {
         });
       }
     });
-    
+
     return info;
   });
-  
+
   console.log('DOM State:', JSON.stringify(domInfo, null, 2));
   return domInfo;
 }

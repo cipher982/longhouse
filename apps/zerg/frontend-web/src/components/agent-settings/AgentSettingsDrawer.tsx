@@ -47,13 +47,13 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const addMcpServer = useAddMcpServer(isOpen ? agentId : null);
   const removeMcpServer = useRemoveMcpServer(isOpen ? agentId : null);
   const testMcpServer = useTestMcpServer(isOpen ? agentId : null);
-  
+
   // Connector Hooks
   const { data: connectors } = useAgentConnectors(isOpen ? agentId : null);
   const { data: accountConnectors } = useAccountConnectors();
   const configureConnector = useConfigureConnector(agentId);
   const testBeforeSave = useTestConnectorBeforeSave(agentId);
-  
+
   // Helper to check ownership
   const isOwner = user?.id === agent?.owner_id;
 
@@ -74,7 +74,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const [authToken, setAuthToken] = useState("");
   const [formAllowedTools, setFormAllowedTools] = useState("");
   const [isTesting, setIsTesting] = useState(false);
-  
+
   // Connector Config Modal State
   const [connectorModal, setConnectorModal] = useState<ConfigModalState>({
     isOpen: false,
@@ -420,7 +420,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
               const hasAccountCreds = isConfiguredAtAccountLevel(connector.type);
               const hasAgentOverride = connector.configured;
               const isConfigured = hasAgentOverride || hasAccountCreds;
-              
+
               return (
                 <div key={connector.type} className="integration-card">
                   <div className="integration-info">

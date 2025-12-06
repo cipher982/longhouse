@@ -1,10 +1,13 @@
 /* ------------------------------------------------------------------ */
+
 /*  Canvas view – layout and controls                                 */
-/* ------------------------------------------------------------------ */
-
 
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+
 /* Root container – app container during canvas view */
+
 /* ------------------------------------------------------------------ */
 
 /* Canvas-specific overrides for app-container */
@@ -38,7 +41,9 @@
 }
 
 /* ------------------------------------------------------------------ */
+
 /* Main content wrapper (toolbar + canvas)                             */
+
 /* ------------------------------------------------------------------ */
 
 .main-content-area {
@@ -55,8 +60,8 @@
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px);
+    linear-gradient(rgb(0 0 0 / 3%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(0 0 0 / 3%) 1px, transparent 1px);
   background-size: 20px 20px;
   pointer-events: none;
 }
@@ -74,9 +79,8 @@
   display: flex;
   align-items: center;
   padding: 8px 16px;
-  background: rgba(39, 39, 42, 0.8);
+  background: rgb(39 39 42 / 80%);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-border-subtle);
   z-index: 5;
   gap: var(--spacing-sm);
@@ -106,7 +110,9 @@
   background: var(--color-surface-elevated);
 }
 
-#send-button { background-color: var(--success); }
+#send-button {
+  background-color: var(--success);
+}
 
 #center-button {
   background-color: var(--primary);
@@ -120,7 +126,9 @@
   cursor: not-allowed;
 }
 
-#clear-button { background-color: var(--error); }
+#clear-button {
+  background-color: var(--error);
+}
 
 #model-select {
   padding: 6px 10px;
@@ -132,7 +140,9 @@
 }
 
 /* ------------------------------------------------------------------ */
+
 /* Workflow tab bar                                                   */
+
 /* ------------------------------------------------------------------ */
 
 #workflow-bar {
@@ -140,7 +150,7 @@
   align-items: center;
   justify-content: flex-start;
   height: 48px;
-  background: rgba(24, 24, 27, 0.9);
+  background: rgb(24 24 27 / 90%);
   border-bottom: 1px solid var(--color-border-subtle);
   padding: 0 var(--spacing-md);
   overflow-x: auto;
@@ -198,7 +208,7 @@
 }
 
 .workflow-tab-list .plus-tab:hover {
-  background: rgba(99, 102, 241, 0.1);
+  background: rgb(99 102 241 / 10%);
   color: var(--primary);
 }
 
@@ -265,7 +275,6 @@ body.space-pan #node-canvas {
   opacity: 1;
 }
 
-
 /* Custom dropdown container */
 .dropdown-container {
   position: relative;
@@ -273,8 +282,8 @@ body.space-pan #node-canvas {
 }
 
 .dropdown-toggle {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgb(255 255 255 / 5%);
+  border: 1px solid rgb(255 255 255 / 10%);
   border-radius: var(--radius-sm);
   padding: 6px;
   font-size: 14px;
@@ -290,16 +299,16 @@ body.space-pan #node-canvas {
 }
 
 .dropdown-toggle:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgb(255 255 255 / 10%);
   color: var(--text);
-  border-color: rgba(100, 255, 218, 0.3);
+  border-color: rgb(100 255 218 / 30%);
   transform: translateY(-1px);
 }
 
 .dropdown-toggle.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgb(255 255 255 / 8%);
   color: var(--text);
-  border-color: rgba(100, 255, 218, 0.5);
+  border-color: rgb(100 255 218 / 50%);
 }
 
 .dropdown-menu {
@@ -309,7 +318,7 @@ body.space-pan #node-canvas {
   border-radius: var(--radius-sm);
   padding: 4px 0;
   min-width: 120px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 30%);
   z-index: var(--z-overlay);
   opacity: 0;
   transform: translateY(-4px);
@@ -337,27 +346,81 @@ body.space-pan #node-canvas {
 }
 
 .dropdown-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(255 255 255 / 5%);
   color: var(--text);
 }
 
 .dropdown-item.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
+  background: rgb(239 68 68 / 10%);
   color: var(--error);
 }
 
 /* Toggle switch */
-.toggle-container { display: inline-flex; align-items: center; margin-left: 10px; }
-.toggle-label { position: relative; display: inline-flex; align-items: center; cursor: pointer; user-select: none; }
-.toggle-label::before { content: 'Auto-Fit'; margin-right: 8px; font-size: 14px; color: #ccc; }
-.toggle-checkbox { opacity: 0; width: 0; height: 0; position: absolute; }
-.toggle-slider { position: relative; display: inline-block; width: 40px; height: 20px; background-color: #ccc; border-radius: 20px; transition: .1s; }
-.toggle-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; border-radius: 50%; transition: .1s; }
-.toggle-checkbox:checked + .toggle-slider { background-color: var(--success); }
-.toggle-checkbox:checked + .toggle-slider:before { transform: translateX(20px); }
+.toggle-container {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+}
+
+.toggle-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-label::before {
+  content: "Auto-Fit";
+  margin-right: 8px;
+  font-size: 14px;
+  color: #ccc;
+}
+
+.toggle-checkbox {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+  background-color: #ccc;
+  border-radius: 20px;
+  transition: 0.1s;
+}
+
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  border-radius: 50%;
+  transition: 0.1s;
+}
+
+.toggle-checkbox:checked + .toggle-slider {
+  background-color: var(--success);
+}
+
+.toggle-checkbox:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
 
 /* Simple responsive tweak when shelf collapses (redundant with agent_shelf.css but harmless) */
-@media (max-width: 768px) {
-  #app-container.canvas-view { flex-direction: column; }
-  .main-content-area { min-width: 0; }
+@media (width <= 768px) {
+  #app-container.canvas-view {
+    flex-direction: column;
+  }
+
+  .main-content-area {
+    min-width: 0;
+  }
 }

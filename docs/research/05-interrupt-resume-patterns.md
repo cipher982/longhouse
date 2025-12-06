@@ -20,6 +20,7 @@ def approval_node(state):
 ```
 
 When `interrupt()` is called:
+
 1. The current graph state is serialized to the checkpointer
 2. Execution halts and returns an `Interrupt` object
 3. The graph can be resumed later by invoking with the same thread/checkpoint ID
@@ -34,6 +35,7 @@ When `interrupt()` is called:
 ### State Capture
 
 When paused, LangGraph captures:
+
 - All state variables in the graph's state schema
 - Current node position in the execution flow
 - Message history
@@ -45,18 +47,21 @@ When paused, LangGraph captures:
 ### MemorySaver (Current Zerg Implementation)
 
 **Location**: `zerg/agents_def/zerg_react_agent.py:133`
+
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 checkpointer = MemorySaver()
 ```
 
 **Characteristics**:
+
 - Stores state in process memory
 - Fast access during runtime
 - Lost on application restart or crash
 - Suitable for: Short-lived conversations, single-session interactions
 
 **Current Usage in Zerg**:
+
 - Agent execution state is checkpointed in memory
 - Thread messages are persisted to PostgreSQL separately (via `thread_service.py`)
 - State is lost if backend restarts mid-execution
@@ -64,11 +69,13 @@ checkpointer = MemorySaver()
 ### PostgresSaver (Recommended for Interrupts)
 
 **Installation**:
+
 ```bash
 pip install langgraph-checkpoint-postgres
 ```
 
 **Setup**:
+
 ```python
 from langgraph.checkpoint.postgres import PostgresSaver
 
@@ -82,6 +89,7 @@ checkpointer = PostgresSaver.from_conn_string(str(engine.url))
 ```
 
 **Characteristics**:
+
 - Persists state to PostgreSQL tables
 - Survives application restarts
 - Enables resumption after hours/days
@@ -90,6 +98,7 @@ checkpointer = PostgresSaver.from_conn_string(str(engine.url))
 
 **Schema**:
 PostgresSaver creates tables for:
+
 - `checkpoints`: Full state snapshots
 - `checkpoint_writes`: Incremental state updates
 - Automatic cleanup of old checkpoints
@@ -101,6 +110,7 @@ PostgresSaver creates tables for:
 **Use Case**: "Wait 2 hours then check status"
 
 **Pattern**:
+
 ```python
 def wait_node(state):
     # Store wake time in state
@@ -114,6 +124,7 @@ graph.invoke(input=None, config={"configurable": {"thread_id": thread_id}})
 ```
 
 **Integration with Zerg**:
+
 - Extend `scheduler_service.py` to schedule "resume" jobs
 - Store wake_time in `Thread.agent_state` JSON field
 - Scheduler polls for threads with `agent_state.wake_time < now()`
@@ -123,6 +134,7 @@ graph.invoke(input=None, config={"configurable": {"thread_id": thread_id}})
 **Use Case**: "Wait for email from customer then continue"
 
 **Pattern**:
+
 ```python
 def wait_for_email(state):
     # Create email trigger condition
@@ -143,6 +155,7 @@ graph.invoke(
 ```
 
 **Integration with Zerg**:
+
 - Link `Trigger` table to specific `Thread` (add `thread_id` FK)
 - When trigger fires, check if thread is in "interrupted" state
 - Resume graph with trigger payload as input
@@ -152,6 +165,7 @@ graph.invoke(
 **Use Case**: "Review agent's plan before executing expensive API call"
 
 **Pattern**:
+
 ```python
 def approval_gate(state):
     plan = state["proposed_action"]
@@ -171,6 +185,7 @@ graph.invoke(
 ```
 
 **Integration with Zerg**:
+
 - Add `interrupted_at` timestamp to `Thread` model
 - New API endpoint: `POST /threads/{id}/resume` with resume payload
 - UI shows paused threads with "Resume" button
@@ -180,21 +195,25 @@ graph.invoke(
 ### Existing Components
 
 **1. Trigger Model** (`models/models.py:302-357`)
+
 - Types: `webhook`, `email` (provider: gmail)
 - Config: JSON blob for provider-specific settings
 - Linked to Agent, not Thread (one-to-many)
 
 **2. Email Trigger Service** (`services/email_trigger_service.py`)
+
 - Background polling loop (10-minute interval)
 - Delegates to provider implementations (Gmail, SMTP)
 - Handles watch renewal for Gmail push notifications
 
 **3. Scheduler Service** (`services/scheduler_service.py`)
+
 - APScheduler for cron-based agent execution
 - Event bus integration for dynamic scheduling
 - Creates new threads for each scheduled run
 
 **4. Thread/Message Persistence** (`services/thread_service.py`)
+
 - Converts between LangChain messages and DB rows
 - Temporal awareness via timestamp prefixes
 - Separate from LangGraph checkpointing
@@ -224,6 +243,7 @@ graph.invoke(
 **Goal**: Switch from MemorySaver to PostgresSaver
 
 **Changes**:
+
 ```python
 # zerg/agents_def/zerg_react_agent.py
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -239,6 +259,7 @@ def get_runnable(agent_row):
 ```
 
 **Database Migration**:
+
 ```sql
 -- PostgresSaver creates these automatically on first use
 -- checkpoints table
@@ -247,6 +268,7 @@ def get_runnable(agent_row):
 ```
 
 **Benefits**:
+
 - Agents can survive restarts
 - Foundation for async resume
 - No API changes required
@@ -256,6 +278,7 @@ def get_runnable(agent_row):
 **Goal**: Support interrupt/resume with typed wake conditions
 
 **Schema Changes**:
+
 ```python
 # Add to Thread model (models/models.py)
 class Thread(Base):
@@ -269,6 +292,7 @@ class Thread(Base):
 ```
 
 **Wake Condition Schema**:
+
 ```python
 # New model in models/trigger_config.py or similar
 class WakeCondition(BaseModel):
@@ -288,6 +312,7 @@ class WakeCondition(BaseModel):
 **Goal**: Trigger services can resume paused threads
 
 **New Service**: `services/agent_resume_service.py`
+
 ```python
 class AgentResumeService:
     """Resumes interrupted agent threads when wake conditions are met."""
@@ -335,6 +360,7 @@ class AgentResumeService:
 **Integration Points**:
 
 1. **Email Trigger Service**:
+
 ```python
 # In email_trigger_service.py
 async def _check_email_triggers(self):
@@ -357,6 +383,7 @@ async def _check_email_triggers(self):
 ```
 
 2. **Scheduler Service**:
+
 ```python
 # In scheduler_service.py
 async def start(self):
@@ -371,6 +398,7 @@ async def start(self):
 ```
 
 3. **New API Endpoint**:
+
 ```python
 # In routers/threads.py
 @router.post("/{thread_id}/resume")
@@ -399,12 +427,14 @@ async def resume_thread(
 ### Phase 1: Durable Checkpointing - COMPLETED (2025-12-03)
 
 **Implementation Details**:
+
 - Added `langgraph-checkpoint-postgres>=2.0.0` to dependencies (pyproject.toml)
 - Created checkpointer factory service (`zerg/services/checkpointer.py`)
 - Modified agent definition to use factory instead of hardcoded MemorySaver
 - Comprehensive test coverage (10 tests, all passing)
 
 **Key Files Modified**:
+
 - `/Users/davidrose/git/zerg/apps/zerg/backend/pyproject.toml` - Added dependency
 - `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/services/checkpointer.py` - New factory module
 - `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/agents_def/zerg_react_agent.py` - Use factory
@@ -412,6 +442,7 @@ async def resume_thread(
 - `/Users/davidrose/git/zerg/apps/zerg/backend/tests/test_zerg_react_agent.py` - Updated for compatibility
 
 **Architecture Decision**:
+
 - **Factory Pattern**: `get_checkpointer(engine)` inspects database URL
 - **PostgreSQL**: Returns `PostgresSaver` with automatic table creation
 - **SQLite**: Returns `MemorySaver` for fast tests
@@ -420,16 +451,19 @@ async def resume_thread(
 
 **Database Schema**:
 PostgresSaver automatically creates:
+
 - `checkpoints` table - Full state snapshots
 - `checkpoint_writes` table - Incremental updates
 
 **Benefits Achieved**:
+
 - Agent checkpoints survive process restarts
 - Foundation for interrupt/resume patterns
 - No API changes required
 - Backward compatible with existing code
 
 **Test Results**:
+
 - New checkpointer tests: 10/10 passing
 - Existing agent tests: 2/2 passing (updated for thread_id config)
 
@@ -439,37 +473,44 @@ See remaining implementation phases below.
 ## Implementation Steps
 
 ### Step 1: Add PostgresSaver (Low Risk) - ✅ COMPLETED
+
 - ✅ Install `langgraph-checkpoint-postgres`
 - ✅ Replace MemorySaver in `zerg_react_agent.py` with factory
 - ✅ Test that existing functionality still works
 - ✅ Verify checkpoints are being written to PostgreSQL
 
 ### Step 2: Database Schema Updates
+
 - Add migration for Thread fields: `is_interrupted`, `wake_condition`, etc.
 - Test schema changes in dev environment
 - Backfill existing threads with default values
 
 ### Step 3: Implement Agent Interrupt Primitives
+
 - Add helper functions for agents to call `interrupt()`
 - Create typed wake condition models
 - Test simple interrupt/resume flows manually
 
 ### Step 4: Build Resume Service
+
 - Implement `AgentResumeService` with resume orchestration
 - Add time-based resume checking
 - Wire into scheduler service
 
 ### Step 5: Integrate with Trigger System
+
 - Extend email trigger service to detect resume conditions
 - Add webhook resume endpoint
 - Test end-to-end email → resume flow
 
 ### Step 6: UI Support
+
 - Show interrupted threads in thread list
 - Add "Resume" button with approval UI
 - Display wake condition metadata
 
 ### Step 7: Documentation & Examples
+
 - Write docs for agent developers on using interrupts
 - Create example agents: "Wait for Email", "Request Approval"
 - Add integration tests for common patterns
@@ -477,6 +518,7 @@ See remaining implementation phases below.
 ## Example: "Wait for Email Then Continue" Flow
 
 ### Agent Implementation
+
 ```python
 # In an agent's task instructions or as a tool
 def wait_for_customer_reply(state):
@@ -504,6 +546,7 @@ def wait_for_customer_reply(state):
 ### System Flow
 
 1. **Agent Execution**:
+
    ```
    User: "Email customer for approval then proceed"
    Agent: [sends email via tool]
@@ -516,6 +559,7 @@ def wait_for_customer_reply(state):
    ```
 
 2. **Background Polling** (email_trigger_service):
+
    ```
    Every 10 minutes:
    → Check Gmail for new messages
@@ -526,6 +570,7 @@ def wait_for_customer_reply(state):
    ```
 
 3. **Resume Execution**:
+
    ```
    resume_service.resume_thread():
    → Load agent graph with PostgresSaver
@@ -548,6 +593,7 @@ def wait_for_customer_reply(state):
 ### Error Handling
 
 **Timeout**:
+
 ```python
 # In resume service
 async def check_timeouts(self):
@@ -566,6 +612,7 @@ async def check_timeouts(self):
 ```
 
 **Invalid Resume Attempt**:
+
 ```python
 # In resume endpoint
 if not thread.is_interrupted:
@@ -575,18 +622,21 @@ if not thread.is_interrupted:
 ## Comparison: MemGPT vs LangGraph Approaches
 
 **MemGPT**:
+
 - Treats memory as first-class state
 - Interrupts are implicit (context window overflow)
 - Pause/resume via memory serialization
 - Focus: Long-term conversational memory
 
 **LangGraph**:
+
 - Explicit `interrupt()` calls in graph nodes
 - Checkpointing infrastructure for state persistence
 - Designed for workflow orchestration
 - Focus: Multi-step agent workflows with external dependencies
 
 **Zerg's Approach** (Recommended):
+
 - Use LangGraph's native interrupt/checkpoint system
 - Extend with typed wake conditions for different trigger types
 - Leverage existing trigger infrastructure (email, webhook, schedule)
@@ -595,6 +645,7 @@ if not thread.is_interrupted:
 ---
 
 **References**:
+
 - LangGraph Interrupts: https://docs.langchain.com/langgraph/interrupts
 - PostgresSaver: https://github.com/langchain-ai/langgraph/tree/main/libs/checkpoint-postgres
 - Zerg codebase: `/Users/davidrose/git/zerg/apps/zerg/backend/`

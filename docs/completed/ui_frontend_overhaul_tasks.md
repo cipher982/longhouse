@@ -1,6 +1,6 @@
 # UI & Front-End Overhaul – Task Tracker
 
-*Status: ✅ COMPLETED*  ·  *Completed: June 2025*  ·  *Moved to completed: June 15, 2025*
+_Status: ✅ COMPLETED_ · _Completed: June 2025_ · _Moved to completed: June 15, 2025_
 
 This document tracked the high-level work items for the visual overhaul of the Zerg web front-end. All phases have been completed successfully.
 
@@ -14,7 +14,7 @@ This document tracked the high-level work items for the visual overhaul of the Z
 - [x] Import `tokens.css` at the top of **`frontend/www/styles.css`**.
 - [x] Replace hard-coded colour / spacing values in `styles.css` with `var(--token)` references (primary-heavy blue values swapped).
 - [x] Add a tiny helper macro `css_var!()` (or similar) for ergonomic inline styles in the Rust/Yew code-base.
-- [ ] Run `trunk build` (or existing build script) and visually verify there are no regressions. *(pending manual review)*
+- [ ] Run `trunk build` (or existing build script) and visually verify there are no regressions. _(pending manual review)_
 
 ## Phase 1 – Quick-Win Theming
 
@@ -26,18 +26,22 @@ This document tracked the high-level work items for the visual overhaul of the Z
 ## Phase 2 – Component Polish
 
 ### Buttons
+
 - [x] Implement reusable Button component variants (primary / secondary / ghost).
 - [x] Add size modifiers (sm / md / lg).
 - [x] Animate hover/active states using `var(--transition-normal)`.
 
 ### Agent Pill & Shelf
+
 - [x] Apply `--radius-lg` and token-based shadows.
 - [x] Harmonise drag-and-drop “ghost” styling with new palette.
 
 ### Modal & Form Elements
+
 - [x] Standardise spacing, typography and focus-ring colour.
 
 ### Toast / Alert System
+
 - [x] Create Toast component with success / warning / error themes (CSS + animation; integration to Rust pending).
 
 ## Phase 3 – Layout & Responsiveness
@@ -48,6 +52,7 @@ This document tracked the high-level work items for the visual overhaul of the Z
 - [x] Break up monolithic `styles.css` into modular CSS files (tokens, layout, util, buttons, forms, nav, agent_shelf, canvas, toast, dashboard, status, modal, MCP, etc.).
 
 ### CSS Modularisation (side-quest)
+
 - [x] Created `frontend/www/css/` directory and migrated legacy blocks into focused modules.
 - [x] Updated `index.html` to link each module directly to avoid nested `@import` CSP issues.
 - [x] Restored all missing rules (dashboard header/search, scope-select, status chips, agent detail modal, MCP manager, utility helpers).

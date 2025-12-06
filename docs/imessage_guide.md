@@ -1,4 +1,4 @@
-Good news: you can get a *pretty* legit iMessage connector running locally with existing building blocks. I’ll lay out concrete “hooks” you can drop into your agent framework.
+Good news: you can get a _pretty_ legit iMessage connector running locally with existing building blocks. I’ll lay out concrete “hooks” you can drop into your agent framework.
 
 I’ll break it into three levels:
 
@@ -52,10 +52,10 @@ def send_imessage(recipient: str, text: str) -> None:
 
 Key quirks:
 
-* First time you run this on a new macOS install you’ll have to approve:
+- First time you run this on a new macOS install you’ll have to approve:
+  - **Automation** (“Terminal wants to control Messages”) and possibly **Full Disk Access** for your shell or agent host. ([Glinteco][1])
 
-  * **Automation** (“Terminal wants to control Messages”) and possibly **Full Disk Access** for your shell or agent host. ([Glinteco][1])
-* Messages must be signed into the Apple ID you want to send from.
+- Messages must be signed into the Apple ID you want to send from.
 
 #### Group chats via AppleScript
 
@@ -88,11 +88,10 @@ Steps:
 1. **Grant Full Disk Access** to your terminal / agent host app so it can read that file. ([Atomic Spin][3])
 2. Treat the DB as read-only in your code. If you want to be extra safe, copy it to a temp location and query the copy.
 3. The tables you care about:
-
-   * `message` – each message
-   * `chat` – conversations
-   * `handle` – participants
-   * `chat_message_join` / `chat_handle_join` – join tables ([Atomic Spin][3])
+   - `message` – each message
+   - `chat` – conversations
+   - `handle` – participants
+   - `chat_message_join` / `chat_handle_join` – join tables ([Atomic Spin][3])
 
 Example query to get recent messages with chat identifier and direction:
 
@@ -170,9 +169,9 @@ High-level:
 
 1. Install **BlueBubbles Server** on your Mac that’s logged into Messages.
 2. Configure:
+   - A **server password** (`guid` / `password` / `token` query param).
+   - Port + HTTPS (they recommend ngrok / Cloudflare tunnel if exposed publicly). ([docs.bluebubbles.app][4])
 
-   * A **server password** (`guid` / `password` / `token` query param).
-   * Port + HTTPS (they recommend ngrok / Cloudflare tunnel if exposed publicly). ([docs.bluebubbles.app][4])
 3. Enable **webhooks** in the server UI and point them at your agent backend URL.
 
 The docs show that most API calls look like:
@@ -189,11 +188,11 @@ and return:
   "message": "Success",
   "data": { ... }
 }
-``` :contentReference[oaicite:10]{index=10}  
+``` :contentReference[oaicite:10]{index=10}
 
 ### 2.2. Sending messages
 
-The Postman collection defines endpoints like `POST /api/v1/message/send` (exact path from the collection, but shape is roughly): :contentReference[oaicite:11]{index=11}  
+The Postman collection defines endpoints like `POST /api/v1/message/send` (exact path from the collection, but shape is roughly): :contentReference[oaicite:11]{index=11}
 
 ```http
 POST https://your-server/api/v1/message/send?guid=YOUR_PASSWORD
@@ -208,10 +207,9 @@ Content-Type: application/json
 
 Where:
 
-* `chatGuid` identifies either:
-
-  * A direct chat (`iMessage;-;+15551234567`)
-  * Or a group chat (`iMessage;+;<group-id>`) – there are nuances with `+` vs `-` they explain in GitHub issues. ([GitHub][5])
+- `chatGuid` identifies either:
+  - A direct chat (`iMessage;-;+15551234567`)
+  - Or a group chat (`iMessage;+;<group-id>`) – there are nuances with `+` vs `-` they explain in GitHub issues. ([GitHub][5])
 
 Your connector can:
 
@@ -222,18 +220,18 @@ Your connector can:
 
 BlueBubbles can POST events to your webhook URL for:
 
-* New messages,
-* Message updates (delivered/read),
-* Group changes, typing indicators, etc. ([docs.bluebubbles.app][4])
+- New messages,
+- Message updates (delivered/read),
+- Group changes, typing indicators, etc. ([docs.bluebubbles.app][4])
 
 So your flow becomes:
 
-* **Inbound**: HTTP `POST /bluebubbles-webhook` → translate into internal “message_received” event for your agent.
-* **Outbound**: HTTP `POST /api/v1/message/send` to BlueBubbles.
+- **Inbound**: HTTP `POST /bluebubbles-webhook` → translate into internal “message_received” event for your agent.
+- **Outbound**: HTTP `POST /api/v1/message/send` to BlueBubbles.
 
 This gives you a clean HTTP abstraction and you never have to touch AppleScript or `chat.db` directly.
 
-You *can* enable their “Private API” for reactions / advanced stuff, but that requires **disabling SIP** and injecting into Messages, which I’d strongly skip for a production-ish stack. ([docs.bluebubbles.app][7])
+You _can_ enable their “Private API” for reactions / advanced stuff, but that requires **disabling SIP** and injecting into Messages, which I’d strongly skip for a production-ish stack. ([docs.bluebubbles.app][7])
 
 ---
 
@@ -243,17 +241,16 @@ Given your stack and love of MCP, this is probably the nicest way to get “loca
 
 [`mac_messages_mcp`](https://github.com/carterlasalle/mac_messages_mcp) is: ([GitHub][8])
 
-* A Python MCP server to interact with macOS Messages.
-* Handles:
+- A Python MCP server to interact with macOS Messages.
+- Handles:
+  - Sending messages (auto iMessage vs SMS fallback),
+  - Reading recent messages,
+  - Contact filtering, group chat handling,
+  - Attachment handling.
 
-  * Sending messages (auto iMessage vs SMS fallback),
-  * Reading recent messages,
-  * Contact filtering, group chat handling,
-  * Attachment handling.
-* Works as:
-
-  * A **Python library**, or
-  * An MCP server you can bridge to HTTP via `mcp-proxy`.
+- Works as:
+  - A **Python library**, or
+  - An MCP server you can bridge to HTTP via `mcp-proxy`.
 
 ### 3.1. Install + permissions
 
@@ -298,21 +295,20 @@ npx mcp-proxy uvx mac-messages-mcp --port 8000 --host 0.0.0.0
 
 Then from Docker / your agent service:
 
-* Hit `http://host.docker.internal:8000/mcp` as a JSON-RPC endpoint and treat `send_message` / `get_recent_messages` as tools.
+- Hit `http://host.docker.internal:8000/mcp` as a JSON-RPC endpoint and treat `send_message` / `get_recent_messages` as tools.
 
 You can:
 
-* Wrap this in your existing “connector” abstraction exactly like you would any other MCP tool.
-* Add thin translation:
-
-  * `connector.imessage.send(user_handle, text)` → MCP `send_message`.
-  * Webhook-equivalent: poll `get_recent_messages` and diff on last-seen timestamp/ROWID (they already handle parsing the DB).
+- Wrap this in your existing “connector” abstraction exactly like you would any other MCP tool.
+- Add thin translation:
+  - `connector.imessage.send(user_handle, text)` → MCP `send_message`.
+  - Webhook-equivalent: poll `get_recent_messages` and diff on last-seen timestamp/ROWID (they already handle parsing the DB).
 
 This path gives you:
 
-* A maintained OSS project,
-* No SIP disabling,
-* A clear, typed boundary tailored for LLM agents.
+- A maintained OSS project,
+- No SIP disabling,
+- A clear, typed boundary tailored for LLM agents.
 
 ---
 
@@ -321,37 +317,32 @@ This path gives you:
 If you want a clean, incrementally-upgradable stack:
 
 1. **Phase 1 – You-only, quickest hook**
+   - Implement **AppleScript + `chat.db` polling** as described in section 1.
 
-   * Implement **AppleScript + `chat.db` polling** as described in section 1.
-
-   * Expose a local HTTP microservice:
+   - Expose a local HTTP microservice:
 
      ```text
      POST /imessage/send { "to": "...", "text": "..." }
      GET  /imessage/events?since=...
      ```
 
-   * Wire that into your existing connector registry.
+   - Wire that into your existing connector registry.
 
 2. **Phase 2 – Swap underlying engine**
-
-   * Replace the bare-metal internals with **mac_messages_mcp** or **BlueBubbles**:
-
-     * Connector interface stays the same.
-     * Under the hood, you now talk to `mac-messages-mcp` via MCP or to BlueBubbles via REST.
+   - Replace the bare-metal internals with **mac_messages_mcp** or **BlueBubbles**:
+     - Connector interface stays the same.
+     - Under the hood, you now talk to `mac-messages-mcp` via MCP or to BlueBubbles via REST.
 
 3. **Phase 3 – Decide scope**
-
-   * For **personal + inner circle**, your Mac/iPad bridge is enough.
-   * For anything approaching real user counts, keep this connector labeled **“experimental / Apple-only / beta”** and lean on SMS/WhatsApp/email as the “serious” channels.
+   - For **personal + inner circle**, your Mac/iPad bridge is enough.
+   - For anything approaching real user counts, keep this connector labeled **“experimental / Apple-only / beta”** and lean on SMS/WhatsApp/email as the “serious” channels.
 
 If you want, next step I can sketch:
 
-* A minimal FastAPI (or Node) service that:
-
-  * Uses `mac_messages_mcp` if present, and
-  * Falls back to `osascript` if not,
-  * With a simple event-polling loop feeding your agent bus.
+- A minimal FastAPI (or Node) service that:
+  - Uses `mac_messages_mcp` if present, and
+  - Falls back to `osascript` if not,
+  - With a simple event-polling loop feeding your agent bus.
 
 [1]: https://glinteco.com/en/post/discovering-applescript-the-journey-to-automate-imessages/ "Glinteco |  Blog | Discovering AppleScript: The Journey to Automate iMessages"
 [2]: https://talk.automators.fm/t/how-to-send-group-imessage-text-via-applescript/10925?utm_source=chatgpt.com "How to send group iMessage text via Applescript?"
@@ -361,4 +352,3 @@ If you want, next step I can sketch:
 [6]: https://www.reddit.com/r/BlueBubbles/comments/1ejdxls/bluebubbles_private_api_and_messages_per_person/?utm_source=chatgpt.com "BlueBubbles Private API and messages per person."
 [7]: https://docs.bluebubbles.app/private-api/installation?utm_source=chatgpt.com "Installation | BlueBubbles Private API"
 [8]: https://github.com/carterlasalle/mac_messages_mcp "GitHub - carterlasalle/mac_messages_mcp: An MCP server that securely interfaces with your iMessage database via the Model Context Protocol (MCP), allowing LLMs to query and analyze iMessage conversations. It includes robust phone number validation, attachment processing, contact management, group chat handling, and full support for sending and receiving messages."
-

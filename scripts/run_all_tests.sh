@@ -19,11 +19,11 @@ echo "=================================================" >&2
 run_test_suite() {
     local suite_name="$1"
     local test_command="$2"
-    
+
     echo "" >&2
     echo "🔄 Running $suite_name tests..." >&2
     echo "---------------------------------" >&2
-    
+
     if eval "$test_command"; then
         echo "✅ $suite_name tests PASSED" >&2
     else
@@ -35,7 +35,7 @@ run_test_suite() {
 # Run Backend Tests
 run_test_suite "Backend" "cd '$ROOT_DIR/backend' && ./run_backend_tests.sh"
 
-# Run Frontend Tests  
+# Run Frontend Tests
 run_test_suite "Frontend" "cd '$ROOT_DIR/frontend' && ./run_frontend_tests.sh"
 
 # Run E2E Tests

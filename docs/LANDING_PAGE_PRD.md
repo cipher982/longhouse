@@ -1,7 +1,7 @@
 # Swarmlet Landing Page PRD
 
-**Document Version:** 1.0  
-**Created:** December 2024  
+**Document Version:** 1.0
+**Created:** December 2024
 **Status:** Ready for Implementation
 
 ---
@@ -11,12 +11,15 @@
 Swarmlet currently drops users directly into a Google Auth flow with zero context, value proposition, or demo access. This document defines the strategy, structure, and implementation plan for a high-converting landing page that follows modern SaaS best practices and positions Swarmlet as a **personal AI assistant** rather than an enterprise tool.
 
 ### Core Problem
+
 - Users hit the app → Immediate auth wall → No understanding of value
 - Zero demo capability, no social proof, no CTAs
 - Missing conversion funnel from "curious visitor" to "signed-up user"
 
 ### Solution
+
 Create a beautiful, conversion-optimized landing page at `/` that:
+
 1. Clearly communicates value in 3 seconds
 2. Uses one primary CTA ("Start Free") repeated throughout
 3. Hooks "normal users" above the fold, rewards "nerds" below
@@ -27,23 +30,27 @@ Create a beautiful, conversion-optimized landing page at `/` that:
 ## Brand & Positioning
 
 ### Identity
+
 - **Product Name:** Swarmlet
 - **Tagline:** "Your own super-Siri for email, health, chats, and home."
 - **Logo:** Purple robot helmet with green visor eyes (already exists as `SwarmLogo.tsx`)
 
 ### Positioning Statement
+
 > "A personal AI that connects to all your apps and quietly runs your life admin."
 
 This positions us AGAINST:
+
 - Enterprise agent platforms (Zapier, n8n, enterprise AI dashboards)
 - Cold, complicated automation tools
 - Per-seat pricing and "talk to sales" friction
 
 ### Two Audiences, One Page
-| Audience | Above the Fold | Below the Fold |
-|----------|----------------|----------------|
-| **"Normal but busy"** | Outcomes, feelings, simplicity | Social proof, trust signals |
-| **"Nerds / builders"** | Clear what it does | Technical details, workflows, APIs |
+
+| Audience               | Above the Fold                 | Below the Fold                     |
+| ---------------------- | ------------------------------ | ---------------------------------- |
+| **"Normal but busy"**  | Outcomes, feelings, simplicity | Social proof, trust signals        |
+| **"Nerds / builders"** | Clear what it does             | Technical details, workflows, APIs |
 
 **Strategy:** Hook normals with emotional outcomes, reward nerds with technical depth.
 
@@ -55,22 +62,22 @@ This positions us AGAINST:
 
 ```css
 /* Colors */
---color-surface-page: #09090b;       /* Background */
---color-surface-card: #27272a;       /* Cards */
---color-surface-section: #18181b;    /* Sections */
---color-brand-primary: #6366f1;      /* Indigo - Primary CTA */
---color-brand-secondary: #818cf8;    /* Lighter indigo - Hover */
---color-brand-accent: #f59e0b;       /* Amber - Accent */
---color-text-primary: #fafafa;       /* White text */
---color-text-secondary: #a1a1aa;     /* Muted text */
---color-text-muted: #71717a;         /* Very muted */
---color-intent-success: #10b981;     /* Green */
---color-intent-error: #ef4444;       /* Red */
+--color-surface-page: #09090b; /* Background */
+--color-surface-card: #27272a; /* Cards */
+--color-surface-section: #18181b; /* Sections */
+--color-brand-primary: #6366f1; /* Indigo - Primary CTA */
+--color-brand-secondary: #818cf8; /* Lighter indigo - Hover */
+--color-brand-accent: #f59e0b; /* Amber - Accent */
+--color-text-primary: #fafafa; /* White text */
+--color-text-secondary: #a1a1aa; /* Muted text */
+--color-text-muted: #71717a; /* Very muted */
+--color-intent-success: #10b981; /* Green */
+--color-intent-error: #ef4444; /* Red */
 
 /* Typography */
---font-family-display: 'General Sans', sans-serif;  /* Headlines */
---font-family-base: 'Inter', sans-serif;            /* Body */
---font-family-mono: 'JetBrains Mono', monospace;    /* Code */
+--font-family-display: "General Sans", sans-serif; /* Headlines */
+--font-family-base: "Inter", sans-serif; /* Body */
+--font-family-mono: "JetBrains Mono", monospace; /* Code */
 
 /* Spacing */
 --space-4: 16px;
@@ -91,6 +98,7 @@ This positions us AGAINST:
 ```
 
 ### Visual Direction
+
 1. **Dark theme** - Consistent with app
 2. **Subtle purple glow** - Behind hero, like branding pages
 3. **Particle background** - Already exists in `particle.css`
@@ -98,6 +106,7 @@ This positions us AGAINST:
 5. **Gradient text** - For headlines (indigo → purple)
 
 ### Existing Components to Reuse
+
 - `SwarmLogo.tsx` - Animated SVG logo with glow effects
 - `btn-primary`, `btn-secondary`, `btn-ghost` - Button styles
 - `particle-bg` - Background effect
@@ -108,6 +117,7 @@ This positions us AGAINST:
 ## Page Structure (AIDA + PAS Framework)
 
 ### 1. HERO SECTION (Attention + First Action)
+
 **Goal:** 3-second clarity
 
 ```
@@ -133,11 +143,13 @@ This positions us AGAINST:
 ```
 
 **Copy Options:**
+
 - **Headline A:** "Your own super-Siri for email, health, chats, and home." ← CHOSEN
 - **Headline B:** "Connect all your apps. Let one AI handle the busywork."
 - **Headline C:** "A personal AI that watches your life so you don't have to."
 
 **CTAs:**
+
 - Primary: `Start Free` → Triggers Google OAuth
 - Secondary: `See it in action` → Smooth scroll to scenarios
 
@@ -146,14 +158,17 @@ This positions us AGAINST:
 ### 2. PAS BLOCK (Problem → Agitate → Solution)
 
 **Problem (3 bullets):**
+
 - "**Digital Fragmentation.** Your health, calendar, and chats are scattered across a dozen apps."
 - "**Notification Overload.** You miss what matters because everything is shouting at once."
 - "**Complexity Fatigue.** Automation tools feel like wiring a server, not living your life."
 
 **Agitate:**
+
 > "Siri can't remember what you said five minutes ago. What if your assistant was actually… smart?"
 
 **Solution:**
+
 > "Swarmlet is a personal AI hub: plug in the tools you already use, and it watches your life signals — health, location, messages, home — to keep you organized automatically."
 
 ---
@@ -161,6 +176,7 @@ This positions us AGAINST:
 ### 3. HOW IT WORKS (3 Human Scenarios)
 
 **Card 1: Daily Health & Focus Check**
+
 - Icon: 🩺
 - Connect your watch/health app + calendar
 - Each morning, your AI checks sleep & schedule
@@ -168,6 +184,7 @@ This positions us AGAINST:
 - `[Start Free]`
 
 **Card 2: Inbox + Chat Guardian**
+
 - Icon: 📬
 - Connect email, Slack, Discord
 - AI watches for "urgent", "manager", or "family" tags
@@ -175,6 +192,7 @@ This positions us AGAINST:
 - `[Start Free]`
 
 **Card 3: Smart Home That Knows Your Patterns**
+
 - Icon: 🏠
 - Use location + time + calendar
 - "Leaving work?" → preheat/cool home, turn on lights, set playlist
@@ -185,13 +203,13 @@ This positions us AGAINST:
 
 ### 4. DIFFERENTIATION TABLE
 
-| Aspect | **Swarmlet** | "Enterprise agent platforms" |
-|--------|--------------|------------------------------|
-| Built for | Individuals + nerds | Teams, managers, enterprises |
-| Setup | Connect your own apps in mins | IT tickets, SSO, sales calls |
-| Pricing | Flat, cheap personal plan | Per-seat, "talk to sales" |
-| UX | Human stories, not dashboards | Admin panels, dashboards, CRMs |
-| Control | You own your data & agents | Shared company workspace |
+| Aspect    | **Swarmlet**                  | "Enterprise agent platforms"   |
+| --------- | ----------------------------- | ------------------------------ |
+| Built for | Individuals + nerds           | Teams, managers, enterprises   |
+| Setup     | Connect your own apps in mins | IT tickets, SSO, sales calls   |
+| Pricing   | Flat, cheap personal plan     | Per-seat, "talk to sales"      |
+| UX        | Human stories, not dashboards | Admin panels, dashboards, CRMs |
+| Control   | You own your data & agents    | Shared company workspace       |
 
 ---
 
@@ -200,6 +218,7 @@ This positions us AGAINST:
 **Headline:** "For builders, hackers, and power users"
 
 **Features (bullet grid):**
+
 - 🔧 Build custom agents and workflows without fighting YAML
 - 🔌 Connect anything with webhooks and APIs
 - 🧠 Bring your own LLM keys (tune cost/latency)
@@ -208,6 +227,7 @@ This positions us AGAINST:
 - 🎨 Visual workflow canvas (drag-and-drop)
 
 **Technical highlights:**
+
 - LangGraph-powered agent execution
 - Per-token LLM streaming over WebSocket
 - MCP (Model Context Protocol) integration
@@ -221,13 +241,13 @@ This positions us AGAINST:
 
 **Grid of integration logos:**
 
-| Notifications | Project Management |
-|---------------|-------------------|
-| Slack | GitHub |
-| Discord | Jira |
-| Email (Resend) | Linear |
-| SMS (Twilio) | Notion |
-| iMessage | |
+| Notifications  | Project Management |
+| -------------- | ------------------ |
+| Slack          | GitHub             |
+| Discord        | Jira               |
+| Email (Resend) | Linear             |
+| SMS (Twilio)   | Notion             |
+| iMessage       |                    |
 
 **Subtext:** "And any MCP-compatible server"
 
@@ -236,16 +256,19 @@ This positions us AGAINST:
 ### 7. SOCIAL PROOF & TRUST
 
 **Phase 1 (Launch):**
+
 - "Loved by early users who hate dashboards"
 - Integration logos (as "Works with" - not endorsements)
 - "Is my data safe?" expandable FAQ
 
 **Phase 2 (Post-launch):**
+
 - Real testimonials with names/photos
 - Usage stats ("10,000 automations run")
 - Case study snippets
 
 **Trust FAQ:**
+
 - "How does authentication work?" → Google OAuth, JWT sessions
 - "Where is my data stored?" → Encrypted at rest, PostgreSQL
 - "Can I delete my data?" → Yes, full account deletion available
@@ -283,11 +306,13 @@ This positions us AGAINST:
 ### 9. FOOTER CTA
 
 **Final PAS reminder:**
+
 > "Life is noisy. You deserve a brain that pays attention for you."
 
 **CTA:** `[Start Free]`
 
 **Secondary links:**
+
 - Documentation
 - Changelog
 - Security
@@ -384,6 +409,7 @@ export function LandingPage() {
 ## Assets Needed
 
 ### Existing (Reuse)
+
 - [x] SwarmLogo SVG component
 - [x] Favicon and app icons
 - [x] OG image (`og-image.png`)
@@ -392,6 +418,7 @@ export function LandingPage() {
 - [x] Particle background
 
 ### To Create
+
 - [ ] Hero visual (central AI orb with connected app icons)
 - [ ] Scenario illustrations (or use emojis as placeholders)
 - [ ] Integration logos (can use simple text/emoji initially)
@@ -402,6 +429,7 @@ export function LandingPage() {
 ## Implementation Phases
 
 ### Phase 1: MVP Landing (Priority)
+
 **Goal:** Ship something better than auth wall
 
 - [ ] Create `LandingPage.tsx` with basic structure
@@ -416,6 +444,7 @@ export function LandingPage() {
 **Estimate:** 1-2 days
 
 ### Phase 2: Polish
+
 - [ ] Differentiation table
 - [ ] Nerd section with technical details
 - [ ] Integration logos grid
@@ -426,6 +455,7 @@ export function LandingPage() {
 **Estimate:** 1 day
 
 ### Phase 3: Conversion Optimization
+
 - [ ] Pricing section (when pricing is decided)
 - [ ] A/B test headlines
 - [ ] Add real testimonials
@@ -439,11 +469,13 @@ export function LandingPage() {
 ## Success Metrics
 
 ### Primary
+
 - **Conversion rate:** Visitors → Google Auth initiated
 - **Sign-up completion:** Auth initiated → Account created
 - **Time on page:** > 30 seconds (indicates engagement)
 
 ### Secondary
+
 - **Scroll depth:** How far down the page users scroll
 - **CTA click rate:** Which CTAs perform best
 - **Bounce rate:** < 60% target
@@ -473,6 +505,7 @@ export function LandingPage() {
 ### Competitor Research Notes
 
 **What works in successful SaaS landing pages:**
+
 - Clear value prop above the fold (< 3 seconds to understand)
 - One primary CTA repeated throughout
 - Social proof and trust signals
@@ -480,6 +513,7 @@ export function LandingPage() {
 - Problem-first, solution-second narrative
 
 **What to avoid:**
+
 - Jargon and clever metaphors that obscure meaning
 - Multiple competing CTAs
 - Enterprise-focused language for consumer products
@@ -489,16 +523,19 @@ export function LandingPage() {
 ### Copy Bank (Alternative Headlines)
 
 **Identity-focused:**
+
 - "Your personal AI that never forgets"
 - "Like having a second brain that actually works"
 - "The AI assistant you wish Siri was"
 
 **Outcome-focused:**
+
 - "Stop managing apps. Start living."
 - "One AI. All your tools. Zero chaos."
 - "Finally, an automation that feels like magic"
 
 **Problem-focused:**
+
 - "Tired of 47 apps that don't talk to each other?"
 - "Your digital life is fragmented. Fix it."
 - "Because IFTTT wasn't built for humans"
@@ -507,11 +544,10 @@ export function LandingPage() {
 
 ## Changelog
 
-| Date | Version | Changes |
-|------|---------|---------|
-| Dec 2024 | 1.0 | Initial PRD created |
+| Date     | Version | Changes             |
+| -------- | ------- | ------------------- |
+| Dec 2024 | 1.0     | Initial PRD created |
 
 ---
 
-*This document is the single source of truth for the Swarmlet landing page implementation. Reference this in all related development threads.*
-
+_This document is the single source of truth for the Swarmlet landing page implementation. Reference this in all related development threads._

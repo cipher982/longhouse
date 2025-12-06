@@ -5,10 +5,10 @@ test.describe('Conversation Persistence', () => {
     // Start with a clean state
     await page.goto('http://localhost:8080');
     await page.waitForSelector('#transcript');
-    
+
     // Wait for app initialization
     await page.waitForFunction(() => {
-      return document.querySelector('#transcript')?.textContent?.includes('ready') || 
+      return document.querySelector('#transcript')?.textContent?.includes('ready') ||
              document.querySelector('#transcript')?.textContent?.includes('Ready');
     }, { timeout: 10000 });
   });
@@ -29,7 +29,7 @@ test.describe('Conversation Persistence', () => {
 
     // Verify user message appears
     await expect(page.locator('.user-turn')).toContainText('Hello, my name is David');
-    
+
     // Mock assistant response
     await page.evaluate(() => {
       const transcript = document.querySelector('#transcript');
@@ -51,10 +51,10 @@ test.describe('Conversation Persistence', () => {
     // Verify all messages are still visible
     const userTurns = page.locator('.user-turn');
     const assistantTurns = page.locator('.assistant-turn');
-    
+
     await expect(userTurns).toHaveCount(2);
     await expect(assistantTurns).toHaveCount(1);
-    
+
     await expect(userTurns.first()).toContainText('Hello, my name is David');
     await expect(userTurns.last()).toContainText('What tools do you have?');
     await expect(assistantTurns).toContainText('Nice to meet you, David!');
@@ -113,7 +113,7 @@ test.describe('Conversation Persistence', () => {
     // Verify first conversation messages are restored
     await expect(page.locator('.user-turn')).toContainText('First conversation message');
     await expect(page.locator('.assistant-turn')).toContainText('Response to first conversation');
-    
+
     // Verify second conversation messages are not visible
     await expect(page.locator('.user-turn')).not.toContainText('Second conversation message');
     await expect(page.locator('.assistant-turn')).not.toContainText('Response to second conversation');
@@ -148,7 +148,7 @@ test.describe('Conversation Persistence', () => {
     // Refresh the page
     await page.reload();
     await page.waitForSelector('#transcript');
-    
+
     // Wait for app to reinitialize and load conversation history
     await page.waitForTimeout(3000);
 
@@ -169,7 +169,7 @@ test.describe('Conversation Persistence', () => {
     // Should now show at least one conversation
     const conversationItems = page.locator('.conversation-item:not(.empty)');
     await expect(conversationItems).toHaveCount(1);
-    
+
     // Should have meaningful name (not just timestamp)
     const firstConversation = conversationItems.first();
     const conversationName = await firstConversation.locator('.conversation-name').textContent();
@@ -181,7 +181,7 @@ test.describe('Conversation Persistence', () => {
 
     // Should now show two conversations
     await expect(conversationItems).toHaveCount(2);
-    
+
     // First item should be "Latest conversation"
     await expect(conversationItems.first().locator('.conversation-name')).toContainText('Latest conversation');
   });
@@ -197,7 +197,7 @@ test.describe('Conversation Persistence', () => {
       if (window.addUserTurnToUI) {
         window.addUserTurnToUI('Tell me about yourself');
       }
-      
+
       // Then simulate streaming assistant response
       const transcript = document.querySelector('#transcript');
       if (transcript) {
@@ -228,7 +228,7 @@ test.describe('Conversation Persistence', () => {
     const userTurns = page.locator('.user-turn');
     await expect(userTurns).toHaveCount(2);
     await expect(page.locator('.assistant-turn.streaming')).toContainText('I am an AI assistant');
-    
+
     // Finalize streaming
     await page.evaluate(() => {
       if (window.currentStreamingTurn) {
@@ -272,7 +272,7 @@ test.describe('Conversation Persistence', () => {
         // Should show empty state in work context
         await expect(page.locator('.conversation-item.empty')).toBeVisible();
 
-        // Switch back to personal context  
+        // Switch back to personal context
         await contextSelector.selectOption({ index: 0 });
         await page.waitForTimeout(2000);
 

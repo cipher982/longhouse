@@ -50,7 +50,8 @@
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-xl);
-  animation: drawerSlideIn var(--motion-duration-fast) var(--motion-easing-standard);
+  animation: drawerSlideIn var(--motion-duration-fast)
+    var(--motion-easing-standard);
   z-index: var(--z-dropdown);
 }
 
@@ -80,6 +81,7 @@
     transform: translateX(12px);
     opacity: 0;
   }
+
   to {
     transform: translateX(0);
     opacity: 1;
@@ -139,7 +141,7 @@
 
 .tool-node:hover {
   border-color: var(--color-intent-success);
-  box-shadow: 0 0 16px rgba(16, 185, 129, 0.2);
+  box-shadow: 0 0 16px rgb(16 185 129 / 20%);
   transform: translateY(-2px);
 }
 
@@ -167,7 +169,7 @@
 
 .trigger-node:hover {
   border-color: var(--color-intent-warning);
-  box-shadow: 0 0 16px rgba(245, 158, 11, 0.2);
+  box-shadow: 0 0 16px rgb(245 158 11 / 20%);
   transform: translateY(-2px);
 }
 
@@ -179,7 +181,7 @@
 .canvas-drag-preview {
   z-index: 200;
   pointer-events: none;
-  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.35));
+  filter: drop-shadow(0 8px 16px rgb(0 0 0 / 35%));
 }
 
 .drag-preview-node {
@@ -251,6 +253,7 @@
     transform: translateY(-8px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;
@@ -266,6 +269,7 @@
 }
 
 /* Agent shelf layout */
+
 /* #agent-shelf styling consolidated into agent_shelf.css (canonical source)
    See: src/styles/css/agent_shelf.css for all shelf-related styles */
 
@@ -340,7 +344,7 @@
 }
 
 .canvas-toggle-btn[aria-pressed="true"] {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgb(99 102 241 / 15%);
   border-color: var(--color-brand-primary);
   color: var(--color-brand-primary);
   box-shadow: var(--shadow-glow);
@@ -365,7 +369,7 @@
 .run-button:hover:not(:disabled) {
   filter: brightness(1.1);
   transform: translateY(-1px);
-  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3);
+  box-shadow: 0 0 16px rgb(16 185 129 / 30%);
 }
 
 .run-button:disabled {
@@ -395,7 +399,7 @@
 .cancel-button:hover:not(:disabled) {
   filter: brightness(1.1);
   transform: translateY(-1px);
-  box-shadow: 0 0 16px rgba(239, 68, 68, 0.3);
+  box-shadow: 0 0 16px rgb(239 68 68 / 30%);
 }
 
 .logs-button {
@@ -437,7 +441,7 @@
 }
 
 .execution-status--running {
-  background: rgba(99, 102, 241, 0.15);
+  background: rgb(99 102 241 / 15%);
   border-color: var(--color-brand-primary);
   color: var(--color-brand-primary);
   animation: pulse 2s infinite;
@@ -456,8 +460,14 @@
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .execution-id {
@@ -569,10 +579,10 @@
   margin: 0;
 }
 
-@media (max-width: 1200px) {
+@media (width <= 1200px) {
   .execution-logs-drawer {
     position: absolute;
-    inset: 64px 16px 16px 16px;
+    inset: 64px 16px 16px;
     flex: none;
     width: auto;
     max-width: none;
@@ -609,7 +619,8 @@
   font-size: var(--font-size-sm);
   cursor: pointer;
   display: block;
-  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  transition: background-color var(--motion-duration-fast)
+    var(--motion-easing-standard);
 }
 
 .canvas-context-menu button:hover {
@@ -620,7 +631,7 @@
 .shortcut-help-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(9, 9, 11, 0.7);
+  background: rgb(9 9 11 / 70%);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -688,7 +699,7 @@
 
 /* ========== MOBILE RESPONSIVE BREAKPOINTS (max-width: 767px) ========== */
 
-@media (max-width: 767px) {
+@media (width <= 767px) {
   /* Hide React Flow Controls on mobile - they're 32px and hard to tap */
   .react-flow__controls {
     display: none;
@@ -750,7 +761,7 @@
 
 /* ========== TABLET/LANDSCAPE ADJUSTMENTS (max-width: 1024px) ========== */
 
-@media (max-width: 1024px) and (orientation: landscape) {
+@media (width <= 1024px) and (orientation: landscape) {
   /* On landscape tablets, still show controls but make them more compact */
   .execution-controls {
     flex-wrap: wrap;
@@ -770,6 +781,7 @@
 }
 
 /* ========== ACCESSIBILITY: PREFERS-REDUCED-MOTION ========== */
+
 /* Respect user preference for reduced motion (WCAG 2.1 criterion 2.3.3) */
 
 @media (prefers-reduced-motion: reduce) {
@@ -811,22 +823,22 @@
   /* Preserve hover/focus visual states without animation */
   .agent-pill:hover {
     transform: none !important;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 4px 8px rgb(0 0 0 / 20%);
   }
 
   .tool-palette-item:hover {
     transform: none !important;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px rgb(0 0 0 / 10%);
   }
 
   .run-button:hover:not(:disabled) {
     transform: none !important;
-    box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+    box-shadow: 0 4px 8px rgb(16 185 129 / 30%);
   }
 
   .cancel-button:hover:not(:disabled) {
     transform: none !important;
-    box-shadow: 0 4px 8px rgba(239, 68, 68, 0.3);
+    box-shadow: 0 4px 8px rgb(239 68 68 / 30%);
   }
 
   /* Remove transforms that create motion */

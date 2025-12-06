@@ -31,7 +31,7 @@ export async function createAgentViaAPI(
   options: AgentCreationOptions = {}
 ): Promise<Agent> {
   const apiClient = createApiClient(workerId);
-  
+
   const config: CreateAgentRequest = {
     name: options.name || `Test Agent ${workerId}`,
     model: options.model || 'gpt-4o-mini',
@@ -39,10 +39,10 @@ export async function createAgentViaAPI(
     task_instructions: options.taskInstructions || 'Perform test tasks as requested',
     temperature: options.temperature || 0.7,
   };
-  
+
   const retries = options.retries || 3;
   let attempts = 0;
-  
+
   while (attempts < retries) {
     try {
       const agent = await apiClient.createAgent(config);
@@ -51,15 +51,15 @@ export async function createAgentViaAPI(
     } catch (error) {
       attempts++;
       console.warn(`Agent creation attempt ${attempts} failed:`, error);
-      
+
       if (attempts >= retries) {
         throw new Error(`Failed to create agent after ${retries} attempts: ${error}`);
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
-  
+
   throw new Error('Unexpected error in agent creation');
 }
 
@@ -72,7 +72,7 @@ export async function createMultipleAgents(
 ): Promise<Agent[]> {
   const agents: Agent[] = [];
   const namePrefix = options.namePrefix || 'Batch Agent';
-  
+
   for (let i = 0; i < options.count; i++) {
     const agent = await createAgentViaAPI(workerId, {
       name: `${namePrefix} ${i + 1}`,
@@ -82,7 +82,7 @@ export async function createMultipleAgents(
     });
     agents.push(agent);
   }
-  
+
   console.log(`✅ Created ${agents.length} agents in batch`);
   return agents;
 }
@@ -99,14 +99,14 @@ export async function createAgentViaUI(page: Page): Promise<string> {
   } catch (error) {
     // Ignore if already on dashboard or button doesn't exist
   }
-  
+
   // Click create agent button
   await page.locator('[data-testid="create-agent-btn"]').click();
-  
+
   // Wait for new row to be visible and stable
   const newRow = page.locator('tr[data-agent-id]').first();
   await expect(newRow).toBeVisible({ timeout: 5000 });
-  
+
   // Wait for row to be fully rendered
   await page.waitForFunction(
     (selector) => {
@@ -116,12 +116,12 @@ export async function createAgentViaUI(page: Page): Promise<string> {
     'tr[data-agent-id]:first-of-type',
     { timeout: 5000 }
   );
-  
+
   const agentId = await newRow.getAttribute('data-agent-id');
   if (!agentId) {
     throw new Error('Failed to get agent ID from newly created agent row');
   }
-  
+
   console.log(`✅ Agent created via UI with ID: ${agentId}`);
   return agentId;
 }
@@ -131,7 +131,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
  */
 export async function getAgentById(workerId: string, agentId: string): Promise<Agent | null> {
   const apiClient = createApiClient(workerId);
-  
+
   try {
     const agents = await apiClient.listAgents();
     return agents.find(agent => agent.id === agentId) || null;
@@ -145,22 +145,22 @@ export async function getAgentById(workerId: string, agentId: string): Promise<A
  * Verify agent exists and has expected properties
  */
 export async function verifyAgentExists(
-  workerId: string, 
-  agentId: string, 
+  workerId: string,
+  agentId: string,
   expectedName?: string
 ): Promise<boolean> {
   const agent = await getAgentById(workerId, agentId);
-  
+
   if (!agent) {
     console.warn(`Agent ${agentId} not found`);
     return false;
   }
-  
+
   if (expectedName && agent.name !== expectedName) {
     console.warn(`Agent ${agentId} has name "${agent.name}", expected "${expectedName}"`);
     return false;
   }
-  
+
   return true;
 }
 
@@ -175,8 +175,8 @@ export async function waitForAgentInUI(page: Page, agentId: string, timeout: num
  * Edit agent via UI modal
  */
 export async function editAgentViaUI(
-  page: Page, 
-  agentId: string, 
+  page: Page,
+  agentId: string,
   data: {
     name?: string;
     systemInstructions?: string;
@@ -194,22 +194,22 @@ export async function editAgentViaUI(
   if (data.name !== undefined) {
     await page.locator('#agent-name').fill(data.name);
   }
-  
+
   if (data.systemInstructions !== undefined) {
     await page.locator('#system-instructions').fill(data.systemInstructions);
   }
-  
+
   if (data.taskInstructions !== undefined) {
     await page.locator('#default-task-instructions').fill(data.taskInstructions);
   }
-  
+
   if (data.temperature !== undefined) {
     const tempInput = page.locator('#temperature-input');
     if (await tempInput.count() > 0) {
       await tempInput.fill(data.temperature.toString());
     }
   }
-  
+
   if (data.model !== undefined) {
     const modelSelect = page.locator('#model-select');
     if (await modelSelect.count() > 0) {
@@ -219,10 +219,10 @@ export async function editAgentViaUI(
 
   // Save changes
   await page.locator('#save-agent').click();
-  
+
   // Wait for modal to close
   await expect(page.locator('#agent-modal')).not.toBeVisible({ timeout: 5000 });
-  
+
   console.log(`✅ Agent ${agentId} edited via UI`);
 }
 
@@ -241,7 +241,7 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
 
   // Click delete button
   await page.locator(`[data-testid="delete-agent-${agentId}"]`).click();
-  
+
   if (confirm) {
     // Wait for row to disappear
     await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(0, { timeout: 5000 });
@@ -258,7 +258,7 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
  */
 export async function deleteAgentViaAPI(workerId: string, agentId: string): Promise<void> {
   const apiClient = createApiClient(workerId);
-  
+
   try {
     await apiClient.deleteAgent(agentId);
     console.log(`✅ Agent ${agentId} deleted via API`);
@@ -273,10 +273,10 @@ export async function deleteAgentViaAPI(workerId: string, agentId: string): Prom
  */
 export async function cleanupAgents(workerId: string, agents: Agent[] | string[]): Promise<void> {
   const apiClient = createApiClient(workerId);
-  
+
   for (const agent of agents) {
     const agentId = typeof agent === 'string' ? agent : agent.id;
-    
+
     try {
       await apiClient.deleteAgent(agentId);
       console.log(`✅ Cleaned up agent ${agentId}`);
@@ -291,7 +291,7 @@ export async function cleanupAgents(workerId: string, agents: Agent[] | string[]
  */
 export async function getAgentCount(workerId: string): Promise<number> {
   const apiClient = createApiClient(workerId);
-  
+
   try {
     const agents = await apiClient.listAgents();
     return agents.length;
@@ -306,7 +306,7 @@ export async function getAgentCount(workerId: string): Promise<number> {
  */
 export async function navigateToAgentChat(page: Page, agentId: string): Promise<void> {
   await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
-  
+
   // Wait for chat interface to load
   try {
     await page.waitForSelector('.chat-input', { timeout: 5000 });

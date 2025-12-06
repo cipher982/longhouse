@@ -34,11 +34,13 @@ The supervisor tools layer enables Zerg's supervisor/worker architecture by prov
 Spawns a disposable worker agent to execute a task independently.
 
 **Use cases:**
+
 - Delegating sub-tasks from a supervisor
 - Parallel execution of multiple tasks
 - Isolating verbose or risky operations
 
 **Example:**
+
 ```python
 result = spawn_worker(
     task="Check disk usage on cube server via SSH",
@@ -56,11 +58,13 @@ result = spawn_worker(
 Lists recent worker executions with optional filters.
 
 **Parameters:**
+
 - `limit`: Maximum workers to return (default: 20)
 - `status`: Filter by "success", "failed", or None for all
 - `since_hours`: Only show workers from last N hours
 
 **Example:**
+
 ```python
 # List all recent workers
 list_workers(limit=10)
@@ -78,6 +82,7 @@ list_workers(status="failed", since_hours=24)
 Reads the final result from a completed worker.
 
 **Example:**
+
 ```python
 result = read_worker_result("2024-12-03T14-32-00_disk-check")
 # Returns the worker's natural language result
@@ -90,6 +95,7 @@ result = read_worker_result("2024-12-03T14-32-00_disk-check")
 Reads a specific file from a worker's artifact directory.
 
 **Common file paths:**
+
 - `result.txt` - Final result
 - `metadata.json` - Worker metadata
 - `thread.jsonl` - Full conversation history
@@ -98,6 +104,7 @@ Reads a specific file from a worker's artifact directory.
 **Security:** Path traversal is blocked. Only files within the worker directory are accessible.
 
 **Example:**
+
 ```python
 # Read metadata
 metadata = read_worker_file(
@@ -119,11 +126,13 @@ output = read_worker_file(
 Searches across worker artifacts for a text pattern.
 
 **Features:**
+
 - Case-insensitive search
 - Searches all .txt files in worker directories
 - Returns matches with context
 
 **Example:**
+
 ```python
 # Find all workers that encountered "timeout" errors
 matches = grep_workers("timeout", since_hours=48)
@@ -139,6 +148,7 @@ matches = grep_workers("disk usage", since_hours=24)
 Gets detailed metadata about a worker execution.
 
 **Returns:**
+
 - Task description
 - Status (success/failed)
 - Timestamps (created, started, finished)
@@ -147,6 +157,7 @@ Gets detailed metadata about a worker execution.
 - Error message (if failed)
 
 **Example:**
+
 ```python
 metadata = get_worker_metadata("2024-12-03T14-32-00_disk-check")
 ```
@@ -183,6 +194,7 @@ This is necessary because LangChain tools must be synchronous functions.
 ### Circular Import Prevention
 
 To avoid circular imports between:
+
 - `supervisor_tools.py` → `WorkerRunner`
 - `WorkerRunner` → `AgentRunner`
 - `AgentRunner` → `tools.builtin`
@@ -196,6 +208,7 @@ We use **lazy imports** - `WorkerRunner` is imported inside the `spawn_worker` f
 **Location:** `tests/test_supervisor_tools.py`
 
 **Coverage:**
+
 - All 6 tools with success and error cases
 - Path traversal security
 - Time filters
@@ -210,6 +223,7 @@ We use **lazy imports** - `WorkerRunner` is imported inside the `spawn_worker` f
 **Location:** `tests/test_supervisor_tools_integration.py`
 
 **Tests:**
+
 - Tool registration in BUILTIN_TOOLS
 - End-to-end agent usage (requires tool allowlist configuration)
 
@@ -247,6 +261,7 @@ uv run python examples/supervisor_tools_demo.py
 ## Files Created/Modified
 
 ### Created:
+
 - `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/supervisor_tools.py` - Tool implementations
 - `/Users/davidrose/git/zerg/apps/zerg/backend/tests/test_supervisor_tools.py` - Unit tests
 - `/Users/davidrose/git/zerg/apps/zerg/backend/tests/test_supervisor_tools_integration.py` - Integration tests
@@ -254,6 +269,7 @@ uv run python examples/supervisor_tools_demo.py
 - `/Users/davidrose/git/zerg/apps/zerg/backend/docs/supervisor_tools.md` - This document
 
 ### Modified:
+
 - `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/__init__.py` - Registered supervisor tools
 
 ## Next Steps

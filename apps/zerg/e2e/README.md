@@ -5,15 +5,17 @@ This directory contains the comprehensive E2E test suite for the Zerg Agent Plat
 ## 🚀 Quick Start
 
 ### From Root Directory (Recommended)
+
 ```bash
 # Run basic E2E tests (fast validation)
 make e2e-basic
 
-# Run full E2E test suite  
+# Run full E2E test suite
 make e2e-full
 ```
 
 ### Direct Commands
+
 ```bash
 # From the e2e directory
 ./run_e2e_tests.sh --mode=basic     # ~3 min - core functionality
@@ -60,18 +62,21 @@ e2e/
 ## 🔧 Architecture & Features
 
 ### Advanced Database Isolation
+
 - **Per-worker SQLite databases** (`test_worker_{id}.db`)
 - **Automatic header injection** via fixtures (`X-Test-Worker: {workerId}`)
 - **WebSocket worker isolation** with query parameters
 - **Clean database state** between test runs
 
 ### Automated Server Management
+
 - **Backend auto-start** on port 8001 (FastAPI + SQLite)
 - **Frontend auto-start** on port 8002 (WASM server)
 - **Parallel test execution** with 2 workers
 - **Automatic cleanup** of test databases
 
 ### Real-time Testing
+
 - **WebSocket connection testing** with worker isolation
 - **Event monitoring** and validation
 - **UI synchronization** verification
@@ -80,17 +85,21 @@ e2e/
 ## 📊 Test Modes
 
 ### Basic Mode (`--mode=basic`)
-**Duration**: ~3 minutes  
-**Purpose**: Core functionality validation  
-**Tests**: 
+
+**Duration**: ~3 minutes
+**Purpose**: Core functionality validation
+**Tests**:
+
 - `agent_creation_full.spec.ts` - Agent lifecycle with database isolation
 - `comprehensive_debug.spec.ts` - System connectivity and health
 - `canvas_complete_workflow.spec.ts` - Canvas navigation and workflow UI
 
 ### Full Mode (`--mode=full`)
-**Duration**: ~15 minutes  
-**Purpose**: Comprehensive validation  
+
+**Duration**: ~15 minutes
+**Purpose**: Comprehensive validation
 **Tests**: All basic tests plus:
+
 - Performance and load testing
 - Accessibility compliance
 - Multi-user concurrency
@@ -101,6 +110,7 @@ e2e/
 ## 🛠️ Helper Libraries
 
 ### Database Helpers (`database-helpers.ts`)
+
 ```typescript
 // Reset database for specific worker
 await resetDatabaseForWorker(workerId);
@@ -113,9 +123,10 @@ const isEmpty = await verifyDatabaseEmpty(workerId);
 ```
 
 ### Agent Helpers (`agent-helpers.ts`)
+
 ```typescript
 // Create agent via API with defaults
-const agent = await createAgentViaAPI(workerId, { name: 'Test Agent' });
+const agent = await createAgentViaAPI(workerId, { name: "Test Agent" });
 
 // Create multiple agents
 const agents = await createMultipleAgents(workerId, { count: 3 });
@@ -128,23 +139,27 @@ await cleanupAgents(workerId, agents);
 ```
 
 ### Test Utils (`test-utils.ts`)
+
 ```typescript
 // Get worker ID from test context
 const workerId = getWorkerIdFromTest(testInfo);
 
 // Retry with backoff
-await retryWithBackoff(async () => { /* operation */ });
+await retryWithBackoff(async () => {
+  /* operation */
+});
 
 // Wait for stable element
-await waitForStableElement(page, '#my-element');
+await waitForStableElement(page, "#my-element");
 
 // Safe navigation
-await safeNavigate(page, '/dashboard');
+await safeNavigate(page, "/dashboard");
 ```
 
 ## 🔍 Configuration Details
 
 ### Playwright Configuration
+
 - **Base URL**: `http://localhost:8002` (frontend)
 - **Backend URL**: `http://localhost:8001` (auto-started)
 - **Workers**: 2 parallel workers
@@ -152,12 +167,14 @@ await safeNavigate(page, '/dashboard');
 - **Retries**: 0 (dev), 2 (CI)
 
 ### Environment Variables
+
 - `NODE_ENV=test` - Test environment
 - `TESTING=1` - Testing mode flag
 - `PW_TEST_WORKER_INDEX` - Worker identifier
 - `E2E_LOG_SUPPRESS=1` - Reduce log noise
 
 ### Database Configuration
+
 - **File Pattern**: `test_worker_{workerId}.db`
 - **Location**: `/tmp/zerg_test_dbs/`
 - **Cleanup**: Automatic after test completion
@@ -166,6 +183,7 @@ await safeNavigate(page, '/dashboard');
 ## 📈 Test Quality Features
 
 ### Comprehensive Logging
+
 ```
 📊 [10:30:45] Agent creation test starting
 📊 Worker ID: 0
@@ -176,12 +194,14 @@ await safeNavigate(page, '/dashboard');
 ```
 
 ### Error Handling
+
 - **Automatic retries** for flaky operations
 - **Graceful degradation** for missing UI elements
 - **Detailed error context** in test reports
 - **Screenshot capture** on failures
 
 ### Performance Monitoring
+
 - **Page load time** measurement
 - **API response time** tracking
 - **Memory usage** monitoring
@@ -190,15 +210,16 @@ await safeNavigate(page, '/dashboard');
 ## 🚦 Adding New Tests
 
 ### 1. Create Test File
-```typescript
-import { test, expect } from './fixtures';
-import { getWorkerIdFromTest } from './helpers/test-utils';
-import { createAgentViaAPI } from './helpers/agent-helpers';
 
-test.describe('My New Feature', () => {
-  test('should work correctly', async ({ page }, testInfo) => {
+```typescript
+import { test, expect } from "./fixtures";
+import { getWorkerIdFromTest } from "./helpers/test-utils";
+import { createAgentViaAPI } from "./helpers/agent-helpers";
+
+test.describe("My New Feature", () => {
+  test("should work correctly", async ({ page }, testInfo) => {
     const workerId = getWorkerIdFromTest(testInfo);
-    
+
     // Test implementation
     const agent = await createAgentViaAPI(workerId);
     // ... rest of test
@@ -207,7 +228,9 @@ test.describe('My New Feature', () => {
 ```
 
 ### 2. Update Test Runner (if needed)
+
 Add to `run_e2e_tests.sh`:
+
 ```bash
 # In get_test_files function
 basic)
@@ -216,6 +239,7 @@ basic)
 ```
 
 ### 3. Use Helper Libraries
+
 - Import from `./helpers/` directory
 - Use consistent patterns for worker ID handling
 - Leverage existing utilities for common operations
@@ -223,12 +247,14 @@ basic)
 ## 🐛 Debugging
 
 ### Common Issues
+
 1. **Database isolation**: Ensure using `testInfo.workerIndex` for worker ID
 2. **Server startup**: Check ports 8001/8002 are available
 3. **Element timing**: Use `waitForStableElement()` for dynamic content
 4. **Test cleanup**: Verify database reset between tests
 
 ### Debug Commands
+
 ```bash
 # Run single test with debugging
 npx playwright test tests/agent_creation_full.spec.ts --debug
@@ -241,6 +267,7 @@ npx playwright test --trace on
 ```
 
 ### Log Analysis
+
 - **Test output**: Console logs with timestamps
 - **Playwright traces**: Visual debugging in browser
 - **Database logs**: SQLite query logs (if enabled)
@@ -249,12 +276,14 @@ npx playwright test --trace on
 ## 📚 Dependencies
 
 ### Core Dependencies
+
 - `@playwright/test` - Testing framework
 - `@axe-core/playwright` - Accessibility testing
 - `pixelmatch` - Visual comparison
 - `pngjs` - Image processing
 
 ### Development Dependencies
+
 - `prettier` - Code formatting
 - `stylelint` - CSS linting
 

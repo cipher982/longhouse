@@ -22,9 +22,9 @@ def dummy_node(state: TestState) -> TestState:
 
 def test_langgraph_validation():
     """Test various invalid graph scenarios to see what LangGraph catches."""
-    
+
     print("Testing LangGraph validation capabilities...")
-    
+
     test_cases = [
         ("valid_simple_graph", create_valid_graph),
         ("orphaned_node", create_orphaned_node_graph),
@@ -34,9 +34,9 @@ def test_langgraph_validation():
         ("empty_graph", create_empty_graph),
         ("invalid_edge_targets", create_invalid_edge_graph),
     ]
-    
+
     results = {}
-    
+
     for test_name, graph_creator in test_cases:
         print(f"\n--- Testing: {test_name} ---")
         try:
@@ -47,11 +47,11 @@ def test_langgraph_validation():
         except Exception as e:
             print(f"❌ {test_name}: Failed with error: {type(e).__name__}: {e}")
             results[test_name] = f"ERROR: {type(e).__name__}: {e}"
-    
+
     print("\n=== SUMMARY ===")
     for test_name, result in results.items():
         print(f"{test_name}: {result}")
-    
+
     return results
 
 def create_valid_graph():
@@ -98,11 +98,11 @@ def create_disconnected_graph():
     graph.add_node("node1", dummy_node)
     graph.add_node("node2", dummy_node)
     graph.add_node("node3", dummy_node)
-    
+
     # Connected component 1
     graph.add_edge(START, "node1")
     graph.add_edge("node1", END)
-    
+
     # Disconnected component 2
     graph.add_edge("node2", "node3")  # Not reachable from START
     return graph
@@ -122,5 +122,5 @@ def create_invalid_edge_graph():
 if __name__ == "__main__":
     # Suppress LangGraph logging for cleaner output
     logging.getLogger("langgraph").setLevel(logging.WARNING)
-    
+
     test_langgraph_validation()

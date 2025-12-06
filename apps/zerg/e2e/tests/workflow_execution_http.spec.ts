@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 /**
  * WORKFLOW EXECUTION WITH HTTP TOOLS E2E TEST
- * 
+ *
  * This test focuses on workflow execution and HTTP request validation:
  * 1. Create a workflow with HTTP tool via API
  * 2. Execute the workflow
@@ -14,10 +14,10 @@ import { test, expect } from './fixtures';
 test.describe('Workflow Execution with HTTP Tools', () => {
   test('Execute workflow with HTTP tool and verify requests', async ({ page }, testInfo) => {
     console.log('🚀 Starting workflow execution test...');
-    
+
     const workerId = String(testInfo.workerIndex);
     console.log('📊 Worker ID:', workerId);
-    
+
     // Step 1: Create agent for workflow
     console.log('📊 Step 1: Creating test agent...');
     const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
@@ -31,11 +31,11 @@ test.describe('Workflow Execution with HTTP Tools', () => {
         model: 'gpt-mock',
       }
     });
-    
+
     expect(agentResponse.status()).toBe(201);
     const createdAgent = await agentResponse.json();
     console.log('✅ Test agent created with ID:', createdAgent.id);
-    
+
     // Step 2: Create a simple workflow (if workflow creation is supported)
     console.log('📊 Step 2: Attempting workflow creation...');
     try {
@@ -76,11 +76,11 @@ test.describe('Workflow Execution with HTTP Tools', () => {
           }
         }
       });
-      
+
       if (workflowResponse.ok()) {
         const workflow = await workflowResponse.json();
         console.log('✅ Workflow created with ID:', workflow.id);
-        
+
         // Step 3: Execute the workflow
         console.log('📊 Step 3: Executing workflow...');
         const executionResponse = await page.request.post(`http://localhost:8001/api/workflow-executions/${workflow.id}/start`, {
@@ -93,25 +93,25 @@ test.describe('Workflow Execution with HTTP Tools', () => {
             }
           }
         });
-        
+
         if (executionResponse.ok()) {
           const execution = await executionResponse.json();
           console.log('✅ Workflow execution started with ID:', execution.id);
-          
+
           // Step 4: Monitor execution status
           console.log('📊 Step 4: Monitoring execution status...');
           let attempts = 0;
           const maxAttempts = 10;
-          
+
           while (attempts < maxAttempts) {
             await page.waitForTimeout(1000);
-            
+
             const statusResponse = await page.request.get(`http://localhost:8001/api/workflow-executions/${execution.id}`);
-            
+
             if (statusResponse.ok()) {
               const status = await statusResponse.json();
               console.log('📊 Execution status:', status.status);
-              
+
               if (status.status === 'completed' || status.status === 'failed') {
                 console.log('📊 Execution finished with status:', status.status);
                 if (status.result) {
@@ -120,10 +120,10 @@ test.describe('Workflow Execution with HTTP Tools', () => {
                 break;
               }
             }
-            
+
             attempts++;
           }
-          
+
           console.log('✅ Workflow execution monitoring completed');
         } else {
           console.log('❌ Workflow execution failed:', executionResponse.status());
@@ -136,17 +136,17 @@ test.describe('Workflow Execution with HTTP Tools', () => {
     } catch (error) {
       console.log('❌ Workflow test error:', error.message);
     }
-    
+
     // Step 5: Test direct HTTP tool usage (if available)
     console.log('📊 Step 5: Testing direct HTTP tool usage...');
     try {
       // Check if there's a tools endpoint to test HTTP functionality
       const toolsResponse = await page.request.get('http://localhost:8001/api/tools');
-      
+
       if (toolsResponse.ok()) {
         const tools = await toolsResponse.json();
         console.log('📊 Available tools:', tools.length);
-        
+
         const httpTool = tools.find(tool => tool.name && tool.name.includes('http'));
         if (httpTool) {
           console.log('✅ HTTP tool found:', httpTool.name);
@@ -155,25 +155,25 @@ test.describe('Workflow Execution with HTTP Tools', () => {
     } catch (error) {
       console.log('📊 Tools endpoint not available or error:', error.message);
     }
-    
+
     // Step 6: Navigate to UI and check for workflow execution interface
     console.log('📊 Step 6: Checking UI for workflow execution...');
     await page.goto('/');
     await page.waitForTimeout(1000);
-    
+
     // Check for workflow execution UI elements
     const executeButtons = await page.locator('button:has-text("Execute")').count();
     const runButtons = await page.locator('button:has-text("Run")').count();
     const workflowElements = await page.locator('[data-testid*="workflow"]').count();
-    
+
     console.log('📊 Execute buttons found:', executeButtons);
     console.log('📊 Run buttons found:', runButtons);
     console.log('📊 Workflow elements found:', workflowElements);
-    
+
     if (executeButtons > 0 || runButtons > 0) {
       console.log('✅ Workflow execution UI elements found');
     }
-    
+
     console.log('✅ Workflow execution test completed');
     console.log('📊 Summary: Workflow execution infrastructure validated');
   });

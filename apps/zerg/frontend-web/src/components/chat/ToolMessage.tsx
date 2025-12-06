@@ -12,15 +12,15 @@ export function ToolMessage({ message }: ToolMessageProps) {
   const [isOpen, setIsOpen] = useState(false);
   const toolName = message.tool_name || "tool";
   const toolCallId = message.tool_call_id || "";
-  
+
   // Determine status based on content (if content is empty, it might be processing)
   const isProcessing = !message.content && !message.name; // simplistic check
-  
+
   const toggleOpen = () => setIsOpen(!isOpen);
 
   return (
     <div className="tool-message-container" data-tool-call-id={toolCallId}>
-      <div 
+      <div
         className={clsx("tool-summary", { "is-open": isOpen })}
         onClick={toggleOpen}
       >
@@ -31,7 +31,7 @@ export function ToolMessage({ message }: ToolMessageProps) {
         </span>
         <div className={clsx("chevron", { "open": isOpen })}>▶</div>
       </div>
-      
+
       {isOpen && (
         <div className="tool-details">
           {message.name && (
@@ -44,12 +44,12 @@ export function ToolMessage({ message }: ToolMessageProps) {
                    customStyle={{ margin: 0, borderRadius: '4px', fontSize: '12px' }}
                    wrapLongLines={true}
                 >
-                   {message.name} 
+                   {message.name}
                 </SyntaxHighlighter>
               </div>
             </div>
           )}
-          
+
           <div className="tool-section">
             <div className="tool-section-header">Output</div>
              <div className="tool-code-block">
@@ -59,7 +59,7 @@ export function ToolMessage({ message }: ToolMessageProps) {
                    customStyle={{ margin: 0, borderRadius: '4px', fontSize: '12px' }}
                    wrapLongLines={true}
                 >
-                   {message.content || "(No output)"} 
+                   {message.content || "(No output)"}
                 </SyntaxHighlighter>
             </div>
           </div>

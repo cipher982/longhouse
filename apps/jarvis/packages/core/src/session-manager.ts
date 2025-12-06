@@ -52,7 +52,7 @@ export class SessionManager {
     try {
       // 1. Initialize conversation manager with context-specific database
       await this.conversationManager.initialize(contextName);
-      
+
       // 2. Auto-resume most recent conversation if exists
       const recentConversations = await this.conversationManager.getAllConversations();
       if (recentConversations.length > 0) {
@@ -60,7 +60,7 @@ export class SessionManager {
         await this.conversationManager.switchToConversation(mostRecent.id);
         logger.success(`Auto-resumed conversation: ${mostRecent.name} (${mostRecent.id})`);
       }
-      
+
       // 2. Load all documents from IndexedDB into memory for fast search
       const documents = await this.conversationManager.getAllDocuments();
       await this.vectorStore.initialize(documents);
@@ -69,7 +69,7 @@ export class SessionManager {
       if (documents.length === 0) {
         logger.context('Loading sample data for context', contextName);
         await this.conversationManager.loadSampleData();
-        
+
         // Reinitialize vector store with sample data
         const sampleDocuments = await this.conversationManager.getAllDocuments();
         await this.vectorStore.initialize(sampleDocuments);
@@ -80,7 +80,7 @@ export class SessionManager {
 
       const initTime = performance.now() - startTime;
       const stats = this.vectorStore.getStats();
-      
+
       logger.performance('Session initialization', initTime, {
         documentCount: stats.documentCount,
         memoryUsageMB: stats.memoryUsageMB,
@@ -157,7 +157,7 @@ export class SessionManager {
     if (!this.sessionActive) {
       throw new Error('Session not active');
     }
-    
+
     return await this.conversationManager.getConversationHistory();
   }
 
@@ -168,7 +168,7 @@ export class SessionManager {
     if (!this.sessionActive) {
       return [];
     }
-    
+
     const history = await this.conversationManager.getConversationHistory();
     return history.slice(-limit); // Get last N turns for context
   }
@@ -211,7 +211,7 @@ export class SessionManager {
     if (!this.sessionActive) {
       throw new Error('Session not active');
     }
-    
+
     await this.conversationManager.switchToConversation(conversationId);
   }
 
@@ -232,7 +232,7 @@ export class SessionManager {
     if (!this.sessionActive) {
       throw new Error('Session not active');
     }
-    
+
     return await this.conversationManager.getAllConversations();
   }
 

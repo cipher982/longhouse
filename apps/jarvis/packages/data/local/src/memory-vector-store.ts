@@ -37,12 +37,12 @@ export class MemoryVectorStore {
 
     const loadTime = performance.now() - startTime
     this.logger.performance('MemoryVectorStore loaded', loadTime)
-    
+
     this.initialized = true
   }
 
   async semanticSearch(
-    queryEmbedding: number[], 
+    queryEmbedding: number[],
     options: {
       limit?: number
       minScore?: number
@@ -66,7 +66,7 @@ export class MemoryVectorStore {
       if (category && document.metadata.category !== category) continue
 
       const score = this.cosineSimilarity(queryEmbedding, document.embedding)
-      
+
       if (score >= minScore) {
         results.push({ document, score })
       }
@@ -108,24 +108,24 @@ export class MemoryVectorStore {
       if (category && document.metadata.category !== category) continue
 
       const content = document.content.toLowerCase()
-      
+
       // Calculate a simple relevance score based on term frequency and position
       let score = 0
-      
+
       // Exact phrase match gets highest score
       if (content.includes(queryLower)) {
         score += 1.0
       }
-      
+
       // Individual word matches
       const queryWords = queryLower.split(/\s+/)
       const contentWords = content.split(/\s+/)
-      
+
       for (const word of queryWords) {
         const wordCount = contentWords.filter(w => w.includes(word)).length
         score += wordCount * 0.1
       }
-      
+
       if (score > 0) {
         results.push({ document, score })
       }
@@ -188,7 +188,7 @@ export class MemoryVectorStore {
   getStats(): { documentCount: number, types: Record<string, number>, memoryUsageMB: number } {
     const types: Record<string, number> = {}
     let totalSize = 0
-    
+
     for (const [id, doc] of this.documents) {
       const type = doc.metadata.type
       types[type] = (types[type] || 0) + 1
@@ -246,7 +246,7 @@ export class MemoryVectorStore {
 
     const embedding: number[] = []
     const rng = this.mulberry32(Math.abs(hash))
-    
+
     for (let i = 0; i < dimensions; i++) {
       embedding.push((rng() - 0.5) * 2) // Values between -1 and 1
     }

@@ -9,14 +9,14 @@ describe('VoiceController', () => {
   beforeEach(() => {
     // Create controller
     controller = new VoiceController();
-    
+
     // Mock listener
     listener = vi.fn();
     controller.addListener(listener);
 
     // Create mock session
     mockSession = {
-      sendAudio: vi.fn() 
+      sendAudio: vi.fn()
     };
 
     // Mock getUserMedia
@@ -133,7 +133,7 @@ describe('VoiceController', () => {
           })
         })
       );
-      
+
       // Should emit transcript event
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -154,7 +154,7 @@ describe('VoiceController', () => {
           isFinal: true
         })
       );
-      
+
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
            type: 'stateChange',
@@ -248,7 +248,7 @@ describe('VoiceController', () => {
           })
         })
       );
-      
+
       expect(listener).toHaveBeenCalledWith(
          expect.objectContaining({
            type: 'vadStateChange',
@@ -273,7 +273,7 @@ describe('VoiceController', () => {
       controller.setHandsFree(true);
       controller.handleVADStateChange(true);
       listener.mockClear();
-      
+
       controller.handleVADStateChange(false);
 
       expect(listener).toHaveBeenCalledWith(
