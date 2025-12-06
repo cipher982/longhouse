@@ -217,78 +217,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         return ToolMessage(content=str(observation), tool_call_id=tool_call["id"], name=tool_name)
 
     # ---------------------------------------------------------------
-    # Helper functions for tool event emission
+    # Import helper functions for tool result processing
     # ---------------------------------------------------------------
-
-    # Keys that should be redacted from event payloads to prevent secret leakage
-    SENSITIVE_KEYS = frozenset({
-        "key", "api_key", "apikey", "token", "secret", "password", "passwd",
-        "credential", "credentials", "auth", "authorization", "bearer",
-        "private_key", "privatekey", "access_token", "refresh_token",
-    })
-
-    def _redact_sensitive_args(args: dict) -> dict:
-        """Redact sensitive fields from tool arguments for safe logging."""
-        if not isinstance(args, dict):
-            return {"_raw": "[non-dict args]"}
-
-        redacted = {}
-        for key, value in args.items():
-            key_lower = key.lower()
-            # Check if key contains any sensitive term
-            if any(sensitive in key_lower for sensitive in SENSITIVE_KEYS):
-                redacted[key] = "[REDACTED]"
-            elif isinstance(value, dict):
-                redacted[key] = _redact_sensitive_args(value)
-            else:
-                redacted[key] = value
-        return redacted
-
-    def _check_tool_error(result_content: str) -> tuple[bool, str | None]:
-        """Check if tool result indicates an error.
-
-        Handles multiple error formats:
-        1. Legacy: "<tool-error> ..." or "Error: ..."
-        2. error_envelope: {"ok": false, "error_type": "...", "user_message": "..."}
-           (works with both JSON and Python literal syntax)
-
-        Returns (is_error, error_message).
-        """
-        # Legacy format check
-        if result_content.startswith("<tool-error>"):
-            return True, result_content
-        if result_content.startswith("Error:"):
-            return True, result_content
-
-        # error_envelope format check - try both JSON and Python literal
-        if result_content.startswith("{"):
-            parsed = None
-
-            # Try JSON first (double quotes)
-            try:
-                import json
-                parsed = json.loads(result_content)
-            except (json.JSONDecodeError, TypeError):
-                # Try Python literal (single quotes) - this is what str(dict) produces
-                try:
-                    import ast
-                    parsed = ast.literal_eval(result_content)
-                except (ValueError, SyntaxError):
-                    pass  # Neither JSON nor valid Python literal
-
-            # Check if parsed dict indicates error
-            if isinstance(parsed, dict) and parsed.get("ok") is False:
-                # Extract user_message if available, else use error_type
-                error_msg = parsed.get("user_message") or parsed.get("error_type") or "Tool returned ok=false"
-                return True, error_msg
-
-        return False, None
-
-    def _safe_preview(content: str, max_len: int = 200) -> str:
-        """Create a safe preview of content, truncating if needed."""
-        if len(content) <= max_len:
-            return content
-        return content[:max_len - 3] + "..."
+    from zerg.tools.result_utils import check_tool_error
+    from zerg.tools.result_utils import redact_sensitive_args
+    from zerg.tools.result_utils import safe_preview
 
     async def _call_tool_async(tool_call: dict):  # noqa: D401 – coroutine helper
         """Run tool execution in a worker thread with event emission.
@@ -313,7 +246,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         tool_record = None
 
         # Redact sensitive fields from args for event emission
-        safe_args = _redact_sensitive_args(tool_args)
+        safe_args = redact_sensitive_args(tool_args)
 
         # Emit STARTED event if in worker context
         if ctx:
@@ -332,7 +265,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                         "run_id": ctx.run_id,
                         "tool_name": tool_name,
                         "tool_call_id": tool_call_id,
-                        "tool_args_preview": _safe_preview(str(safe_args)),
+                        "tool_args_preview": safe_preview(str(safe_args)),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                 )
@@ -347,7 +280,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Check if tool execution failed
         result_content = str(result.content) if hasattr(result, "content") else str(result)
-        is_error, error_msg = _check_tool_error(result_content)
+        is_error, error_msg = check_tool_error(result_content)
 
         # Emit appropriate event if in worker context
         if ctx and tool_record:
@@ -364,7 +297,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,
-                            "error": _safe_preview(error_msg or result_content, 500),
+                            "error": safe_preview(error_msg or result_content, 500),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                     )
@@ -383,7 +316,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,
-                            "result_preview": _safe_preview(result_content),
+                            "result_preview": safe_preview(result_content),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                     )

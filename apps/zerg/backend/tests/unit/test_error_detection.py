@@ -1,100 +1,111 @@
 """Tests for tool error detection logic."""
 
-import pytest
+from zerg.tools.result_utils import check_tool_error
 
 
 class TestErrorEnvelopeDetection:
-    """Tests for _check_tool_error helper function."""
+    """Tests for check_tool_error function."""
 
     def test_detects_legacy_tool_error_prefix(self):
         """Test detection of <tool-error> prefix."""
-        # Import the function from the module
-        # Note: This imports from the module but doesn't execute the get_runnable function
-        import sys
-        import importlib.util
-
-        # Load the module
-        spec = importlib.util.find_spec("zerg.agents_def.zerg_react_agent")
-        module = importlib.util.module_from_spec(spec)
-
-        # We can't easily get _check_tool_error since it's defined inside get_runnable()
-        # Instead, test the logic directly
-
         result = "<tool-error> Connection failed"
-        is_error = result.startswith("<tool-error>") or result.startswith("Error:")
+        is_error, error_msg = check_tool_error(result)
+
         assert is_error is True
+        assert error_msg == "<tool-error> Connection failed"
 
     def test_detects_error_prefix(self):
         """Test detection of Error: prefix."""
         result = "Error: Tool 'foo' not found"
-        is_error = result.startswith("<tool-error>") or result.startswith("Error:")
+        is_error, error_msg = check_tool_error(result)
+
         assert is_error is True
+        assert error_msg == "Error: Tool 'foo' not found"
 
     def test_detects_json_error_envelope(self):
         """Test detection of JSON error envelope with double quotes."""
-        import json
-
         result = '{"ok": false, "error_type": "execution_error", "user_message": "SSH failed"}'
 
-        # Parse as JSON
-        parsed = json.loads(result)
-        assert isinstance(parsed, dict)
-        assert parsed.get("ok") is False
-        assert parsed.get("user_message") == "SSH failed"
+        is_error, error_msg = check_tool_error(result)
+
+        assert is_error is True
+        assert error_msg == "SSH failed"
 
     def test_detects_python_literal_error_envelope(self):
         """Test detection of Python literal error envelope (str(dict) format)."""
-        import ast
-
         # This is what str(dict) produces - single quotes, capitalized False
         result = "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH failed'}"
 
-        # Parse as Python literal
-        parsed = ast.literal_eval(result)
-        assert isinstance(parsed, dict)
-        assert parsed.get("ok") is False
-        assert parsed.get("user_message") == "SSH failed"
+        is_error, error_msg = check_tool_error(result)
+
+        assert is_error is True
+        assert error_msg == "SSH failed"
+
+    def test_error_envelope_without_user_message_uses_error_type(self):
+        """Test that error_type is used when user_message is missing."""
+        result = "{'ok': False, 'error_type': 'execution_error'}"
+
+        is_error, error_msg = check_tool_error(result)
+
+        assert is_error is True
+        assert error_msg == "execution_error"
+
+    def test_error_envelope_without_message_or_type_uses_default(self):
+        """Test fallback message when neither user_message nor error_type present."""
+        result = "{'ok': False}"
+
+        is_error, error_msg = check_tool_error(result)
+
+        assert is_error is True
+        assert error_msg == "Tool returned ok=false"
 
     def test_success_envelope_not_detected_as_error(self):
         """Test that success envelopes are not detected as errors."""
-        import ast
-
         result = "{'ok': True, 'data': 'Success message'}"
-        parsed = ast.literal_eval(result)
 
-        assert isinstance(parsed, dict)
-        assert parsed.get("ok") is True  # Should NOT be detected as error
+        is_error, error_msg = check_tool_error(result)
+
+        assert is_error is False
+        assert error_msg is None
 
     def test_non_envelope_string_not_detected(self):
         """Test that regular strings are not detected as errors."""
         result = "This is just a normal result string"
 
-        # Should not start with error markers
-        is_error = result.startswith("<tool-error>") or result.startswith("Error:")
-        assert is_error is False
+        is_error, error_msg = check_tool_error(result)
 
-        # Should not start with {
-        assert not result.startswith("{")
+        assert is_error is False
+        assert error_msg is None
 
     def test_malformed_dict_string_not_detected(self):
         """Test that malformed dict strings don't cause crashes."""
         result = "{'ok': False, 'missing_quote: True}"
 
-        # Should fail to parse but not crash
-        try:
-            import ast
-            ast.literal_eval(result)
-            assert False, "Should have raised SyntaxError"
-        except (ValueError, SyntaxError):
-            pass  # Expected
+        is_error, error_msg = check_tool_error(result)
+
+        # Should not crash, should return False since parsing failed
+        assert is_error is False
+        assert error_msg is None
 
     def test_error_envelope_with_nested_data(self):
         """Test error envelope with nested data structures."""
-        import ast
+        result = (
+            "{'ok': False, 'error_type': 'validation_error', "
+            "'user_message': 'Invalid input', 'details': {'field': 'email'}}"
+        )
 
-        result = "{'ok': False, 'error_type': 'validation_error', 'user_message': 'Invalid input', 'details': {'field': 'email'}}"
-        parsed = ast.literal_eval(result)
+        is_error, error_msg = check_tool_error(result)
 
-        assert parsed.get("ok") is False
-        assert parsed.get("error_type") == "validation_error"
-        assert "details" in parsed
+        assert is_error is True
+        assert error_msg == "Invalid input"
+
+    def test_json_error_envelope_with_camelcase_keys(self):
+        """Test JSON format with common variations."""
+        result = '{"ok": false, "errorType": "validation_error", "userMessage": "Bad request"}'
+
+        is_error, error_msg = check_tool_error(result)
+
+        # Should detect ok: false even if keys don't match expected format
+        assert is_error is True
+        # Will use fallback since user_message (snake_case) not found
+        assert "Bad request" in error_msg or "ok=false" in error_msg.lower()
