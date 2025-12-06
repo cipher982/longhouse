@@ -1,225 +1,65 @@
-/* Animations */
+/* High Performance Animations */
 
-/* Fade in up animation */
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Fade in animation */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Pulse animation for active state */
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 12px rgba(99, 102, 241, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
-  }
-}
-
-/* Glow animation */
-@keyframes glow {
-  0%, 100% {
-    filter: brightness(1);
-  }
-  50% {
-    filter: brightness(1.1);
-  }
-}
-
-/* Rotate animation for processing */
-@keyframes rotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Blink animation for cursor */
-@keyframes blink {
-  0%, 50% {
-    opacity: 1;
-  }
-  51%, 100% {
-    opacity: 0;
-  }
-}
-
-/* Ripple effect */
-@keyframes ripple {
-  to {
-    transform: scale(1.5);
-    opacity: 0;
-  }
-}
-
-/* Slide in from left */
-@keyframes slideInLeft {
-  from {
-    transform: translateX(-100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-/* Slide in from right */
-@keyframes slideInRight {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-/* Bounce animation */
-@keyframes bounce {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-5px);
-  }
-}
-
-/* Scale in animation */
-@keyframes scaleIn {
-  from {
-    transform: scale(0.95);
-    opacity: 0;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* Shimmer effect for loading */
-@keyframes shimmer {
-  0% {
-    background-position: -1000px 0;
-  }
-  100% {
-    background-position: 1000px 0;
-  }
-}
-
-/* Voice wave animation */
-@keyframes voiceWave {
-  0%, 100% {
-    transform: scaleY(1);
-  }
-  50% {
-    transform: scaleY(1.5);
-  }
-}
-
-/* Connection pulse */
-@keyframes connectionPulse {
-  0% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.5;
-  }
-}
-
-/* Error shake */
-@keyframes errorShake {
-  0%, 100% {
-    transform: translateX(0);
-  }
-  10%, 30%, 50%, 70%, 90% {
-    transform: translateX(-4px);
-  }
-  20%, 40%, 60%, 80% {
-    transform: translateX(4px);
-  }
-}
-
-/* Success check */
-@keyframes successCheck {
-  0% {
-    stroke-dashoffset: 100;
-  }
-  100% {
-    stroke-dashoffset: 0;
-  }
-}
-
-/* Transition utilities */
-.transition-all {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.transition-transform {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.transition-opacity {
-  transition: opacity 0.2s ease;
-}
-
-.transition-colors {
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-}
-
-/* Animation utilities */
+/* GPU-friendly fades */
 .animate-fadeIn {
-  animation: fadeIn 0.3s ease;
+  opacity: 0;
+  animation: fadeIn 0.3s ease forwards;
+  will-change: opacity;
 }
 
-.animate-fadeInUp {
-  animation: fadeInUp 0.3s ease;
+@keyframes fadeIn {
+  to { opacity: 1; }
 }
 
-.animate-pulse {
-  animation: pulse 2s infinite;
+/* Particle Effects / Glow Pulses */
+@keyframes glow-pulse {
+  0% { box-shadow: 0 0 5px var(--color-neon-primary); }
+  50% { box-shadow: 0 0 20px var(--color-neon-primary), 0 0 10px var(--color-neon-cyan); }
+  100% { box-shadow: 0 0 5px var(--color-neon-primary); }
 }
 
-.animate-bounce {
-  animation: bounce 1s infinite;
+.animate-glow {
+  animation: glow-pulse 2s infinite;
 }
 
-.animate-spin {
-  animation: rotate 1s linear infinite;
+/* Text Glitch Effect (Optional use) */
+@keyframes glitch {
+  0% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(-2px, -2px); }
+  60% { transform: translate(2px, 2px); }
+  80% { transform: translate(2px, -2px); }
+  100% { transform: translate(0); }
 }
 
-.animate-shimmer {
-  animation: shimmer 2s infinite;
-  background: linear-gradient(
-    90deg,
-    var(--color-surface-card) 0%,
-    var(--color-surface-elevated) 50%,
-    var(--color-surface-card) 100%
-  );
-  background-size: 1000px 100%;
+/* Supervisor Progress - Holographic Card */
+.supervisor-progress {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+
+.supervisor-progress::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-neon-primary), transparent);
+  animation: scan-line 2s linear infinite;
+}
+
+@keyframes scan-line {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.supervisor-spinner {
+  border-color: rgba(99, 102, 241, 0.1);
+  border-top-color: var(--color-neon-cyan);
+  box-shadow: 0 0 10px var(--color-neon-cyan);
 }

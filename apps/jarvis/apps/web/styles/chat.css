@@ -1,51 +1,29 @@
-/* Chat and Conversation UI Styles - Modern Messenger Style */
+/* Chat Interface - Holographic Messaging */
 
-/* Chat Container */
 #chat {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background: var(--color-surface-page);
 }
 
-/* Transcript Area */
 #transcript {
   flex: 1;
-  overflow-y: auto;
-  padding: var(--space-5) var(--space-5); /* Reduced side padding for cleaner look */
-  font-size: var(--font-size-base);
-  line-height: 1.6;
-  color: var(--color-text-secondary);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-6); /* More spacing between message groups */
-  max-width: 900px;
+  gap: var(--space-6);
+  max-width: 960px;
   margin: 0 auto;
   width: 100%;
 }
 
-/* Empty state */
-#transcript:empty::before,
-#transcript:not(:has(.message))::before {
-  content: attr(data-status);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  font-size: var(--font-size-lg);
-  color: var(--color-text-muted);
-  text-align: center;
-  padding: var(--space-8);
-  font-weight: 500;
-}
-
-/* Message Layout */
+/* Messages */
 .message {
   display: flex;
   gap: var(--space-4);
-  animation: fadeInUp 0.3s ease;
-  width: 100%;
+  opacity: 0;
+  animation: slideUpFade 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  transform-origin: center bottom;
 }
 
 .message.user {
@@ -54,130 +32,94 @@
 
 /* Avatars */
 .message-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-elevated);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  font-weight: 600;
+  width: 36px; height: 36px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
   border: 1px solid var(--color-border-muted);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .message.assistant .message-avatar {
-  background: var(--color-surface-card);
-  color: var(--color-brand-primary);
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--color-neon-cyan);
 }
 
 .message.user .message-avatar {
-  background: var(--color-brand-primary);
-  color: white;
+  background: var(--color-neon-primary);
   border: none;
+  color: #fff;
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);
 }
 
-/* Message Bubbles */
+/* Bubbles */
 .message-content {
   max-width: 80%;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-xl);
-  position: relative;
+  padding: var(--space-3) var(--space-5);
+  border-radius: 18px;
   font-size: var(--font-size-base);
-}
-
-.message.assistant .message-content {
-  background: transparent; /* No background for assistant, just text aligned */
-  padding: var(--space-1) 0;
-  max-width: 100%;
-  color: var(--color-text-secondary);
-}
-
-/* Alternate style for assistant: if we want bubbles */
-/* 
-.message.assistant .message-content {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-muted);
-  color: var(--color-text-primary);
-} 
-*/
-
-.message.user .message-content {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-muted);
-  color: var(--color-text-primary);
-  border-bottom-right-radius: var(--radius-sm);
-}
-
-.message-text {
-  word-wrap: break-word;
   line-height: 1.6;
+  position: relative;
 }
 
-.message.assistant .message-text {
+.message.assistant .message-content {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   color: var(--color-text-primary);
+  border-top-left-radius: 4px;
 }
 
-/* Timestamps */
-.message-time {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  margin-top: var(--space-1);
-  opacity: 0;
-  transition: opacity 0.2s;
+/* User bubble - Gradient Glass */
+.message.user .message-content {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.8) 0%, rgba(79, 70, 229, 0.9) 100%);
+  color: #fff;
+  border-top-right-radius: 4px;
+  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.25);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
-.message:hover .message-time {
-  opacity: 1;
-}
-
-/* Streaming Cursor */
+/* Streaming Effect - Matrix Style */
 .message.streaming .message-content::after {
-  content: '';
+  content: '_';
   display: inline-block;
-  width: 6px;
-  height: 16px;
   margin-left: 4px;
-  background: var(--color-brand-primary);
-  animation: blink 1s infinite;
-  vertical-align: sub;
-  border-radius: 2px;
+  color: var(--color-neon-cyan);
+  animation: blink 1s steps(2, start) infinite;
+  text-shadow: 0 0 8px var(--color-neon-cyan);
 }
 
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* Status Message */
-.status-message {
-  text-align: center;
-  padding: var(--space-2);
+/* Time stamps */
+.message-time {
+  font-size: 0.7rem;
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  margin: var(--space-2) 0;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.message:hover .message-time { opacity: 0.6; }
+
+@keyframes slideUpFade {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Context Selector */
-.context-selector {
-  padding: 6px 12px;
-  background: transparent;
-  border: 1px solid var(--color-border-muted);
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: all 0.2s ease;
+/* Empty State */
+#transcript:empty::before {
+  content: "System Ready";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-muted);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  opacity: 0.5;
 }
 
-.context-selector:hover {
-  background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
-}
