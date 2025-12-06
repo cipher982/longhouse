@@ -8,9 +8,10 @@ This module centralizes logic for:
 
 import ast
 import json
+from typing import Any
 
 
-def check_tool_error(result_content: str) -> tuple[bool, str | None]:
+def check_tool_error(result_content: Any) -> tuple[bool, str | None]:
     """Check if tool result indicates an error.
 
     Handles multiple error formats:
@@ -21,13 +22,17 @@ def check_tool_error(result_content: str) -> tuple[bool, str | None]:
     Parameters
     ----------
     result_content
-        String representation of the tool result
+        Tool result (any type - will be converted to string)
 
     Returns
     -------
     tuple[bool, str | None]
         (is_error, error_message) - error_message is None if not an error
     """
+    # Convert to string (handles None, dicts, etc)
+    if result_content is None:
+        return False, None
+    result_content = str(result_content)
     # Legacy format check
     if result_content.startswith("<tool-error>"):
         return True, result_content
@@ -82,7 +87,7 @@ SENSITIVE_KEYS = frozenset({
 })
 
 
-def redact_sensitive_args(args):
+def redact_sensitive_args(args: Any) -> Any:
     """Redact sensitive fields from tool arguments for safe logging.
 
     Recursively walks dicts, lists, tuples, and sets to find and redact
@@ -160,13 +165,13 @@ def redact_sensitive_args(args):
         return args
 
 
-def safe_preview(content: str, max_len: int = 200) -> str:
+def safe_preview(content: Any, max_len: int = 200) -> str:
     """Create a safe preview of content, truncating if needed.
 
     Parameters
     ----------
     content
-        Content to preview
+        Content to preview (any type - will be converted to string)
     max_len
         Maximum length (default 200 chars)
 
@@ -175,9 +180,14 @@ def safe_preview(content: str, max_len: int = 200) -> str:
     str
         Truncated content with "..." if needed
     """
-    if len(content) <= max_len:
-        return content
-    return content[: max_len - 3] + "..."
+    # Convert to string (handles None, dicts, etc)
+    if content is None:
+        return "(None)"
+    content_str = str(content)
+
+    if len(content_str) <= max_len:
+        return content_str
+    return content_str[: max_len - 3] + "..."
 
 
 __all__ = [
