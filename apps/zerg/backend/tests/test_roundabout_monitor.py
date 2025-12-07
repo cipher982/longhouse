@@ -1,5 +1,4 @@
 import asyncio
-from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -28,7 +27,7 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
     # Reset event bus subscribers for isolation
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -91,7 +90,7 @@ async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -270,7 +269,7 @@ async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_pa
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -328,7 +327,7 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -457,7 +456,7 @@ async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -512,7 +511,7 @@ async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -566,7 +565,7 @@ async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_pa
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -627,7 +626,7 @@ async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -687,7 +686,7 @@ async def test_roundabout_hybrid_mode_heuristic_takes_precedence(monkeypatch, db
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -742,7 +741,7 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
@@ -793,7 +792,7 @@ async def test_roundabout_llm_timeout_fallback(monkeypatch, db_session, tmp_path
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    original_subs = deepcopy(event_bus._subscribers)
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
