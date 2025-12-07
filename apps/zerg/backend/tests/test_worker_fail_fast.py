@@ -200,7 +200,6 @@ def test_critical_error_detection():
 @pytest.mark.asyncio
 async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_path, monkeypatch):
     """Roundabout should exit immediately when worker fails with critical error."""
-    from copy import deepcopy
     from zerg.events import event_bus
     from zerg.models.models import WorkerJob
     from zerg.services.roundabout_monitor import RoundaboutMonitor
@@ -212,8 +211,8 @@ async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_pa
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
     store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
 
-    # Reset event bus
-    original_subs = deepcopy(event_bus._subscribers)
+    # Reset event bus - use shallow copy to avoid pickling asyncio Futures
+    original_subs = {k: set(v) for k, v in event_bus._subscribers.items()}
     event_bus._subscribers.clear()
 
     try:
