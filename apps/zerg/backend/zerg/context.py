@@ -58,6 +58,8 @@ class WorkerContext:
         User ID that owns this worker's agent
     run_id
         Optional run ID for correlating events
+    job_id
+        Optional WorkerJob ID for roundabout event correlation
     task
         Task description (first 100 chars)
     tool_calls
@@ -71,6 +73,7 @@ class WorkerContext:
     worker_id: str
     owner_id: int | None = None
     run_id: str | None = None
+    job_id: int | None = None
     task: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     has_critical_error: bool = False
