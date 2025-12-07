@@ -360,12 +360,13 @@ Both `jarvis-server` and `zerg-backend` MUST:
 - [x] Add "Dashboard" link pointing to `/dashboard`
 - [x] Style consistently with Jarvis UI (header-button with icon)
 
-#### 4.3 Update Landing Page
+#### 4.3 Update Landing Page (Deferred)
 
 **File:** `apps/zerg/frontend-web/src/pages/LandingPage.tsx`
 
-- [ ] Add prominent "Try Chat" CTA linking to `/chat` (deferred - nav tabs sufficient)
-- [x] Header has Chat tab visible on all pages
+- [ ] Add prominent "Try Chat" CTA linking to `/chat`
+
+**Note:** Deferred - nav tabs provide sufficient discoverability for now. CTA can be added when landing page is redesigned.
 
 ---
 

@@ -83,6 +83,8 @@
 }
 
 .tabs-container .tab-button {
+  display: inline-flex; /* Consistent box model for buttons and anchors */
+  align-items: center;
   background-color: transparent;
   color: var(--color-text-secondary);
   border: none;
