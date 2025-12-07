@@ -62,6 +62,10 @@ class WorkerContext:
         Task description (first 100 chars)
     tool_calls
         List of tool calls made during this worker run (for activity log)
+    has_critical_error
+        Flag indicating a critical tool error occurred (fail-fast)
+    critical_error_message
+        Human-readable error message for the critical error
     """
 
     worker_id: str
@@ -69,6 +73,8 @@ class WorkerContext:
     run_id: str | None = None
     task: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    has_critical_error: bool = False
+    critical_error_message: str | None = None
 
     def record_tool_start(
         self,
@@ -100,6 +106,11 @@ class WorkerContext:
         if tool_call.started_at:
             delta = tool_call.completed_at - tool_call.started_at
             tool_call.duration_ms = int(delta.total_seconds() * 1000)
+
+    def mark_critical_error(self, error_message: str) -> None:
+        """Mark that a critical error occurred, triggering fail-fast behavior."""
+        self.has_critical_error = True
+        self.critical_error_message = error_message
 
 
 # Global contextvar - set by WorkerRunner, read anywhere in the call stack

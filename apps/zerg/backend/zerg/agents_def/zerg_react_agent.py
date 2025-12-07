@@ -223,6 +223,122 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     from zerg.tools.result_utils import redact_sensitive_args
     from zerg.tools.result_utils import safe_preview
 
+    # ---------------------------------------------------------------
+    # Phase 6: Critical error detection for fail-fast behavior
+    # ---------------------------------------------------------------
+    def _is_critical_error(result_content: str, error_msg: str | None) -> bool:
+        """Determine if a tool error is critical and should stop execution.
+
+        Critical errors are configuration/infrastructure issues that won't
+        resolve by continuing (SSH keys missing, API not configured, etc).
+        Non-critical errors are transient issues (timeout, rate limit, etc).
+
+        Args:
+            result_content: Full tool result content
+            error_msg: Extracted error message (if any)
+
+        Returns:
+            True if error is critical and worker should fail fast
+        """
+        # Check result content and error message
+        content_lower = result_content.lower()
+        msg_lower = (error_msg or "").lower()
+        combined = f"{content_lower} {msg_lower}"
+
+        # Configuration errors (always critical)
+        config_indicators = [
+            "not configured",
+            "no ssh key",
+            "ssh key not found",
+            "not connected",
+            "not found in path",
+            "ssh client not found",
+            "connector_not_configured",
+            "invalid_credentials",
+            "credentials have expired",
+        ]
+
+        for indicator in config_indicators:
+            if indicator in combined:
+                return True
+
+        # Permission errors (critical)
+        if "permission_denied" in combined or "permission denied" in combined:
+            return True
+
+        # Execution errors that indicate setup problems (critical)
+        if "execution_error" in combined:
+            # SSH/connection setup issues
+            if any(term in combined for term in ["ssh", "connection", "host", "unreachable"]):
+                return True
+
+        # Validation errors are typically critical (bad arguments, missing params)
+        if "validation_error" in combined:
+            return True
+
+        # Non-critical: transient failures (timeout, rate limit)
+        # These are not critical - the LLM should be able to reason about them
+        # and potentially retry or take alternative action
+        transient_indicators = [
+            "timeout",
+            "timed out",
+            "rate_limited",
+            "rate limit",
+            "temporarily unavailable",
+        ]
+
+        for indicator in transient_indicators:
+            if indicator in combined:
+                return False
+
+        # Default: treat as non-critical
+        # This is conservative - better to let the agent reason about the error
+        # than to fail fast unnecessarily
+        return False
+
+    def _format_critical_error(tool_name: str, error_content: str) -> str:
+        """Format a critical error message for the worker result.
+
+        Extracts the user-facing message and provides actionable guidance.
+
+        Args:
+            tool_name: Name of the tool that failed
+            error_content: Error content from the tool
+
+        Returns:
+            Human-readable error message with guidance
+        """
+        # Try to extract user_message from error envelope
+        if "user_message" in error_content:
+            # Parse error envelope
+            try:
+                import json
+                import ast
+                parsed = None
+                try:
+                    parsed = json.loads(error_content)
+                except (json.JSONDecodeError, TypeError):
+                    try:
+                        parsed = ast.literal_eval(error_content)
+                    except (ValueError, SyntaxError):
+                        pass
+
+                if isinstance(parsed, dict) and parsed.get("user_message"):
+                    user_msg = parsed["user_message"]
+                    return f"Tool '{tool_name}' failed: {user_msg}"
+            except Exception:
+                pass  # Fall through to default formatting
+
+        # Extract the most relevant part of the error
+        # Remove <tool-error> prefix if present
+        error_clean = error_content.replace("<tool-error>", "").strip()
+
+        # Limit length
+        if len(error_clean) > 300:
+            error_clean = error_clean[:297] + "..."
+
+        return f"Tool '{tool_name}' failed: {error_clean}"
+
     async def _call_tool_async(tool_call: dict):  # noqa: D401 – coroutine helper
         """Run tool execution in a worker thread with event emission.
 
@@ -286,6 +402,14 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         if ctx and tool_record:
             if is_error:
                 ctx.record_tool_complete(tool_record, success=False, error=error_msg)
+
+                # Phase 6: Mark critical errors for fail-fast behavior
+                # Determine if this is a critical error that should stop execution
+                if _is_critical_error(result_content, error_msg):
+                    critical_msg = _format_critical_error(tool_name, error_msg or result_content)
+                    ctx.mark_critical_error(critical_msg)
+                    logger.error(f"Critical tool error in worker {ctx.worker_id}: {critical_msg}")
+
                 try:
                     await event_bus.publish(
                         EventType.WORKER_TOOL_FAILED,
@@ -379,6 +503,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
             # Update message history with the model response and tool results
             current_messages = add_messages(current_messages, [llm_response] + list(tool_results))
+
+            # Phase 6: Check for critical errors and fail fast
+            # If a critical tool error occurred, stop execution immediately
+            ctx = get_worker_context()
+            if ctx and ctx.has_critical_error:
+                logger.warning(f"Worker {ctx.worker_id} stopping due to critical error: {ctx.critical_error_message}")
+                # Create final assistant message explaining the failure
+                from langchain_core.messages import AIMessage as FinalAIMessage
+                error_response = FinalAIMessage(
+                    content=f"I encountered a critical error that prevents me from completing this task:\n\n{ctx.critical_error_message}"
+                )
+                final_messages = add_messages(current_messages, [error_response])
+                return final_messages
 
             # Call model again with updated messages
             llm_response = await _call_model_async(current_messages, enable_token_stream)
