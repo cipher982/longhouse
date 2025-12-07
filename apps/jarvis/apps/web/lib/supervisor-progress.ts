@@ -48,6 +48,7 @@ export class SupervisorProgressUI {
   private workersByWorkerId: Map<string, WorkerState> = new Map(); // Index for tool event lookups
   private unsubscribers: Array<() => void> = [];
   private tickerInterval: number | null = null; // For live duration updates
+  private clearTimeout: number | null = null; // For delayed clear after complete/error
   private displayMode: DisplayMode = 'floating';
 
   constructor() {
@@ -167,6 +168,9 @@ export class SupervisorProgressUI {
    * Handle supervisor started
    */
   private handleStarted(runId: number, task: string): void {
+    // Cancel any pending clear from previous supervisor complete/error
+    this.cancelPendingClear();
+
     this.isActive = true;
     this.currentRunId = runId;
     this.workers.clear();
@@ -177,6 +181,16 @@ export class SupervisorProgressUI {
 
     // Draw attention to the supervisor UI when it activates
     this.pulseAttention();
+  }
+
+  /**
+   * Cancel any pending delayed clear
+   */
+  private cancelPendingClear(): void {
+    if (this.clearTimeout !== null) {
+      clearTimeout(this.clearTimeout);
+      this.clearTimeout = null;
+    }
   }
 
   /**
@@ -391,9 +405,7 @@ export class SupervisorProgressUI {
   private handleComplete(runId: number, result: string, status: string): void {
     console.log(`[SupervisorProgress] Complete: ${runId} (${status})`);
     // Keep showing for a moment then clear
-    setTimeout(() => {
-      this.clear();
-    }, 2000);
+    this.scheduleClear(2000);
   }
 
   /**
@@ -402,15 +414,25 @@ export class SupervisorProgressUI {
   private handleError(message: string): void {
     console.error(`[SupervisorProgress] Error: ${message}`);
     // Show error briefly then clear
-    setTimeout(() => {
+    this.scheduleClear(3000);
+  }
+
+  /**
+   * Schedule a delayed clear (cancellable if new supervisor starts)
+   */
+  private scheduleClear(delayMs: number): void {
+    this.cancelPendingClear();
+    this.clearTimeout = window.setTimeout(() => {
+      this.clearTimeout = null;
       this.clear();
-    }, 3000);
+    }, delayMs);
   }
 
   /**
    * Clear progress UI
    */
   clear(): void {
+    this.cancelPendingClear();
     this.isActive = false;
     this.currentRunId = null;
     this.workers.clear();

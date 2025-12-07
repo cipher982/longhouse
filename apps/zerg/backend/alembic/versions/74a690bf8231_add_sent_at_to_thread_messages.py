@@ -20,10 +20,19 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add sent_at column to thread_messages table."""
-    op.add_column(
-        'thread_messages',
-        sa.Column('sent_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True)
-    )
+    # Check if column already exists (idempotent)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [col['name'] for col in inspector.get_columns('thread_messages')]
+
+    if 'sent_at' not in columns:
+        op.add_column(
+            'thread_messages',
+            sa.Column('sent_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True)
+        )
+        print("sent_at column added successfully")
+    else:
+        print("sent_at column already exists - skipping")
 
 
 def downgrade() -> None:
