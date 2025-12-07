@@ -7,10 +7,10 @@
 | **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** | See `docs/completed/worker-tool-events-implementation.md` |
 | **Phase 2** | UI Activity Ticker           | ✅ **COMPLETE** | Jarvis shows real-time tool calls per worker              |
 | **Phase 3** | Roundabout Monitoring Loop   | ✅ **COMPLETE** | Supervisor waits for worker with 5s polling               |
-| **Phase 4** | Supervisor Decision Handling | ⏳ Not started  | wait/exit/cancel/peek options                             |
+| **Phase 4** | Supervisor Decision Handling | ✅ **COMPLETE** | Heuristic-based wait/exit/cancel/peek (v1)                |
 | **Phase 5** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
 
-**Next recommended**: Phase 4 (Decision Handling) or Phase 5 (Fail-Fast Tools)
+**Next recommended**: Phase 5 (Fail-Fast Tools)
 
 ---
 
@@ -374,14 +374,45 @@ ROUNDABOUT_STUCK_THRESHOLD = 30  # flag as slow
 ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # entries to track
 ```
 
-### Phase 4: Supervisor Decision Handling
+### Phase 4: Supervisor Decision Handling ✅ COMPLETE
 
-Handle supervisor decisions:
+**Implementation details:**
 
-- Continue (default)
-- Exit early
-- Cancel worker
-- Peek at details
+Files modified:
+
+- `zerg/services/roundabout_monitor.py` - Added decision types and heuristic function
+
+Key components:
+
+- `RoundaboutDecision` enum: WAIT, EXIT, CANCEL, PEEK
+- `DecisionContext` dataclass: Current state for decision making
+- `make_heuristic_decision()` function: Rules-based decision logic
+
+Heuristic rules (v1 - rules-based, future v2 could add LLM):
+
+- **EXIT**: Worker status changed to success/failed, OR final answer pattern detected in tool output
+- **CANCEL**: Stuck > 60s without completing operation, OR no progress for 6+ consecutive polls
+- **WAIT**: Default when none of the above conditions apply
+- **PEEK**: Reserved for future LLM-based decisions
+
+Configuration constants:
+
+```python
+ROUNDABOUT_CANCEL_STUCK_THRESHOLD = 60  # seconds
+ROUNDABOUT_NO_PROGRESS_POLLS = 6  # consecutive polls
+FINAL_ANSWER_PATTERNS = ["Result:", "Summary:", "Completed successfully", ...]
+```
+
+Result types added:
+
+- `early_exit`: Exited before worker completion (answer detected)
+- `cancelled`: Worker cancelled due to stuck/no progress
+- `peek`: Drill-down requested (returns hint for supervisor to call read_worker_file)
+
+Tests added in `tests/test_roundabout_monitor.py`:
+
+- Unit tests for `make_heuristic_decision()` covering all decision paths
+- Integration test for cancel-on-no-progress behavior
 
 ### Phase 5: Graceful Failure Handling
 
