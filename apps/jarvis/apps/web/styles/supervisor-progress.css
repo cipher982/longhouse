@@ -210,7 +210,7 @@
 }
 
 /* Responsive adjustments */
-@media (width <= 640px) {
+@media (width <= 768px) {
   .supervisor-progress {
     padding: var(--space-3);
     margin: 0 var(--space-2) var(--space-2);

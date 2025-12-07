@@ -58,6 +58,12 @@
   --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
   --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
 
+  /* Breakpoints (for reference - CSS can't use vars in media queries) */
+  /* --breakpoint-sm: 640px;  Small mobile */
+  /* --breakpoint-md: 768px;  Tablet/mobile threshold */
+  /* --breakpoint-lg: 1024px; Desktop */
+  /* --breakpoint-xl: 1280px; Large desktop */
+
   /* Spacing & Radius */
   --space-1: 4px;
   --space-2: 8px;
