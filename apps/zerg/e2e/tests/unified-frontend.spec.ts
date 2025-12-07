@@ -42,8 +42,8 @@ test.describe('Unified Frontend Navigation', () => {
   test('landing page loads at /', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/`);
 
-    // Wait for title in the page - unique selector
-    await expect(page.locator('title')).toHaveText(/Swarmlet/, { timeout: 10000 });
+    // Wait for page title - use toHaveTitle() which correctly reads document.title
+    await expect(page).toHaveTitle(/Swarmlet/, { timeout: 10000 });
     await expect(page).toHaveURL(/\/(dashboard)?$/);
   });
 
