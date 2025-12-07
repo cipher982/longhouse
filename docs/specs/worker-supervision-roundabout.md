@@ -9,9 +9,9 @@
 | **Phase 3** | Roundabout Monitoring Loop   | ✅ **COMPLETE** | Supervisor waits for worker with 5s polling               |
 | **Phase 4** | Supervisor Decision Handling | ✅ **COMPLETE** | Heuristic-based wait/exit/cancel/peek (v1)                |
 | **Phase 5** | LLM-Gated Decisions          | ✅ **COMPLETE** | Optional LLM decider with budget/timeout safeguards       |
-| **Phase 6** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
+| **Phase 6** | Graceful Failure Handling    | ✅ **COMPLETE** | Workers fail fast on critical tool errors                 |
 
-**Next recommended**: Phase 6 (Fail-Fast Tools)
+**All phases complete!** The worker supervision roundabout is fully functional.
 
 ---
 
@@ -493,13 +493,71 @@ Tests added in `tests/test_llm_decider.py` and `tests/test_roundabout_monitor.py
 - Integration tests for all decision modes
 - Integration tests for budget and interval enforcement
 
-### Phase 6: Graceful Failure Handling
+### Phase 6: Graceful Failure Handling ✅ COMPLETE
 
-Workers fail fast and report clearly:
+**Implementation details:**
 
-- Tool errors return immediately (no hanging)
-- Clear error messages in worker result
-- Supervisor can reason about failure
+Workers fail fast on critical tool errors, allowing supervisors to immediately understand and respond to failures rather than waiting for timeout or receiving opaque errors.
+
+Files modified:
+
+- `zerg/context.py` - Added critical error tracking to WorkerContext
+- `zerg/agents_def/zerg_react_agent.py` - Added critical error detection and fail-fast logic
+- `zerg/services/worker_runner.py` - Check for critical errors and mark worker as failed
+
+Key components:
+
+- `WorkerContext.has_critical_error` - Flag indicating a critical error occurred
+- `WorkerContext.critical_error_message` - Human-readable error message
+- `WorkerContext.mark_critical_error()` - Mark that a critical error occurred
+- `_is_critical_error()` - Determine if a tool error is critical
+- `_format_critical_error()` - Format error messages for supervisor
+
+**Critical vs Non-Critical Errors:**
+
+Critical errors (trigger fail-fast):
+
+- Configuration errors: SSH key missing, connector not configured, API not set up
+- Permission errors: Access denied, invalid credentials
+- Validation errors: Invalid tool arguments, missing required parameters
+- Infrastructure errors: SSH client not found, service unreachable
+
+Non-critical errors (agent continues):
+
+- Transient failures: Timeout, rate limit, temporarily unavailable
+- Command failures: Non-zero exit codes, grep no matches
+- Recoverable errors: Network hiccup, retry-able API errors
+
+**Behavior:**
+
+1. When a tool returns an error, `_call_tool_async` checks if it's critical via `_is_critical_error()`
+2. If critical, `WorkerContext.mark_critical_error()` is called with formatted message
+3. Agent execution loop checks `ctx.has_critical_error` after each tool batch
+4. If set, agent immediately returns with error explanation, skipping further tool calls
+5. `WorkerRunner` detects the critical error flag and marks worker as "failed"
+6. Roundabout receives failed status and exits immediately
+7. Supervisor sees clear error message explaining what went wrong and how to fix it
+
+**Error Message Format:**
+
+```
+Tool 'ssh_exec' failed: SSH client not found. Ensure OpenSSH is installed.
+```
+
+Messages are extracted from error envelopes' `user_message` field, providing actionable guidance for the supervisor.
+
+**Tests:**
+
+Added `tests/test_worker_fail_fast.py`:
+
+- Test worker fails fast on critical SSH error
+- Test worker succeeds without critical errors
+- Test WorkerContext tracks critical errors correctly
+- Test critical error detection logic
+- Test roundabout exits immediately on worker failure
+- Test error message formatting
+
+All existing worker and roundabout tests continue to pass, ensuring backward compatibility.
 
 ## Configuration
 

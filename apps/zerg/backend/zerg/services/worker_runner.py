@@ -214,6 +214,49 @@ class WorkerRunner:
 
             # Extract final result (last assistant message)
             result_text = self._extract_result(langchain_messages)
+
+            # Phase 6: Check for critical errors
+            # If a critical error occurred during execution, mark as failed
+            if worker_context.has_critical_error:
+                # Calculate duration
+                end_time = datetime.now(timezone.utc)
+                duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+                # Save the error message as result
+                error_result = result_text or worker_context.critical_error_message or "(Critical error)"
+                self.artifact_store.save_result(worker_id, error_result)
+
+                # Mark worker failed
+                self.artifact_store.complete_worker(
+                    worker_id,
+                    status="failed",
+                    error=worker_context.critical_error_message
+                )
+
+                if event_context is not None:
+                    await self._emit_event(
+                        EventType.WORKER_COMPLETE,
+                        {
+                            "event_type": EventType.WORKER_COMPLETE,
+                            "worker_id": worker_id,
+                            "status": "failed",
+                            "error": worker_context.critical_error_message,
+                            "duration_ms": duration_ms,
+                            "owner_id": owner_for_events,
+                            "run_id": event_ctx.get("run_id"),
+                        },
+                    )
+
+                logger.error(f"Worker {worker_id} failed due to critical error after {duration_ms}ms")
+
+                return WorkerResult(
+                    worker_id=worker_id,
+                    status="failed",
+                    result=error_result,
+                    error=worker_context.critical_error_message,
+                    duration_ms=duration_ms,
+                )
+
             # Always save result, even if empty (for consistency)
             saved_result = result_text or "(No result generated)"
             self.artifact_store.save_result(worker_id, saved_result)
