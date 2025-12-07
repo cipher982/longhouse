@@ -352,11 +352,18 @@ Key components:
 
 Behavior:
 
-- `spawn_worker(task)` now waits for completion by default
-- `spawn_worker(task, wait=False)` for fire-and-forget (old behavior)
+- `spawn_worker(task)` returns immediately (fire-and-forget, backward compatible)
+- `spawn_worker(task, wait=True)` enters roundabout monitoring loop
+- Subscribes to tool events via event bus for activity tracking
 - Polling refreshes database session to see worker status changes
 - Monitoring checks logged to `/data/workers/{worker_id}/monitoring/`
 - Returns structured result with duration, summary, activity stats
+
+Timeout semantics:
+
+- `monitor_timeout` status distinct from job failure
+- `worker_still_running` flag indicates if worker continues after monitor exits
+- Clear messaging guides supervisor on next steps
 
 Configuration constants in `roundabout_monitor.py`:
 
