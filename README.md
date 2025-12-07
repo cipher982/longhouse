@@ -2,164 +2,77 @@
   <img src="apps/zerg/frontend-web/branding/swarm-logo-master.png" alt="Zerg" width="200" />
 </p>
 
-<h1 align="center">Zerg</h1>
+<h1 align="center">Zerg + Jarvis (Unified)</h1>
 
 <p align="center">
-  <strong>Visual AI workflow automation with real-time streaming.</strong>
+  <strong>Supervisor + Workers with a unified single-origin UI.</strong>
 </p>
 
-Zerg combines chat-based AI agents, a visual workflow canvas, and per-token LLM streaming into a unified platform. Build automations where every visual node maps directly to runtime execution—not config files, not YAML, but a live canvas.
+Zerg is the supervisor/worker orchestration backend. Jarvis is the voice/text UI. They now ship behind one nginx entrypoint for same-origin UX.
 
 ---
 
-## 🏗️ Architecture
+## Current Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        React Dashboard                          │
-│   ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│   │ Workflow     │  │ Agent        │  │ Execution            │  │
-│   │ Canvas       │  │ Chat         │  │ Monitor              │  │
-│   └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                    WebSocket (per-token streaming)
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                      FastAPI Backend                            │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │
-│  │ LangGraph      │  │ Workflow       │  │ MCP              │   │
-│  │ Agent Runner   │  │ Engine         │  │ Adapter          │   │
-│  └────────────────┘  └────────────────┘  └──────────────────┘   │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐   │
-│  │ Credential     │  │ Topic-based    │  │ Trigger          │   │
-│  │ Resolver       │  │ Pub/Sub        │  │ Service          │   │
-│  └────────────────┘  └────────────────┘  └──────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              PostgreSQL + Encrypted Credential Store
+User → http://localhost:30080 (nginx)
+  /            → Zerg dashboard (React)
+  /dashboard   → Zerg dashboard (alias)
+  /chat        → Jarvis web (PWA)
+  /api/*       → Zerg FastAPI backend
+  /ws/*        → Zerg WS (SSE/WS)
+
+Backend: FastAPI + LangGraph supervisor/worker agents
+Workers: disposable agents, artifacts under /data/workers
+Frontend: React (Zerg) + Vite PWA (Jarvis), served same-origin
 ```
+
+Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (backend), 8080 (jarvis web), 8787 (jarvis server) stay internal.
 
 ---
 
-## ✨ Key Features
+## Highlights
 
-### Visual Workflow Canvas
-
-Drag-and-drop workflow builder with four node types:
-
-- **Triggers** — Gmail, webhooks, cron schedules
-- **Agents** — LangGraph-powered with tool access
-- **Tools** — HTTP calls, math, containers, MCP tools
-- **Conditionals** — Branch logic based on node outputs
-
-Parallel execution is native. The StateGraph engine handles concurrent branches with typed reducers—no race conditions, no manual synchronization.
-
-### Per-Token LLM Streaming
-
-Every token streams over WebSocket as it's generated. The `WsTokenCallback` handler forwards chunks in real-time, so your UI updates character-by-character instead of waiting for complete responses.
-
-```python
-# Under the hood: async callback handler with context vars
-class WsTokenCallback(AsyncCallbackHandler):
-    async def on_llm_new_token(self, token: str, **kwargs):
-        await topic_manager.publish(f"thread:{thread_id}", StreamChunkData(token))
-```
-
-### MCP Integration
-
-First-class [Model Context Protocol](https://modelcontextprotocol.io/) support. Connect any MCP server or use built-in presets:
-
-| Service | Capabilities                    |
-| ------- | ------------------------------- |
-| GitHub  | Issues, PRs, repos, code search |
-| Slack   | Messages, channels, threads     |
-| Linear  | Issues, projects, cycles        |
-| Notion  | Pages, databases, blocks        |
-| Custom  | Any MCP-compliant server        |
-
-MCP tools coexist with built-in tools in a unified registry. The adapter handles connection pooling, retries (3× with 30s timeout), and HTTP/2 multiplexing.
-
-### Two-Tier Credential Management
-
-Enterprise-ready credential resolution:
-
-1. **Account-level** — Shared org credentials (e.g., team Slack workspace)
-2. **Agent-level** — Per-agent overrides for isolated secrets
-
-Credentials resolve at runtime through a cascading lookup with Fernet encryption at rest.
-
-### Jarvis Integration
-
-Voice and device UI powered by the same backend. Jarvis is a PWA that dispatches to Zerg agents via device-secret authentication:
-
-```
-Jarvis PWA → Device Auth → JWT Session → Agent Dispatch → SSE Stream
-```
-
-One platform, multiple interfaces.
+- **Worker supervision (Phases 1–6 complete):** tool events, activity ticker, roundabout monitoring, heuristic/LLM decisions, fail-fast critical errors.
+- **Unified frontend (Phases 0–7 complete):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
+- **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.
+- **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker-compose.unified.yml`; enable auth in prod.
 
 ---
 
-## ⚙️ Technical Highlights
+## Commands
 
-**LangGraph Agent Execution**
-
-- Functional ReAct agents compiled to async runnables
-- Process-local cache with edit-based invalidation
-- Full async execution—no blocking thread pools
-
-**Workflow Engine** (~150 LOC)
-
-- StateGraph with typed state and `Annotated` reducers
-- Fail-fast semantics: `first_error` reducer halts on exception
-- Envelope-based outputs with node metadata
-
-**WebSocket Architecture**
-
-- Topic-based pub/sub (`agent:123`, `thread:45`, `workflow:99`)
-- JWT pre-authentication before handshake acceptance
-- Custom close codes (4401 for invalid JWT)
-
-**Trigger System**
-
-- Gmail OAuth with push notifications via Cloud Pub/Sub
-- Webhook endpoints with signature verification
-- APScheduler for cron/interval jobs
+- `make dev` – brings up unified stack with nginx front.
+- `make zerg` / `make jarvis` – individual stacks.
+- Tests: `make test-zerg` (backend + frontend + e2e), `make test-jarvis`.
+- Codegen: `make generate-sdk`, `make regen-ws`.
 
 ---
 
-## 🛠️ Stack
-
-| Layer         | Technology                        |
-| ------------- | --------------------------------- |
-| Frontend      | React, TypeScript, Vite           |
-| Backend       | FastAPI, Python 3.12, LangGraph   |
-| Database      | PostgreSQL (prod), SQLite (test)  |
-| Real-time     | WebSocket with topic pub/sub      |
-| Auth          | JWT, Google OAuth, device secrets |
-| Tools         | MCP protocol, built-in registry   |
-| Observability | LangSmith tracing (optional)      |
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 apps/
 ├── zerg/
-│   ├── backend/        # FastAPI + LangGraph agents
+│   ├── backend/        # FastAPI + LangGraph supervisor/worker
 │   ├── frontend-web/   # React dashboard
-│   └── e2e/            # Playwright tests
-└── jarvis/             # Voice/device PWA
+│   └── e2e/            # Playwright unified tests
+└── jarvis/             # PWA UI + Node bridge
 
-config/                 # Environment configs
-docker/                 # Docker Compose + Dockerfiles
-docs/                   # Documentation + branding
-schemas/                # OpenAPI, AsyncAPI, JSON schemas
+docker/                 # Compose incl. docker-compose.unified.yml
+docs/                   # Specs/PRDs (see below)
 scripts/                # Dev tools + generators
-tests/                  # Integration tests
 ```
+
+---
+
+## Docs to know
+
+- `docs/specs/frontend-unification-spec.md` – now marked complete (phases 0–7).
+- `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
+- `docs/specs/super-siri-architecture.md` – overall vision.
+- `docs/specs/supervisor-ui-spec.md` – pending (future UI work).
+- `docs/DEPLOYMENT.md` / `docker/docker-compose.unified.yml` – dev/prod entrypoints.
 
 ---
 
