@@ -276,15 +276,30 @@ app.openapi = custom_openapi
 # ------------------------------------------------------------------
 
 if _settings.auth_disabled:
-    # Dev mode: Allow localhost origins for development
-    cors_origins = ["http://localhost:30080", "http://localhost:8080", "http://localhost:5173"]
+    # Dev mode: Allow localhost and 127.0.0.1 origins for development/e2e tests
+    # Include both http and https variants for flexibility
+    cors_origins = [
+        # localhost variants
+        "http://localhost:30080",
+        "http://localhost:8080",
+        "http://localhost:5173",
+        "https://localhost:30080",
+        # 127.0.0.1 variants (used by Playwright/e2e runners)
+        "http://127.0.0.1:30080",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:5173",
+    ]
 else:
     cors_origins_env = _settings.allowed_cors_origins
     if cors_origins_env.strip():
         cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     else:
-        # Safe default: same-origin only (unified frontend at port 30080)
-        # In production, ALLOWED_CORS_ORIGINS should be set explicitly
+        # Prod with no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
+        logger.warning(
+            "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
+            "CORS will only allow http://localhost:30080. "
+            "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
+        )
         cors_origins = ["http://localhost:30080"]
 
 # Custom exception handler to ensure CORS headers are included in error responses
