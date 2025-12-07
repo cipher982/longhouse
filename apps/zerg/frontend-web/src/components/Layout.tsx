@@ -132,6 +132,7 @@ export default function Layout({ children }: PropsWithChildren) {
   const isProfileRoute = location.pathname.startsWith("/profile");
   const isIntegrationsRoute = location.pathname.startsWith("/settings/integrations");
   const isAdminRoute = location.pathname.startsWith("/admin");
+  const isChatRoute = location.pathname.startsWith("/chat");
 
   // Check if user has admin access using authoritative role field
   const isAdmin = user?.role === 'ADMIN';
@@ -144,6 +145,14 @@ export default function Layout({ children }: PropsWithChildren) {
     <>
       <WelcomeHeader />
       <nav id="global-tabs-container" className="tabs-container">
+        <a
+          id="global-chat-tab"
+          href="/chat"
+          data-testid="global-chat-tab"
+          className={clsx("tab-button", { active: isChatRoute })}
+        >
+          Chat
+        </a>
         <button
           id="global-dashboard-tab"
           type="button"
