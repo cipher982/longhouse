@@ -6,11 +6,11 @@
 | ----------- | ---------------------------- | --------------- | --------------------------------------------------------- |
 | **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** | See `docs/completed/worker-tool-events-implementation.md` |
 | **Phase 2** | UI Activity Ticker           | ✅ **COMPLETE** | Jarvis shows real-time tool calls per worker              |
-| **Phase 3** | Roundabout Monitoring Loop   | ⏳ Not started  | Supervisor polling + ephemeral context                    |
+| **Phase 3** | Roundabout Monitoring Loop   | ✅ **COMPLETE** | Supervisor waits for worker with 5s polling               |
 | **Phase 4** | Supervisor Decision Handling | ⏳ Not started  | wait/exit/cancel/peek options                             |
 | **Phase 5** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
 
-**Next recommended**: Phase 3 (Roundabout Monitoring Loop) or Phase 5 (Fail-Fast Tools)
+**Next recommended**: Phase 4 (Decision Handling) or Phase 5 (Fail-Fast Tools)
 
 ---
 
@@ -333,14 +333,39 @@ UI displays:
 - Args preview (while running) or error (if failed)
 - Tool calls nested under each worker with visual hierarchy
 
-### Phase 3: Roundabout Loop
+### Phase 3: Roundabout Loop ✅ COMPLETE
 
-Implement the supervision loop:
+**Implementation details:**
 
-- Polling interval (default 5s)
-- Status aggregation
-- Decision prompt to supervisor
-- Ephemeral context (not persisted to thread)
+Files created/modified:
+
+- `zerg/services/roundabout_monitor.py` - New monitoring service
+- `zerg/tools/builtin/supervisor_tools.py` - Modified spawn_worker
+
+Key components:
+
+- `RoundaboutMonitor` class with `wait_for_completion()` method
+- Polling interval: 5 seconds (configurable via `ROUNDABOUT_CHECK_INTERVAL`)
+- Hard timeout: 300 seconds / 5 minutes (configurable)
+- Status tracking via `RoundaboutStatus` dataclass
+- Result formatting via `format_roundabout_result()`
+
+Behavior:
+
+- `spawn_worker(task)` now waits for completion by default
+- `spawn_worker(task, wait=False)` for fire-and-forget (old behavior)
+- Polling refreshes database session to see worker status changes
+- Monitoring checks logged to `/data/workers/{worker_id}/monitoring/`
+- Returns structured result with duration, summary, activity stats
+
+Configuration constants in `roundabout_monitor.py`:
+
+```python
+ROUNDABOUT_CHECK_INTERVAL = 5  # seconds
+ROUNDABOUT_HARD_TIMEOUT = 300  # 5 minutes
+ROUNDABOUT_STUCK_THRESHOLD = 30  # flag as slow
+ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # entries to track
+```
 
 ### Phase 4: Supervisor Decision Handling
 
