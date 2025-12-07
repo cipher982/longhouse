@@ -276,14 +276,16 @@ app.openapi = custom_openapi
 # ------------------------------------------------------------------
 
 if _settings.auth_disabled:
-    cors_origins = ["*"]
+    # Dev mode: Allow localhost origins for development
+    cors_origins = ["http://localhost:30080", "http://localhost:8080", "http://localhost:5173"]
 else:
     cors_origins_env = _settings.allowed_cors_origins
     if cors_origins_env.strip():
         cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     else:
-        # Safe default: only allow same-origin frontend (assumes SPA served on 8002)
-        cors_origins = ["https://your-domain.com", "http://localhost:8002"]
+        # Safe default: same-origin only (unified frontend at port 30080)
+        # In production, ALLOWED_CORS_ORIGINS should be set explicitly
+        cors_origins = ["http://localhost:30080"]
 
 # Custom exception handler to ensure CORS headers are included in error responses
 from fastapi import Request
