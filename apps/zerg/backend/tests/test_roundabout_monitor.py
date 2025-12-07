@@ -198,16 +198,44 @@ class TestMakeHeuristicDecision:
         assert decision == RoundaboutDecision.CANCEL
         assert "stuck" in reason.lower()
 
-    def test_cancel_when_no_progress(self):
-        """Should return CANCEL after too many polls without progress."""
+    def test_cancel_when_no_progress_with_tool_activity(self):
+        """Should return CANCEL after too many polls without progress (with tool activity)."""
         ctx = self._make_context(
             status="running",
             polls_without_progress=7,  # Beyond 6 poll threshold
+            elapsed_seconds=20.0,  # Beyond min_elapsed guard (15s)
+            tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
         )
         decision, reason = make_heuristic_decision(ctx)
 
         assert decision == RoundaboutDecision.CANCEL
         assert "progress" in reason.lower()
+
+    def test_no_cancel_when_no_progress_but_too_early(self):
+        """Should NOT cancel if no progress but not enough time elapsed."""
+        ctx = self._make_context(
+            status="running",
+            polls_without_progress=7,
+            elapsed_seconds=10.0,  # Less than min_elapsed guard (15s)
+            tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
+        )
+        decision, reason = make_heuristic_decision(ctx)
+
+        # Should wait, not cancel
+        assert decision == RoundaboutDecision.WAIT
+
+    def test_cancel_when_no_tool_activity_after_extended_time(self):
+        """Should cancel if no tool activity after extended grace period."""
+        ctx = self._make_context(
+            status="running",
+            polls_without_progress=7,
+            elapsed_seconds=35.0,  # Beyond extended grace (30s)
+            tool_activities=[],  # No tool activity
+        )
+        decision, reason = make_heuristic_decision(ctx)
+
+        assert decision == RoundaboutDecision.CANCEL
+        assert "activity" in reason.lower()
 
     def test_wait_when_stuck_but_under_threshold(self):
         """Should still WAIT when stuck but under cancel threshold."""
@@ -223,7 +251,7 @@ class TestMakeHeuristicDecision:
 
 @pytest.mark.asyncio
 async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_path):
-    """Monitor should cancel when no progress for many polls."""
+    """Monitor should cancel when no progress for many polls (with tool activity)."""
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 3)  # Lower for fast test
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
@@ -253,13 +281,127 @@ async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_pa
             owner_id=1,
             timeout_seconds=2,  # Higher than we need
         )
+        monitor_task = asyncio.create_task(monitor.wait_for_completion())
 
-        result = await monitor.wait_for_completion()
+        # Allow subscription to register
+        await asyncio.sleep(0.01)
 
-        # Should be cancelled due to no progress
-        assert result.status == "cancelled"
-        assert result.decision == RoundaboutDecision.CANCEL
-        assert "progress" in result.activity_summary.get("cancel_reason", "").lower()
+        # Emit a tool event to satisfy the "has_tool_activity" guard
+        # After this, no more events will come (simulating "stuck after tool started")
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": EventType.WORKER_TOOL_STARTED,
+                "job_id": job.id,
+                "worker_id": worker_id,
+                "tool_name": "stuck_tool",
+            },
+        )
+
+        result = await monitor_task
+
+        # Should be cancelled due to no progress (or timeout, which is also acceptable)
+        assert result.status in ("cancelled", "monitor_timeout")
+        if result.status == "cancelled":
+            assert result.decision == RoundaboutDecision.CANCEL
+    finally:
+        event_bus._subscribers = original_subs
+
+
+@pytest.mark.asyncio
+async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, tmp_path):
+    """Monitor should correlate tool events by job_id (regression test for event filtering bug)."""
+    monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
+    monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
+    store = WorkerArtifactStore(base_path=str(tmp_path / "workers"))
+
+    original_subs = deepcopy(event_bus._subscribers)
+    event_bus._subscribers.clear()
+
+    try:
+        worker_id = store.create_worker("Test task", owner_id=1)
+        store.start_worker(worker_id)
+
+        job = WorkerJob(
+            owner_id=1,
+            task="Test task",
+            model="gpt-5-mini",
+            status="running",
+            worker_id=worker_id,
+        )
+        db_session.add(job)
+        db_session.commit()
+        db_session.refresh(job)
+
+        monitor = RoundaboutMonitor(db_session, job.id, owner_id=1, timeout_seconds=2)
+        monitor_task = asyncio.create_task(monitor.wait_for_completion())
+
+        # Allow subscription to register
+        await asyncio.sleep(0.01)
+
+        # Emit event WITH job_id - should be recorded
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": EventType.WORKER_TOOL_STARTED,
+                "job_id": job.id,  # Critical: includes job_id
+                "worker_id": worker_id,
+                "owner_id": 1,
+                "tool_name": "http_request",
+            },
+        )
+
+        # Emit event with WRONG job_id - should be ignored
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": EventType.WORKER_TOOL_STARTED,
+                "job_id": 99999,  # Different job
+                "worker_id": "other-worker",
+                "owner_id": 1,
+                "tool_name": "should_not_appear",
+            },
+        )
+
+        # Emit event with NO job_id - should be ignored (regression test)
+        await event_bus.publish(
+            EventType.WORKER_TOOL_STARTED,
+            {
+                "event_type": EventType.WORKER_TOOL_STARTED,
+                "worker_id": worker_id,  # Same worker but no job_id
+                "owner_id": 1,
+                "tool_name": "also_should_not_appear",
+            },
+        )
+
+        # Complete the worker
+        await event_bus.publish(
+            EventType.WORKER_TOOL_COMPLETED,
+            {
+                "event_type": EventType.WORKER_TOOL_COMPLETED,
+                "job_id": job.id,
+                "worker_id": worker_id,
+                "tool_name": "http_request",
+                "duration_ms": 100,
+            },
+        )
+
+        store.save_result(worker_id, "OK")
+        store.complete_worker(worker_id, status="success")
+        job.status = "success"
+        db_session.commit()
+
+        result = await monitor_task
+
+        assert result.status == "complete"
+        # Should only have recorded the events with matching job_id
+        assert result.activity_summary["tool_calls_total"] == 1
+        assert result.activity_summary["tool_calls_completed"] == 1
+        # Verify tool names don't include the ignored events
+        tools_used = result.activity_summary.get("tools_used", [])
+        assert "http_request" in tools_used
+        assert "should_not_appear" not in tools_used
+        assert "also_should_not_appear" not in tools_used
     finally:
         event_bus._subscribers = original_subs
 

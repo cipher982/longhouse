@@ -86,6 +86,7 @@ class WorkerRunner:
         agent_config: dict[str, Any] | None = None,
         timeout: int = 300,
         event_context: dict[str, Any] | None = None,
+        job_id: int | None = None,
     ) -> WorkerResult:
         """Execute a task as a worker agent.
 
@@ -141,10 +142,12 @@ class WorkerRunner:
         # Set up worker context for tool event emission
         # This context is read by zerg_react_agent._call_tool_async to emit
         # WORKER_TOOL_STARTED/COMPLETED/FAILED events
+        # job_id is critical for roundabout event correlation
         worker_context = WorkerContext(
             worker_id=worker_id,
             owner_id=owner_for_events,
             run_id=event_ctx.get("run_id"),
+            job_id=job_id,
             task=task[:100],
         )
         context_token = set_worker_context(worker_context)

@@ -379,6 +379,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                         "worker_id": ctx.worker_id,
                         "owner_id": ctx.owner_id,
                         "run_id": ctx.run_id,
+                        "job_id": ctx.job_id,  # Critical for roundabout event correlation
                         "tool_name": tool_name,
                         "tool_call_id": tool_call_id,
                         "tool_args_preview": safe_preview(str(safe_args)),
@@ -418,6 +419,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "worker_id": ctx.worker_id,
                             "owner_id": ctx.owner_id,
                             "run_id": ctx.run_id,
+                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,
@@ -437,6 +439,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             "worker_id": ctx.worker_id,
                             "owner_id": ctx.owner_id,
                             "run_id": ctx.run_id,
+                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
                             "tool_name": tool_name,
                             "tool_call_id": tool_call_id,
                             "duration_ms": duration_ms,

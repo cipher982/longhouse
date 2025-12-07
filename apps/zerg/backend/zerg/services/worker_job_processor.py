@@ -138,6 +138,7 @@ class WorkerJobProcessor:
                 runner = WorkerRunner(artifact_store=artifact_store)
 
                 # Execute the worker
+                # Pass job.id so tool events include job_id for roundabout correlation
                 result = await runner.run_worker(
                     db=db,
                     task=job.task,
@@ -146,6 +147,7 @@ class WorkerJobProcessor:
                         "model": job.model,
                         "owner_id": job.owner_id,
                     },
+                    job_id=job.id,
                 )
 
                 # Update job with results
