@@ -339,10 +339,10 @@ Both `jarvis-server` and `zerg-backend` MUST:
 
 ---
 
-### Phase 4: Navigation Integration ⏳ TODO
+### Phase 4: Navigation Integration ✅ COMPLETE
 
 **Duration:** 1-2 hours
-**Status:** Not started
+**Status:** Complete
 
 **Tasks:**
 
@@ -350,29 +350,29 @@ Both `jarvis-server` and `zerg-backend` MUST:
 
 **File:** `apps/zerg/frontend-web/src/components/Layout.tsx`
 
-- [ ] Add "Chat" link pointing to `/chat`
-- [ ] Style consistently with existing nav
+- [x] Add "Chat" link pointing to `/chat`
+- [x] Style consistently with existing nav (anchor styled as tab-button)
 
 #### 4.2 Add Header Navigation to Jarvis
 
-**File:** `apps/jarvis/apps/web/index.html` or new component
+**File:** `apps/jarvis/apps/web/index.html`
 
-- [ ] Add "Dashboard" link pointing to `/dashboard`
-- [ ] Style consistently with Jarvis UI
+- [x] Add "Dashboard" link pointing to `/dashboard`
+- [x] Style consistently with Jarvis UI (header-button with icon)
 
 #### 4.3 Update Landing Page
 
 **File:** `apps/zerg/frontend-web/src/pages/LandingPage.tsx`
 
-- [ ] Add prominent "Try Chat" CTA linking to `/chat`
-- [ ] Ensure header has both Chat and Dashboard links
+- [ ] Add prominent "Try Chat" CTA linking to `/chat` (deferred - nav tabs sufficient)
+- [x] Header has Chat tab visible on all pages
 
 ---
 
-### Phase 5: Testing ⏳ TODO
+### Phase 5: Testing ⏳ IN PROGRESS
 
 **Duration:** 1 day
-**Status:** Not started
+**Status:** Playwright smoke tests created, manual tests pending
 
 **Tasks:**
 
@@ -404,38 +404,20 @@ Both `jarvis-server` and `zerg-backend` MUST:
 - [ ] WebSocket connection works
 - [ ] OAuth flow works (if enabled)
 
-#### 5.4 Playwright Smoke Tests
+#### 5.4 Playwright Smoke Tests ✅ CREATED
 
-**File:** `apps/zerg/e2e/tests/unified-frontend.spec.ts` (new)
+**File:** `apps/zerg/e2e/tests/unified-frontend.spec.ts`
 
-```typescript
-// Tests to implement:
-test("landing page loads", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator("h1")).toContainText("Swarmlet");
-});
+Tests implemented:
 
-test("chat page loads with favicon", async ({ page }) => {
-  await page.goto("/chat");
-  await expect(page.locator("#pttBtn")).toBeVisible();
-  // Check favicon loaded (inspect link tag)
-});
-
-test("dashboard page loads", async ({ page }) => {
-  await page.goto("/dashboard");
-  await expect(page.locator("text=Agents")).toBeVisible();
-});
-
-test("SSE stream opens successfully", async ({ page }) => {
-  // Navigate to chat, trigger supervisor task, verify SSE events
-});
-
-test("voice toggle works", async ({ page }) => {
-  await page.goto("/chat");
-  await page.click("#pttBtn");
-  // Verify connection state changes
-});
-```
+- Landing page loads at /
+- Chat page loads at /chat with PTT button
+- Dashboard page loads at /dashboard
+- Chat tab visible in Zerg dashboard nav
+- Dashboard link visible in Jarvis header
+- Navigation from dashboard → chat works
+- Navigation from chat → dashboard works
+- API health check via unified proxy
 
 #### 5.5 Auth Contract Test
 
