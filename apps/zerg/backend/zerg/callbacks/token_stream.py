@@ -54,6 +54,12 @@ current_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.Context
 class WsTokenCallback(AsyncCallbackHandler):
     """LangChain callback that forwards every new LLM token over WebSocket."""
 
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize callback with skip-warning flag to prevent log spam."""
+        super().__init__(**kwargs)
+        # Track if we've already warned about missing context (avoid log spam)
+        self._warned_no_context = False
+
     # We only need **async** token notifications
 
     # ------------------------------------------------------------------
@@ -105,8 +111,11 @@ class WsTokenCallback(AsyncCallbackHandler):
 
         if thread_id is None or user_id is None:
             # If no context is set we skip – this can happen if the LLM is
-            # called outside an ``AgentRunner`` (unit-tests, etc.).
-            logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
+            # called outside an ``AgentRunner`` (unit-tests, workers, etc.).
+            # Only warn once per callback instance to prevent log spam.
+            if not self._warned_no_context:
+                logger.debug("WsTokenCallback: thread_id or user_id context not set – skipping token dispatch")
+                self._warned_no_context = True
             return
 
         topic = f"user:{user_id}"

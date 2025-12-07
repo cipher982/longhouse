@@ -702,7 +702,8 @@ class WorkerJob(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     # Supervisor correlation - links worker to supervisor run for SSE event streaming
-    supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True, index=True)
+    # ON DELETE SET NULL: if supervisor run is deleted, worker job remains but loses correlation
+    supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Job specification
     task = Column(Text, nullable=False)
