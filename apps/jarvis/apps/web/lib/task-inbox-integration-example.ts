@@ -18,7 +18,7 @@ async function initializeTaskInbox() {
   }
 
   // Get configuration from environment
-  const zergApiURL = import.meta.env?.VITE_ZERG_API_URL || 'http://localhost:47300';
+  const zergApiURL = '/api';  // Same-origin API calls through nginx proxy
   const deviceSecret = import.meta.env?.VITE_JARVIS_DEVICE_SECRET || '';
 
   if (!deviceSecret) {

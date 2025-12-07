@@ -137,10 +137,11 @@ export function buildConversationManagerOptions(config: any): ConversationManage
 }
 
 /**
- * Get Zerg API URL from environment or use default
+ * Get Zerg API URL - now uses relative path for same-origin calls
  */
 export function getZergApiUrl(): string {
-  return import.meta.env?.VITE_ZERG_API_URL || CONFIG.DEFAULT_ZERG_API_URL;
+  // Use relative path for same-origin API calls through nginx proxy
+  return '/api';
 }
 
 /**

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import { resolve } from 'path'
 
 export default defineConfig({
+  base: '/chat/',
   build: {
     outDir: './dist',
     emptyOutDir: true,
@@ -36,11 +37,38 @@ export default defineConfig({
       clientPort: process.env.JARPXY_PORT ? parseInt(process.env.JARPXY_PORT) : 30080,
     },
     proxy: {
-      '/api': {
-        target: 'http://localhost:8787',
+      // Jarvis realtime bridge
+      '/api/session': {
+        target: 'http://jarvis-server:8787',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
-      }
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/api/tool': {
+        target: 'http://jarvis-server:8787',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+      '/api/sync': {
+        target: 'http://jarvis-server:8787',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
+
+      // Zerg backend (REST + SSE)
+      '/api/ws': {
+        target: 'ws://zerg-backend:8000',
+        ws: true,
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://zerg-backend:8000',
+        ws: true,
+        changeOrigin: true,
+      },
+      '/api': {
+        target: 'http://zerg-backend:8000',
+        changeOrigin: true,
+      },
     }
   }
 })

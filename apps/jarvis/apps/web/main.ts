@@ -280,7 +280,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const taskInboxContainer = document.getElementById('task-inbox-container');
     if (taskInboxContainer) {
       await createTaskInbox(taskInboxContainer, {
-        apiURL: import.meta.env?.VITE_ZERG_API_URL || 'http://localhost:47300',
+        apiURL: '/api',  // Same-origin API calls through nginx proxy
         deviceSecret: import.meta.env?.VITE_JARVIS_DEVICE_SECRET || '',
         onError: (err) => console.error('TaskInbox error:', err),
         onRunUpdate: (run) => {

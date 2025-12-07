@@ -53,7 +53,6 @@ echo ""
 
 # Export all required environment variables
 export JARPXY_PORT=30080
-export ZGPXY_PORT=30081
 export JARVIS_WEB_PORT=8080
 export JARVIS_SERVER_PORT=8787
 export ZERG_BACKEND_PORT=8000
@@ -79,8 +78,9 @@ docker compose -f "$COMPOSE_FILE" ps
 
 echo ""
 echo -e "${GREEN}✅ Development environment ready!${NC}"
-echo -e "${BLUE}   Jarvis PWA:     http://localhost:30080${NC}"
-echo -e "${BLUE}   Zerg Dashboard: http://localhost:30081${NC}"
+echo -e "${BLUE}   App:        http://localhost:30080${NC}"
+echo -e "${BLUE}   Chat:       http://localhost:30080/chat${NC}"
+echo -e "${BLUE}   Dashboard:  http://localhost:30080/dashboard${NC}"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop everything${NC}"
 echo ""
