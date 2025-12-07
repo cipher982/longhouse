@@ -207,13 +207,16 @@ class RoundaboutMonitor:
 
             event_type = payload.get("event_type")
             if event_type:
-                self.record_tool_activity(event_type.value if hasattr(event_type, 'value') else str(event_type), payload)
+                self.record_tool_activity(
+                    event_type.value if hasattr(event_type, "value") else str(event_type),
+                    payload,
+                )
 
         # Subscribe to all tool event types
         self._event_subscription = handle_tool_event
-        await event_bus.subscribe(EventType.WORKER_TOOL_STARTED, handle_tool_event)
-        await event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, handle_tool_event)
-        await event_bus.subscribe(EventType.WORKER_TOOL_FAILED, handle_tool_event)
+        event_bus.subscribe(EventType.WORKER_TOOL_STARTED, handle_tool_event)
+        event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, handle_tool_event)
+        event_bus.subscribe(EventType.WORKER_TOOL_FAILED, handle_tool_event)
         logger.debug(f"Subscribed to tool events for job {self.job_id}")
 
     async def _unsubscribe_from_tool_events(self) -> None:
@@ -222,9 +225,9 @@ class RoundaboutMonitor:
 
         if self._event_subscription:
             try:
-                await event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, self._event_subscription)
-                await event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, self._event_subscription)
-                await event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, self._event_subscription)
+                event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, self._event_subscription)
+                event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, self._event_subscription)
+                event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, self._event_subscription)
                 logger.debug(f"Unsubscribed from tool events for job {self.job_id}")
             except Exception as e:
                 logger.debug(f"Error unsubscribing from events: {e}")
@@ -280,7 +283,11 @@ class RoundaboutMonitor:
         """Record tool activity from events."""
         timestamp = datetime.now(timezone.utc)
 
-        if "STARTED" in event_type:
+        # Normalize event type to lower-case string for robust matching
+        event_str = event_type.value if hasattr(event_type, "value") else str(event_type)
+        event_str = event_str.lower()
+
+        if "started" in event_str:
             activity = ToolActivity(
                 tool_name=payload.get("tool_name", "unknown"),
                 status="started",
@@ -290,10 +297,10 @@ class RoundaboutMonitor:
             self._tool_activities.append(activity)
             logger.debug(f"Recorded tool start: {activity.tool_name}")
 
-        elif "COMPLETED" in event_type or "FAILED" in event_type:
+        elif "completed" in event_str or "failed" in event_str:
             # Find matching started activity and update it
             tool_name = payload.get("tool_name", "unknown")
-            is_failed = "FAILED" in event_type
+            is_failed = "failed" in event_str
             for activity in reversed(self._tool_activities):
                 if activity.tool_name == tool_name and activity.status == "started":
                     activity.status = "failed" if is_failed else "completed"
