@@ -32,7 +32,9 @@
     <!-- Analytics (Umami) -->
     <script defer src="https://analytics.drose.io/script.js" data-website-id="486eaa80-2916-41ee-a2a2-f55209495028"></script>
 
-    <!-- CSS loaded via main.ts for proper Vite HMR -->
+    <!-- CSS as blocking resource in head (Vite HMR works fine with link tags) -->
+    <link rel="stylesheet" href="./styles/index.css">
+    <link rel="stylesheet" href="./styles/task-inbox.css">
   </head>
   <body>
     <div class="app-container">

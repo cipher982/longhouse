@@ -1,7 +1,5 @@
 // Jarvis PWA - Refactored Entry Point
-// Import CSS here for proper Vite HMR support (instead of HTML link tags)
-import './styles/index.css';
-import './styles/task-inbox.css';
+// CSS loaded via <link> tags in index.html (blocking, prevents FOUC)
 
 import { logger, getJarvisClient, SessionManager } from '@jarvis/core';
 import { createTaskInbox, type TaskInbox } from './lib/task-inbox';
