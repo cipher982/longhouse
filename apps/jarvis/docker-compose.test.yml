@@ -17,6 +17,11 @@ services:
       NODE_ENV: test
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY required for e2e tests}
       JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-device-secret}
+      # Model configuration - use mini model for faster/cheaper tests
+      JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
+      JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
+      JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
+      JARVIS_VOICE: ${JARVIS_VOICE:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${TEST_SERVER_PORT:-8787}/session"]
       interval: 5s
@@ -36,6 +41,10 @@ services:
     environment:
       JARVIS_WEB_PORT: ${TEST_WEB_PORT:-8080}
       NODE_ENV: test
+      # Model configuration - Vite env vars need VITE_ prefix
+      VITE_JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
+      VITE_JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
+      VITE_JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${TEST_WEB_PORT:-8080}"]
       interval: 5s
@@ -54,7 +63,15 @@ services:
         condition: service_healthy
     environment:
       BASE_URL: http://jarvis-web:${TEST_WEB_PORT:-8080}
+      SERVER_URL: http://jarvis-server:${TEST_SERVER_PORT:-8787}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CI: ${CI:-}
+      # Flag to skip WebRTC tests (they don't work in headless Docker)
+      SKIP_WEBRTC_TESTS: "true"
+      # Model configuration - pass through for test assertions
+      JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
+      JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
+      JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
     volumes:
       # Mount test results back to host for inspection
       - ./test-results:/app/test-results

@@ -22,19 +22,25 @@ test.describe('History Hydration E2E', () => {
   // Use a unique codeword per test run to avoid false positives
   const testCodeword = `zebra${Date.now()}`;
 
-  // Skip tests that require real OpenAI connection in CI
-  // These tests require WebRTC + microphone which don't work reliably in headless Docker
-  const skipRealApiTests = process.env.CI || !process.env.OPENAI_API_KEY;
+  // Skip tests that require real OpenAI WebRTC connection
+  // These tests require WebRTC + microphone which don't work in headless Docker
+  // SKIP_WEBRTC_TESTS is set in docker-compose.test.yml
+  const skipRealApiTests = process.env.SKIP_WEBRTC_TESTS === 'true' ||
+                           process.env.CI ||
+                           !process.env.OPENAI_API_KEY;
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/chat/');
     await page.waitForSelector('#transcript');
 
-    // Wait for app initialization
+    // Wait for app initialization AND session to be active
+    // The session must be active before we can add conversation turns
     await page.waitForFunction(() => {
       const w = window as any;
-      return w.stateManager?.getState?.()?.sessionManager != null;
-    }, { timeout: 15000 });
+      const sessionManager = w.stateManager?.getState?.()?.sessionManager;
+      // Check both that sessionManager exists AND that session is active
+      return sessionManager != null && sessionManager.isSessionActive?.() === true;
+    }, { timeout: 30000 });
   });
 
   test('should hydrate conversation history into Realtime session after page refresh', async ({ page }) => {

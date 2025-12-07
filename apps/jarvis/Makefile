@@ -35,7 +35,8 @@ test: ## Run Playwright tests (requires OPENAI_API_KEY)
 	fi
 	@echo "🧪 Running E2E tests in isolated Docker environment..."
 	@echo "   Building and starting services..."
-	@docker compose -f docker-compose.test.yml run --rm playwright; \
+	@docker compose -f docker-compose.test.yml build && \
+	docker compose -f docker-compose.test.yml run --rm playwright; \
 	EXIT_CODE=$$?; \
 	echo "🧹 Cleaning up test containers..."; \
 	docker compose -f docker-compose.test.yml down -v --remove-orphans; \

@@ -1,12 +1,14 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Voice Interaction Flow', () => {
+// Skip all voice tests in CI/Docker - they require real OpenAI WebRTC connection
+// These tests click the mic button and try to establish real WebRTC connections
+test.describe.skip('Voice Interaction Flow', () => {
   test.beforeEach(async ({ page, context }) => {
     // Grant microphone permissions
     await context.grantPermissions(['microphone']);
 
     // Navigate to Jarvis
-    await page.goto('http://localhost:8080');
+    await page.goto('/');
     await page.waitForSelector('#transcript');
 
     // Wait for app initialization
