@@ -136,6 +136,10 @@ JWT_SECRET="<64-char-random-string>"
 GOOGLE_CLIENT_ID="<client-id>.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET="<google-secret>"
 
+# CORS (must include your public TLS origin)
+# Comma-separated list. Example: "https://swarm.example.com,https://dashboard.swarm.example.com"
+ALLOWED_CORS_ORIGINS="https://your-domain.com"
+
 # Jarvis Integration
 JARVIS_DEVICE_SECRET="<32-char-random-string>"
 
