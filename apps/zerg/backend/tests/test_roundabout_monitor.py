@@ -203,7 +203,7 @@ class TestMakeHeuristicDecision:
         ctx = self._make_context(
             status="running",
             polls_without_progress=7,  # Beyond 6 poll threshold
-            elapsed_seconds=20.0,  # Beyond min_elapsed guard (15s)
+            elapsed_seconds=25.0,  # Beyond min_elapsed guard (20s)
             tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
         )
         decision, reason = make_heuristic_decision(ctx)
@@ -216,7 +216,7 @@ class TestMakeHeuristicDecision:
         ctx = self._make_context(
             status="running",
             polls_without_progress=7,
-            elapsed_seconds=10.0,  # Less than min_elapsed guard (15s)
+            elapsed_seconds=15.0,  # Less than min_elapsed guard (20s)
             tool_activities=[ToolActivity("http_request", "completed", datetime.now(timezone.utc))],
         )
         decision, reason = make_heuristic_decision(ctx)
@@ -225,17 +225,30 @@ class TestMakeHeuristicDecision:
         assert decision == RoundaboutDecision.WAIT
 
     def test_cancel_when_no_tool_activity_after_extended_time(self):
-        """Should cancel if no tool activity after extended grace period."""
+        """Should cancel if no tool activity after extended grace period (60s)."""
         ctx = self._make_context(
             status="running",
-            polls_without_progress=7,
-            elapsed_seconds=35.0,  # Beyond extended grace (30s)
+            polls_without_progress=15,
+            elapsed_seconds=65.0,  # Beyond ROUNDABOUT_CANCEL_STUCK_THRESHOLD (60s)
             tool_activities=[],  # No tool activity
         )
         decision, reason = make_heuristic_decision(ctx)
 
         assert decision == RoundaboutDecision.CANCEL
         assert "activity" in reason.lower()
+
+    def test_no_cancel_when_no_tool_activity_but_under_threshold(self):
+        """Should NOT cancel if no tool activity but under 60s threshold."""
+        ctx = self._make_context(
+            status="running",
+            polls_without_progress=7,
+            elapsed_seconds=45.0,  # Under ROUNDABOUT_CANCEL_STUCK_THRESHOLD (60s)
+            tool_activities=[],  # No tool activity
+        )
+        decision, reason = make_heuristic_decision(ctx)
+
+        # Should wait, not cancel - worker may still be in initial model call
+        assert decision == RoundaboutDecision.WAIT
 
     def test_wait_when_stuck_but_under_threshold(self):
         """Should still WAIT when stuck but under cancel threshold."""
