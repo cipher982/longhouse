@@ -4,6 +4,7 @@
  */
 
 import type { VoiceAgentConfig } from '../types';
+import { getRealtimeModel } from '@jarvis/core';
 
 export const personalConfig: VoiceAgentConfig = {
   name: 'Jarvis',
@@ -85,9 +86,10 @@ Keep responses concise but informative. When using tools, briefly acknowledge th
 
   settings: {
     maxHistoryTurns: 50,
+    realtimeHistoryTurns: 8, // Turns to inject into OpenAI Realtime session
     enableRAG: false,        // Personal context uses MCP, not RAG
     enableMCP: true,         // Core feature for personal assistant
-    voiceModel: 'gpt-realtime',
+    voiceModel: getRealtimeModel(),
     defaultPrompts: [
       "What's my current location?",
       "How's my recovery today?",

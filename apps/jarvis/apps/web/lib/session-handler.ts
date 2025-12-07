@@ -4,8 +4,10 @@
  */
 
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
-import { logger } from '@jarvis/core';
+import { logger, getRealtimeModel } from '@jarvis/core';
+import type { ConversationTurn } from '@jarvis/data-local';
 import { VoiceButtonState, CONFIG } from './config';
+import { mapConversationToRealtimeItems, trimForRealtime } from './history-mapper';
 import type { VoiceAgentConfig } from '../contexts/types';
 
 /**
@@ -27,6 +29,16 @@ export interface SessionHandlerConfig {
   onSessionError?: (error: Error) => void;
   onSessionEnded?: () => void;
   onSessionEvent?: (event: string, data: any) => void;
+  /**
+   * Callback to retrieve conversation history for Realtime session hydration.
+   * Called after connect to inject previous turns into the model's context.
+   */
+  getConversationHistory?: () => Promise<ConversationTurn[]>;
+  /**
+   * Number of turns to inject into Realtime session (default: 8).
+   * Separate from UI maxHistoryTurns due to token budget constraints.
+   */
+  realtimeHistoryTurns?: number;
 }
 
 /**
@@ -72,7 +84,7 @@ export class SessionHandler {
       // Create the RealtimeSession
       const session = new RealtimeSession(agent, {
         transport,
-        model: 'gpt-realtime',
+        model: getRealtimeModel(),
         config: {
           inputAudioTranscription: { model: 'whisper-1' },
           audio: {
@@ -102,6 +114,26 @@ export class SessionHandler {
         await session.connect({ apiKey: token });
       } else {
         throw new Error('No token request handler provided');
+      }
+
+      // Hydrate conversation history into Realtime session
+      if (this.config.getConversationHistory) {
+        try {
+          const turns = await this.config.getConversationHistory();
+          const maxTurns = this.config.realtimeHistoryTurns ?? 8;
+          const recentTurns = trimForRealtime(turns, maxTurns);
+          const items = mapConversationToRealtimeItems(recentTurns);
+
+          if (items.length > 0) {
+            session.updateHistory(items);
+            logger.info(`📜 Hydrated ${items.length} history items into Realtime session`);
+          } else {
+            logger.debug('No conversation history to hydrate');
+          }
+        } catch (historyError) {
+          // Non-fatal: session can still work without history
+          logger.warn('Failed to hydrate conversation history:', historyError);
+        }
       }
 
       // Success feedback

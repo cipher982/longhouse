@@ -8,6 +8,22 @@ import { promises as fs } from 'fs';
 import path from 'path';
 dotenv.config();
 
+// Model configuration - configurable via env vars
+const DEFAULT_REALTIME_MODEL = 'gpt-4o-realtime-preview';
+const DEFAULT_REALTIME_MODEL_MINI = 'gpt-4o-mini-realtime-preview';
+
+function getRealtimeModel() {
+  const useMini = process.env.JARVIS_USE_MINI_MODEL === 'true';
+  if (useMini) {
+    return process.env.JARVIS_REALTIME_MODEL_MINI || DEFAULT_REALTIME_MODEL_MINI;
+  }
+  return process.env.JARVIS_REALTIME_MODEL || DEFAULT_REALTIME_MODEL;
+}
+
+function getVoice() {
+  return process.env.JARVIS_VOICE || 'verse';
+}
+
 // Nashville location data
 const NASHVILLE_LOCATION = {
   lat: 36.1627,
@@ -89,9 +105,9 @@ app.get("/session", async (req, res) => {
       body: JSON.stringify({
         session: {
           type: "realtime",
-          model: "gpt-realtime",
+          model: getRealtimeModel(),
           audio: {
-            output: { voice: "verse" }
+            output: { voice: getVoice() }
           }
         }
       })
