@@ -39,6 +39,8 @@
   --color-surface-secondary: rgb(10 10 15 / 40%);
   --color-surface-card: rgb(255 255 255 / 3%);
   --color-surface-elevated: rgb(255 255 255 / 7%);
+  --color-surface-dark: #1a1a2e; /* Dark surface for inputs/controls */
+  --color-neon-primary-dark: #4f46e5; /* Darker variant of neon-primary */
 
   /* Typography */
   --font-family-base: "Inter", system-ui, -apple-system, sans-serif;

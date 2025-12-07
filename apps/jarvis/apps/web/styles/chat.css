@@ -206,7 +206,7 @@
 }
 
 .role-icon.assistant-icon {
-  color: var(--color-neon-cyan, #06b6d4);
+  color: var(--color-neon-cyan);
 }
 
 .turn-content {
@@ -231,7 +231,7 @@
 .cursor {
   display: inline-block;
   margin-left: 2px;
-  color: var(--color-neon-cyan, #06b6d4);
+  color: var(--color-neon-cyan);
   animation: blink 1s steps(2, start) infinite;
 }
 
@@ -279,35 +279,29 @@
 
 /* Inline code */
 .turn-content code {
-  background: rgba(0, 0, 0, 0.3);
+  background: rgb(0 0 0 / 30%);
   padding: 0.15em 0.4em;
   border-radius: 4px;
-  font-family: var(
-    --font-family-mono,
-    "SF Mono",
-    "Monaco",
-    "Consolas",
-    monospace
-  );
+  font-family: var(--font-family-mono);
   font-size: 0.9em;
-  color: var(--color-neon-cyan, #06b6d4);
+  color: var(--color-neon-cyan);
 }
 
 /* Code blocks */
 .turn-content pre {
-  background: rgba(0, 0, 0, 0.4);
+  background: rgb(0 0 0 / 40%);
   padding: 1em;
   border-radius: 8px;
   overflow-x: auto;
   margin: 0.75em 0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgb(255 255 255 / 10%);
 }
 
 .turn-content pre code {
   background: none;
   padding: 0;
   border-radius: 0;
-  color: var(--color-text-primary, #e5e7eb);
+  color: var(--color-text-primary);
   font-size: 0.85em;
   line-height: 1.5;
 }
@@ -316,8 +310,8 @@
 .turn-content blockquote {
   margin: 0.75em 0;
   padding: 0.5em 1em;
-  border-left: 3px solid var(--color-neon-cyan, #06b6d4);
-  background: rgba(6, 182, 212, 0.1);
+  border-left: 3px solid var(--color-neon-cyan);
+  background: rgb(6 182 212 / 10%);
   border-radius: 0 4px 4px 0;
 }
 
@@ -362,7 +356,7 @@
 .turn-content strong,
 .turn-content b {
   font-weight: 600;
-  color: var(--color-text-primary, #fff);
+  color: var(--color-text-primary);
 }
 
 .turn-content em,
@@ -372,20 +366,20 @@
 
 /* Links */
 .turn-content a {
-  color: var(--color-neon-cyan, #06b6d4);
+  color: var(--color-neon-cyan);
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition: border-color 0.2s;
 }
 
 .turn-content a:hover {
-  border-bottom-color: var(--color-neon-cyan, #06b6d4);
+  border-bottom-color: var(--color-neon-cyan);
 }
 
 /* Horizontal rules */
 .turn-content hr {
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  border-top: 1px solid rgb(255 255 255 / 20%);
   margin: 1em 0;
 }
 
@@ -400,15 +394,15 @@
 .turn-content th,
 .turn-content td {
   padding: 0.5em 0.75em;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgb(255 255 255 / 15%);
   text-align: left;
 }
 
 .turn-content th {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgb(255 255 255 / 5%);
   font-weight: 600;
 }
 
 .turn-content tr:nth-child(even) {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgb(255 255 255 / 2%);
 }
