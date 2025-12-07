@@ -8,9 +8,10 @@
 | **Phase 2** | UI Activity Ticker           | ✅ **COMPLETE** | Jarvis shows real-time tool calls per worker              |
 | **Phase 3** | Roundabout Monitoring Loop   | ✅ **COMPLETE** | Supervisor waits for worker with 5s polling               |
 | **Phase 4** | Supervisor Decision Handling | ✅ **COMPLETE** | Heuristic-based wait/exit/cancel/peek (v1)                |
-| **Phase 5** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
+| **Phase 5** | LLM-Gated Decisions          | ✅ **COMPLETE** | Optional LLM decider with budget/timeout safeguards       |
+| **Phase 6** | Graceful Failure Handling    | ⏳ Not started  | Fail-fast tools                                           |
 
-**Next recommended**: Phase 5 (Fail-Fast Tools)
+**Next recommended**: Phase 6 (Fail-Fast Tools)
 
 ---
 
@@ -414,7 +415,85 @@ Tests added in `tests/test_roundabout_monitor.py`:
 - Unit tests for `make_heuristic_decision()` covering all decision paths
 - Integration test for cancel-on-no-progress behavior
 
-### Phase 5: Graceful Failure Handling
+### Phase 5: LLM-Gated Decisions ✅ COMPLETE
+
+**Implementation details:**
+
+Files created/modified:
+
+- `zerg/services/llm_decider.py` - New module for LLM-based decision making
+- `zerg/services/roundabout_monitor.py` - Added decision mode configuration and integration
+- `zerg/tools/builtin/supervisor_tools.py` - Added `decision_mode` parameter to `spawn_worker`
+
+Key components:
+
+- `DecisionMode` enum: HEURISTIC (default), LLM, HYBRID
+- `LLMDeciderStats` dataclass: Tracks calls, timeouts, errors, skipped calls
+- `LLMDecisionPayload` dataclass: Compact payload for LLM (~1-2KB)
+- `decide_roundabout_action()` function: Makes LLM decision with timeout
+
+**Decision Modes:**
+
+- **heuristic** (default): Rules-based decisions only. Fast, no cost, safe.
+- **llm**: LLM-based decisions only. Smarter but adds latency (~500-1500ms) and cost.
+- **hybrid**: Heuristic first, LLM for ambiguous cases. Best of both worlds.
+
+**Safeguards:**
+
+All safeguards ensure safe fallback to "wait" on any failure:
+
+| Safeguard             | Default     | Description                                |
+| --------------------- | ----------- | ------------------------------------------ |
+| `llm_poll_interval`   | 2           | Only call LLM every N polls (reduces cost) |
+| `llm_max_calls`       | 3           | Maximum LLM calls per job (budget limit)   |
+| `llm_timeout_seconds` | 1.5s        | Max time to wait for LLM response          |
+| `llm_model`           | gpt-4o-mini | Fast, cheap model for decisions            |
+
+**Telemetry:**
+
+The `activity_summary` in `RoundaboutResult` now includes:
+
+```python
+{
+    "llm_calls": 3,              # Total LLM calls made
+    "llm_calls_succeeded": 2,    # Successful calls
+    "llm_timeouts": 1,           # Calls that timed out
+    "llm_errors": 0,             # Calls that errored
+    "llm_skipped_budget": 2,     # Skipped due to budget exhaustion
+    "llm_skipped_interval": 5,   # Skipped due to poll interval
+    "llm_avg_response_ms": 850,  # Average response time
+    "decision_mode": "hybrid",   # Mode used for this job
+}
+```
+
+**Usage:**
+
+```python
+# Default: heuristic only (fast, safe)
+spawn_worker("Check disk on cube", wait=True)
+
+# Hybrid: heuristic + LLM for ambiguous cases
+spawn_worker("Complex research task", wait=True, decision_mode="hybrid")
+
+# LLM only: full LLM control (use sparingly)
+spawn_worker("Task needing smart decisions", wait=True, decision_mode="llm")
+```
+
+**Cost/Latency Expectations:**
+
+- Model: `gpt-4o-mini` (~$0.15/1M input, ~$0.60/1M output)
+- Average response time: 500-1500ms
+- Cost per job (hybrid, 3 calls): ~$0.001-0.003
+- Max latency impact: 3 calls × 1.5s timeout = 4.5s worst case
+
+Tests added in `tests/test_llm_decider.py` and `tests/test_roundabout_monitor.py`:
+
+- Unit tests for `LLMDeciderStats`, payload building, prompt generation
+- Unit tests for LLM call handling (success, timeout, error fallback)
+- Integration tests for all decision modes
+- Integration tests for budget and interval enforcement
+
+### Phase 6: Graceful Failure Handling
 
 Workers fail fast and report clearly:
 

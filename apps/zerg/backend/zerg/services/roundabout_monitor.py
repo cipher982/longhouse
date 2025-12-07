@@ -19,7 +19,12 @@ Phase 4 Implementation (Decision Handling):
 - Exit early when: worker completes, or final answer detected in output
 - Cancel when: stuck > 60s with no progress
 - Peek: returns structured payload for supervisor to drill down
-- Future: LLM-based decisions for more sophisticated gating
+
+Phase 5 Implementation (LLM-Gated Decisions):
+- Optional LLM decider for more sophisticated decision making
+- Three modes: heuristic (default), llm, hybrid
+- LLM gated by: poll interval, max calls budget, timeout
+- Safe fallback: any LLM failure defaults to "wait"
 """
 
 import asyncio
@@ -35,6 +40,16 @@ from pathlib import Path
 from typing import Any
 
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.llm_decider import (
+    DecisionMode,
+    LLMDeciderStats,
+    DEFAULT_DECISION_MODE,
+    DEFAULT_LLM_POLL_INTERVAL,
+    DEFAULT_LLM_MAX_CALLS,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    DEFAULT_LLM_MODEL,
+    decide_roundabout_action,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +200,17 @@ class RoundaboutMonitor:
     activity for visibility. When the worker completes (or times out),
     it returns a structured result.
 
+    Supports three decision modes:
+    - heuristic (default): Rules-based decisions only
+    - llm: LLM-based decisions only
+    - hybrid: Heuristic first, LLM for ambiguous cases
+
     Usage:
         monitor = RoundaboutMonitor(db, job_id, owner_id)
+        result = await monitor.wait_for_completion()
+
+        # With LLM decisions
+        monitor = RoundaboutMonitor(db, job_id, owner_id, decision_mode=DecisionMode.HYBRID)
         result = await monitor.wait_for_completion()
     """
 
@@ -197,12 +221,24 @@ class RoundaboutMonitor:
         owner_id: int,
         supervisor_run_id: int | None = None,
         timeout_seconds: float = ROUNDABOUT_HARD_TIMEOUT,
+        decision_mode: DecisionMode = DEFAULT_DECISION_MODE,
+        llm_poll_interval: int = DEFAULT_LLM_POLL_INTERVAL,
+        llm_max_calls: int = DEFAULT_LLM_MAX_CALLS,
+        llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+        llm_model: str = DEFAULT_LLM_MODEL,
     ):
         self.db = db
         self.job_id = job_id
         self.owner_id = owner_id
         self.supervisor_run_id = supervisor_run_id
         self.timeout_seconds = timeout_seconds
+
+        # Phase 5: LLM decision configuration
+        self.decision_mode = decision_mode
+        self.llm_poll_interval = llm_poll_interval
+        self.llm_max_calls = llm_max_calls
+        self.llm_timeout_seconds = llm_timeout_seconds
+        self.llm_model = llm_model
 
         self._artifact_store = WorkerArtifactStore()
         self._tool_activities: list[ToolActivity] = []
@@ -214,6 +250,102 @@ class RoundaboutMonitor:
         self._polls_without_progress = 0  # Consecutive polls with no new events
         self._last_tool_output: str | None = None  # Preview of last completed output
         self._task: str = ""  # Cached task description
+        # Phase 5: LLM decision tracking
+        self._llm_stats = LLMDeciderStats()
+        self._llm_calls_made = 0  # Track calls for budget enforcement
+
+    async def _make_decision(
+        self, ctx: DecisionContext
+    ) -> tuple[RoundaboutDecision, str]:
+        """Make a decision using the configured mode.
+
+        This method integrates heuristic and LLM decision making based on
+        the configured decision_mode.
+
+        Args:
+            ctx: Decision context with current state
+
+        Returns:
+            Tuple of (decision, reason)
+        """
+        # Mode: heuristic only
+        if self.decision_mode == DecisionMode.HEURISTIC:
+            return make_heuristic_decision(ctx)
+
+        # Mode: LLM only
+        if self.decision_mode == DecisionMode.LLM:
+            return await self._make_llm_decision(ctx)
+
+        # Mode: hybrid - heuristic first, LLM for ambiguous cases
+        heuristic_decision, heuristic_reason = make_heuristic_decision(ctx)
+
+        # If heuristic says anything other than WAIT, use it
+        if heuristic_decision != RoundaboutDecision.WAIT:
+            return heuristic_decision, f"[heuristic] {heuristic_reason}"
+
+        # Heuristic says WAIT - optionally consult LLM
+        llm_decision, llm_reason = await self._make_llm_decision(ctx)
+
+        # If LLM says something actionable, use it
+        if llm_decision != RoundaboutDecision.WAIT:
+            return llm_decision, f"[llm] {llm_reason}"
+
+        # Both say wait
+        return RoundaboutDecision.WAIT, f"[hybrid] {heuristic_reason}"
+
+    async def _make_llm_decision(
+        self, ctx: DecisionContext
+    ) -> tuple[RoundaboutDecision, str]:
+        """Make a decision using the LLM decider.
+
+        Respects budget and interval constraints. Falls back to WAIT on any issue.
+
+        Args:
+            ctx: Decision context
+
+        Returns:
+            Tuple of (decision, reason)
+        """
+        # Check budget
+        if self._llm_calls_made >= self.llm_max_calls:
+            self._llm_stats.record_skip("budget")
+            logger.debug(
+                f"Job {self.job_id}: LLM budget exhausted ({self._llm_calls_made}/{self.llm_max_calls})"
+            )
+            return RoundaboutDecision.WAIT, "LLM budget exhausted, continuing to monitor"
+
+        # Check interval (only call every N polls)
+        if self._check_count % self.llm_poll_interval != 0:
+            self._llm_stats.record_skip("interval")
+            logger.debug(
+                f"Job {self.job_id}: Skipping LLM (poll {self._check_count}, interval {self.llm_poll_interval})"
+            )
+            return RoundaboutDecision.WAIT, "Continuing to monitor"
+
+        # Make LLM call
+        try:
+            action, rationale, result = await decide_roundabout_action(
+                ctx,
+                model=self.llm_model,
+                timeout_seconds=self.llm_timeout_seconds,
+            )
+            self._llm_calls_made += 1
+            self._llm_stats.record_call(result)
+
+            # Map string action to enum
+            action_map = {
+                "wait": RoundaboutDecision.WAIT,
+                "exit": RoundaboutDecision.EXIT,
+                "cancel": RoundaboutDecision.CANCEL,
+                "peek": RoundaboutDecision.PEEK,
+            }
+            decision = action_map.get(action, RoundaboutDecision.WAIT)
+
+            return decision, rationale
+
+        except Exception as e:
+            logger.warning(f"Job {self.job_id}: LLM decision error: {e}")
+            return RoundaboutDecision.WAIT, f"LLM error ({e}), continuing to monitor"
 
     async def wait_for_completion(self) -> RoundaboutResult:
         """Enter the roundabout and wait for worker completion.
@@ -285,9 +417,9 @@ class RoundaboutMonitor:
                     )
                     return await self._create_completion_result(job)
 
-                # Phase 4: Build decision context and make heuristic decision
+                # Phase 4/5: Build decision context and make decision
                 decision_ctx = self._build_decision_context(job, elapsed)
-                decision, reason = make_heuristic_decision(decision_ctx)
+                decision, reason = await self._make_decision(decision_ctx)
 
                 # Act on decision
                 if decision == RoundaboutDecision.EXIT:
@@ -445,6 +577,40 @@ class RoundaboutMonitor:
             last_tool_output=self._last_tool_output,
         )
 
+    def _build_activity_summary(self, **extra) -> dict[str, Any]:
+        """Build activity summary with common fields and LLM stats.
+
+        Args:
+            **extra: Additional fields to include in the summary
+
+        Returns:
+            Dictionary with activity summary
+        """
+        completed_tools = [t for t in self._tool_activities if t.status == "completed"]
+        failed_tools = [t for t in self._tool_activities if t.status == "failed"]
+        tool_names = list({t.tool_name for t in self._tool_activities})
+
+        summary = {
+            "tool_calls_total": len(self._tool_activities),
+            "tool_calls_completed": len(completed_tools),
+            "tool_calls_failed": len(failed_tools),
+            "tools_used": tool_names,
+            "monitoring_checks": self._check_count,
+        }
+
+        # Add LLM stats (includes skips even if no calls were made)
+        llm_stats = self._llm_stats.to_dict()
+        if llm_stats:
+            summary.update(llm_stats)
+
+        # Add decision mode
+        summary["decision_mode"] = self.decision_mode.value
+
+        # Add extra fields
+        summary.update(extra)
+
+        return summary
+
     async def _create_early_exit_result(self, job, reason: str) -> RoundaboutResult:
         """Create result for early exit (answer detected in output)."""
         elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
@@ -457,17 +623,7 @@ class RoundaboutMonitor:
             except Exception:
                 pass  # Worker may not have result yet
 
-        # Build activity summary
-        completed_tools = [t for t in self._tool_activities if t.status == "completed"]
-        tool_names = list({t.tool_name for t in self._tool_activities})
-
-        activity_summary = {
-            "tool_calls_total": len(self._tool_activities),
-            "tool_calls_completed": len(completed_tools),
-            "tools_used": tool_names,
-            "monitoring_checks": self._check_count,
-            "exit_reason": reason,
-        }
+        activity_summary = self._build_activity_summary(exit_reason=reason)
 
         return RoundaboutResult(
             status="early_exit",
@@ -494,16 +650,10 @@ class RoundaboutMonitor:
         except Exception as e:
             logger.warning(f"Failed to mark job {self.job_id} as cancelled: {e}")
 
-        # Build activity summary
-        tool_names = list({t.tool_name for t in self._tool_activities})
-
-        activity_summary = {
-            "tool_calls_total": len(self._tool_activities),
-            "tools_used": tool_names,
-            "monitoring_checks": self._check_count,
-            "polls_without_progress": self._polls_without_progress,
-            "cancel_reason": reason,
-        }
+        activity_summary = self._build_activity_summary(
+            polls_without_progress=self._polls_without_progress,
+            cancel_reason=reason,
+        )
 
         return RoundaboutResult(
             status="cancelled",
@@ -529,11 +679,7 @@ class RoundaboutMonitor:
             f"  read_worker_result('{self.job_id}')  # Final result (when complete)"
         )
 
-        activity_summary = {
-            "tool_calls_total": len(self._tool_activities),
-            "monitoring_checks": self._check_count,
-            "peek_reason": reason,
-        }
+        activity_summary = self._build_activity_summary(peek_reason=reason)
 
         return RoundaboutResult(
             status="peek",
@@ -600,18 +746,7 @@ class RoundaboutMonitor:
             except Exception as e:
                 logger.warning(f"Failed to get worker result for {job.worker_id}: {e}")
 
-        # Build activity summary
-        completed_tools = [t for t in self._tool_activities if t.status == "completed"]
-        failed_tools = [t for t in self._tool_activities if t.status == "failed"]
-        tool_names = list({t.tool_name for t in self._tool_activities})
-
-        activity_summary = {
-            "tool_calls_total": len(self._tool_activities),
-            "tool_calls_completed": len(completed_tools),
-            "tool_calls_failed": len(failed_tools),
-            "tools_used": tool_names,
-            "monitoring_checks": self._check_count,
-        }
+        activity_summary = self._build_activity_summary()
 
         return RoundaboutResult(
             status="complete" if job.status == "success" else "failed",
@@ -638,10 +773,7 @@ class RoundaboutMonitor:
             duration_seconds=elapsed,
             worker_still_running=False,
             error=error,
-            activity_summary={
-                "tool_calls_total": len(self._tool_activities),
-                "monitoring_checks": self._check_count,
-            },
+            activity_summary=self._build_activity_summary(),
         )
 
     def _create_timeout_result(
@@ -659,10 +791,7 @@ class RoundaboutMonitor:
             duration_seconds=elapsed,
             worker_still_running=worker_still_running,
             error=f"Monitor timeout after {elapsed:.0f}s",
-            activity_summary={
-                "tool_calls_total": len(self._tool_activities),
-                "monitoring_checks": self._check_count,
-            },
+            activity_summary=self._build_activity_summary(),
         )
 
     async def _log_monitoring_check(self, job, elapsed: float) -> None:

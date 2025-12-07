@@ -21,6 +21,7 @@ from langchain_core.tools import StructuredTool
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.llm_decider import DecisionMode
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ async def spawn_worker_async(
     model: str | None = None,
     wait: bool = False,
     timeout_seconds: float = 300.0,
+    decision_mode: str = "heuristic",
 ) -> str:
     """Spawn a worker agent to execute a task.
 
@@ -46,6 +48,10 @@ async def spawn_worker_async(
         wait: If True, wait for worker completion with monitoring (roundabout).
               If False (default), return immediately after queuing.
         timeout_seconds: Maximum time to wait for completion when wait=True (default: 300s/5min)
+        decision_mode: How roundabout decisions are made when wait=True.
+              "heuristic" (default): Rules-based decisions only (fast, no cost)
+              "llm": LLM-based decisions (smarter but adds latency/cost)
+              "hybrid": Heuristic first, LLM for ambiguous cases
 
     Returns:
         If wait=False: A summary indicating the job has been queued
@@ -55,6 +61,7 @@ async def spawn_worker_async(
         spawn_worker("Check disk usage on cube server via SSH")  # Returns immediately
         spawn_worker("Research vacuums", wait=True)  # Waits for completion
         spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
+        spawn_worker("Complex task", wait=True, decision_mode="hybrid")  # LLM-assisted decisions
     """
     from zerg.crud import crud
     from zerg.events import EventType, event_bus
@@ -114,13 +121,22 @@ async def spawn_worker_async(
             )
 
         # Enter roundabout - wait for completion with monitoring
-        logger.info(f"Entering roundabout for worker job {worker_job.id}")
+        # Parse decision mode string to enum
+        mode_map = {
+            "heuristic": DecisionMode.HEURISTIC,
+            "llm": DecisionMode.LLM,
+            "hybrid": DecisionMode.HYBRID,
+        }
+        parsed_mode = mode_map.get(decision_mode.lower(), DecisionMode.HEURISTIC)
+
+        logger.info(f"Entering roundabout for worker job {worker_job.id} (mode={parsed_mode.value})")
         monitor = RoundaboutMonitor(
             db=db,
             job_id=worker_job.id,
             owner_id=owner_id,
             supervisor_run_id=supervisor_run_id,
             timeout_seconds=timeout_seconds,
+            decision_mode=parsed_mode,
         )
 
         result = await monitor.wait_for_completion()
@@ -137,10 +153,11 @@ def spawn_worker(
     model: str | None = None,
     wait: bool = False,
     timeout_seconds: float = 300.0,
+    decision_mode: str = "heuristic",
 ) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
-    return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds))
+    return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds, decision_mode))
 
 
 async def list_workers_async(
@@ -535,6 +552,7 @@ TOOLS: List[StructuredTool] = [
         description="Spawn a worker agent to execute a task. "
         "Returns immediately by default (fire-and-forget). "
         "Use wait=True to monitor until completion (roundabout). "
+        "Set decision_mode to 'hybrid' or 'llm' for LLM-assisted monitoring decisions. "
         "The worker persists all outputs and returns a natural language result.",
     ),
     StructuredTool.from_function(
