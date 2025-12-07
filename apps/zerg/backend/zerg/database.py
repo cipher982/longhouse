@@ -375,7 +375,6 @@ def db_session(session_factory: Any = None):
     try:
         yield session
         session.commit()  # Auto-commit on success
-        logging.debug("Database session committed successfully")
 
     except Exception as e:
         session.rollback()  # Auto-rollback on error
@@ -384,7 +383,6 @@ def db_session(session_factory: Any = None):
 
     finally:
         session.close()  # Always close
-        logging.debug("Database session closed")
 
 
 # Legacy alias for backward compatibility
