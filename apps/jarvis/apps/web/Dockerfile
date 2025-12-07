@@ -3,6 +3,9 @@
 # Uses jarvis-specific workspace (not full monorepo) for smaller image size
 FROM oven/bun:alpine
 
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
 # Copy jarvis workspace root (NOT the full monorepo root)

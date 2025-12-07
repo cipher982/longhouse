@@ -17,6 +17,7 @@ import { audioController } from './lib/audio-controller';
 import { stateManager, type StateChangeEvent } from './lib/state-manager';
 import { voiceController, initializeVoiceController } from './lib/voice-controller';
 import { conversationController } from './lib/conversation-controller';
+import { sessionHandler } from './lib/session-handler';
 import { feedbackSystem } from './lib/feedback-system';
 import { VoiceButtonState } from './lib/config';
 import type { VoiceAgentConfig } from './contexts/types';
@@ -80,6 +81,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     (window as any).voiceController = voiceController;
     (window as any).audioController = audioController;
     (window as any).appController = appController;
+    (window as any).stateManager = stateManager;
   }
 
   // 5. Wire up State Listeners (Reactive UI) - Direct Subscription Pattern
@@ -256,6 +258,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     stateManager.setSessionManager(sessionManager);
     conversationController.setSessionManager(sessionManager);
     conversationUI.setSessionManager(sessionManager);
+
+    // Configure SessionHandler with history hydration
+    sessionHandler.setConfig({
+      getConversationHistory: () => sessionManager.getConversationHistory(),
+      realtimeHistoryTurns: currentContext.settings.realtimeHistoryTurns ?? 8,
+    });
 
     // Load conversation
     const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);

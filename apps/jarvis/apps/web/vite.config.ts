@@ -25,6 +25,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 8080,
+    // Allow docker service hostnames for e2e testing
+    allowedHosts: ['jarvis-web', 'localhost'],
     fs: {
       allow: [resolve(__dirname, '..', '..')]
     },

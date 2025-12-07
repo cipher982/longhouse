@@ -1,0 +1,67 @@
+# Docker Compose for Jarvis E2E Testing
+# Fully containerized - Playwright runs inside Docker, no host ports exposed
+#
+# Usage: docker compose -f docker-compose.test.yml run --rm playwright
+#
+# All services communicate via internal 'test' network using service names:
+#   - jarvis-server:8787
+#   - jarvis-web:8080
+
+services:
+  jarvis-server:
+    build:
+      context: ../..
+      dockerfile: apps/jarvis/apps/server/Dockerfile
+    environment:
+      JARVIS_SERVER_PORT: ${TEST_SERVER_PORT:-8787}
+      NODE_ENV: test
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY required for e2e tests}
+      JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-device-secret}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${TEST_SERVER_PORT:-8787}/session"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    networks:
+      - test
+
+  jarvis-web:
+    build:
+      context: ../..
+      dockerfile: apps/jarvis/apps/web/Dockerfile
+    depends_on:
+      jarvis-server:
+        condition: service_healthy
+    environment:
+      JARVIS_WEB_PORT: ${TEST_WEB_PORT:-8080}
+      NODE_ENV: test
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:${TEST_WEB_PORT:-8080}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    networks:
+      - test
+
+  playwright:
+    build:
+      context: ../..
+      dockerfile: apps/jarvis/Dockerfile.playwright
+    depends_on:
+      jarvis-web:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://jarvis-web:${TEST_WEB_PORT:-8080}
+      CI: ${CI:-}
+    volumes:
+      # Mount test results back to host for inspection
+      - ./test-results:/app/test-results
+      - ./playwright-report:/app/playwright-report
+    networks:
+      - test
+
+networks:
+  test:
+    driver: bridge

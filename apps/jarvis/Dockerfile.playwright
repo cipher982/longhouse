@@ -1,0 +1,32 @@
+# Playwright test runner container
+# Runs on internal docker network - no host port exposure needed
+FROM mcr.microsoft.com/playwright:v1.57.0-jammy
+
+WORKDIR /app
+
+# Copy package files for dependency installation
+COPY apps/jarvis/package.json ./package.json
+COPY apps/jarvis/bun.lock* ./
+
+# Copy workspace package.json files (needed for bun workspace resolution)
+COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
+COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
+COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
+COPY apps/jarvis/apps/server/package.json ./apps/server/package.json
+COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
+
+# Install bun for package management
+RUN npm install -g bun
+
+# Install dependencies
+RUN bun install
+
+# Copy test files and playwright config
+COPY apps/jarvis/playwright.config.js ./playwright.config.js
+COPY apps/jarvis/tests ./tests
+
+# Copy source packages (needed for any shared types/utilities)
+COPY apps/jarvis/packages ./packages
+
+# Default command runs playwright tests
+CMD ["npx", "playwright", "test"]

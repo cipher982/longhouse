@@ -1,7 +1,7 @@
 # Jarvis Voice Agent — simple Makefile
 # Targets: help, install, start, native, test, status, stop, clean
 
-.PHONY: help install start native test test-e2e status stop clean
+.PHONY: help install start native test test-e2e test-clean status stop clean
 
 help: ## Show available commands
 	@echo "Jarvis Commands" && echo "" && \
@@ -27,12 +27,26 @@ start: ## Start server (8787) and web app (8080)
 native: ## Launch Electron shell (servers must be running)
 	@cd apps/native && bun run dev
 
-test: ## Run Playwright tests
-	@bun run test
+test: ## Run Playwright tests (requires OPENAI_API_KEY)
+	@if [ -z "$$OPENAI_API_KEY" ]; then \
+		echo "❌ Error: OPENAI_API_KEY environment variable required for e2e tests"; \
+		echo "   Export it: export OPENAI_API_KEY=sk-..."; \
+		exit 1; \
+	fi
+	@echo "🧪 Running E2E tests in isolated Docker environment..."
+	@echo "   Building and starting services..."
+	@docker compose -f docker-compose.test.yml run --rm playwright; \
+	EXIT_CODE=$$?; \
+	echo "🧹 Cleaning up test containers..."; \
+	docker compose -f docker-compose.test.yml down -v --remove-orphans; \
+	exit $$EXIT_CODE
 
-test-e2e: ## Run E2E tests (terminal output only)
-	@echo "🧪 Running E2E tests (servers auto-start via Playwright)..."
-	@bun run test
+test-e2e: test ## Alias for 'make test'
+
+test-clean: ## Clean up test containers and images
+	@echo "🧹 Removing test containers and volumes..."
+	@docker compose -f docker-compose.test.yml down -v --remove-orphans --rmi local
+	@echo "✅ Test environment cleaned"
 
 status: ## Check if services are up
 	@echo "API (8787):"; curl -sf http://localhost:8787/session >/dev/null && echo "  ✅" || echo "  ❌"
