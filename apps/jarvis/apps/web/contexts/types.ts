@@ -43,6 +43,8 @@ export interface VoiceAgentConfig {
   // Context-specific settings
   settings: {
     maxHistoryTurns: number;
+    /** Number of turns to inject into OpenAI Realtime session on connect (default: 8) */
+    realtimeHistoryTurns: number;
     enableRAG: boolean;
     enableMCP: boolean;
     voiceModel: string;
