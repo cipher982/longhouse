@@ -144,6 +144,36 @@ body::before {
   background: var(--color-neon-primary);
 }
 
+/* Accessibility: Focus visible states for keyboard navigation */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-neon-cyan);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--color-neon-cyan);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgb(6 182 212 / 20%);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--color-neon-primary);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-neon-cyan);
+  outline-offset: 0;
+  border-color: var(--color-neon-cyan);
+}
+
 /* Accessibility: Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *,
