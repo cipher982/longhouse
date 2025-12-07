@@ -10,6 +10,7 @@ intervention needed) until the right one appears.
 Phase 3 Implementation:
 - Polling loop every 5 seconds
 - Status aggregation from database and events
+- Tool event subscription for activity tracking
 - Returns structured result when worker completes
 - Logs monitoring checks for audit trail
 
@@ -71,10 +72,11 @@ class RoundaboutStatus:
 class RoundaboutResult:
     """Final result from the roundabout when exiting."""
 
-    status: str  # "complete", "early_exit", "cancelled", "timeout", "failed"
+    status: str  # "complete", "early_exit", "cancelled", "monitor_timeout", "failed"
     job_id: int
     worker_id: str | None
     duration_seconds: float
+    worker_still_running: bool = False  # True if monitor timed out but worker continues
     result: str | None = None
     summary: str | None = None
     error: str | None = None
@@ -111,63 +113,122 @@ class RoundaboutMonitor:
         self._tool_activities: list[ToolActivity] = []
         self._start_time: datetime | None = None
         self._check_count = 0
+        self._event_subscription = None
 
     async def wait_for_completion(self) -> RoundaboutResult:
         """Enter the roundabout and wait for worker completion.
 
         Polls worker status every 5 seconds until:
         - Worker completes (success or failure)
-        - Hard timeout reached
+        - Hard timeout reached (returns monitor_timeout, worker may continue)
         - Error occurs
 
         Returns:
             RoundaboutResult with final status and result
         """
+        from zerg.events import EventType, event_bus
         from zerg.models.models import WorkerJob
 
         self._start_time = datetime.now(timezone.utc)
         logger.info(f"Entering roundabout for job {self.job_id}")
 
-        while True:
-            self._check_count += 1
-            elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
+        # Subscribe to tool events for this job
+        await self._subscribe_to_tool_events()
 
-            # Check timeout
-            if elapsed > self.timeout_seconds:
-                logger.warning(f"Roundabout timeout for job {self.job_id} after {elapsed:.1f}s")
-                return self._create_result("timeout", error="Hard timeout reached")
+        try:
+            while True:
+                self._check_count += 1
+                elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
-            # Get current job status
-            self.db.expire_all()  # Refresh from database
-            job = (
-                self.db.query(WorkerJob)
-                .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
-                .first()
-            )
+                # Check timeout - monitor timeout, not job failure
+                if elapsed > self.timeout_seconds:
+                    logger.warning(
+                        f"Roundabout monitor timeout for job {self.job_id} after {elapsed:.1f}s "
+                        "(worker may still be running)"
+                    )
+                    # Get current job status to check if still running
+                    self.db.expire_all()
+                    job = (
+                        self.db.query(WorkerJob)
+                        .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
+                        .first()
+                    )
+                    worker_running = job and job.status in ("queued", "running")
+                    return self._create_timeout_result(
+                        worker_id=job.worker_id if job else None,
+                        worker_still_running=worker_running,
+                    )
 
-            if not job:
-                logger.error(f"Job {self.job_id} not found in roundabout")
-                return self._create_result("failed", error="Job not found")
-
-            # Log monitoring check for audit
-            await self._log_monitoring_check(job, elapsed)
-
-            # Check if worker is done
-            if job.status in ("success", "failed"):
-                logger.info(
-                    f"Roundabout exit for job {self.job_id}: {job.status} after {elapsed:.1f}s"
-                )
-                return await self._create_completion_result(job)
-
-            # Log progress
-            if self._check_count % 4 == 0:  # Every 20 seconds
-                logger.info(
-                    f"Roundabout check #{self._check_count} for job {self.job_id}: "
-                    f"status={job.status}, elapsed={elapsed:.1f}s"
+                # Get current job status
+                self.db.expire_all()  # Refresh from database
+                job = (
+                    self.db.query(WorkerJob)
+                    .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
+                    .first()
                 )
 
-            # Wait before next check
-            await asyncio.sleep(ROUNDABOUT_CHECK_INTERVAL)
+                if not job:
+                    logger.error(f"Job {self.job_id} not found in roundabout")
+                    return self._create_result("failed", error="Job not found")
+
+                # Log monitoring check for audit
+                await self._log_monitoring_check(job, elapsed)
+
+                # Check if worker is done
+                if job.status in ("success", "failed"):
+                    logger.info(
+                        f"Roundabout exit for job {self.job_id}: {job.status} after {elapsed:.1f}s"
+                    )
+                    return await self._create_completion_result(job)
+
+                # Log progress
+                if self._check_count % 4 == 0:  # Every 20 seconds
+                    logger.info(
+                        f"Roundabout check #{self._check_count} for job {self.job_id}: "
+                        f"status={job.status}, elapsed={elapsed:.1f}s, tools={len(self._tool_activities)}"
+                    )
+
+                # Wait before next check
+                await asyncio.sleep(ROUNDABOUT_CHECK_INTERVAL)
+        finally:
+            # Unsubscribe from events
+            await self._unsubscribe_from_tool_events()
+
+    async def _subscribe_to_tool_events(self) -> None:
+        """Subscribe to tool events for this job."""
+        from zerg.events import EventType, event_bus
+
+        async def handle_tool_event(payload: dict[str, Any]) -> None:
+            """Handle incoming tool events."""
+            # Filter to events for this job
+            event_job_id = payload.get("job_id")
+            if event_job_id != self.job_id:
+                return
+
+            event_type = payload.get("event_type")
+            if event_type:
+                self.record_tool_activity(event_type.value if hasattr(event_type, 'value') else str(event_type), payload)
+
+        # Subscribe to all tool event types
+        self._event_subscription = handle_tool_event
+        await event_bus.subscribe(EventType.WORKER_TOOL_STARTED, handle_tool_event)
+        await event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, handle_tool_event)
+        await event_bus.subscribe(EventType.WORKER_TOOL_FAILED, handle_tool_event)
+        logger.debug(f"Subscribed to tool events for job {self.job_id}")
+
+    async def _unsubscribe_from_tool_events(self) -> None:
+        """Unsubscribe from tool events."""
+        from zerg.events import EventType, event_bus
+
+        if self._event_subscription:
+            try:
+                await event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, self._event_subscription)
+                await event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, self._event_subscription)
+                await event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, self._event_subscription)
+                logger.debug(f"Unsubscribed from tool events for job {self.job_id}")
+            except Exception as e:
+                logger.debug(f"Error unsubscribing from events: {e}")
+            self._event_subscription = None
 
     def get_current_status(self) -> RoundaboutStatus:
         """Get current status snapshot (for future decision prompts)."""
@@ -216,10 +277,10 @@ class RoundaboutMonitor:
         )
 
     def record_tool_activity(self, event_type: str, payload: dict[str, Any]) -> None:
-        """Record tool activity from SSE events."""
+        """Record tool activity from events."""
         timestamp = datetime.now(timezone.utc)
 
-        if event_type == "WORKER_TOOL_STARTED":
+        if "STARTED" in event_type:
             activity = ToolActivity(
                 tool_name=payload.get("tool_name", "unknown"),
                 status="started",
@@ -227,16 +288,19 @@ class RoundaboutMonitor:
                 args_preview=payload.get("args_preview"),
             )
             self._tool_activities.append(activity)
+            logger.debug(f"Recorded tool start: {activity.tool_name}")
 
-        elif event_type in ("WORKER_TOOL_COMPLETED", "WORKER_TOOL_FAILED"):
+        elif "COMPLETED" in event_type or "FAILED" in event_type:
             # Find matching started activity and update it
             tool_name = payload.get("tool_name", "unknown")
+            is_failed = "FAILED" in event_type
             for activity in reversed(self._tool_activities):
                 if activity.tool_name == tool_name and activity.status == "started":
-                    activity.status = "completed" if event_type == "WORKER_TOOL_COMPLETED" else "failed"
+                    activity.status = "failed" if is_failed else "completed"
                     activity.duration_ms = payload.get("duration_ms")
-                    if event_type == "WORKER_TOOL_FAILED":
+                    if is_failed:
                         activity.error = payload.get("error")
+                    logger.debug(f"Recorded tool {activity.status}: {tool_name}")
                     break
 
     async def _create_completion_result(self, job) -> RoundaboutResult:
@@ -272,6 +336,7 @@ class RoundaboutMonitor:
             job_id=self.job_id,
             worker_id=job.worker_id,
             duration_seconds=elapsed,
+            worker_still_running=False,
             result=result_text,
             summary=summary,
             error=job.error if job.status == "failed" else None,
@@ -279,7 +344,7 @@ class RoundaboutMonitor:
         )
 
     def _create_result(self, status: str, error: str | None = None) -> RoundaboutResult:
-        """Create result for non-completion exits (timeout, cancel, etc)."""
+        """Create result for non-completion exits (cancel, etc)."""
         elapsed = 0.0
         if self._start_time:
             elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
@@ -289,7 +354,29 @@ class RoundaboutMonitor:
             job_id=self.job_id,
             worker_id=None,
             duration_seconds=elapsed,
+            worker_still_running=False,
             error=error,
+            activity_summary={
+                "tool_calls_total": len(self._tool_activities),
+                "monitoring_checks": self._check_count,
+            },
+        )
+
+    def _create_timeout_result(
+        self, worker_id: str | None, worker_still_running: bool
+    ) -> RoundaboutResult:
+        """Create result for monitor timeout (distinct from job failure)."""
+        elapsed = 0.0
+        if self._start_time:
+            elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
+
+        return RoundaboutResult(
+            status="monitor_timeout",
+            job_id=self.job_id,
+            worker_id=worker_id,
+            duration_seconds=elapsed,
+            worker_still_running=worker_still_running,
+            error=f"Monitor timeout after {elapsed:.0f}s",
             activity_summary={
                 "tool_calls_total": len(self._tool_activities),
                 "monitoring_checks": self._check_count,
@@ -312,6 +399,7 @@ class RoundaboutMonitor:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "job_status": job.status,
                 "tool_activities": len(self._tool_activities),
+                "tool_names": [t.tool_name for t in self._tool_activities[-5:]],
             }
 
             check_file.write_text(json.dumps(check_data, indent=2))
@@ -358,10 +446,15 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
         lines.append("Check worker artifacts for details:")
         lines.append(f"  read_worker_file('{result.job_id}', 'thread.jsonl')")
 
-    elif result.status == "timeout":
-        lines.append(f"Worker job {result.job_id} timed out after {result.duration_seconds:.1f}s.")
-        lines.append("The worker may still be running in the background.")
-        lines.append("Check status with: get_worker_metadata('{result.job_id}')")
+    elif result.status == "monitor_timeout":
+        lines.append(f"Monitor timeout: stopped watching job {result.job_id} after {result.duration_seconds:.1f}s.")
+        if result.worker_still_running:
+            lines.append("NOTE: The worker is STILL RUNNING in the background.")
+            lines.append("It may complete successfully - check status periodically:")
+        else:
+            lines.append("The worker appears to have stopped.")
+        lines.append(f"  get_worker_metadata('{result.job_id}')")
+        lines.append(f"  read_worker_result('{result.job_id}')  # when complete")
 
     elif result.status == "early_exit":
         lines.append(f"Exited monitoring of worker job {result.job_id} early.")

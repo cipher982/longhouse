@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 async def spawn_worker_async(
     task: str,
     model: str | None = None,
-    wait: bool = True,
+    wait: bool = False,
     timeout_seconds: float = 300.0,
 ) -> str:
     """Spawn a worker agent to execute a task.
@@ -37,25 +37,24 @@ async def spawn_worker_async(
     a natural language result. Use this when you need to delegate work that
     might involve multiple tool calls or generate verbose output.
 
-    By default, this enters a "roundabout" monitoring loop that waits for
-    the worker to complete, providing visibility into progress. Set wait=False
-    for fire-and-forget behavior.
+    By default, returns immediately after queuing (fire-and-forget). Set wait=True
+    to enter a "roundabout" monitoring loop that waits for worker completion.
 
     Args:
         task: Natural language description of what the worker should do
         model: LLM model for the worker (default: gpt-5-mini)
-        wait: If True (default), wait for worker completion with monitoring.
-              If False, return immediately after queuing.
-        timeout_seconds: Maximum time to wait for completion (default: 300s/5min)
+        wait: If True, wait for worker completion with monitoring (roundabout).
+              If False (default), return immediately after queuing.
+        timeout_seconds: Maximum time to wait for completion when wait=True (default: 300s/5min)
 
     Returns:
-        If wait=True: The worker's result or error details
         If wait=False: A summary indicating the job has been queued
+        If wait=True: The worker's result or error details
 
     Example:
-        spawn_worker("Check disk usage on cube server via SSH")
-        spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-5.1-2025-11-13")
-        spawn_worker("Long task", wait=False)  # Fire and forget
+        spawn_worker("Check disk usage on cube server via SSH")  # Returns immediately
+        spawn_worker("Research vacuums", wait=True)  # Waits for completion
+        spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
     """
     from zerg.crud import crud
     from zerg.events import EventType, event_bus
@@ -136,7 +135,7 @@ async def spawn_worker_async(
 def spawn_worker(
     task: str,
     model: str | None = None,
-    wait: bool = True,
+    wait: bool = False,
     timeout_seconds: float = 300.0,
 ) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
@@ -534,10 +533,9 @@ TOOLS: List[StructuredTool] = [
         coroutine=spawn_worker_async,
         name="spawn_worker",
         description="Spawn a worker agent to execute a task. "
-        "By default, waits for completion with a monitoring loop (roundabout). "
-        "The worker persists all outputs and returns a natural language result. "
-        "Use wait=False for fire-and-forget behavior. "
-        "Timeout defaults to 5 minutes.",
+        "Returns immediately by default (fire-and-forget). "
+        "Use wait=True to monitor until completion (roundabout). "
+        "The worker persists all outputs and returns a natural language result.",
     ),
     StructuredTool.from_function(
         func=list_workers,
