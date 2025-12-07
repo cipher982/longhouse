@@ -140,8 +140,9 @@ export function buildConversationManagerOptions(config: any): ConversationManage
  * Get Zerg API URL - now uses relative path for same-origin calls
  */
 export function getZergApiUrl(): string {
-  // Use relative path for same-origin API calls through nginx proxy
-  return '/api';
+  // Use empty string for same-origin API calls through nginx proxy
+  // The JarvisAPIClient already includes /api/ prefix in its endpoint paths
+  return '';
 }
 
 /**

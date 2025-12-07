@@ -280,7 +280,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const taskInboxContainer = document.getElementById('task-inbox-container');
     if (taskInboxContainer) {
       await createTaskInbox(taskInboxContainer, {
-        apiURL: '/api',  // Same-origin API calls through nginx proxy
+        apiURL: '',  // Empty - JarvisAPIClient already includes /api/ prefix
         deviceSecret: import.meta.env?.VITE_JARVIS_DEVICE_SECRET || '',
         onError: (err) => console.error('TaskInbox error:', err),
         onRunUpdate: (run) => {
