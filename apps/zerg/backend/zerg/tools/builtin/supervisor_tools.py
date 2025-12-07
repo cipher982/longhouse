@@ -25,27 +25,42 @@ from zerg.services.worker_artifact_store import WorkerArtifactStore
 logger = logging.getLogger(__name__)
 
 
-async def spawn_worker_async(task: str, model: str | None = None) -> str:
+async def spawn_worker_async(
+    task: str,
+    model: str | None = None,
+    wait: bool = True,
+    timeout_seconds: float = 300.0,
+) -> str:
     """Spawn a worker agent to execute a task.
 
     The worker runs independently, persists all outputs to disk, and returns
     a natural language result. Use this when you need to delegate work that
     might involve multiple tool calls or generate verbose output.
 
+    By default, this enters a "roundabout" monitoring loop that waits for
+    the worker to complete, providing visibility into progress. Set wait=False
+    for fire-and-forget behavior.
+
     Args:
         task: Natural language description of what the worker should do
         model: LLM model for the worker (default: gpt-5-mini)
+        wait: If True (default), wait for worker completion with monitoring.
+              If False, return immediately after queuing.
+        timeout_seconds: Maximum time to wait for completion (default: 300s/5min)
 
     Returns:
-        A summary indicating the job has been queued
+        If wait=True: The worker's result or error details
+        If wait=False: A summary indicating the job has been queued
 
     Example:
         spawn_worker("Check disk usage on cube server via SSH")
         spawn_worker("Research the top 5 robot vacuums under $500", model="gpt-5.1-2025-11-13")
+        spawn_worker("Long task", wait=False)  # Fire and forget
     """
     from zerg.crud import crud
     from zerg.events import EventType, event_bus
     from zerg.models.models import WorkerJob
+    from zerg.services.roundabout_monitor import RoundaboutMonitor, format_roundabout_result
     from zerg.services.supervisor_context import get_supervisor_run_id
 
     # Get database session from credential resolver context
@@ -89,13 +104,28 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
             },
         )
 
-        return (
-            f"Worker job {worker_job.id} queued successfully.\n\n"
-            f"Task: {task}\n"
-            f"Model: {worker_model}\n\n"
-            f"The worker will execute in the background. Use get_worker_metadata({worker_job.id}) "
-            f"to check status and read_worker_result('{worker_job.id}') to get results when complete."
+        if not wait:
+            # Fire and forget - return immediately
+            return (
+                f"Worker job {worker_job.id} queued successfully.\n\n"
+                f"Task: {task}\n"
+                f"Model: {worker_model}\n\n"
+                f"The worker will execute in the background. Use get_worker_metadata({worker_job.id}) "
+                f"to check status and read_worker_result('{worker_job.id}') to get results when complete."
+            )
+
+        # Enter roundabout - wait for completion with monitoring
+        logger.info(f"Entering roundabout for worker job {worker_job.id}")
+        monitor = RoundaboutMonitor(
+            db=db,
+            job_id=worker_job.id,
+            owner_id=owner_id,
+            supervisor_run_id=supervisor_run_id,
+            timeout_seconds=timeout_seconds,
         )
+
+        result = await monitor.wait_for_completion()
+        return format_roundabout_result(result)
 
     except Exception as e:
         logger.exception(f"Failed to queue worker job for task: {task}")
@@ -103,10 +133,15 @@ async def spawn_worker_async(task: str, model: str | None = None) -> str:
         return f"Error queuing worker job: {e}"
 
 
-def spawn_worker(task: str, model: str | None = None) -> str:
+def spawn_worker(
+    task: str,
+    model: str | None = None,
+    wait: bool = True,
+    timeout_seconds: float = 300.0,
+) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
-    return run_async_safely(spawn_worker_async(task, model))
+    return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds))
 
 
 async def list_workers_async(
@@ -498,9 +533,11 @@ TOOLS: List[StructuredTool] = [
         func=spawn_worker,
         coroutine=spawn_worker_async,
         name="spawn_worker",
-        description="Spawn a worker agent to execute a task independently. "
+        description="Spawn a worker agent to execute a task. "
+        "By default, waits for completion with a monitoring loop (roundabout). "
         "The worker persists all outputs and returns a natural language result. "
-        "Use for delegation, parallel work, or tasks that might generate verbose output.",
+        "Use wait=False for fire-and-forget behavior. "
+        "Timeout defaults to 5 minutes.",
     ),
     StructuredTool.from_function(
         func=list_workers,
