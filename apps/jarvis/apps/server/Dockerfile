@@ -1,4 +1,6 @@
+# syntax=docker/dockerfile:1.4
 # Dockerfile for Jarvis Server (OpenAI bridge + MCP tools)
+# Uses jarvis-specific workspace (not full monorepo) for smaller image size
 FROM oven/bun:alpine
 
 # Install curl for healthcheck
@@ -6,28 +8,28 @@ RUN apk add --no-cache curl
 
 WORKDIR /app
 
-# Copy root lockfile and package.json for workspace resolution
-COPY bun.lock package.json ./
+# Copy jarvis workspace root (NOT the full monorepo root)
+# This gives us jarvis-only workspaces, not the entire monorepo
+COPY apps/jarvis/package.json ./package.json
+COPY apps/jarvis/bun.lock* ./
 
-# Copy Jarvis workspace package files
-COPY apps/jarvis/package.json ./apps/jarvis/package.json
-COPY apps/jarvis/packages ./apps/jarvis/packages
-COPY apps/jarvis/apps/server/package.json ./apps/jarvis/apps/server/package.json
-COPY apps/jarvis/apps/web/package.json ./apps/jarvis/apps/web/package.json
-COPY apps/jarvis/apps/native/package.json ./apps/jarvis/apps/native/package.json
+# Copy jarvis workspace package.json files
+COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
+COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
+COPY apps/jarvis/apps/server/package.json ./apps/server/package.json
+COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
+COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
 
-# Copy Zerg workspace package files (required for bun workspace resolution)
-COPY apps/zerg/frontend-web/package.json ./apps/zerg/frontend-web/package.json
-COPY apps/zerg/e2e/package.json ./apps/zerg/e2e/package.json
+# Install only jarvis dependencies (much smaller than full monorepo)
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install
 
-# Install all dependencies
-RUN bun install
-
-# Copy server app source
-COPY apps/jarvis/apps/server ./apps/jarvis/apps/server
+# Copy jarvis source code
+COPY apps/jarvis/packages ./packages
+COPY apps/jarvis/apps/server ./apps/server
 
 # Set working directory to server app
-WORKDIR /app/apps/jarvis/apps/server
+WORKDIR /app/apps/server
 
 # ARG for build-time default, ENV for runtime
 ARG JARVIS_SERVER_PORT=8787
