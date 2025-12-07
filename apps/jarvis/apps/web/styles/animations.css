@@ -13,6 +13,12 @@
   }
 }
 
+@keyframes fadeOut {
+  to {
+    opacity: 0;
+  }
+}
+
 /* Particle Effects / Glow Pulses */
 @keyframes glow-pulse {
   0% {
