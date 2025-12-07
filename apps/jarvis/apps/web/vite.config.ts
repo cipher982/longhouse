@@ -3,6 +3,10 @@ import { resolve } from 'path'
 
 export default defineConfig({
   base: '/chat/',
+  // Pre-bundle dependencies from workspace packages
+  optimizeDeps: {
+    include: ['idb'],
+  },
   build: {
     outDir: './dist',
     emptyOutDir: true,
