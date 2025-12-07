@@ -176,7 +176,7 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
     # Priority 4: Cancel if no progress for too many polls
     # Guard: Only cancel if we've been running long enough AND at least one tool has started
     # This prevents false cancels on short tasks that haven't emitted events yet
-    min_elapsed_for_cancel = ROUNDABOUT_CHECK_INTERVAL * 3  # At least 15s before cancel
+    min_elapsed_for_cancel = ROUNDABOUT_CHECK_INTERVAL * 4  # At least 20s before cancel
     has_tool_activity = len(ctx.tool_activities) > 0
     if ctx.polls_without_progress >= ROUNDABOUT_NO_PROGRESS_POLLS:
         if ctx.elapsed_seconds >= min_elapsed_for_cancel and has_tool_activity:
@@ -184,8 +184,9 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
                 RoundaboutDecision.CANCEL,
                 f"No progress for {ctx.polls_without_progress} consecutive polls",
             )
-        elif ctx.elapsed_seconds >= min_elapsed_for_cancel * 2:
-            # Extended grace period expired even without tool activity
+        elif ctx.elapsed_seconds >= ROUNDABOUT_CANCEL_STUCK_THRESHOLD:
+            # Extended grace period (60s) expired even without tool activity
+            # This allows for long initial model calls before first tool event
             return (
                 RoundaboutDecision.CANCEL,
                 f"No tool activity after {ctx.elapsed_seconds:.0f}s",
