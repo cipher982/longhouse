@@ -237,3 +237,76 @@
     transform: translateY(0);
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Floating Mode - Fixed position toast, always visible               */
+/* ------------------------------------------------------------------ */
+
+.supervisor-progress--floating {
+  position: fixed;
+  bottom: 140px; /* Above voice button controls */
+  right: var(--space-5);
+  width: 340px;
+  max-width: calc(100vw - var(--space-6) * 2);
+  z-index: 1000;
+  margin-bottom: 0; /* Override inline margin */
+
+  /* Enhanced visual presence for floating */
+  background: var(--color-void-light);
+  border: 1px solid var(--color-neon-primary);
+  box-shadow: var(--shadow-card), var(--glow-primary);
+}
+
+/* Floating mode entrance animation */
+.supervisor-progress--floating[style*="display: block"] {
+  animation: supervisor-float-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes supervisor-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Mobile: full width at bottom */
+@media (width <= 768px) {
+  .supervisor-progress--floating {
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: 120px;
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Attention Animation - Draws user focus when supervisor starts      */
+/* ------------------------------------------------------------------ */
+
+.supervisor-progress--attention {
+  animation: supervisor-attention 0.4s ease-out;
+}
+
+@keyframes supervisor-attention {
+  0% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 0 rgb(99 102 241 / 60%);
+  }
+
+  50% {
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 8px rgb(99 102 241 / 0%);
+  }
+
+  100% {
+    box-shadow: var(--shadow-card), var(--glow-primary);
+  }
+}

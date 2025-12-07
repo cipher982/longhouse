@@ -33,6 +33,13 @@ interface WorkerState {
   toolCalls: Map<string, ToolCall>;
 }
 
+/**
+ * Display mode for supervisor progress UI
+ * - 'floating': Fixed position toast at bottom-right (default, always visible)
+ * - 'inline': Embedded in chat flow (original behavior, can scroll out of view)
+ */
+type DisplayMode = 'floating' | 'inline';
+
 export class SupervisorProgressUI {
   private container: HTMLElement | null = null;
   private isActive = false;
@@ -41,6 +48,7 @@ export class SupervisorProgressUI {
   private workersByWorkerId: Map<string, WorkerState> = new Map(); // Index for tool event lookups
   private unsubscribers: Array<() => void> = [];
   private tickerInterval: number | null = null; // For live duration updates
+  private displayMode: DisplayMode = 'floating';
 
   constructor() {
     this.subscribeToEvents();
@@ -48,20 +56,30 @@ export class SupervisorProgressUI {
 
   /**
    * Initialize with container element
+   *
+   * @param containerId - DOM id for the container element
+   * @param mode - Display mode: 'floating' (default) or 'inline'
    */
-  initialize(containerId: string = 'supervisor-progress'): void {
+  initialize(containerId: string = 'supervisor-progress', mode: DisplayMode = 'floating'): void {
+    this.displayMode = mode;
     this.container = document.getElementById(containerId);
+
     if (!this.container) {
-      // Create container if it doesn't exist
       this.container = document.createElement('div');
       this.container.id = containerId;
       this.container.className = 'supervisor-progress';
 
-      // Insert before the transcript in the chat container
-      const chatContainer = document.querySelector('.chat-container');
-      const transcript = document.getElementById('transcript');
-      if (chatContainer && transcript) {
-        chatContainer.insertBefore(this.container, transcript);
+      if (mode === 'floating') {
+        // Floating mode: append to body, always visible regardless of scroll
+        this.container.classList.add('supervisor-progress--floating');
+        document.body.appendChild(this.container);
+      } else {
+        // Inline mode: insert before transcript in chat container
+        const chatContainer = document.querySelector('.chat-container');
+        const transcript = document.getElementById('transcript');
+        if (chatContainer && transcript) {
+          chatContainer.insertBefore(this.container, transcript);
+        }
       }
     }
     this.render();
@@ -156,6 +174,21 @@ export class SupervisorProgressUI {
     this.startTicker();
     console.log(`[SupervisorProgress] Started run ${runId}: ${task}`);
     this.render();
+
+    // Draw attention to the supervisor UI when it activates
+    this.pulseAttention();
+  }
+
+  /**
+   * Briefly pulse the container to draw user attention
+   */
+  private pulseAttention(): void {
+    if (!this.container) return;
+
+    this.container.classList.add('supervisor-progress--attention');
+    setTimeout(() => {
+      this.container?.classList.remove('supervisor-progress--attention');
+    }, 1500);
   }
 
   /**
