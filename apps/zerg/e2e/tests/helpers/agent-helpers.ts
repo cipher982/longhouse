@@ -34,7 +34,7 @@ export async function createAgentViaAPI(
 
   const config: CreateAgentRequest = {
     name: options.name || `Test Agent ${workerId}`,
-    model: options.model || 'gpt-4o-mini',
+    model: options.model || 'gpt-5-nano',
     system_instructions: options.systemInstructions || 'You are a test agent for E2E testing',
     task_instructions: options.taskInstructions || 'Perform test tasks as requested',
     temperature: options.temperature || 0.7,
@@ -325,7 +325,7 @@ export async function createTestAgent(page: Page, name: string): Promise<Agent> 
 
   const config: CreateAgentRequest = {
     name: name || `Test Agent ${Date.now()}`,
-    model: 'gpt-4o-mini',
+    model: 'gpt-5-nano',
     system_instructions: 'You are a test agent for E2E testing',
     task_instructions: 'Perform test tasks as requested',
     temperature: 0.7,

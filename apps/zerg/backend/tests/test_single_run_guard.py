@@ -19,7 +19,7 @@ class TestSingleRunGuard:
             name="Test Agent",
             system_instructions="Test system",
             task_instructions="Test task",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Should successfully acquire advisory lock for idle agent
@@ -38,7 +38,7 @@ class TestSingleRunGuard:
             name="Test Agent",
             system_instructions="Test system",
             task_instructions="Test task",
-            model="gpt-4",
+            model="gpt-mock",
         )
         assert AgentLockManager.acquire_agent_lock(db, agent.id) is True
         assert AgentLockManager.acquire_agent_lock(db, agent.id) is False
@@ -53,7 +53,7 @@ class TestSingleRunGuard:
             name="Test Agent",
             system_instructions="Test system",
             task_instructions="Test task",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Simulate a concurrent run by acquiring the advisory lock in this session.
@@ -86,7 +86,7 @@ class TestSingleRunGuard:
             name="Test Agent",
             system_instructions="Test system",
             task_instructions="Test task",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Acquire lock

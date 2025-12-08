@@ -54,7 +54,7 @@ async def main():
             print("\n1. Spawning a worker to calculate 10 + 15...")
             result = spawn_worker(
                 task="Calculate 10 + 15 and explain the result",
-                model="gpt-4o-mini"
+                model="gpt-5-nano"
             )
             print(result)
 
@@ -67,7 +67,7 @@ async def main():
             print("\n2. Spawning another worker to write a haiku about AI...")
             result2 = spawn_worker(
                 task="Write a haiku about artificial intelligence",
-                model="gpt-4o-mini"
+                model="gpt-5-nano"
             )
             print(result2)
 

@@ -31,7 +31,7 @@ class TestAgentStateRecovery:
             name="Normal Agent 1",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         agent2 = create_agent(
@@ -40,7 +40,7 @@ class TestAgentStateRecovery:
             name="Normal Agent 2",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Both should be idle by default
@@ -63,7 +63,7 @@ class TestAgentStateRecovery:
             name="Stuck Agent 1",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         agent2 = create_agent(
@@ -72,7 +72,7 @@ class TestAgentStateRecovery:
             name="Normal Agent",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Manually set agent1 to running status (simulating stuck state)
@@ -111,7 +111,7 @@ class TestAgentStateRecovery:
             name="Agent with Active Run",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         thread = Thread(agent_id=agent.id, title="Test Thread", thread_type="manual")
@@ -147,7 +147,7 @@ class TestAgentStateRecovery:
             name="Uppercase Stuck Agent",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Set to uppercase RUNNING status
@@ -184,7 +184,7 @@ class TestAgentStateRecovery:
             name="Initialization Test Agent",
             system_instructions="Test",
             task_instructions="Test",
-            model="gpt-4",
+            model="gpt-mock",
         )
 
         # Set to running status

@@ -58,7 +58,7 @@ test('Message streaming via WebSocket', async ({ page, request }) => {
       name: 'WebSocket Streaming Agent',
       system_instructions: 'Test agent',
       task_instructions: 'Respond briefly',
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-nano',
     }
   });
   expect(agentResponse.status()).toBe(201);

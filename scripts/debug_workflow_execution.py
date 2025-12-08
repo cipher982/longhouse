@@ -89,7 +89,7 @@ def create_test_agent():
         "name": "Test Agent",
         "system_instructions": "You are a test agent.",
         "task_instructions": "Execute the given task.",
-        "model": "gpt-4o-mini"
+        "model": "gpt-5-nano"
     }
 
     try:

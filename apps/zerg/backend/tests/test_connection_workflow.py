@@ -35,7 +35,7 @@ def test_agent_connection_workflow_execution(
         name="Test Agent A",
         system_instructions="You are Test Agent A",
         task_instructions="Respond with 'Hello from Agent A'",
-        model="gpt-4",
+        model="gpt-mock",
     )
 
     agent2 = crud_mod.create_agent(
@@ -44,7 +44,7 @@ def test_agent_connection_workflow_execution(
         name="Test Agent B",
         system_instructions="You are Test Agent B",
         task_instructions="Respond with 'Hello from Agent B'",
-        model="gpt-4",
+        model="gpt-mock",
     )
 
     # Create workflow with connected agents using WorkflowData format

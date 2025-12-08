@@ -258,7 +258,7 @@ class TestValidationEdgeCases:
                 "role": "assistant",
                 "content": "Hello",
                 "metadata": {
-                    "model": "gpt-4",
+                    "model": "gpt-mock",
                     "tokens": 100,
                     "tools": ["web_search", "calculator"]
                 }
