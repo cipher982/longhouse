@@ -1,7 +1,13 @@
+"""
+Centralized model configuration for Zerg.
+
+Loads from shared config/models.json - the single source of truth for all model definitions.
+"""
+
+import json
 from enum import Enum
-from typing import Dict
-from typing import List
-from typing import Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 
 class ModelProvider(str, Enum):
@@ -19,11 +25,15 @@ class ModelConfig:
         display_name: str,
         provider: ModelProvider,
         is_default: bool = False,
+        tier: Optional[str] = None,
+        description: Optional[str] = None,
     ):
         self.id = id
         self.display_name = display_name
         self.provider = provider
         self.is_default = is_default
+        self.tier = tier
+        self.description = description
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for API responses"""
@@ -35,41 +45,90 @@ class ModelConfig:
         }
 
 
-# Define available models
-# Voice/realtime interfaces use dedicated realtime models (see jarvis context)
-# Note: We use alias IDs without date tags - OpenAI updates snapshots behind the scenes
-AVAILABLE_MODELS = [
-    ModelConfig(
-        id="gpt-5.1",
-        display_name="GPT-5.1",
-        provider=ModelProvider.OPENAI,
-        is_default=True,
-    ),
-    ModelConfig(
-        id="gpt-5-mini",
-        display_name="GPT-5 Mini",
-        provider=ModelProvider.OPENAI,
-    ),
-    ModelConfig(
-        id="gpt-5-nano",
-        display_name="GPT-5 Nano",
-        provider=ModelProvider.OPENAI,
-    ),
-    ModelConfig(
-        id="gpt-mock",
-        display_name="Mock (testing)",
-        provider=ModelProvider.OPENAI,
-    ),
-]
+def _load_models_config() -> dict:
+    """Load the shared models.json configuration"""
+    # Find config relative to this file: zerg/backend/zerg/models_config.py -> config/models.json
+    config_path = Path(__file__).parent.parent.parent.parent.parent / "config" / "models.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Models config not found at {config_path}")
+    with open(config_path) as f:
+        return json.load(f)
 
-# Centralized model constants - use these instead of hardcoding
-DEFAULT_MODEL_ID = "gpt-5.1"
-DEFAULT_WORKER_MODEL_ID = "gpt-5-mini"  # Workers use lighter model by default
-TEST_MODEL_ID = "gpt-5-nano"  # For tests that hit real LLM but need to be cheap/fast
+
+# Load configuration at module level
+_CONFIG = _load_models_config()
+_TEXT_CONFIG = _CONFIG["text"]
+_TIERS = _TEXT_CONFIG["tiers"]
+_MODELS = _TEXT_CONFIG["models"]
+_USE_CASES = _CONFIG["useCases"]["text"]
+_DEFAULTS = _CONFIG["defaults"]["text"]
+
+# =============================================================================
+# TIER CONSTANTS - Use these for semantic model selection
+# =============================================================================
+
+# Model tiers by capability (change these in config/models.json to update everywhere)
+TIER_1 = _TIERS["TIER_1"]  # Best reasoning (gpt-5.1)
+TIER_2 = _TIERS["TIER_2"]  # Good, cheaper (gpt-5-mini)
+TIER_3 = _TIERS["TIER_3"]  # Basic, cheapest (gpt-5-nano)
+MOCK_MODEL = _TEXT_CONFIG["mock"]  # For unit tests
+
+# =============================================================================
+# USE CASE HELPERS - Get model by what you're doing
+# =============================================================================
+
+
+def get_model_for_use_case(use_case: str) -> str:
+    """
+    Get the appropriate model ID for a use case.
+
+    Use cases (defined in config/models.json):
+    - agent_conversation: TIER_1 (quality critical)
+    - routing_decision: TIER_1 (small output but high-stakes decision)
+    - tool_selection: TIER_1 (quality critical)
+    - worker_task: TIER_2 (cost-sensitive batch work)
+    - summarization: TIER_2 (cost-sensitive)
+    - bulk_classification: TIER_3 (high volume, simple)
+    - ci_test: TIER_3 (fast/cheap for CI)
+    """
+    tier = _USE_CASES.get(use_case)
+    if not tier:
+        raise ValueError(f"Unknown use case: {use_case}. Valid: {list(_USE_CASES.keys())}")
+    return _TIERS[tier]
+
+
+# =============================================================================
+# BACKWARDS COMPATIBLE CONSTANTS - Existing code uses these
+# =============================================================================
+
+# Default model IDs (backwards compatible)
+DEFAULT_MODEL_ID = _TIERS[_DEFAULTS["agent"]]  # "gpt-5.1"
+DEFAULT_WORKER_MODEL_ID = _TIERS[_DEFAULTS["worker"]]  # "gpt-5-mini"
+TEST_MODEL_ID = _TIERS[_DEFAULTS["test"]]  # "gpt-5-nano"
+
+# Build AVAILABLE_MODELS list from config
+AVAILABLE_MODELS: List[ModelConfig] = []
+for model_id, model_info in _MODELS.items():
+    provider = ModelProvider(model_info["provider"])
+    is_default = model_id == DEFAULT_MODEL_ID
+    AVAILABLE_MODELS.append(
+        ModelConfig(
+            id=model_id,
+            display_name=model_info["displayName"],
+            provider=provider,
+            is_default=is_default,
+            tier=model_info.get("tier"),
+            description=model_info.get("description"),
+        )
+    )
 
 # Create lookup dictionaries for quick access
 MODELS_BY_ID: Dict[str, ModelConfig] = {model.id: model for model in AVAILABLE_MODELS}
 DEFAULT_MODEL: ModelConfig = next((m for m in AVAILABLE_MODELS if m.is_default), AVAILABLE_MODELS[0])
+
+# =============================================================================
+# API FUNCTIONS - For use by routers and services
+# =============================================================================
 
 
 def get_model_by_id(model_id: str) -> Optional[ModelConfig]:
@@ -95,3 +154,18 @@ def get_all_models() -> List[ModelConfig]:
 def get_all_models_for_api() -> List[Dict]:
     """Get all models in a format suitable for API responses"""
     return [model.to_dict() for model in AVAILABLE_MODELS]
+
+
+def get_tier_model(tier: str) -> str:
+    """
+    Get model ID for a tier.
+
+    Args:
+        tier: One of "TIER_1", "TIER_2", "TIER_3"
+
+    Returns:
+        The model ID for that tier
+    """
+    if tier not in _TIERS:
+        raise ValueError(f"Unknown tier: {tier}. Valid: {list(_TIERS.keys())}")
+    return _TIERS[tier]

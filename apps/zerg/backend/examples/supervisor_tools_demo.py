@@ -17,6 +17,7 @@ from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.database import SessionLocal
 from zerg.models.models import User
+from zerg.models_config import TIER_3  # Use cheapest model for demo
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.tools.builtin.supervisor_tools import (
     get_worker_metadata,
@@ -54,7 +55,7 @@ async def main():
             print("\n1. Spawning a worker to calculate 10 + 15...")
             result = spawn_worker(
                 task="Calculate 10 + 15 and explain the result",
-                model="gpt-5-nano"
+                model=TIER_3
             )
             print(result)
 
@@ -67,7 +68,7 @@ async def main():
             print("\n2. Spawning another worker to write a haiku about AI...")
             result2 = spawn_worker(
                 task="Write a haiku about artificial intelligence",
-                model="gpt-5-nano"
+                model=TIER_3
             )
             print(result2)
 

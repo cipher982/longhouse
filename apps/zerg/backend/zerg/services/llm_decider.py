@@ -47,7 +47,11 @@ DEFAULT_DECISION_MODE = DecisionMode.LLM  # v2.0 default: let LLM interpret stat
 DEFAULT_LLM_POLL_INTERVAL = 2  # Call LLM every N polls (rate limiting guardrail)
 DEFAULT_LLM_MAX_CALLS = 3  # Max LLM calls per job (cost control guardrail)
 DEFAULT_LLM_TIMEOUT_SECONDS = 1.5  # Max time to wait for LLM response (responsiveness guardrail)
-DEFAULT_LLM_MODEL = "gpt-5-nano"  # Fast, cheap model for LLM decisions
+# Use TIER_1 (best model) for routing decisions - output is tiny (~5 tokens)
+# but decision quality is CRITICAL. Cost difference is negligible.
+from zerg.models_config import get_model_for_use_case
+
+DEFAULT_LLM_MODEL = get_model_for_use_case("routing_decision")
 
 
 @dataclass
@@ -55,12 +59,19 @@ class LLMDecisionPayload:
     """Compact payload for LLM decision making.
 
     Kept under ~1-2KB to minimize latency and cost.
+
+    v2.0: Passes raw timing data instead of pre-computed is_stuck boolean.
+    The LLM can judge whether an operation is "stuck" based on context
+    (e.g., 45s for 'du -sh /var' is normal, 45s for 'ls' is stuck).
     """
 
     job_id: int
     status: str
     elapsed_seconds: float
-    is_stuck: bool
+    # v2.0: Raw timing instead of pre-computed is_stuck
+    current_op_elapsed_seconds: float | None  # How long current operation has been running
+    current_op_name: str | None  # Tool name (e.g., "ssh_exec")
+    current_op_args: str | None  # Tool arguments preview (e.g., "du -sh /var/*")
     last_3_tools: list[dict]  # name, status, duration_ms, error (truncated)
     activity_counts: dict  # total, completed, failed, monitoring_checks
     log_tail: str  # 400-800 chars of recent output
@@ -143,6 +154,8 @@ def build_decision_payload(ctx: "DecisionContext") -> LLMDecisionPayload:
     - Only including last 3 tool activities
     - Truncating log tail to 400-800 chars
     - Using compact field names
+
+    v2.0: Passes raw timing and operation context instead of pre-computed is_stuck.
     """
     # Last 3 tools with essential info only
     last_3 = ctx.tool_activities[-3:] if ctx.tool_activities else []
@@ -168,11 +181,22 @@ def build_decision_payload(ctx: "DecisionContext") -> LLMDecisionPayload:
         if len(ctx.last_tool_output) > 600:
             log_tail = "..." + log_tail
 
+    # v2.0: Extract current operation details for contextual stuck judgment
+    current_op_elapsed = None
+    current_op_name = None
+    current_op_args = None
+    if ctx.current_operation:
+        current_op_elapsed = round(ctx.stuck_seconds, 1)
+        current_op_name = ctx.current_operation.tool_name
+        current_op_args = ctx.current_operation.args_preview
+
     return LLMDecisionPayload(
         job_id=ctx.job_id,
         status=ctx.status,
         elapsed_seconds=round(ctx.elapsed_seconds, 1),
-        is_stuck=ctx.is_stuck,
+        current_op_elapsed_seconds=current_op_elapsed,
+        current_op_name=current_op_name,
+        current_op_args=current_op_args,
         last_3_tools=tools_compact,
         activity_counts={
             "total": total,
@@ -196,9 +220,17 @@ Return EXACTLY ONE word from: wait, exit, cancel, peek
 
 Decision rules:
 - wait: Default. Continue monitoring if task is progressing normally.
-- exit: Return immediately if the task has clearly produced a final answer or result. Look for output containing "Result:", "Summary:", "Done.", "Completed", or similar completion indicators.
-- cancel: Abort the worker if it appears stuck (>60s on one operation), has repeated failures, or is clearly on a wrong path.
-- peek: Request more details if you need to see full logs before deciding. Use sparingly.
+- exit: Return immediately if the worker appears to have completed its task and produced useful output. Use your semantic understanding to recognize completion regardless of specific wording.
+- cancel: Abort if stuck, repeated failures, or clearly wrong path.
+- peek: Request more details if you need full logs. Use sparingly.
+
+Judging "stuck" - use context:
+- current_op_elapsed_seconds: How long the current operation has been running
+- current_op_name: The tool being used (e.g., "ssh_exec")
+- current_op_args: What command/args (e.g., "du -sh /var/*")
+
+Examples: 45s for "du -sh /var" = normal. 45s for "ls" = stuck. 60s for "find / -name..." = normal.
+If current_op fields are null, no operation is in progress.
 
 When in doubt, return "wait". Be conservative with exit/cancel."""
 

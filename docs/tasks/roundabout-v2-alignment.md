@@ -1,7 +1,8 @@
 # Roundabout v2.0 Alignment - Task Document
 
 **Created:** 2025-12-08
-**Status:** Research Complete, Implementation Pending
+**Implemented:** 2025-12-08
+**Status:** ✅ Improvements 1-3 Complete, Improvement 4 Deferred
 **Priority:** Medium (polish, not blocking)
 
 ---

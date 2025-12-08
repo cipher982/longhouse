@@ -164,7 +164,10 @@ class TestBuildDecisionPayload:
         assert payload.job_id == 1
         assert payload.status == "running"
         assert payload.elapsed_seconds == 10.0
-        assert payload.is_stuck is False
+        # v2.0: No current operation, so op fields are None
+        assert payload.current_op_elapsed_seconds is None
+        assert payload.current_op_name is None
+        assert payload.current_op_args is None
 
     def test_last_3_tools_only(self):
         """Should only include last 3 tool activities."""
@@ -221,6 +224,29 @@ class TestBuildDecisionPayload:
 
         assert len(payload.last_3_tools[0]["error"]) == 100
 
+    def test_current_operation_context(self):
+        """v2.0: Should include current operation context for stuck judgment.
+
+        Instead of pre-computed is_stuck boolean, we pass raw timing and
+        operation details so the LLM can make contextual decisions.
+        """
+        current_op = ToolActivity(
+            tool_name="ssh_exec",
+            status="started",
+            timestamp=datetime.now(timezone.utc),
+            args_preview="du -sh /var/*",
+        )
+        ctx = self._make_context(
+            current_operation=current_op,
+            stuck_seconds=45.0,  # 45s might be stuck for ls, but normal for du
+        )
+        payload = build_decision_payload(ctx)
+
+        # v2.0: Raw timing and operation context
+        assert payload.current_op_elapsed_seconds == 45.0
+        assert payload.current_op_name == "ssh_exec"
+        assert payload.current_op_args == "du -sh /var/*"
+
 
 class TestBuildLLMPrompt:
     """Tests for the LLM prompt builder."""
@@ -231,7 +257,9 @@ class TestBuildLLMPrompt:
             job_id=1,
             status="running",
             elapsed_seconds=10.0,
-            is_stuck=False,
+            current_op_elapsed_seconds=None,
+            current_op_name=None,
+            current_op_args=None,
             last_3_tools=[],
             activity_counts={"total": 0, "completed": 0, "failed": 0},
             log_tail="",
@@ -268,7 +296,9 @@ class TestCallLLMDecider:
                 job_id=1,
                 status="running",
                 elapsed_seconds=10.0,
-                is_stuck=False,
+                current_op_elapsed_seconds=None,
+                current_op_name=None,
+                current_op_args=None,
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="",
@@ -294,7 +324,9 @@ class TestCallLLMDecider:
                 job_id=1,
                 status="running",
                 elapsed_seconds=10.0,
-                is_stuck=False,
+                current_op_elapsed_seconds=None,
+                current_op_name=None,
+                current_op_args=None,
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="Result: success",
@@ -306,7 +338,7 @@ class TestCallLLMDecider:
 
     @pytest.mark.asyncio
     async def test_successful_cancel_response(self):
-        """Should handle valid 'cancel' response."""
+        """Should handle valid 'cancel' response - operation stuck for long time."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "cancel"
@@ -316,11 +348,14 @@ class TestCallLLMDecider:
                 return_value=mock_response
             )
 
+            # v2.0: Pass raw timing - LLM decides if 90s on simple command is stuck
             payload = LLMDecisionPayload(
                 job_id=1,
                 status="running",
                 elapsed_seconds=90.0,
-                is_stuck=True,
+                current_op_elapsed_seconds=90.0,
+                current_op_name="ssh_exec",
+                current_op_args="ls -la",  # Simple command, 90s is definitely stuck
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="",
@@ -346,7 +381,9 @@ class TestCallLLMDecider:
                 job_id=1,
                 status="running",
                 elapsed_seconds=10.0,
-                is_stuck=False,
+                current_op_elapsed_seconds=None,
+                current_op_name=None,
+                current_op_args=None,
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="",
@@ -371,7 +408,9 @@ class TestCallLLMDecider:
                 job_id=1,
                 status="running",
                 elapsed_seconds=10.0,
-                is_stuck=False,
+                current_op_elapsed_seconds=None,
+                current_op_name=None,
+                current_op_args=None,
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="",
@@ -394,7 +433,9 @@ class TestCallLLMDecider:
                 job_id=1,
                 status="running",
                 elapsed_seconds=10.0,
-                is_stuck=False,
+                current_op_elapsed_seconds=None,
+                current_op_name=None,
+                current_op_args=None,
                 last_3_tools=[],
                 activity_counts={},
                 log_tail="",
