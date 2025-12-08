@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page } from '@playwright/test';
 import { createApiClient } from './api-client';
 import * as fs from 'fs';
@@ -60,12 +62,12 @@ export async function resetDatabaseForWorker(
         if (agents.length === 0) {
           return; // Success
         }
-        console.warn(`Database reset attempt ${attempts + 1}: Found ${agents.length} remaining agents`);
+        testLog.warn(`Database reset attempt ${attempts + 1}: Found ${agents.length} remaining agents`);
       } else {
         return; // Skip verification, assume success
       }
     } catch (error) {
-      console.warn(`Database reset attempt ${attempts + 1} failed:`, error);
+      testLog.warn(`Database reset attempt ${attempts + 1} failed:`, error);
     }
 
     attempts++;
@@ -112,9 +114,9 @@ export async function resetDatabaseViaRequest(
           return;
         }
       }
-      console.warn(`Database reset attempt ${attempts + 1}: HTTP ${response.status()}`);
+      testLog.warn(`Database reset attempt ${attempts + 1}: HTTP ${response.status()}`);
     } catch (error) {
-      console.warn(`Database reset attempt ${attempts + 1} failed:`, error);
+      testLog.warn(`Database reset attempt ${attempts + 1} failed:`, error);
     }
 
     attempts++;
@@ -133,9 +135,9 @@ export async function resetDatabaseViaRequest(
 export async function ensureCleanDatabase(page: Page, workerId: string): Promise<void> {
   try {
     await resetDatabaseForWorker(workerId, { retries: 2, skipVerification: false });
-    console.log(`✅ Database reset successful for worker ${workerId}`);
+    testLog.info(`✅ Database reset successful for worker ${workerId}`);
   } catch (error) {
-    console.warn(`⚠️  Database reset failed for worker ${workerId}:`, error);
+    testLog.warn(`⚠️  Database reset failed for worker ${workerId}:`, error);
     // Don't throw - let test proceed in case it's a transient issue
   }
 }
@@ -159,7 +161,7 @@ export async function verifyDatabaseEmpty(workerId: string): Promise<boolean> {
     const agents = await apiClient.listAgents();
     return agents.length === 0;
   } catch (error) {
-    console.warn(`Failed to verify database state for worker ${workerId}:`, error);
+    testLog.warn(`Failed to verify database state for worker ${workerId}:`, error);
     return false;
   }
 }

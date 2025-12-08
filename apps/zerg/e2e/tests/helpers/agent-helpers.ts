@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page, expect } from '@playwright/test';
 import { createApiClient, Agent, CreateAgentRequest } from './api-client';
 
@@ -46,11 +48,11 @@ export async function createAgentViaAPI(
   while (attempts < retries) {
     try {
       const agent = await apiClient.createAgent(config);
-      console.log(`✅ Agent created via API: ${agent.name} (ID: ${agent.id})`);
+      testLog.info(`✅ Agent created via API: ${agent.name} (ID: ${agent.id})`);
       return agent;
     } catch (error) {
       attempts++;
-      console.warn(`Agent creation attempt ${attempts} failed:`, error);
+      testLog.warn(`Agent creation attempt ${attempts} failed:`, error);
 
       if (attempts >= retries) {
         throw new Error(`Failed to create agent after ${retries} attempts: ${error}`);
@@ -83,7 +85,7 @@ export async function createMultipleAgents(
     agents.push(agent);
   }
 
-  console.log(`✅ Created ${agents.length} agents in batch`);
+  testLog.info(`✅ Created ${agents.length} agents in batch`);
   return agents;
 }
 
@@ -122,7 +124,7 @@ export async function createAgentViaUI(page: Page): Promise<string> {
     throw new Error('Failed to get agent ID from newly created agent row');
   }
 
-  console.log(`✅ Agent created via UI with ID: ${agentId}`);
+  testLog.info(`✅ Agent created via UI with ID: ${agentId}`);
   return agentId;
 }
 
@@ -136,7 +138,7 @@ export async function getAgentById(workerId: string, agentId: string): Promise<A
     const agents = await apiClient.listAgents();
     return agents.find(agent => agent.id === agentId) || null;
   } catch (error) {
-    console.warn(`Failed to get agent ${agentId}:`, error);
+    testLog.warn(`Failed to get agent ${agentId}:`, error);
     return null;
   }
 }
@@ -152,12 +154,12 @@ export async function verifyAgentExists(
   const agent = await getAgentById(workerId, agentId);
 
   if (!agent) {
-    console.warn(`Agent ${agentId} not found`);
+    testLog.warn(`Agent ${agentId} not found`);
     return false;
   }
 
   if (expectedName && agent.name !== expectedName) {
-    console.warn(`Agent ${agentId} has name "${agent.name}", expected "${expectedName}"`);
+    testLog.warn(`Agent ${agentId} has name "${agent.name}", expected "${expectedName}"`);
     return false;
   }
 
@@ -223,7 +225,7 @@ export async function editAgentViaUI(
   // Wait for modal to close
   await expect(page.locator('#agent-modal')).not.toBeVisible({ timeout: 5000 });
 
-  console.log(`✅ Agent ${agentId} edited via UI`);
+  testLog.info(`✅ Agent ${agentId} edited via UI`);
 }
 
 /**
@@ -245,11 +247,11 @@ export async function deleteAgentViaUI(page: Page, agentId: string, confirm: boo
   if (confirm) {
     // Wait for row to disappear
     await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(0, { timeout: 5000 });
-    console.log(`✅ Agent ${agentId} deleted via UI`);
+    testLog.info(`✅ Agent ${agentId} deleted via UI`);
   } else {
     // Row should still be present
     await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toHaveCount(1);
-    console.log(`✅ Agent ${agentId} deletion cancelled`);
+    testLog.info(`✅ Agent ${agentId} deletion cancelled`);
   }
 }
 
@@ -261,9 +263,9 @@ export async function deleteAgentViaAPI(workerId: string, agentId: string): Prom
 
   try {
     await apiClient.deleteAgent(agentId);
-    console.log(`✅ Agent ${agentId} deleted via API`);
+    testLog.info(`✅ Agent ${agentId} deleted via API`);
   } catch (error) {
-    console.warn(`Failed to delete agent ${agentId}:`, error);
+    testLog.warn(`Failed to delete agent ${agentId}:`, error);
     throw error;
   }
 }
@@ -279,9 +281,9 @@ export async function cleanupAgents(workerId: string, agents: Agent[] | string[]
 
     try {
       await apiClient.deleteAgent(agentId);
-      console.log(`✅ Cleaned up agent ${agentId}`);
+      testLog.info(`✅ Cleaned up agent ${agentId}`);
     } catch (error) {
-      console.warn(`Failed to cleanup agent ${agentId}:`, error);
+      testLog.warn(`Failed to cleanup agent ${agentId}:`, error);
     }
   }
 }
@@ -296,7 +298,7 @@ export async function getAgentCount(workerId: string): Promise<number> {
     const agents = await apiClient.listAgents();
     return agents.length;
   } catch (error) {
-    console.warn(`Failed to get agent count for worker ${workerId}:`, error);
+    testLog.warn(`Failed to get agent count for worker ${workerId}:`, error);
     return 0;
   }
 }
@@ -310,9 +312,9 @@ export async function navigateToAgentChat(page: Page, agentId: string): Promise<
   // Wait for chat interface to load
   try {
     await page.waitForSelector('.chat-input', { timeout: 5000 });
-    console.log(`✅ Navigated to chat for agent ${agentId}`);
+    testLog.info(`✅ Navigated to chat for agent ${agentId}`);
   } catch (error) {
-    console.warn(`Chat UI not fully loaded for agent ${agentId}, continuing...`);
+    testLog.warn(`Chat UI not fully loaded for agent ${agentId}, continuing...`);
   }
 }
 
@@ -332,6 +334,6 @@ export async function createTestAgent(page: Page, name: string): Promise<Agent> 
   };
 
   const agent = await apiClient.createAgent(config);
-  console.log(`✅ Test agent created: ${agent.name} (ID: ${agent.id})`);
+  testLog.info(`✅ Test agent created: ${agent.name} (ID: ${agent.id})`);
   return agent;
 }

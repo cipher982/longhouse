@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page, TestInfo } from '@playwright/test';
 
 /**
@@ -115,12 +117,12 @@ export async function skipIfNotImplemented(
   try {
     const count = await page.locator(selector).count();
     if (count === 0) {
-      console.log(`⏭️  Skipping test: ${reason} (${selector} not found)`);
+      testLog.info(`⏭️  Skipping test: ${reason} (${selector} not found)`);
       return true;
     }
     return false;
   } catch (error) {
-    console.log(`⏭️  Skipping test: ${reason} (error checking ${selector})`);
+    testLog.info(`⏭️  Skipping test: ${reason} (error checking ${selector})`);
     return true;
   }
 }
@@ -275,9 +277,9 @@ export function getTestTimeout(base: number = 5000): number {
  */
 export function logTestStep(step: string, details?: any): void {
   const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
-  console.log(`📊 [${timestamp}] ${step}`);
+  testLog.info(`📊 [${timestamp}] ${step}`);
   if (details) {
-    console.log(`   ${JSON.stringify(details)}`);
+    testLog.info(`   ${JSON.stringify(details)}`);
   }
 }
 
@@ -290,7 +292,7 @@ export function createCleanupFunction(cleanupTasks: (() => Promise<void>)[]): ()
       try {
         await task();
       } catch (error) {
-        console.warn('Cleanup task failed:', error);
+        testLog.warn('Cleanup task failed:', error);
       }
     }
   };

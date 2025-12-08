@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { expect } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -98,7 +100,7 @@ export class ApiClient {
       }
       return await response.text();
     } catch (error) {
-      console.error(`API request error: ${method} ${path}`, {
+      testLog.error(`API request error: ${method} ${path}`, {
         error: error instanceof Error ? error.message : String(error),
         responseStatus: response?.status,
         responseText: errorText
@@ -170,7 +172,7 @@ export class ApiClient {
       // Wait for database to be fully reset before proceeding
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
-      console.error('Database reset failed, trying fallback cleanup...');
+      testLog.error('Database reset failed, trying fallback cleanup...');
       // If reset fails, try to manually clean up test data
       const agents = await this.listAgents();
       await Promise.all(agents.map(agent => this.deleteAgent(agent.id)));

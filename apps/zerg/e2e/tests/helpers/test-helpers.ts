@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page, expect } from '@playwright/test';
 import { createApiClient, Agent, Thread, CreateAgentRequest, CreateThreadRequest } from './api-client';
 import { resetDatabaseForWorker } from './database-helpers';
@@ -63,7 +65,7 @@ export async function cleanupTestData(workerId: string, context: TestContext): P
       try {
         await apiClient.deleteThread(thread.id);
       } catch (error) {
-        console.warn(`Failed to delete thread ${thread.id}:`, error);
+        testLog.warn(`Failed to delete thread ${thread.id}:`, error);
       }
     }
   }
@@ -101,7 +103,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
     ]);
   } catch (error) {
     // Log detailed error information
-    console.error('Dashboard failed to load properly:', error);
+    testLog.error('Dashboard failed to load properly:', error);
 
     // Try to get current DOM state for debugging
     const domState = await page.evaluate(() => ({
@@ -113,7 +115,7 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
       bodyHTML: document.body.innerHTML.substring(0, 200)
     }));
 
-    console.error('Current DOM state:', domState);
+    testLog.error('Current DOM state:', domState);
     throw new Error(`Dashboard did not load properly. DOM state: ${JSON.stringify(domState)}`);
   }
 
@@ -239,7 +241,7 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
     await waitForElement(page, '.chat-input', 5000);
   } catch (error) {
     // Chat UI might not be fully implemented yet
-    console.warn('Chat UI not fully loaded, continuing...');
+    testLog.warn('Chat UI not fully loaded, continuing...');
   }
 }
 
@@ -261,7 +263,7 @@ export async function checkBackendHealth(workerId: string = '0'): Promise<boolea
     const response = await apiClient.healthCheck();
     return response && response.message === 'Agent Platform API is running';
   } catch (error) {
-    console.error('Backend health check failed:', error);
+    testLog.error('Backend health check failed:', error);
     return false;
   }
 }
@@ -273,7 +275,7 @@ export function skipIfNotImplemented(page: Page, selector: string, reason: strin
   return async function() {
     const count = await page.locator(selector).count();
     if (count === 0) {
-      console.log(`Skipping test: ${reason} (${selector} not found)`);
+      testLog.info(`Skipping test: ${reason} (${selector} not found)`);
       return true;
     }
     return false;
