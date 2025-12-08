@@ -1,8 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth, GoogleSignInButton, LoginOverlay } from "../lib/auth";
+import { useAuth } from "../lib/auth";
 import { SwarmLogo } from "../components/SwarmLogo";
-import config from "../lib/config";
 import "../styles/landing.css";
 
 // Section components

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { useRoutes, Outlet } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
@@ -8,16 +8,27 @@ import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import DashboardPage from "../pages/DashboardPage";
-import ChatPage from "../pages/ChatPage";
-import CanvasPage from "../pages/CanvasPage";
 import ProfilePage from "../pages/ProfilePage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import AdminPage from "../pages/AdminPage";
 import { AuthGuard } from "../lib/auth";
+
+// Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
+const ChatPage = lazy(() => import("../pages/ChatPage"));
+const CanvasPage = lazy(() => import("../pages/CanvasPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
 import config from "../lib/config";
+
+// Loading fallback for lazy-loaded pages
+function PageLoader() {
+  return (
+    <div className="page-loader">
+      <div className="page-loader-spinner" />
+    </div>
+  );
+}
 
 // Authenticated app wrapper - wraps all authenticated routes with a single instance
 // This prevents remounting Layout/StatusFooter/WebSocket on navigation
@@ -112,7 +123,9 @@ export default function App() {
           path: "/canvas",
           element: (
             <ErrorBoundary>
-              <CanvasPage />
+              <Suspense fallback={<PageLoader />}>
+                <CanvasPage />
+              </Suspense>
             </ErrorBoundary>
           )
         },
@@ -120,7 +133,9 @@ export default function App() {
           path: "/agent/:agentId/thread/:threadId?",
           element: (
             <ErrorBoundary>
-              <ChatPage />
+              <Suspense fallback={<PageLoader />}>
+                <ChatPage />
+              </Suspense>
             </ErrorBoundary>
           )
         },

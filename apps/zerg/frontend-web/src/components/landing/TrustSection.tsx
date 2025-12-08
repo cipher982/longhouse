@@ -26,7 +26,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What LLM do you use?",
-    answer: "Swarmlet currently uses OpenAI models (GPT-4, GPT-3.5) for AI capabilities."
+    answer: "Swarmlet supports multiple AI providers including OpenAI (GPT-4o) and Anthropic (Claude). You can choose the model that works best for you."
   }
 ];
 
