@@ -691,6 +691,65 @@ User sees intelligent explanation (no ErrorContext classification needed)
 | Worker execution      | < 300s  | Timeout after 5 minutes  |
 | SSE event latency     | < 500ms | Near real-time updates   |
 
+### 8.5 Guardrails (Not Heuristics)
+
+**Critical distinction:** Guardrails are NOT heuristics. They don't tell the LLM what to decide - they're hard limits that prevent runaway resources.
+
+| Guardrail                      | Limit | Purpose                 | Enforcement          |
+| ------------------------------ | ----- | ----------------------- | -------------------- |
+| Worker timeout                 | 300s  | Prevent runaway workers | System kills process |
+| SSH command timeout            | 60s   | Protect servers         | asyncio.timeout      |
+| Max workers per supervisor run | 5     | Cost control            | spawn_worker fails   |
+| Output tokens per run          | 4000  | Cost control            | LLM truncates        |
+| Max SSH commands per worker    | 20    | Prevent loops           | Tool raises error    |
+
+**What makes these NOT heuristics:**
+
+```python
+# HEURISTIC (bad) - pre-programs LLM decisions:
+if elapsed > 60:
+    return "CANCEL"  # LLM should decide this
+
+# GUARDRAIL (good) - enforces hard limit:
+async with asyncio.timeout(300):
+    await worker.execute()  # System enforces, not LLM
+```
+
+**The key test:** Does this rule tell the LLM WHAT TO DECIDE, or does it enforce a RESOURCE BOUNDARY?
+
+- "If disk > 80%, alert user" → Heuristic (LLM should judge severity)
+- "Workers timeout after 300s" → Guardrail (resource limit, not judgment)
+
+### 8.6 Command Safety Layer
+
+**Dangerous command patterns require explicit override:**
+
+```python
+DANGEROUS_PATTERNS = [
+    r'rm\s+-rf',              # Recursive delete
+    r'>\s*/dev/sd',           # Write to block device
+    r'DROP\s+(TABLE|DATABASE)', # SQL destruction
+    r'docker\s+rm\s+-f',      # Force remove containers
+    r'systemctl\s+(stop|disable)', # Service disruption
+    r'chmod\s+777',           # Security risk
+]
+
+async def ssh_exec(host, command, allow_destructive=False):
+    if not allow_destructive and matches_dangerous_pattern(command):
+        raise DangerousCommandError(
+            f"Command matches dangerous pattern. "
+            f"Use allow_destructive=True if intentional."
+        )
+    # ... execute command
+```
+
+**Why this is safe:**
+
+- LLM can still run destructive commands if needed (explicit flag)
+- Prevents accidental destruction from prompt injection
+- All attempts logged to audit trail
+- Human review for patterns that trigger this
+
 ---
 
 ## 9. Implementation Principles
