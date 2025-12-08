@@ -19,5 +19,6 @@ mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Run all tests (additional args forwarded, e.g. -k pattern)
-uv run pytest tests/ -p no:warnings --tb=short "$@"
+# Run unit tests (excluding integration tests which require real API credentials)
+# To run integration tests: pytest tests/integration/ -v
+uv run pytest tests/ --ignore=tests/integration/ -p no:warnings --tb=short "$@"

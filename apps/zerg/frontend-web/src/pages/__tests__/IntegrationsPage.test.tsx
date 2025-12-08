@@ -128,23 +128,18 @@ describe("IntegrationsPage", () => {
     expect(within(githubCard as HTMLElement).getByText("Not configured")).toBeInTheDocument();
   });
 
-  it("opens configuration modal when Configure button is clicked", async () => {
+  it("shows Connect button for OAuth connectors like GitHub", async () => {
     renderIntegrationsPage();
-    const user = userEvent.setup();
 
     await waitFor(() => {
       expect(screen.getByText("GitHub")).toBeInTheDocument();
     });
 
-    // Find and click "Configure" on GitHub card
+    // GitHub is an OAuth connector, so it shows "Connect GitHub" instead of "Configure"
     const githubCard = screen.getByText("GitHub").closest(".connector-card");
-    const configureBtn = within(githubCard as HTMLElement).getByRole("button", { name: "Configure" });
-    await user.click(configureBtn);
-
-    // Modal should appear
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Configure GitHub" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Personal Access Token")).toBeInTheDocument();
+    expect(githubCard).not.toBeNull();
+    const connectBtn = within(githubCard as HTMLElement).getByRole("button", { name: "Connect GitHub" });
+    expect(connectBtn).toBeInTheDocument();
   });
 
   it("shows error message when API fails", async () => {

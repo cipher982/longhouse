@@ -315,3 +315,23 @@ export async function navigateToAgentChat(page: Page, agentId: string): Promise<
     console.warn(`Chat UI not fully loaded for agent ${agentId}, continuing...`);
   }
 }
+
+/**
+ * Create a test agent using the API client via page context
+ * This is a convenience wrapper for tests that have a Page but need to create agents
+ */
+export async function createTestAgent(page: Page, name: string): Promise<Agent> {
+  const apiClient = createApiClient('0'); // Use default worker for page-based tests
+
+  const config: CreateAgentRequest = {
+    name: name || `Test Agent ${Date.now()}`,
+    model: 'gpt-4o-mini',
+    system_instructions: 'You are a test agent for E2E testing',
+    task_instructions: 'Perform test tasks as requested',
+    temperature: 0.7,
+  };
+
+  const agent = await apiClient.createAgent(config);
+  console.log(`✅ Test agent created: ${agent.name} (ID: ${agent.id})`);
+  return agent;
+}

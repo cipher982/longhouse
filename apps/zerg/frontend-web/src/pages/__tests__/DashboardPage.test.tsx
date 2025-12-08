@@ -14,12 +14,16 @@ import {
   type DashboardSnapshot,
 } from "../../services/api";
 
-vi.mock("../../services/api", () => ({
-  fetchDashboardSnapshot: vi.fn(),
-  createAgent: vi.fn(),
-  resetAgent: vi.fn(),
-  runAgent: vi.fn(),
-}));
+vi.mock("../../services/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api")>();
+  return {
+    ...actual,
+    fetchDashboardSnapshot: vi.fn(),
+    createAgent: vi.fn(),
+    resetAgent: vi.fn(),
+    runAgent: vi.fn(),
+  };
+});
 
 type MockWebSocketInstance = {
   onmessage: ((event: MessageEvent) => void) | null;

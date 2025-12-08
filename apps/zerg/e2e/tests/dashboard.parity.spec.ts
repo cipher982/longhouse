@@ -1,8 +1,12 @@
 import { test, expect } from './fixtures';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const BASELINE_PATH = path.resolve(__dirname, '../visual-baseline/dashboard-legacy.png');
 const DIFF_PATH = path.resolve(__dirname, '../visual-baseline/dashboard-legacy-diff.png');

@@ -19,9 +19,16 @@ const apiMocks = vi.hoisted(() => ({
   fetchWorkflows: vi.fn(),
   startWorkflowExecution: vi.fn(),
   fetchContainerPolicy: vi.fn(),
+  fetchAccountConnectors: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("../../services/api", () => apiMocks);
+vi.mock("../../services/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api")>();
+  return {
+    ...actual,
+    ...apiMocks,
+  };
+});
 
 const {
   fetchAgent: mockFetchAgent,

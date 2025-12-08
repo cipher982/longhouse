@@ -1,25 +1,25 @@
 import { test, expect } from '@playwright/test';
-import { injectAxe, checkA11y } from '@axe-core/playwright';
+import AxeBuilder from '@axe-core/playwright';
 
 test.describe('Accessibility – dashboard smoke', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await injectAxe(page);
-  });
-
   test('dashboard view has no serious axe violations', async ({ page }) => {
-    // Limit to serious / critical for CI signal
-    await checkA11y(page, undefined, {
-      detailedReport: true,
-      axeOptions: {
-        runOnly: {
-          type: 'tag',
-          values: ['wcag2a', 'wcag2aa'],
-        },
-        resultTypes: ['violations'],
-        reporter: 'v2',
-      },
-      violations: ['critical', 'serious'],
-    });
+    await page.goto('/');
+
+    // Run axe accessibility checks
+    const accessibilityScanResults = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+
+    // Filter for only critical and serious violations
+    const seriousViolations = accessibilityScanResults.violations.filter(
+      (violation) => violation.impact === 'critical' || violation.impact === 'serious'
+    );
+
+    // Log violations for debugging if any exist
+    if (seriousViolations.length > 0) {
+      console.log('Accessibility violations found:', JSON.stringify(seriousViolations, null, 2));
+    }
+
+    expect(seriousViolations).toEqual([]);
   });
 });
