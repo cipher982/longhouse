@@ -1,6 +1,19 @@
-/* Layout utility classes – Phase 3 groundwork */
+/* Layout & Reset – Modern CSS Foundation */
 
-/* Grid helpers */
+/* --------------------------------------------------------- */
+/* CSS Reset - Applied universally                           */
+/* --------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------- */
+/* Grid helpers                                              */
+/* --------------------------------------------------------- */
+
 .grid {
   display: grid;
   gap: var(--spacing-lg);
@@ -18,7 +31,10 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
-/* Flex helpers */
+/* --------------------------------------------------------- */
+/* Flex helpers                                              */
+/* --------------------------------------------------------- */
+
 .flex {
   display: flex;
 }
@@ -34,26 +50,22 @@
   flex-direction: column;
 }
 
-/* Spacer helper */
 .spacer {
   flex: 1 1 auto;
 }
 
 /* --------------------------------------------------------- */
-
 /* Application grid layout (header, tabs, content, status)   */
-
 /* --------------------------------------------------------- */
 
-html,
-body {
+html {
   height: 100%;
 }
 
-/* Body simply hosts the React root */
 body {
+  height: 100%;
   margin: 0;
-  overflow-y: auto; /* Allow vertical scrolling naturally */
+  min-width: 320px; /* minimum supported viewport - horizontal scroll below this */
 }
 
 /* The React root acts as the application grid */
@@ -61,9 +73,8 @@ body {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   height: 100%;
-  min-height: 100vh; /* fallback */
-  min-height: 100dvh; /* modern viewport */
-  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh; /* modern viewport units */
 }
 
 /* Place elements explicitly so order in DOM does not matter */
@@ -79,22 +90,19 @@ body {
   grid-row: 4;
 }
 
-/* Content containers occupy the main viewport row */
+/* Content area - main scrollable viewport */
 #app-container {
   grid-row: 3;
-  min-height: 0; /* allow pages to size and scroll */
-  width: 100%;
+  min-height: 0; /* required for grid children to respect overflow */
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  overflow: hidden auto; /* Allow vertical scrolling */ /* Prevent horizontal scroll */
+  overflow-x: hidden; /* prevent page-level horizontal scroll */
+  overflow-y: auto;
   position: relative;
 }
 
-/* Ensure direct children can manage their own scrolling */
+/* Ensure direct children fill available space */
 #app-container > * {
   flex: 1 1 auto;
   min-height: 0;
-  width: 100%;
 }
