@@ -28,7 +28,11 @@ export default defineConfig({
     // Allow docker service hostnames for e2e testing
     allowedHosts: ['jarvis-web', 'localhost'],
     fs: {
-      allow: [resolve(__dirname, '..', '..')]
+      // Allow reading workspace root AND top-level config (models.json)
+      allow: [
+        resolve(__dirname, '..', '..'),
+        resolve(__dirname, '../../..', 'config')
+      ]
     },
     // Docker on macOS doesn't propagate filesystem events - must use polling
     watch: {

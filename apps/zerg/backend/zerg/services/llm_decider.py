@@ -47,11 +47,41 @@ DEFAULT_DECISION_MODE = DecisionMode.LLM  # v2.0 default: let LLM interpret stat
 DEFAULT_LLM_POLL_INTERVAL = 2  # Call LLM every N polls (rate limiting guardrail)
 DEFAULT_LLM_MAX_CALLS = 3  # Max LLM calls per job (cost control guardrail)
 DEFAULT_LLM_TIMEOUT_SECONDS = 1.5  # Max time to wait for LLM response (responsiveness guardrail)
-# Use TIER_1 (best model) for routing decisions - output is tiny (~5 tokens)
-# but decision quality is CRITICAL. Cost difference is negligible.
-from zerg.models_config import get_model_for_use_case
 
-DEFAULT_LLM_MODEL = get_model_for_use_case("routing_decision")
+
+def get_routing_model() -> str:
+    """Get the model for routing decisions.
+
+    Priority:
+    1. ROUNDABOUT_ROUTING_MODEL env var (explicit override via settings)
+    2. Default: use_case lookup for "routing_decision" (TIER_1)
+
+    The routing decision is tiny (~5 tokens output) but decision quality is CRITICAL.
+    Cost difference between tiers is negligible for this use case, so TIER_1 is default.
+
+    However, if you experience timeouts (the 1.5s default is tight for some models),
+    you can either:
+    - Set ROUNDABOUT_LLM_TIMEOUT to a higher value (e.g., 2.5)
+    - Set ROUNDABOUT_ROUTING_MODEL to a faster model (e.g., "gpt-5-mini")
+    """
+    from zerg.config import get_settings
+    from zerg.models_config import get_model_for_use_case
+
+    settings = get_settings()
+    if settings.roundabout_routing_model:
+        return settings.roundabout_routing_model
+    return get_model_for_use_case("routing_decision")
+
+
+def get_routing_timeout() -> float:
+    """Get the timeout for routing LLM calls.
+
+    Default: 1.5s (tight but responsive)
+    Override via ROUNDABOUT_LLM_TIMEOUT env var.
+    """
+    from zerg.config import get_settings
+
+    return get_settings().roundabout_llm_timeout
 
 
 @dataclass
@@ -247,15 +277,15 @@ What action should be taken? Reply with exactly one word: wait, exit, cancel, or
 
 async def call_llm_decider(
     payload: LLMDecisionPayload,
-    model: str = DEFAULT_LLM_MODEL,
-    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+    model: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> LLMDecisionResult:
     """Call LLM to make a decision.
 
     Args:
         payload: The decision context
-        model: Model to use (default: gpt-4o-mini for speed/cost)
-        timeout_seconds: Max time to wait for response
+        model: Model to use (default: from settings or TIER_1 via use_case lookup)
+        timeout_seconds: Max time to wait for response (default: from settings, 1.5s)
 
     Returns:
         LLMDecisionResult with action, rationale, and timing
@@ -263,6 +293,10 @@ async def call_llm_decider(
     Note:
         Supports custom OpenAI-compatible endpoints via OPENAI_BASE_URL env var.
         This enables Azure OpenAI or other compatible providers.
+
+        Configure defaults via env vars:
+        - ROUNDABOUT_ROUTING_MODEL: Override the model (e.g., "gpt-5-mini")
+        - ROUNDABOUT_LLM_TIMEOUT: Override timeout (e.g., "2.5")
     """
     import os
     import time
@@ -272,6 +306,12 @@ async def call_llm_decider(
     from zerg.config import get_settings
 
     settings = get_settings()
+
+    # Resolve defaults from settings if not provided
+    if model is None:
+        model = get_routing_model()
+    if timeout_seconds is None:
+        timeout_seconds = get_routing_timeout()
 
     # Build client kwargs - support custom base URL for Azure/compatible endpoints
     client_kwargs = {"api_key": settings.openai_api_key}
@@ -347,15 +387,15 @@ async def call_llm_decider(
 
 async def decide_roundabout_action(
     ctx: "DecisionContext",
-    model: str = DEFAULT_LLM_MODEL,
-    timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+    model: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> tuple[str, str, LLMDecisionResult]:
     """High-level function to make an LLM-based roundabout decision.
 
     Args:
         ctx: The decision context from roundabout monitor
-        model: LLM model to use
-        timeout_seconds: Max time for LLM call
+        model: LLM model to use (default: from settings or TIER_1)
+        timeout_seconds: Max time for LLM call (default: from settings, 1.5s)
 
     Returns:
         Tuple of (action, rationale, result)
@@ -363,3 +403,16 @@ async def decide_roundabout_action(
     payload = build_decision_payload(ctx)
     result = await call_llm_decider(payload, model, timeout_seconds)
     return result.action, result.rationale, result
+
+
+# =============================================================================
+# BACKWARDS COMPATIBILITY - Legacy constant names via lazy accessor
+# =============================================================================
+
+
+def __getattr__(name: str):
+    """Support legacy constant names via lazy loading."""
+    if name == "DEFAULT_LLM_MODEL":
+        # Return the routing model from settings (or default)
+        return get_routing_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

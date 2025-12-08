@@ -247,7 +247,7 @@ class RoundaboutMonitor:
         decision_mode: DecisionMode = DEFAULT_DECISION_MODE,
         llm_poll_interval: int = DEFAULT_LLM_POLL_INTERVAL,
         llm_max_calls: int = DEFAULT_LLM_MAX_CALLS,
-        llm_timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+        llm_timeout_seconds: float | None = None,
         llm_model: str = DEFAULT_LLM_MODEL,
     ):
         self.db = db

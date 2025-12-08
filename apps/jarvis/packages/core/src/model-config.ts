@@ -12,7 +12,8 @@
  */
 
 // @ts-expect-error - JSON import works with bundlers, TS may complain without resolveJsonModule
-import modelsConfig from '../../../../../config/models.json';
+// Path: packages/core/src -> ../../.. = /app -> /app/config/models.json
+import modelsConfig from '../../../config/models.json';
 
 // =============================================================================
 // DERIVED FROM config/models.json - Single source of truth

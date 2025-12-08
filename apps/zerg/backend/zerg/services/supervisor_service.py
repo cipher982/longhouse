@@ -253,13 +253,14 @@ class SupervisorService:
         This prevents stale context from accumulating across runs.
         Messages are identified by the RECENT_WORKER_CONTEXT_MARKER.
 
-        To avoid race conditions with concurrent requests, only deletes messages
-        older than min_age_seconds. This ensures we don't delete context that
-        was just injected by a concurrent request.
+        Strategy to handle both race conditions and back-to-back requests:
+        1. Find all marked messages, sorted newest-first
+        2. Keep the newest one ONLY if it's < min_age_seconds old (concurrent request protection)
+        3. Delete all others (prevents accumulation from back-to-back requests)
 
         Args:
             thread_id: The thread to clean up
-            min_age_seconds: Only delete messages older than this (default: 5s)
+            min_age_seconds: Protect messages newer than this from deletion (default: 5s)
 
         Returns:
             Number of messages deleted.
@@ -267,24 +268,41 @@ class SupervisorService:
         from datetime import timedelta
         from zerg.models.models import ThreadMessage
 
-        # Only delete messages older than min_age_seconds to avoid race conditions
-        # with concurrent requests
         age_cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
 
-        # Find and delete messages containing the marker that are old enough
-        stale_messages = (
+        # Find ALL marked messages, sorted by sent_at descending (newest first)
+        all_marked = (
             self.db.query(ThreadMessage)
             .filter(
                 ThreadMessage.thread_id == thread_id,
                 ThreadMessage.role == "system",
                 ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-                ThreadMessage.created_at < age_cutoff,
             )
+            .order_by(ThreadMessage.sent_at.desc())
             .all()
         )
 
-        count = len(stale_messages)
-        for msg in stale_messages:
+        if not all_marked:
+            return 0
+
+        # Determine which messages to delete:
+        # - Keep newest ONLY if it's fresh (< min_age_seconds) - protects concurrent requests
+        # - Delete ALL others (prevents accumulation)
+        messages_to_delete = []
+        newest = all_marked[0]
+        newest_sent_at = newest.sent_at
+        if newest_sent_at.tzinfo is None:
+            newest_sent_at = newest_sent_at.replace(tzinfo=timezone.utc)
+
+        if newest_sent_at >= age_cutoff:
+            # Newest is fresh - keep it, delete all others
+            messages_to_delete = all_marked[1:]
+        else:
+            # Newest is stale - delete all (we're about to inject a new one)
+            messages_to_delete = all_marked
+
+        count = len(messages_to_delete)
+        for msg in messages_to_delete:
             self.db.delete(msg)
 
         if count > 0:
