@@ -344,3 +344,19 @@ export async function waitForToast(
   await expect(toast).toBeVisible({ timeout });
   return toast;
 }
+
+/**
+ * Create a test thread using the API client
+ * This is a convenience wrapper for tests that have a Page but need to create threads
+ */
+export async function createTestThread(page: Page, agentId: string, title: string): Promise<Thread> {
+  const apiClient = createApiClient('0'); // Use default worker for page-based tests
+
+  const thread = await apiClient.createThread({
+    agent_id: agentId,
+    title: title || `Test Thread ${Date.now()}`,
+  });
+
+  logTestStep(`Test thread created: ${thread.title} (ID: ${thread.id})`);
+  return thread;
+}
