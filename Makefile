@@ -84,7 +84,7 @@ test: ## Run ALL tests (Jarvis + Zerg + integration)
 
 test-jarvis: ## Run Jarvis tests only
 	@echo "🧪 Running Jarvis tests..."
-	cd apps/jarvis && bun run test
+	cd apps/jarvis/apps/web && bun vitest run --reporter=basic --silent
 
 test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."
