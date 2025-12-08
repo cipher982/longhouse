@@ -970,18 +970,26 @@
     font-size: 2rem;
   }
 
+  .landing-hero-headline br,
+  .landing-pas-agitate br {
+    display: none;
+  }
+
   .landing-hero-subhead {
     font-size: var(--font-size-lg);
   }
 
   .landing-hero-ctas {
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
+    width: 100%;
+    max-width: 320px;
+    margin: 0 auto;
   }
 
   .landing-hero-ctas .btn-lg {
     width: 100%;
-    max-width: 300px;
+    align-self: stretch;
   }
 
   .landing-section-title {
@@ -1013,6 +1021,24 @@
 
   .landing-footer-quote {
     font-size: var(--font-size-2xl);
+  }
+
+  .landing-footer-cta .btn-lg {
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .landing-trust-badges {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .landing-scenario-card {
+    padding: var(--space-6);
+  }
+
+  .landing-scenario-cta {
+    width: 100%;
   }
 }
 

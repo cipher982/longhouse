@@ -68,7 +68,7 @@ export function ScenariosSection() {
                   <li key={stepIndex}>{step}</li>
                 ))}
               </ul>
-              <button className="btn-primary landing-scenario-cta" onClick={handleStartFree}>
+              <button className="btn-primary btn-lg landing-scenario-cta" onClick={handleStartFree}>
                 Start Free
               </button>
             </div>

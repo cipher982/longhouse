@@ -21,8 +21,8 @@ export function NerdSection() {
     },
     {
       icon: <BrainIcon width={32} height={32} />,
-      title: "Powered by GPT-4",
-      description: "OpenAI models for reliable AI",
+      title: "Latest AI models",
+      description: "GPT-4o, Claude, and more",
     },
     {
       icon: <BarChartIcon width={32} height={32} />,

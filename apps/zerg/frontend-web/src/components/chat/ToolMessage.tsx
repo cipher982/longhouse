@@ -1,7 +1,6 @@
 import { useState } from "react";
 import clsx from "clsx";
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { SyntaxHighlighter, oneDark } from '../../lib/syntaxHighlighter';
 import { ThreadMessage } from "../../services/api";
 
 interface ToolMessageProps {
