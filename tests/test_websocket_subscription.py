@@ -20,7 +20,7 @@ async def test_websocket_subscription():
         "name": "Test Agent",
         "system_instructions": "You are a test agent.",
         "task_instructions": "Execute the given task.",
-        "model": "gpt-4o-mini"
+        "model": "gpt-5-nano"
     })
     agent_id = agent_response.json()['id']
     print(f"✅ Created agent {agent_id}")

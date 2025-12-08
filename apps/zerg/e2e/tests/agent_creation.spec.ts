@@ -46,7 +46,7 @@ test.describe('Agent Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'gpt-4o'
+        model: 'gpt-5.1'
       }
     });
 
@@ -66,7 +66,7 @@ test.describe('Agent Creation', () => {
       data: {
         system_instructions: 'Test instructions',
         task_instructions: 'Test task',
-        model: 'gpt-4o'
+        model: 'gpt-5.1'
       }
     });
     expect(response1.ok()).toBeTruthy();
@@ -78,7 +78,7 @@ test.describe('Agent Creation', () => {
       data: {
         system_instructions: 'Different instructions',
         task_instructions: 'Different task',
-        model: 'gpt-4o'
+        model: 'gpt-5.1'
       }
     });
     expect(response2.ok()).toBeTruthy();

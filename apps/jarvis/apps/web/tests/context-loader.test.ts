@@ -127,7 +127,7 @@ describe('ContextLoader', () => {
       vi.spyOn(contextLoader, 'switchContext').mockResolvedValue({
         name: 'Personal Assistant',
         instructions: 'You are a helpful AI.',
-        model: 'gpt-4o',
+        model: 'gpt-5.1',
         voice: 'verse',
         instructionsSrc: null,
         tools: [],

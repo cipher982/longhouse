@@ -397,12 +397,12 @@ def test_spawn_worker_with_different_models(
     credential_context, temp_artifact_path, db_session
 ):
     """Test spawning workers with different models."""
-    # Test with gpt-4o-mini
+    # Test with worker model (gpt-5-mini)
     result1 = spawn_worker(task="Test with mini", model=TEST_WORKER_MODEL)
     assert "queued successfully" in result1
 
-    # Test with gpt-4o
-    result2 = spawn_worker(task="Test with gpt-4o", model=TEST_MODEL)
+    # Test with default model (gpt-5.1)
+    result2 = spawn_worker(task="Test with default model", model=TEST_MODEL)
     assert "queued successfully" in result2 or "Worker job" in result2
 
 

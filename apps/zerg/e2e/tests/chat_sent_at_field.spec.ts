@@ -46,7 +46,7 @@ async function createAgentAndNavigateToChat(page: Page) {
     data: {
       name: 'Test Agent',
       description: 'E2E test agent',
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-nano',
     },
   });
   const agent = await agentRes.json();

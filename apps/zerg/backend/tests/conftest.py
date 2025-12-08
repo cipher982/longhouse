@@ -570,7 +570,7 @@ def test_session_factory(db_session):
 from zerg.models_config import DEFAULT_MODEL_ID, DEFAULT_WORKER_MODEL_ID
 
 # Re-export as module-level constants for tests that need direct import
-TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.1-2025-11-13"
+TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.1"
 TEST_WORKER_MODEL = DEFAULT_WORKER_MODEL_ID  # "gpt-5-mini"
 
 

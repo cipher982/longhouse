@@ -37,7 +37,7 @@ test.describe('Worker Database Isolation', () => {
         name: 'Test Agent for Isolation',
         system_instructions: 'Test agent',
         task_instructions: 'Test task',
-        model: 'gpt-4o-mini',
+        model: 'gpt-5-nano',
       }
     });
 
@@ -82,7 +82,7 @@ test.describe('Worker Database Isolation', () => {
         name: 'Agent for Thread Isolation Test',
         system_instructions: 'Test agent',
         task_instructions: 'Test task',
-        model: 'gpt-4o-mini',
+        model: 'gpt-5-nano',
       }
     });
 
@@ -163,7 +163,7 @@ test.describe('Worker Database Isolation', () => {
         name: 'WebSocket Test Agent',
         system_instructions: 'Test agent',
         task_instructions: 'Test task',
-        model: 'gpt-4o-mini',
+        model: 'gpt-5-nano',
       }
     });
 

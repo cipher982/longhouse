@@ -129,14 +129,14 @@ What action should be taken? Reply with exactly one word: wait, exit, cancel, or
 
 async def call_llm_decider(
     payload: LLMDecisionPayload,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-5-nano",
     timeout_seconds: float = 1.5,
 ) -> tuple[str, str, float]:
     """Call LLM to make a decision.
 
     Args:
         payload: The decision context
-        model: Model to use (default: gpt-4o-mini for speed/cost)
+        model: Model to use (default: gpt-5-nano for speed/cost)
         timeout_seconds: Max time to wait for response
 
     Returns:

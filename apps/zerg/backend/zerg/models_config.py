@@ -37,38 +37,35 @@ class ModelConfig:
 
 # Define available models
 # Voice/realtime interfaces use dedicated realtime models (see jarvis context)
+# Note: We use alias IDs without date tags - OpenAI updates snapshots behind the scenes
 AVAILABLE_MODELS = [
     ModelConfig(
-        id="gpt-5.1-2025-11-13",
-        display_name="gpt-5.1",
+        id="gpt-5.1",
+        display_name="GPT-5.1",
         provider=ModelProvider.OPENAI,
         is_default=True,
     ),
     ModelConfig(
         id="gpt-5-mini",
-        display_name="gpt-5 mini",
+        display_name="GPT-5 Mini",
         provider=ModelProvider.OPENAI,
     ),
     ModelConfig(
-        id="o3-mini-2025-01-31",
-        display_name="o3 mini",
-        provider=ModelProvider.OPENAI,
-    ),
-    ModelConfig(
-        id="o1-2024-12-17",
-        display_name="o1",
+        id="gpt-5-nano",
+        display_name="GPT-5 Nano",
         provider=ModelProvider.OPENAI,
     ),
     ModelConfig(
         id="gpt-mock",
-        display_name="gpt-mock (testing)",
+        display_name="Mock (testing)",
         provider=ModelProvider.OPENAI,
     ),
 ]
 
 # Centralized model constants - use these instead of hardcoding
-DEFAULT_MODEL_ID = "gpt-5.1-2025-11-13"
+DEFAULT_MODEL_ID = "gpt-5.1"
 DEFAULT_WORKER_MODEL_ID = "gpt-5-mini"  # Workers use lighter model by default
+TEST_MODEL_ID = "gpt-5-nano"  # For tests that hit real LLM but need to be cheap/fast
 
 # Create lookup dictionaries for quick access
 MODELS_BY_ID: Dict[str, ModelConfig] = {model.id: model for model in AVAILABLE_MODELS}

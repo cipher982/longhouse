@@ -368,7 +368,7 @@ export default function DashboardPage() {
   });
 
   const defaultModel = useMemo(() => {
-    return modelsData?.find((m) => m.is_default)?.id || "gpt-5.1-chat-latest";
+    return modelsData?.find((m) => m.is_default)?.id || "gpt-5.1";
   }, [modelsData]);
 
   const {
