@@ -304,7 +304,7 @@ supervisor → spawn_worker("Check cube") → worker.ssh_exec('cube', 'df -h')
 
 **SSH access is safe when properly scoped:**
 
-### Host Allowlist
+### 8.1 Host Allowlist
 
 ```python
 # In ssh_exec tool
@@ -319,7 +319,57 @@ ALLOWED_HOSTS = {
 # Requests to other hosts are rejected
 ```
 
-### Command Auditing
+### 8.2 Command Safety Layer
+
+**Dangerous patterns require explicit override:**
+
+```python
+DANGEROUS_PATTERNS = [
+    r'rm\s+-rf',              # Recursive delete
+    r'>\s*/dev/sd',           # Write to block device
+    r'DROP\s+(TABLE|DATABASE)', # SQL destruction
+    r'docker\s+rm\s+-f',      # Force remove containers
+    r'docker\s+stop',         # Stop containers
+    r'systemctl\s+(stop|disable)', # Service disruption
+    r'chmod\s+777',           # Security risk
+    r'curl.*\|\s*(ba)?sh',    # Pipe to shell
+    r'wget.*\|\s*(ba)?sh',    # Pipe to shell
+]
+
+async def ssh_exec(host: str, command: str, allow_destructive: bool = False):
+    """Execute command on remote host with safety checks."""
+
+    # 1. Validate host
+    if host not in ALLOWED_HOSTS:
+        raise PermissionError(f"SSH access denied to {host}")
+
+    # 2. Check for dangerous patterns
+    if not allow_destructive:
+        for pattern in DANGEROUS_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                raise DangerousCommandError(
+                    f"Command matches dangerous pattern: {pattern}\n"
+                    f"Use allow_destructive=True if intentional."
+                )
+
+    # 3. Execute with timeout
+    async with asyncio.timeout(timeout):
+        result = await run_ssh(host, command)
+
+    # 4. Log everything
+    log_to_artifact(host, command, result)
+
+    return result
+```
+
+**Why allow_destructive flag exists:**
+
+- Agents CAN run destructive commands when needed (like cleaning disk space)
+- But they must be explicit about it
+- Prevents accidental destruction from prompt injection
+- Creates clear audit trail of intentional destructive actions
+
+### 8.3 Command Auditing
 
 ```
 All ssh_exec calls logged to:
@@ -330,22 +380,74 @@ Host: cube
 Command: df -h
 Timestamp: 2025-12-07T20:33:17Z
 Exit code: 0
+Allow_destructive: false
+Duration_ms: 1847
 Output:
 [... command output ...]
 ```
 
-### Read-Only Default
+**Audit retention:** 30 days minimum, longer for destructive commands.
+
+### 8.4 Privilege Model
 
 ```bash
-# SSH key has read-only access by default
-# sudo access requires explicit grant (not default)
+# SSH user 'zerg-agent' has limited permissions:
+
+# CAN do (no sudo required):
+- Read files in /var/log/
+- Run docker ps, docker logs, docker stats
+- Run df, free, top, ps, netstat
+- Read /etc/* configs
+
+# REQUIRES sudo (granted per-host):
+- docker stop/start/restart
+- systemctl commands
+- Writing to /etc/
+- Package management (apt, yum)
+
+# NEVER allowed:
+- Root shell access
+- SSH key modification
+- User management
 ```
 
-### Timeout Enforcement
+**Server setup required:**
+
+```bash
+# On each managed server:
+sudo useradd -m -s /bin/bash zerg-agent
+sudo usermod -aG docker zerg-agent  # Docker access without sudo
+
+# Limited sudo for specific commands only:
+echo "zerg-agent ALL=(ALL) NOPASSWD: /usr/bin/docker stop *, /usr/bin/docker start *" \
+  | sudo tee /etc/sudoers.d/zerg-agent
+```
+
+### 8.5 Timeout Enforcement
 
 ```python
-# All commands timeout after 30s (default) or 300s (max)
-# Prevents runaway commands
+# Timeouts are guardrails, not heuristics
+SSH_TIMEOUTS = {
+    'default': 30,      # Most commands
+    'max': 300,         # Long-running (du, tar, etc.)
+    'interactive': 0,   # Not supported (vim, less, etc.)
+}
+
+# Agent can request longer timeout (up to max):
+ssh_exec('cube', 'tar -czf backup.tar.gz /data', timeout=120)
+```
+
+### 8.6 Rate Limiting
+
+```python
+# Per-worker limits:
+MAX_SSH_COMMANDS_PER_WORKER = 20  # Prevent infinite loops
+MAX_BYTES_RETURNED = 1_000_000    # 1MB output limit
+MAX_CONCURRENT_SSH = 3            # Don't overwhelm servers
+
+# Enforcement:
+if worker.ssh_count >= MAX_SSH_COMMANDS_PER_WORKER:
+    raise RateLimitError("Worker exceeded SSH command limit")
 ```
 
 ---
