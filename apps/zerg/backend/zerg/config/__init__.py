@@ -111,6 +111,10 @@ class Settings:  # noqa: D401 – simple data container
     container_seccomp_profile: str | None
     container_tools_enabled: bool
 
+    # Roundabout LLM decider settings ----------------------------------
+    roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
+    roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def llm_disabled(self) -> bool:  # noqa: D401
@@ -216,6 +220,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         container_timeout_secs=int(os.getenv("CONTAINER_TIMEOUT_SECS", "30")),
         container_seccomp_profile=os.getenv("CONTAINER_SECCOMP_PROFILE"),
         container_tools_enabled=_truthy(os.getenv("CONTAINER_TOOLS_ENABLED")),
+        # Roundabout settings
+        roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
+        roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
     )
 
 

@@ -52,6 +52,7 @@ services:
     environment:
       <<: *common-variables
       ENVIRONMENT: development
+      MODELS_CONFIG_PATH: /app/config/models.json
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       # Do not bake secrets into compose defaults; require env or use a clearly non-secret dev placeholder
@@ -75,6 +76,7 @@ services:
     ports: []
     volumes:
       - ../apps/zerg/backend:/app:cached
+      - ../config:/app/config:ro
       - backend_dev_static:/app/static
       - ../data:/app/data
       - /Users/davidrose/.ssh:/home/zerg/.ssh:ro
@@ -139,6 +141,7 @@ services:
       - ../apps/jarvis/apps/web:/app/apps/web:cached
       - ../apps/jarvis/configs:/app/configs:cached
       - ../apps/jarvis/packages:/app/packages:cached
+      - ../config:/app/config:ro
       - /app/node_modules
       - /app/apps/web/node_modules
       - ../logs/jarvis-web:/app/logs
@@ -170,6 +173,7 @@ services:
       - ../apps/jarvis/apps/server:/app/apps/server:cached
       - ../apps/jarvis/configs:/app/configs:cached
       - ../apps/jarvis/packages:/app/packages:cached
+      - ../config:/app/config:ro
       - /app/node_modules
       - /app/apps/server/node_modules
       - ../logs/jarvis-server:/app/logs

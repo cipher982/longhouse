@@ -422,7 +422,7 @@ class TestRecentWorkerHistoryInjection:
     def test_cleanup_stale_worker_context(
         self, db_session, test_user, temp_artifact_path
     ):
-        """Should delete messages containing the marker."""
+        """Should delete messages containing the marker (older than min_age)."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
         from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
@@ -449,8 +449,8 @@ class TestRecentWorkerHistoryInjection:
         ).all()
         assert len(messages_before) == 1
 
-        # Cleanup
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        # Cleanup with min_age_seconds=0 to delete immediately (for testing)
+        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -505,8 +505,8 @@ class TestRecentWorkerHistoryInjection:
         ).all()
         assert len(marker_messages) == 1
 
-        # Cleanup
-        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        # Cleanup with min_age_seconds=0 to delete immediately (for testing)
+        deleted_count = service._cleanup_stale_worker_context(thread.id, min_age_seconds=0)
         db_session.commit()
 
         assert deleted_count == 1
@@ -524,3 +524,104 @@ class TestRecentWorkerHistoryInjection:
             ThreadMessage.content.contains("Important system instructions"),
         ).first()
         assert important_msg is not None
+
+    def test_cleanup_respects_min_age_for_race_condition_protection(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Fresh context messages (< min_age) should NOT be deleted.
+
+        This prevents race conditions where concurrent requests could
+        delete each other's freshly injected context.
+        """
+        from zerg.crud import crud
+        from zerg.models.models import ThreadMessage
+        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+
+        # Create supervisor agent and thread
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Add a context message (just created, so fresh)
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Cleanup with default min_age_seconds=5.0
+        # Message was just created, so it should NOT be deleted
+        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        db_session.commit()
+
+        # Should not delete fresh messages (race condition protection)
+        assert deleted_count == 0
+
+        # Message should still exist
+        messages = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(messages) == 1
+
+    def test_cleanup_removes_older_duplicates_but_keeps_fresh(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Back-to-back requests should not accumulate multiple context blocks.
+
+        When there are multiple context messages and the newest is fresh,
+        only the newest should be kept (all older ones deleted).
+        """
+        from datetime import timedelta
+        from zerg.crud import crud
+        from zerg.models.models import ThreadMessage
+        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+
+        # Create supervisor agent and thread
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Simulate back-to-back requests by adding multiple context messages
+        # First message (older)
+        msg1 = crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Old context 1",
+            processed=True,
+        )
+        # Second message (newer, fresh - should be kept)
+        msg2 = crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Fresh context 2",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Verify both exist
+        before = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(before) == 2
+
+        # Cleanup with default min_age - newest is fresh so kept, older deleted
+        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        db_session.commit()
+
+        # Should have deleted the older one
+        assert deleted_count == 1
+
+        # Only the fresh one should remain
+        after = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(after) == 1
+        assert "Fresh context 2" in after[0].content
