@@ -1,13 +1,18 @@
 """LLM-based decision maker for roundabout monitoring.
 
-This module provides an optional LLM-based decision layer for the roundabout
-monitoring loop. It uses a tiny, fast model to analyze worker state and decide
-whether to wait, exit early, cancel, or peek.
+v2.0 Philosophy: Trust the AI, Remove Scaffolding
+-------------------------------------------------
+This module provides the LLM-based decision layer for roundabout monitoring.
+The supervisor polls worker status ("glancing at a second monitor") and the LLM
+interprets what it sees to decide: wait, exit early, cancel, or peek.
 
-The LLM decider is gated by:
-- Poll interval (only call every N polls)
-- Max calls budget (limit total LLM calls per job)
-- Timeout (fail fast on slow responses)
+This is the v2.0 default approach. Heuristic mode is deprecated but kept for
+backwards compatibility.
+
+The LLM decider is gated by hard guardrails (not heuristics):
+- Poll interval (only call every N polls) - rate limiting
+- Max calls budget (limit total LLM calls per job) - cost control
+- Timeout (fail fast on slow responses) - responsiveness
 
 Default is safe: on any LLM failure, returns "wait" to continue monitoring.
 """
@@ -26,19 +31,23 @@ logger = logging.getLogger(__name__)
 
 
 class DecisionMode(Enum):
-    """Decision mode for roundabout monitoring."""
+    """Decision mode for roundabout monitoring.
 
-    HEURISTIC = "heuristic"  # Rules-based only (default, safe)
-    LLM = "llm"  # LLM-based only
-    HYBRID = "hybrid"  # Heuristic first, then LLM for ambiguous cases
+    v2.0 default: LLM mode (trust the AI to interpret status)
+    Deprecated: HEURISTIC mode (pre-programmed decision engine)
+    """
+
+    HEURISTIC = "heuristic"  # DEPRECATED: Rules-based only (v1.0 approach)
+    LLM = "llm"  # v2.0 default: LLM interprets status and decides
+    HYBRID = "hybrid"  # DEPRECATED: Heuristic first, then LLM for ambiguous cases
 
 
-# Default configuration
-DEFAULT_DECISION_MODE = DecisionMode.HEURISTIC
-DEFAULT_LLM_POLL_INTERVAL = 2  # Call LLM every N polls
-DEFAULT_LLM_MAX_CALLS = 3  # Max LLM calls per job
-DEFAULT_LLM_TIMEOUT_SECONDS = 1.5  # Max time to wait for LLM response
-DEFAULT_LLM_MODEL = "gpt-4o-mini"  # Fast, cheap model
+# Default configuration (v2.0: Trust the AI)
+DEFAULT_DECISION_MODE = DecisionMode.LLM  # v2.0 default: let LLM interpret status
+DEFAULT_LLM_POLL_INTERVAL = 2  # Call LLM every N polls (rate limiting guardrail)
+DEFAULT_LLM_MAX_CALLS = 3  # Max LLM calls per job (cost control guardrail)
+DEFAULT_LLM_TIMEOUT_SECONDS = 1.5  # Max time to wait for LLM response (responsiveness guardrail)
+DEFAULT_LLM_MODEL = "gpt-5-nano"  # Fast, cheap model for LLM decisions
 
 
 @dataclass

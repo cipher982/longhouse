@@ -1,30 +1,32 @@
 """Roundabout monitoring for worker supervision.
 
+v2.0 Philosophy: Trust the AI, Remove Scaffolding
+-------------------------------------------------
 The roundabout is a polling loop that provides real-time visibility into worker
 execution without polluting the supervisor's long-lived thread context.
 
-Like a highway interchange: the main thread temporarily enters a circular
-monitoring pattern, checking exits (worker complete, early termination,
-intervention needed) until the right one appears.
+Like glancing at a second monitor: the supervisor polls worker status periodically,
+and the LLM interprets what it sees to decide the next action.
 
-Phase 3 Implementation:
-- Polling loop every 5 seconds
+This is v2.0's "trust the AI" approach:
+- Polling (supervisor checking status) = GOOD (like glancing at second monitor)
+- LLM interprets status and decides = GOOD (trust the AI's judgment)
+- Hard guardrails (timeouts, rate limits) = GOOD (safety boundaries, not heuristics)
+- Heuristic decision engine = DEPRECATED (pre-programs LLM decisions)
+
+Implementation:
+- Polling loop every 5 seconds (supervisor checking status)
 - Status aggregation from database and events
 - Tool event subscription for activity tracking
+- LLM interprets status and decides: wait, exit, cancel, or peek
+- Hard guardrails: poll interval, max calls budget, timeout
 - Returns structured result when worker completes
 - Logs monitoring checks for audit trail
 
-Phase 4 Implementation (Decision Handling):
-- Heuristic-based decisions: wait/exit/cancel/peek
-- Exit early when: worker completes, or final answer detected in output
-- Cancel when: stuck > 60s with no progress
-- Peek: returns structured payload for supervisor to drill down
-
-Phase 5 Implementation (LLM-Gated Decisions):
-- Optional LLM decider for more sophisticated decision making
-- Three modes: heuristic (default), llm, hybrid
-- LLM gated by: poll interval, max calls budget, timeout
-- Safe fallback: any LLM failure defaults to "wait"
+Decision modes (v2.0 default: LLM):
+- LLM (v2.0 default): LLM interprets status and decides
+- Heuristic (DEPRECATED): Pre-programmed decision rules (v1.0 approach)
+- Hybrid (DEPRECATED): Heuristic first, then LLM for ambiguous cases
 """
 
 import asyncio
@@ -145,7 +147,10 @@ class RoundaboutResult:
 def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
     """Make a heuristic-based decision about what to do next in the roundabout.
 
-    This is the v1 implementation using rules. Future versions may use LLM.
+    DEPRECATED (v2.0): This is the v1.0 approach using pre-programmed rules.
+    v2.0 default is LLM mode - let the AI interpret status and decide.
+
+    Kept for backwards compatibility only. Use DecisionMode.LLM instead.
 
     Args:
         ctx: Decision context with current state
@@ -208,21 +213,27 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
 class RoundaboutMonitor:
     """Monitors worker execution with periodic status checks.
 
-    The monitor polls worker status every 5 seconds and tracks tool
-    activity for visibility. When the worker completes (or times out),
-    it returns a structured result.
+    v2.0 default: LLM interprets status and decides (trust the AI).
 
-    Supports three decision modes:
-    - heuristic (default): Rules-based decisions only
-    - llm: LLM-based decisions only
-    - hybrid: Heuristic first, LLM for ambiguous cases
+    The monitor polls worker status every 5 seconds ("glancing at a second monitor")
+    and the LLM interprets what it sees to decide the next action. Hard guardrails
+    (poll interval, max calls, timeout) provide safety boundaries without pre-programming
+    the LLM's decisions.
+
+    When the worker completes (or times out), it returns a structured result.
+
+    Decision modes (v2.0 default: LLM):
+    - LLM (v2.0 default): Let the AI interpret status and decide
+    - Heuristic (DEPRECATED): Pre-programmed rules-based decisions (v1.0 approach)
+    - Hybrid (DEPRECATED): Heuristic first, LLM for ambiguous cases
 
     Usage:
+        # v2.0 default: LLM mode (trust the AI)
         monitor = RoundaboutMonitor(db, job_id, owner_id)
         result = await monitor.wait_for_completion()
 
-        # With LLM decisions
-        monitor = RoundaboutMonitor(db, job_id, owner_id, decision_mode=DecisionMode.HYBRID)
+        # Override to use deprecated heuristic mode (not recommended)
+        monitor = RoundaboutMonitor(db, job_id, owner_id, decision_mode=DecisionMode.HEURISTIC)
         result = await monitor.wait_for_completion()
     """
 
@@ -245,8 +256,20 @@ class RoundaboutMonitor:
         self.supervisor_run_id = supervisor_run_id
         self.timeout_seconds = timeout_seconds
 
-        # Phase 5: LLM decision configuration
+        # Phase 5: LLM decision configuration (v2.0 default: LLM mode)
         self.decision_mode = decision_mode
+
+        # Warn if using deprecated heuristic mode
+        if decision_mode in (DecisionMode.HEURISTIC, DecisionMode.HYBRID):
+            import warnings
+            warnings.warn(
+                f"DecisionMode.{decision_mode.name} is deprecated. "
+                "v2.0 uses DecisionMode.LLM (trust the AI to interpret status). "
+                "Heuristic decision engines pre-program the LLM's decisions, which goes against "
+                "the v2.0 philosophy of trusting the AI.",
+                DeprecationWarning,
+                stacklevel=2
+            )
         self.llm_poll_interval = llm_poll_interval
         self.llm_max_calls = llm_max_calls
         self.llm_timeout_seconds = llm_timeout_seconds
