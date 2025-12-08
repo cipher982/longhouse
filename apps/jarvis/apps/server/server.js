@@ -6,22 +6,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { getRealtimeModel, getDefaultVoice } from '@jarvis/core';
 dotenv.config();
 
-// Model configuration - configurable via env vars
-const DEFAULT_REALTIME_MODEL = 'gpt-4o-realtime-preview';
-const DEFAULT_REALTIME_MODEL_MINI = 'gpt-4o-mini-realtime-preview';
-
-function getRealtimeModel() {
-  const useMini = process.env.JARVIS_USE_MINI_MODEL === 'true';
-  if (useMini) {
-    return process.env.JARVIS_REALTIME_MODEL_MINI || DEFAULT_REALTIME_MODEL_MINI;
-  }
-  return process.env.JARVIS_REALTIME_MODEL || DEFAULT_REALTIME_MODEL;
-}
+// Model configuration loaded from shared config/models.json via @jarvis/core
+// Override via env vars: JARVIS_REALTIME_MODEL, JARVIS_USE_MINI_MODEL, JARVIS_VOICE
 
 function getVoice() {
-  return process.env.JARVIS_VOICE || 'verse';
+  return getDefaultVoice();
 }
 
 // Nashville location data

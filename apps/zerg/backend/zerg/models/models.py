@@ -20,6 +20,7 @@ from sqlalchemy.sql import func
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.enums import AgentStatus
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.models.enums import Phase
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
@@ -707,7 +708,7 @@ class WorkerJob(Base):
 
     # Job specification
     task = Column(Text, nullable=False)
-    model = Column(String(100), nullable=False, default="gpt-5-mini")
+    model = Column(String(100), nullable=False, default=DEFAULT_WORKER_MODEL_ID)
 
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed

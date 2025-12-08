@@ -26,14 +26,22 @@ from zerg.models.enums import AgentStatus, RunStatus, ThreadType
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
 from zerg.models.models import Thread as ThreadModel
+from zerg.models.models import WorkerJob
 from zerg.prompts.supervisor_prompt import get_supervisor_prompt
 from zerg.services.supervisor_context import reset_seq
 from zerg.services.thread_service import ThreadService
+from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
 # Thread type for supervisor threads - distinguishes from regular agent threads
 SUPERVISOR_THREAD_TYPE = ThreadType.SUPER
+
+# Configuration for recent worker history injection
+RECENT_WORKER_HISTORY_LIMIT = 5  # Max workers to show
+RECENT_WORKER_HISTORY_MINUTES = 10  # Only show workers from last N minutes
+# Marker to identify ephemeral context messages (for cleanup)
+RECENT_WORKER_CONTEXT_MARKER = "<!-- RECENT_WORKER_CONTEXT -->"
 
 
 @dataclass
@@ -166,6 +174,124 @@ class SupervisorService:
         logger.info(f"Created supervisor thread {thread.id} for user {owner_id}")
         return thread
 
+    def _build_recent_worker_context(self, owner_id: int) -> str | None:
+        """Build context message with recent worker history.
+
+        v2.0 Improvement: Auto-inject recent worker results so the supervisor
+        doesn't have to call list_workers to check for duplicate work.
+
+        The message includes a marker for cleanup - see _cleanup_stale_worker_context().
+
+        Returns:
+            Context string if there are recent workers, None otherwise.
+        """
+        from datetime import timedelta
+
+        # Query recent workers
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=RECENT_WORKER_HISTORY_MINUTES)
+        recent_jobs = (
+            self.db.query(WorkerJob)
+            .filter(
+                WorkerJob.owner_id == owner_id,
+                WorkerJob.created_at >= cutoff,
+                WorkerJob.status.in_(["success", "failed", "running"]),
+            )
+            .order_by(WorkerJob.created_at.desc())
+            .limit(RECENT_WORKER_HISTORY_LIMIT)
+            .all()
+        )
+
+        if not recent_jobs:
+            return None
+
+        # Try to get artifact store for richer summaries, but don't fail if unavailable
+        artifact_store = None
+        try:
+            artifact_store = WorkerArtifactStore()
+        except (OSError, PermissionError) as e:
+            logger.warning(f"WorkerArtifactStore unavailable, using task summaries only: {e}")
+
+        # Build context with marker for cleanup
+        lines = [
+            RECENT_WORKER_CONTEXT_MARKER,  # Marker for identifying ephemeral context
+            "## Recent Worker Activity (last 10 minutes)",
+            "Check if any of these results already answer the user's question before spawning new workers:\n",
+        ]
+
+        for job in recent_jobs:
+            # Calculate elapsed time (handle naive vs aware datetimes)
+            job_created = job.created_at
+            if job_created.tzinfo is None:
+                job_created = job_created.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - job_created
+            elapsed_str = f"{int(elapsed.total_seconds() / 60)}m ago" if elapsed.total_seconds() >= 60 else f"{int(elapsed.total_seconds())}s ago"
+
+            # Get summary from artifact store if available
+            summary = None
+            if artifact_store and job.worker_id and job.status in ["success", "failed"]:
+                try:
+                    metadata = artifact_store.get_worker_metadata(job.worker_id)
+                    summary = metadata.get("summary")
+                except Exception:
+                    pass
+
+            if not summary:
+                # Truncate task as fallback
+                summary = job.task[:100] + "..." if len(job.task) > 100 else job.task
+
+            status_emoji = {"success": "✓", "failed": "✗", "running": "⋯"}.get(job.status, "?")
+            lines.append(f"- Job {job.id} [{status_emoji} {job.status.upper()}] ({elapsed_str})")
+            lines.append(f"  {summary}\n")
+
+        lines.append("Use read_worker_result(job_id) to get full details from any of these.")
+
+        return "\n".join(lines)
+
+    def _cleanup_stale_worker_context(self, thread_id: int, min_age_seconds: float = 5.0) -> int:
+        """Delete previous recent worker context messages from the thread.
+
+        This prevents stale context from accumulating across runs.
+        Messages are identified by the RECENT_WORKER_CONTEXT_MARKER.
+
+        To avoid race conditions with concurrent requests, only deletes messages
+        older than min_age_seconds. This ensures we don't delete context that
+        was just injected by a concurrent request.
+
+        Args:
+            thread_id: The thread to clean up
+            min_age_seconds: Only delete messages older than this (default: 5s)
+
+        Returns:
+            Number of messages deleted.
+        """
+        from datetime import timedelta
+        from zerg.models.models import ThreadMessage
+
+        # Only delete messages older than min_age_seconds to avoid race conditions
+        # with concurrent requests
+        age_cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
+
+        # Find and delete messages containing the marker that are old enough
+        stale_messages = (
+            self.db.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread_id,
+                ThreadMessage.role == "system",
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+                ThreadMessage.created_at < age_cutoff,
+            )
+            .all()
+        )
+
+        count = len(stale_messages)
+        for msg in stale_messages:
+            self.db.delete(msg)
+
+        if count > 0:
+            logger.debug(f"Cleaned up {count} stale worker context message(s) from thread {thread_id}")
+
+        return count
+
     async def run_supervisor(
         self,
         owner_id: int,
@@ -234,6 +360,25 @@ class SupervisorService:
         )
 
         try:
+            # v2.0: Inject recent worker history context before user message
+            # This prevents redundant worker spawns by showing the supervisor
+            # what work has been done recently
+            #
+            # IMPORTANT: Clean up any stale context messages first to prevent
+            # accumulation of outdated "X minutes ago" timestamps
+            self._cleanup_stale_worker_context(thread.id)
+
+            recent_worker_context = self._build_recent_worker_context(owner_id)
+            if recent_worker_context:
+                logger.debug(f"Injecting recent worker context for user {owner_id}")
+                crud.create_thread_message(
+                    db=self.db,
+                    thread_id=thread.id,
+                    role="system",
+                    content=recent_worker_context,
+                    processed=True,  # Mark as processed so agent doesn't re-process
+                )
+
             # Add task as user message
             crud.create_thread_message(
                 db=self.db,

@@ -19,6 +19,7 @@ from zerg.services.supervisor_service import (
     SupervisorService,
     SUPERVISOR_THREAD_TYPE,
 )
+from tests.conftest import TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -299,3 +300,227 @@ class TestWorkerSupervisorCorrelation:
         ).first()
         assert job is not None
         assert job.supervisor_run_id is None
+
+
+class TestRecentWorkerHistoryInjection:
+    """Tests for v2.0 recent worker history auto-injection.
+
+    This feature injects recent worker results into supervisor context
+    to prevent redundant worker spawns.
+    """
+
+    def test_build_recent_worker_context_no_workers(self, db_session, test_user):
+        """Should return None when no recent workers exist."""
+        service = SupervisorService(db_session)
+        context = service._build_recent_worker_context(test_user.id)
+        assert context is None
+
+    def test_build_recent_worker_context_with_workers(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Should return formatted context when recent workers exist."""
+        from datetime import datetime, timezone
+        from zerg.models.models import WorkerJob
+
+        # Create a recent worker job
+        job = WorkerJob(
+            owner_id=test_user.id,
+            task="Check disk usage on cube",
+            model=TEST_WORKER_MODEL,
+            status="success",
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(job)
+        db_session.commit()
+        db_session.refresh(job)
+
+        service = SupervisorService(db_session)
+        context = service._build_recent_worker_context(test_user.id)
+
+        assert context is not None
+        assert "Recent Worker Activity" in context
+        assert f"Job {job.id}" in context
+        assert "SUCCESS" in context
+        assert "Check disk usage" in context
+
+    def test_build_recent_worker_context_respects_limit(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Should only return up to RECENT_WORKER_HISTORY_LIMIT workers."""
+        from datetime import datetime, timezone
+        from zerg.models.models import WorkerJob
+        from zerg.services.supervisor_service import RECENT_WORKER_HISTORY_LIMIT
+
+        # Create more workers than the limit
+        for i in range(RECENT_WORKER_HISTORY_LIMIT + 3):
+            job = WorkerJob(
+                owner_id=test_user.id,
+                task=f"Task {i}",
+                model=TEST_WORKER_MODEL,
+                status="success",
+                created_at=datetime.now(timezone.utc),
+            )
+            db_session.add(job)
+        db_session.commit()
+
+        service = SupervisorService(db_session)
+        context = service._build_recent_worker_context(test_user.id)
+
+        assert context is not None
+        # Count how many "Job X" entries
+        job_count = context.count("Job ")
+        assert job_count == RECENT_WORKER_HISTORY_LIMIT
+
+    def test_build_recent_worker_context_includes_running(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Should include running workers in context."""
+        from datetime import datetime, timezone
+        from zerg.models.models import WorkerJob
+
+        job = WorkerJob(
+            owner_id=test_user.id,
+            task="Long running investigation",
+            model=TEST_WORKER_MODEL,
+            status="running",
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        service = SupervisorService(db_session)
+        context = service._build_recent_worker_context(test_user.id)
+
+        assert context is not None
+        assert "RUNNING" in context
+        assert "Long running investigation" in context
+
+    def test_build_recent_worker_context_includes_marker(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Context should include marker for cleanup identification."""
+        from datetime import datetime, timezone
+        from zerg.models.models import WorkerJob
+        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+
+        job = WorkerJob(
+            owner_id=test_user.id,
+            task="Test task",
+            model=TEST_WORKER_MODEL,
+            status="success",
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        service = SupervisorService(db_session)
+        context = service._build_recent_worker_context(test_user.id)
+
+        assert context is not None
+        assert RECENT_WORKER_CONTEXT_MARKER in context
+
+    def test_cleanup_stale_worker_context(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Should delete messages containing the marker."""
+        from zerg.crud import crud
+        from zerg.models.models import ThreadMessage
+        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+
+        # Create supervisor agent and thread
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Add a stale context message
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Verify message exists
+        messages_before = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(messages_before) == 1
+
+        # Cleanup
+        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        db_session.commit()
+
+        assert deleted_count == 1
+
+        # Verify message is gone
+        messages_after = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(messages_after) == 0
+
+    def test_cleanup_does_not_affect_other_messages(
+        self, db_session, test_user, temp_artifact_path
+    ):
+        """Cleanup should only delete messages with the marker."""
+        from zerg.crud import crud
+        from zerg.models.models import ThreadMessage
+        from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
+
+        # Create supervisor agent and thread
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Count existing messages (thread may have a system prompt)
+        initial_count = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+        ).count()
+
+        # Add a normal system message (no marker)
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content="Important system instructions",
+            processed=True,
+        )
+        # Add a stale context message (with marker)
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="system",
+            content=f"{RECENT_WORKER_CONTEXT_MARKER}\n## Stale context",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Verify marker message exists
+        marker_messages = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(marker_messages) == 1
+
+        # Cleanup
+        deleted_count = service._cleanup_stale_worker_context(thread.id)
+        db_session.commit()
+
+        assert deleted_count == 1
+
+        # Verify marker message is gone
+        marker_messages_after = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+        ).all()
+        assert len(marker_messages_after) == 0
+
+        # Verify our "Important system instructions" message still exists
+        important_msg = db_session.query(ThreadMessage).filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.content.contains("Important system instructions"),
+        ).first()
+        assert important_msg is not None

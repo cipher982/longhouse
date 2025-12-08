@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from zerg.crud import crud
 from zerg.models.models import Base
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
 
@@ -44,7 +45,7 @@ async def main():
             db=db,
             task="Calculate 42 * 137 and explain the result",
             agent=None,
-            agent_config={"model": "gpt-4o-mini", "owner_id": user.id},
+            agent_config={"model": DEFAULT_WORKER_MODEL_ID, "owner_id": user.id},
         )
 
         print(f"Worker ID: {result1.worker_id}")
@@ -66,7 +67,7 @@ async def main():
                 db=db,
                 task=task,
                 agent=None,
-                agent_config={"model": "gpt-4o-mini", "owner_id": user.id},
+                agent_config={"model": DEFAULT_WORKER_MODEL_ID, "owner_id": user.id},
             )
             worker_ids.append(result.worker_id)
             print(f"  - Completed: {task} ({result.worker_id})")

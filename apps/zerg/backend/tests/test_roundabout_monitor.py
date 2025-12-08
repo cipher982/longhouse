@@ -14,6 +14,7 @@ from zerg.services.roundabout_monitor import (
     make_heuristic_decision,
 )
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from tests.conftest import TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
@@ -37,7 +38,7 @@ async def test_roundabout_records_tool_events(monkeypatch, db_session, tmp_path)
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -100,7 +101,7 @@ async def test_roundabout_monitor_timeout_sets_flag(monkeypatch, db_session, tmp
         job = WorkerJob(
             owner_id=1,
             task="Long task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -279,7 +280,7 @@ async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_pa
         job = WorkerJob(
             owner_id=1,
             task="Stuck task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -337,7 +338,7 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -466,7 +467,7 @@ async def test_roundabout_with_llm_mode_exit(monkeypatch, db_session, tmp_path):
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -521,7 +522,7 @@ async def test_roundabout_with_llm_mode_cancel(monkeypatch, db_session, tmp_path
         job = WorkerJob(
             owner_id=1,
             task="Stuck task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -575,7 +576,7 @@ async def test_roundabout_llm_budget_enforcement(monkeypatch, db_session, tmp_pa
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -636,7 +637,7 @@ async def test_roundabout_llm_interval_enforcement(monkeypatch, db_session, tmp_
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -696,7 +697,7 @@ async def test_roundabout_hybrid_mode_heuristic_takes_precedence(monkeypatch, db
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="success",  # Heuristic will say EXIT
             worker_id=worker_id,
         )
@@ -751,7 +752,7 @@ async def test_roundabout_heuristic_mode_no_llm_calls(monkeypatch, db_session, t
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
@@ -802,7 +803,7 @@ async def test_roundabout_llm_timeout_fallback(monkeypatch, db_session, tmp_path
         job = WorkerJob(
             owner_id=1,
             task="Test task",
-            model="gpt-5-mini",
+            model=TEST_WORKER_MODEL,
             status="running",
             worker_id=worker_id,
         )
