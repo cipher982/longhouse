@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page } from '@playwright/test';
 
 /**
@@ -15,7 +17,7 @@ export async function setupDebugCapture(page: Page, testName: string) {
 
     // Log errors and warnings to console in real-time
     if (msg.type() === 'error' || msg.type() === 'warning') {
-      console.log(`Browser ${msg.type()}: ${msg.text()}`);
+      testLog.info(`Browser ${msg.type()}: ${msg.text()}`);
     }
   });
 
@@ -23,24 +25,24 @@ export async function setupDebugCapture(page: Page, testName: string) {
   page.on('pageerror', (error) => {
     const errorText = `Page error: ${error.message}\n${error.stack || ''}`;
     errors.push(errorText);
-    console.error(errorText);
+    testLog.error(errorText);
   });
 
   // Capture failed network requests
   page.on('requestfailed', (request) => {
     const failure = `Network request failed: ${request.method()} ${request.url()} - ${request.failure()?.errorText || 'Unknown error'}`;
     networkErrors.push(failure);
-    console.error(failure);
+    testLog.error(failure);
   });
 
   // Return a function to dump all captured logs
   return {
     dumpLogs: () => {
-      console.log(`\n=== Debug logs for test: ${testName} ===`);
-      console.log('Console logs:', logs.length ? logs.join('\n') : 'No logs');
-      console.log('\nErrors:', errors.length ? errors.join('\n') : 'No errors');
-      console.log('\nNetwork errors:', networkErrors.length ? networkErrors.join('\n') : 'No network errors');
-      console.log('=== End debug logs ===\n');
+      testLog.info(`\n=== Debug logs for test: ${testName} ===`);
+      testLog.info('Console logs:', logs.length ? logs.join('\n') : 'No logs');
+      testLog.info('\nErrors:', errors.length ? errors.join('\n') : 'No errors');
+      testLog.info('\nNetwork errors:', networkErrors.length ? networkErrors.join('\n') : 'No network errors');
+      testLog.info('=== End debug logs ===\n');
     },
     logs,
     errors,
@@ -67,7 +69,7 @@ export async function waitForWasmInit(page: Page, timeout: number = 30000): Prom
 
     return !!wasmLoaded;
   } catch (error) {
-    console.error('WASM initialization timeout:', error);
+    testLog.error('WASM initialization timeout:', error);
     return false;
   }
 }
@@ -101,6 +103,6 @@ export async function debugDomState(page: Page) {
     return info;
   });
 
-  console.log('DOM State:', JSON.stringify(domInfo, null, 2));
+  testLog.info('DOM State:', JSON.stringify(domInfo, null, 2));
   return domInfo;
 }

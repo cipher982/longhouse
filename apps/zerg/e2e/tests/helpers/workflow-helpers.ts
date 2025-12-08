@@ -1,3 +1,5 @@
+import { testLog } from './test-logger';
+
 import { Page, expect } from '@playwright/test';
 import { ExecutionMonitor, startExecutionMonitoring, analyzeExecutionResults } from './canvas-helpers';
 
@@ -200,12 +202,12 @@ export function validateWorkflowExecution(
     requireSuccessfulResponse = false
   } = requirements;
 
-  console.log(result.analysis.summary);
-  console.log(`\n📊 DETAILED LOGS:`);
-  console.log(`Connection Logs:`, result.monitor.connectionLogs);
-  console.log(`Execution Logs:`, result.monitor.executionLogs);
-  console.log(`HTTP Request Logs:`, result.monitor.httpRequestLogs);
-  console.log(`Network Requests:`, result.monitor.networkRequests);
+  testLog.info(result.analysis.summary);
+  testLog.info(`\n📊 DETAILED LOGS:`);
+  testLog.info(`Connection Logs:`, result.monitor.connectionLogs);
+  testLog.info(`Execution Logs:`, result.monitor.executionLogs);
+  testLog.info(`HTTP Request Logs:`, result.monitor.httpRequestLogs);
+  testLog.info(`Network Requests:`, result.monitor.networkRequests);
 
   // Core assertions
   expect(result.nodeCount).toBeGreaterThanOrEqual(minNodeCount);
@@ -226,7 +228,7 @@ export function validateWorkflowExecution(
     expect(result.analysis.hasSuccessfulHttpResponse).toBe(true);
   }
 
-  console.log('✅ All workflow validation requirements met');
+  testLog.info('✅ All workflow validation requirements met');
 }
 
 /**
@@ -243,7 +245,7 @@ export async function runMultipleWorkflowTests(
   const results = [];
 
   for (const scenario of scenarios) {
-    console.log(`\n🚀 Starting workflow test: ${scenario.name}`);
+    testLog.info(`\n🚀 Starting workflow test: ${scenario.name}`);
 
     // Reset database for clean state
     await page.request.post('http://localhost:8001/admin/reset-database');
@@ -263,9 +265,9 @@ export async function runMultipleWorkflowTests(
         success: true
       });
 
-      console.log(`✅ ${scenario.name} completed successfully`);
+      testLog.info(`✅ ${scenario.name} completed successfully`);
     } catch (error) {
-      console.error(`❌ ${scenario.name} failed:`, error);
+      testLog.error(`❌ ${scenario.name} failed:`, error);
       results.push({
         name: scenario.name,
         result: {
@@ -298,7 +300,7 @@ export async function stressTestWorkflowExecution(
   let failures = 0;
 
   for (let i = 0; i < iterations; i++) {
-    console.log(`\n🔄 Stress test iteration ${i + 1}/${iterations}`);
+    testLog.info(`\n🔄 Stress test iteration ${i + 1}/${iterations}`);
 
     try {
       const result = await runWorkflowScenario(page, scenario, {
@@ -309,16 +311,16 @@ export async function stressTestWorkflowExecution(
 
       if (!result.success) {
         failures++;
-        console.warn(`⚠️ Iteration ${i + 1} failed`);
+        testLog.warn(`⚠️ Iteration ${i + 1} failed`);
 
         if (failures >= maxFailures) {
-          console.error(`❌ Max failures (${maxFailures}) reached, stopping stress test`);
+          testLog.error(`❌ Max failures (${maxFailures}) reached, stopping stress test`);
           break;
         }
       }
     } catch (error) {
       failures++;
-      console.error(`❌ Iteration ${i + 1} error:`, error);
+      testLog.error(`❌ Iteration ${i + 1} error:`, error);
 
       if (failures >= maxFailures) {
         break;
@@ -331,11 +333,11 @@ export async function stressTestWorkflowExecution(
 
   const successes = results.filter(r => r.success).length;
 
-  console.log(`\n📊 STRESS TEST RESULTS:`);
-  console.log(`  Total Iterations: ${results.length}`);
-  console.log(`  Successes: ${successes}`);
-  console.log(`  Failures: ${failures}`);
-  console.log(`  Success Rate: ${((successes / results.length) * 100).toFixed(1)}%`);
+  testLog.info(`\n📊 STRESS TEST RESULTS:`);
+  testLog.info(`  Total Iterations: ${results.length}`);
+  testLog.info(`  Successes: ${successes}`);
+  testLog.info(`  Failures: ${failures}`);
+  testLog.info(`  Success Rate: ${((successes / results.length) * 100).toFixed(1)}%`);
 
   return { successes, failures, results };
 }

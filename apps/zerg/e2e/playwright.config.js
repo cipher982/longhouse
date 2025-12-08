@@ -67,7 +67,7 @@ const config = {
   retries: process.env.CI ? 2 : 1,
 
   reporter: [
-    ['list'],
+    ['dot'],  // Concise output for make test - use 'list' for verbose debugging
     ['html', { open: 'never' }],
     ['junit', { outputFile: 'test-results/junit.xml' }]
   ],
