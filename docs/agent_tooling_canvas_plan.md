@@ -1,178 +1,384 @@
-# Agent Tools & Canvas Workflow – Master Design Doc
+# Agent Tooling & Canvas – Simplified Design
 
-_Status: 🟡 IN PROGRESS — Phase A Complete, Phases B-D Active_
-_Last Updated: 2025-06-15 — adopted as the **source-of-truth** for the upcoming “Tooling & Canvas” epic._
-
----
-
-## 1 Purpose
-
-This document aggregates the architectural context, design principles and phased rollout plan we agreed on while discussing how to evolve:
-
-- the **backend** (true agent ReAct loop, tool runtime, metrics), and
-- the **frontend** canvas UX (nodes, hierarchy, live debug).
-
-It is intentionally _code-agnostic_: no function names or API signatures are frozen here. Implementation specifics live in PRs and inline code comments, but **goals, principles and scope live here and must be kept up-to-date**.
+**Version:** 2.0
+**Date:** December 2025
+**Status:** Foundation Complete, Canvas Optional
+**Philosophy:** Agents are code. Visual tools are for humans, not architectural requirements.
 
 ---
 
-## 2 Context Snapshot (May 2025)
+## 1. Purpose
 
-Backend
-• Agents already run a ReAct loop (`LLM → Tool → LLM … until done`).
-• Only one demo tool (`get_current_time`) exists; no shared registry.
-• No timeouts, retries, per-tool metrics or permission model.
+Enable users to create and manage AI agents that can execute tasks autonomously.
 
-Frontend
-• Canvas supports AgentIdentity nodes only; no Tool/Trigger/Condition nodes yet.
-• Dashboard & chat UI already stream tool output via WebSockets.
+**v1.0 approach (DEPRECATED):**
 
-Business goal
+- Visual canvas with Agent, Tool, Trigger, Condition node types
+- ToolRegistry for centralized tool management
+- Per-agent allowed_tools allowlists
+- Complex node types for workflow composition
 
-> Enable non-technical users to visually build **event-driven workflows** that combine AI reasoning (Agents) with deterministic operations (Tools) in a single canvas.
+**v2.0 approach (SIMPLIFIED):**
 
----
-
-## 3 First-Principles Foundations
-
-1. **What you draw is what runs.** Canvas objects map 1-to-1 to runtime units so there is no mental translation cost.
-2. **One node, one responsibility.** An Agent node encapsulates its full internal loop. A Tool node performs exactly one deterministic action.
-3. **Explicit data-flow.** Edges carry typed payloads; execution order follows edge direction.
-4. **Progressive disclosure.** Beginners see collapsed nodes; power-users can drill down to inspect the agent’s internal LLM/Tool timeline.
-5. **Live feedback by default.** Every running node surfaces state (spinner, ✓, ✗) and exposes inputs/outputs for debugging.
+- Agents are defined in code or via API
+- Tools are capabilities (SSH access, HTTP, connectors)
+- Canvas is optional visualization layer (not architectural requirement)
+- Trust LLMs to use appropriate tools for the task
 
 ---
 
-## 4 Concept Glossary
+## 2. Core Architecture
 
-| Term               | Definition                                                                                                                                           |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Agent node**     | Black-box coroutine. Ingests a message/context, runs its internal while-loop (LLM ↔ Tools) until complete, then outputs the final assistant message. |
-| **Tool node**      | Deterministic function executed _outside_ any agent. Useful for pre/post-processing or cost-efficient steps that don’t require reasoning.            |
-| **Internal Tool**  | A Tool that lives _inside_ an Agent’s allow-list and can be invoked by the LLM during the loop.                                                      |
-| **Trigger node**   | Entry point that fires a workflow (webhook, cron, manual).                                                                                           |
-| **Condition node** | Branching logic on previous output.                                                                                                                  |
-| **Nested canvas**  | Read-only or editable sub-graph that visualises an Agent’s internal steps.                                                                           |
+### 2.1 What an Agent Is
 
----
-
-## 5 UX Model
-
-### 5.1 Top-level Canvas
-
-```
-┌──────────┐   ┌────────┐   ┌────────────┐   ┌─────────────┐
-│ Webhook  │→ │ Agent A │→ │  Format     │→ │ Send Email  │
-│ Trigger  │   │ (GPT-4) │   │  Tool      │   │  Tool       │
-└──────────┘   └────────┘   └────────────┘   └─────────────┘
+```python
+Agent:
+  name: "Infrastructure Monitor"
+  model: "gpt-4o"  # or gpt-4o-mini, claude-opus-4-5
+  system_instructions: """
+    You monitor infrastructure health.
+    You have SSH access to: cube, clifford, zerg, slim
+    Check disk, docker, backups, connectivity as needed.
+  """
+  # No allowed_tools list - agent has capabilities, not restrictions
 ```
 
-• Each node is a single block on the main canvas.
-• Agent node animates its internal loop progress (e.g. _🧠1 → ⚙2 → 🧠3 → ✓_).
+**That's it.** No specialized classes, no tool allowlists, no pre-programmed behavior.
 
-### 5.2 Drill-down / Inspect
+### 2.2 What Tools Are
 
-Double-clicking an Agent opens a side-panel (or nested canvas) streaming every LLM and Tool step in real time. The user cannot re-wire internal calls here yet; it is a debug view.
+**Tools are not abstractions - they're capabilities:**
 
----
+| Tool                             | What It Does                             |
+| -------------------------------- | ---------------------------------------- |
+| `ssh_exec(host, command)`        | Execute shell commands on remote servers |
+| `http_request(url, method, ...)` | Make HTTP calls to APIs                  |
+| `send_email(to, subject, body)`  | Send notifications                       |
+| `spawn_worker(task)`             | Delegate to disposable sub-agent         |
 
-## 6 Backend Architectural Guidelines
+**Safety via capability boundaries:**
 
-1. **ToolRegistry** Central registry in `zerg/tools/registry.py` with a `register_tool()` decorator. Supports discovery of built-ins and plugin entry-points.
-2. **Allowed-tools list per Agent** New DB column (`allowed_tools` text[]). Empty list = “all tools”.
-3. **Timeouts & retries** Every tool execution wrapped in `asyncio.wait_for`. Retry with exponential back-off (default 1 retry).
-4. **Metrics** Prometheus counters & histograms: `tool_calls_total`, `tool_errors_total`, `tool_latency_seconds`.
-5. **Execution semantics unchanged** `AgentRunner.run_thread()` still waits until the internal loop finishes before emitting the final assistant message to downstream workflow edges.
+- `ssh_exec` validates host against allowlist (cube, clifford, zerg, slim)
+- `send_email` validates from address (alerts@drose.io)
+- File operations scoped to worker artifact directories
 
----
-
-## 7 Phased Roll-out & Checklist
-
-> Use the check-boxes to track progress. Update this section in each PR that advances an item.
-
-### Phase A – Core refactor (target ≅ 2 weeks)
-
-| ID  | Task                                                                      | Status |
-| --- | ------------------------------------------------------------------------- | ------ |
-| A-1 | Implement `ToolRegistry` & migrate `get_current_time`                     | [x]    |
-| A-2 | Add built-in tools (`http_request`, `math_eval`, `uuid`, `datetime_diff`) | [x]    |
-| A-3 | Schema migration – `allowed_tools` column                                 | [x]    |
-| A-4 | Update agent factory to honour allow-list                                 | [x]    |
-
-### Phase B – Reliability & Metrics (target ≅ 2 weeks)
-
-| ID  | Task                                             | Status |
-| --- | ------------------------------------------------ | ------ |
-| B-1 | Timeout + retry wrapper around each Tool         | [x]    |
-| B-2 | Emit Prometheus metrics per tool                 | [ ]    |
-| B-3 | Persist per-tool timing & status in `runs` table | [x]    |
-
-### Phase C – MCP Integration (target ≅ 2 weeks)
-
-| ID  | Task                                               | Status |
-| --- | -------------------------------------------------- | ------ |
-| C-1 | MCP client adapter for tool registry               | [x]    |
-| C-2 | Support for custom MCP server URLs                 | [x]    |
-| C-3 | Preset popular MCP servers (GitHub, Linear, Slack) | [x]    |
-| C-4 | OAuth token management for MCP servers             | [x]    |
-
-### Phase D – Frontend Canvas (runs in parallel)
-
-| ID  | Task                                         | Status |
-| --- | -------------------------------------------- | ------ |
-| D-1 | Render standalone Tool nodes with ⚙ icon     | [ ]    |
-| D-2 | Agent node progress badge + click-to-inspect | [ ]    |
-| D-3 | Debug side-panel streaming LLM/Tool timeline | [ ]    |
-| D-4 | Basic port typing & edge validation          | [ ]    |
+**No ToolRegistry needed.** Tools are imported code, not discovered services.
 
 ---
 
-## 8 MCP Integration Strategy
+## 3. Implementation Status
 
-### How MCP Fits the Canvas Vision
+### ✅ Phase A: Core Tools (COMPLETE)
 
-MCP (Model Context Protocol) provides a standardized way to connect to external tool providers, perfectly aligning with our plugin system needs:
+| Tool               | Status |
+| ------------------ | ------ |
+| `get_current_time` | ✅     |
+| `http_request`     | ✅     |
+| `ssh_exec`         | ✅     |
+| `spawn_worker`     | ✅     |
+| `send_email`       | ✅     |
 
-1. **Built-in Tools** (Phase A) ✅ - Fast, reliable, always available
-   - `get_current_time`, `math_eval`, `http_request`, etc.
-   - Directly integrated into our tool registry
+### ✅ Phase B: Reliability (COMPLETE)
 
-2. **MCP Tools** (Phase C) - Extensible ecosystem
-   - **Preset Servers**: One-click setup for GitHub, Linear, Slack, etc.
-   - **Custom Servers**: Customers can add ANY MCP server URL
-   - Tools from MCP servers appear in the same registry as built-in tools
+| Feature             | Status                  |
+| ------------------- | ----------------------- |
+| Timeouts per tool   | ✅                      |
+| Retry logic         | ✅                      |
+| Error handling      | ✅                      |
+| Tool execution logs | ✅ (saved to artifacts) |
 
-3. **Canvas Integration** (Phase D)
-   - Tool nodes can represent either built-in OR MCP tools
-   - Visual distinction shows tool source (built-in vs which MCP server)
-   - Connection health indicators for external dependencies
+### ✅ Phase C: MCP Integration (COMPLETE)
 
-### Customer Experience
+| Feature                                      | Status |
+| -------------------------------------------- | ------ |
+| MCP client adapter                           | ✅     |
+| Custom MCP servers                           | ✅     |
+| OAuth token management                       | ✅     |
+| Preset servers (GitHub, Linear, Slack, etc.) | ✅     |
+
+### 📋 Phase D: Canvas (OPTIONAL)
+
+**v1.0 spec:** Complex multi-node system with Agent, Tool, Trigger, Condition node types
+
+**v2.0 decision:** Canvas is optional visualization, not architectural requirement.
+
+**If we build Canvas:**
+
+- Single "Agent" node type
+- Node shows: name, status, last run time
+- Click to view: full thread history, tool calls, artifacts
+- No separate Tool/Trigger/Condition nodes (unnecessary complexity)
+
+**Why optional:**
+
+- Agents work fine defined in code/API
+- Canvas adds visual polish but not core capability
+- Most users will use Jarvis (conversational), not Canvas (visual workflows)
+
+---
+
+## 4. What Changed from v1.0
+
+### Removed Concepts
+
+1. **ToolRegistry** ❌
+   - v1.0: Central registry for discovering tools
+   - v2.0: Tools are imported code, no discovery needed
+   - Benefit: 200+ LOC simpler
+
+2. **allowed_tools allowlist** ❌
+   - v1.0: Per-agent tool whitelist (`allowed_tools: ["ssh", "http"]`)
+   - v2.0: Agents have capabilities (which hosts, which APIs)
+   - Benefit: Security via capability boundaries, not tool restrictions
+
+3. **Multiple node types** ❌
+   - v1.0: Agent node, Tool node, Trigger node, Condition node
+   - v2.0: Just Agent node (if we build Canvas at all)
+   - Benefit: Simpler implementation, clearer mental model
+
+4. **"Progressive disclosure" nested canvas** ❌
+   - v1.0: Click agent → see internal LLM/Tool timeline as nested graph
+   - v2.0: Click agent → see thread history as chat transcript
+   - Benefit: Users understand chat transcripts; graph adds complexity
+
+### Kept Concepts
+
+1. **Agent as autonomous unit** ✅
+   - Agents execute independently
+   - Have persistent threads for context
+   - Make their own tool decisions
+
+2. **Tool execution logging** ✅
+   - All tool calls saved to disk artifacts
+   - Full audit trail
+
+3. **MCP integration** ✅
+   - Connect to external tool providers
+   - Standardized protocol
+
+---
+
+## 5. Current Usage Pattern
+
+**How users create agents today:**
+
+### Option 1: API (Primary Method)
+
+```typescript
+POST /api/agents
+{
+  "name": "Infrastructure Monitor",
+  "model": "gpt-4o",
+  "system_instructions": "You monitor infrastructure health...",
+  "trigger": {
+    "type": "schedule",
+    "cron": "0 6 * * *"  // Daily at 6am
+  }
+}
+```
+
+### Option 2: Jarvis (Voice)
 
 ```
-Agent Configuration
-├── Built-in Tools (always available)
-│   ├── datetime tools
-│   ├── math tools
-│   └── http tools
-├── Quick Connect (MCP Presets)
-│   ├── [Connect GitHub]
-│   ├── [Connect Linear]
-│   └── [Connect Slack]
-└── Custom MCP Servers
-    └── [+ Add MCP Server URL]
+User: "Create a daily health check that runs every morning"
+Jarvis → Supervisor → Creates agent via API
+```
+
+### Option 3: Dashboard (UI)
+
+```
+Zerg Dashboard → Agents → [+ Create Agent]
+  Fill form: name, model, instructions, schedule
+  Save
+```
+
+**Canvas (visual workflow builder) is optional future enhancement, not required for functionality.**
+
+---
+
+## 6. Testing Strategy
+
+### Test Behaviors, Not Architecture
+
+```python
+# ✅ Good test: Can agent accomplish task?
+async def test_can_check_server_health():
+    """Can agent check server health when asked?"""
+
+    mock_ssh('cube', /df -h/, "500G 78% used")
+    mock_ssh('cube', /docker ps/, "12 containers running")
+
+    result = await agent.execute("Check server health")
+
+    assert "78%" in result
+    assert "healthy" in result or "12 containers" in result
+
+# ❌ Bad test: Does it use specific tools?
+async def test_uses_ssh_exec_tool():
+    """Tests implementation detail, not behavior."""
+
+    result = await agent.execute("Check server health")
+
+    # Who cares which tool it used? Test the outcome!
+    assert agent.tool_calls[0].name == "ssh_exec"
 ```
 
 ---
 
-## 9 Open Questions
+## 7. Migration from v1.0
 
-1. Do we expose editing of an Agent's internal allow-list from the UI v1, or keep it API-only until permissions/multi-tenant story lands?
-2. How to cancel a long-running Agent loop mid-flight from the canvas? Signal handling & UI affordance TBD.
+### Code to Remove
+
+1. **ToolRegistry:**
+
+   ```python
+   # DELETE: zerg/tools/registry.py
+   # DELETE: register_tool() decorator
+   # DELETE: Tool discovery logic
+   ```
+
+2. **allowed_tools column:**
+
+   ```python
+   # DELETE: agents.allowed_tools column from schema
+   # DELETE: Tool allowlist validation in AgentRunner
+   ```
+
+3. **Tool/Trigger/Condition node types:**
+   ```typescript
+   // DELETE: Canvas node types besides Agent
+   // DELETE: Edge validation for different port types
+   ```
+
+### Code to Keep
+
+1. **Tool implementations:**
+
+   ```python
+   # KEEP: ssh_exec, http_request, send_email
+   # These are capabilities, not registry entries
+   ```
+
+2. **MCP adapter:**
+
+   ```python
+   # KEEP: MCP client integration
+   # MCP tools available to agents naturally
+   ```
+
+3. **Tool execution logging:**
+   ```python
+   # KEEP: tool_calls/*.txt artifact saving
+   # Audit trail is valuable
+   ```
 
 ---
 
-## 10 Change-log
+## 8. Canvas: If We Build It
 
-_2025-05-25_ – Document created from design discussion (davidrose, GPT-4o-assistant).
-_2025-05-25_ – Updated Phase C to use MCP instead of custom plugin system. Added MCP integration strategy section.
+**Decision:** Canvas is optional visualization layer, not core architecture.
+
+**If we decide to build it:**
+
+### Single Node Type Approach
+
+```
+┌────────────────────────┐
+│  Infrastructure Check  │  ← Agent node
+│  ⚙️ gpt-4o             │
+│                        │
+│  Status: ✓ Healthy     │
+│  Last run: 2h ago      │
+│  Cost: $0.03           │
+│                        │
+│  [View Thread]         │  ← Opens chat transcript
+│  [Edit] [Run Now]      │
+└────────────────────────┘
+```
+
+**What it shows:**
+
+- Agent name
+- Model in use
+- Last run status
+- Timing/cost
+
+**What it does:**
+
+- Click [View Thread] → See full conversation history
+- Click [Edit] → Update system instructions
+- Click [Run Now] → Trigger immediate execution
+
+**No nested graph.** Thread history is shown as chat transcript (humans understand this).
+
+### No Complex Workflow Composition
+
+**v1.0 vision:**
+
+```
+Trigger → Agent A → Tool (format) → Agent B → Tool (email)
+```
+
+**v2.0 reality:**
+Agents can do this themselves:
+
+```
+Agent with instructions:
+  "Check infrastructure daily.
+   If you find issues, format them clearly and send email to alerts@drose.io"
+
+Agent autonomously:
+  1. Spawns worker to check infrastructure
+  2. Reads result
+  3. Decides if it's an issue
+  4. Formats email naturally
+  5. Calls send_email
+```
+
+**No workflow composition UI needed.** LLM handles orchestration.
+
+---
+
+## 9. Design Principles
+
+### Principle 1: Agents Are Code
+
+Visual canvas is helpful for:
+
+- ✅ Seeing what agents exist
+- ✅ Checking their status
+- ✅ Viewing past runs
+
+Visual canvas is NOT needed for:
+
+- ❌ Defining agent behavior (system instructions work fine)
+- ❌ Composing workflows (LLMs orchestrate naturally)
+- ❌ Tool selection (LLMs pick appropriate tools)
+
+### Principle 2: Tools Are Capabilities
+
+```python
+# WRONG: Tool as abstraction
+class DiskCheckTool:
+    name = "check_disk"
+    description = "Check disk usage"
+    def execute(host):
+        return ssh_exec(host, "df -h")
+
+# RIGHT: Tool as capability
+ssh_exec(host, command)  # General purpose, LLM decides command
+```
+
+### Principle 3: Canvas Is Visualization, Not Definition
+
+```
+Definition lives in: Database (agent records) or code (agent configs)
+Canvas displays: Current state, past runs, artifacts
+Canvas does NOT: Define behavior, enforce tool restrictions, manage workflows
+```
+
+---
+
+_End of Specification v2.0_
+
+**Summary:** Agents are code with system instructions. Tools are capabilities bounded by access control. Canvas (if built) is optional visualization layer showing agent status and history. ToolRegistry, allowed_tools allowlists, and complex node types removed. ~500+ LOC simpler, equally capable.

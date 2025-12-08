@@ -1,250 +1,308 @@
-# Worker Supervision Roundabout
+# Worker Supervision & Monitoring
 
-## Implementation Status
-
-| Phase       | Description                  | Status          | Notes                                                     |
-| ----------- | ---------------------------- | --------------- | --------------------------------------------------------- |
-| **Phase 1** | Tool Activity Events         | ✅ **COMPLETE** | See `docs/completed/worker-tool-events-implementation.md` |
-| **Phase 2** | UI Activity Ticker           | ✅ **COMPLETE** | Jarvis shows real-time tool calls per worker              |
-| **Phase 3** | Roundabout Monitoring Loop   | ✅ **COMPLETE** | Supervisor waits for worker with 5s polling               |
-| **Phase 4** | Supervisor Decision Handling | ✅ **COMPLETE** | Heuristic-based wait/exit/cancel/peek (v1)                |
-| **Phase 5** | LLM-Gated Decisions          | ✅ **COMPLETE** | Optional LLM decider with budget/timeout safeguards       |
-| **Phase 6** | Graceful Failure Handling    | ✅ **COMPLETE** | Workers fail fast on critical tool errors                 |
-
-**All phases complete!** The worker supervision roundabout is fully functional.
+**Version:** 2.0
+**Date:** December 2025
+**Status:** Implementation Complete (v1.0 → v2.0 Simplification Pending)
+**Philosophy:** Event-driven, not polling. Trust the LLM to interpret state.
 
 ---
 
-## Overview
+## Executive Summary
 
-When a supervisor spawns a worker, it enters a "roundabout" - a temporary monitoring loop that provides real-time visibility into worker execution without polluting the supervisor's long-lived thread context.
+**v1.0 approach (DEPRECATED):**
 
-The roundabout is like a highway interchange: the main thread (linear conversation) temporarily enters a circular monitoring pattern, checking exits (worker complete, early termination, intervention needed) until the right one appears, then continues on the main path.
+- Supervisor enters "roundabout" monitoring loop
+- Polls worker status every 5 seconds
+- Hardcoded heuristics decide: WAIT, EXIT, CANCEL, PEEK
+- Complex decision tree separate from LLM reasoning
 
-## The Problem This Solves
+**v2.0 approach (TARGET):**
 
-### Without Roundabout (Current State)
+- Workers emit events when state changes
+- Supervisor receives notifications (not polling)
+- Supervisor interprets worker state and decides actions
+- Tool activity events for UI progress display (kept)
+
+**Key insight:** We don't need a monitoring "loop" or hardcoded decision rules. Workers notify when done. Supervisor reads their state and decides what to do.
+
+---
+
+## What Stays vs What Goes
+
+### ✅ KEEP: Tool Activity Events (Phase 1-2)
+
+**Purpose:** UI progress display and supervisor visibility.
+
+**Events:**
 
 ```
-Supervisor spawns worker
-    ↓
-[2 minutes of silence]
-    ↓
-"worker_complete" or "timeout"
+worker_tool_started    → Tool execution begins
+worker_tool_completed  → Tool finishes successfully
+worker_tool_failed     → Tool encounters error
 ```
 
-Problems:
+**Why keep:**
 
-- Supervisor has no visibility into worker progress
-- User sees nothing happening
-- If worker is stuck, nobody knows until timeout
-- No opportunity for early exit or intervention
+- Users want to see real-time progress (UI activity ticker)
+- Supervisor benefits from seeing "worker is SSH'ing to cube right now"
+- These are async notifications, not polling
 
-### With Roundabout
+**Implementation:** Already complete and working well.
+
+### ❌ REMOVE: Roundabout Polling Loop (Phase 3-4)
+
+**v1.0 implementation:**
+
+```python
+def spawn_worker(task, wait=True):
+    job = create_worker_job(task)
+
+    if wait:
+        # Enter polling loop
+        while True:
+            status = check_worker_status(job.id)  # Query DB
+            decision = make_heuristic_decision(status)  # Hardcoded rules
+
+            if decision == "EXIT":
+                return format_early_exit()
+            elif decision == "CANCEL":
+                cancel_worker()
+                return format_cancellation()
+
+            sleep(5)  # Poll every 5 seconds
+```
+
+**Problems:**
+
+1. Busy-wait pattern (polling DB every 5s)
+2. Supervisor waits in loop asking "are you done yet?"
+3. Heuristic decision engine (`make_heuristic_decision()`) duplicates LLM reasoning
+4. Complex state machine separate from LLM's natural decision-making
+
+**v2.0 replacement:**
+
+```python
+async def spawn_worker(task):
+    """Spawn worker and return job handle immediately."""
+    job = create_worker_job(task)
+
+    # Worker executes asynchronously
+    # Emits events: worker_started, tool_events, worker_complete
+
+    return {
+        "job_id": job.id,
+        "status": "queued",
+        "task": task
+    }
+
+# Later, supervisor can check status if needed
+async def get_worker_status(job_id):
+    """Query current worker state (on-demand, not polling)."""
+    job = db.query(WorkerJob).get(job_id)
+    return {
+        "status": job.status,  # queued, running, success, failed
+        "elapsed_ms": ...,
+        "current_operation": ...,  # From latest tool event
+    }
+```
+
+**Key change:** Supervisor doesn't wait in a loop. It spawns workers and receives events when they complete. If supervisor needs status, it queries on-demand.
+
+### ❌ REMOVE: Heuristic Decision Engine (Phase 4-5)
+
+**v1.0 implementation:**
+
+```python
+def make_heuristic_decision(context: DecisionContext) -> RoundaboutDecision:
+    """Hardcoded rules for supervisor decisions."""
+
+    # Rule 1: Exit if worker completed
+    if context.job_status in ["success", "failed"]:
+        return RoundaboutDecision.EXIT
+
+    # Rule 2: Cancel if stuck
+    if context.stuck_operation_seconds > 60:
+        return RoundaboutDecision.CANCEL
+
+    # Rule 3: Exit early if answer visible
+    if detect_final_answer_pattern(context.recent_output):
+        return RoundaboutDecision.EXIT
+
+    return RoundaboutDecision.WAIT
+```
+
+**Problems:**
+
+1. Pre-programs supervisor's decisions
+2. "Stuck" detection (> 60s) is arbitrary - some operations take longer
+3. "Final answer pattern detection" is heuristic - LLM can read output directly
+4. Every edge case requires new heuristic rule
+
+**v2.0 replacement:**
+
+```python
+# NO heuristic decision function
+# Supervisor sees worker state naturally via context:
+
+supervisor_context = f"""
+Worker job 123 is running.
+Task: Check disk space on cube
+Elapsed: 45 seconds
+Current operation: ssh_exec(cube, "du -sh /var/*") - running for 35s
+
+Recent activity:
+- [00:00] Worker started
+- [00:02] ssh_exec(cube, "df -h") completed in 1.8s
+- [00:10] Analyzing output...
+- [00:10] Started du -sh /var/* (still running)
+
+What do you want to do?
+"""
+
+# Supervisor (LLM) decides naturally:
+# - "du -sh takes time on large filesystems, I'll wait"
+# - OR "I already have enough info from df -h, I can answer now"
+# - OR "This seems stuck, let me cancel and try a different approach"
+```
+
+**Key change:** Supervisor LLM interprets worker state and makes judgment calls. No hardcoded rules.
+
+---
+
+## New Architecture (v2.0)
+
+### Worker Execution Flow
 
 ```
-Supervisor spawns worker
-    ↓
-[Enter roundabout]
-    ↻ 5s: Check status → continue
-    ↻ 10s: Check status → continue
-    ↻ 15s: Check status → worker done! → exit
-    ↓
-[Exit roundabout with result]
+Supervisor: spawn_worker("Check disk space on cube")
+  ↓
+Backend: Creates WorkerJob (status=queued)
+  ↓
+Returns to supervisor immediately:
+  {"job_id": 123, "status": "queued"}
+  ↓
+Supervisor continues reasoning...
+  ↓
+[Meanwhile, async worker processor picks up job]
+  ↓
+Worker starts → Emits: worker_started event
+Worker runs ssh_exec → Emits: worker_tool_started event
+SSH completes → Emits: worker_tool_completed event
+Worker finishes → Emits: worker_complete event
+  ↓
+Supervisor receives worker_complete via context (or queries status)
+Supervisor reads worker result
+Supervisor synthesizes answer
 ```
 
-Benefits:
+**Key difference:** Supervisor doesn't block waiting. It spawns and continues. Worker notifies when done.
 
-- Supervisor sees real-time activity
-- Can exit early if answer is visible in logs
-- Can intervene if worker is stuck/wrong path
-- User sees activity ticker in UI
+### Supervisor Decision Making (Autonomous)
 
-## Two Types of Persistence
+**If supervisor wants to check worker status:**
+
+```python
+# Supervisor can query anytime
+status = get_worker_status(job_id=123)
+
+# Status includes:
+{
+  "status": "running",
+  "elapsed_ms": 45000,
+  "current_operation": {
+    "tool": "ssh_exec",
+    "args": {"host": "cube", "command": "du -sh /var/*"},
+    "elapsed_ms": 35000
+  },
+  "completed_operations": [
+    {"tool": "ssh_exec", "command": "df -h", "duration_ms": 1800}
+  ]
+}
+```
+
+**Supervisor (LLM) interprets this and decides:**
+
+- "du -sh can take 30-60s on large dirs, this is normal - I'll wait"
+- "I already got what I need from df -h, I can answer without waiting"
+- "35 seconds for du -sh seems stuck - I'll cancel and try a different command"
+
+**No hardcoded rules.** The LLM makes these judgment calls.
+
+### Error Handling (Autonomous)
+
+**When worker fails:**
+
+```
+Worker encounters: SSH connection refused
+  ↓
+Worker emits: worker_complete(status="failed", error="...")
+  ↓
+Supervisor sees in worker result:
+  "Worker job 123 failed.
+   Error: SSH connection refused to cube (100.70.237.79)
+   This usually means: SSH service down OR credentials not configured"
+  ↓
+Supervisor (LLM) interprets and responds:
+  "I couldn't connect to cube via SSH. This could mean the server is down
+   or SSH credentials aren't configured. Can you verify cube is reachable?"
+```
+
+**No error classification middleware.** Raw error → LLM interpretation → user-friendly explanation.
+
+---
+
+## What Gets Persisted
 
 ### Disk Artifacts (Full Audit Trail)
 
-Everything is logged to disk. Always.
+**Always logged:**
 
 ```
-/data/workers/{worker_id}/
-├── metadata.json           # Status, timestamps, config
+/data/swarmlet/workers/{worker_id}/
+├── metadata.json           # Status, timestamps, model
 ├── thread.jsonl            # Full LLM conversation
 ├── result.txt              # Final result
-├── tool_calls/
-│   ├── 001_ssh_exec.txt    # Each tool invocation
-│   ├── 002_ssh_exec.txt
-│   └── ...
-└── monitoring/             # NEW: Roundabout check logs
-    ├── check_005s.json     # What supervisor saw at 5s
-    ├── check_010s.json     # What supervisor saw at 10s
+└── tool_calls/
+    ├── 001_ssh_exec.txt    # Each tool invocation
+    ├── 002_ssh_exec.txt
     └── ...
 ```
 
-This enables:
+**Removed in v2.0:**
 
-- `grep_workers` for searching across workers
-- Full debugging capability
-- Audit trail for compliance
-- Post-hoc analysis of what went wrong
+```
+└── monitoring/             # ❌ DELETE: Polling check logs
+    ├── check_005s.json     # No longer needed
+    ├── check_010s.json
+    └── ...
+```
 
-### Supervisor LLM Thread (Curated Context)
+**Why remove:** Polling checks were ephemeral state from the monitoring loop. In event-driven model, no loop exists.
 
-The conversation history the LLM accumulates. This is the "brain" that persists across sessions.
+### Supervisor Thread (Curated Context)
 
-**What goes in the thread:**
+**What goes in thread:**
 
 - User messages
-- Assistant responses
-- Tool calls and their final results
-- Worker completion summaries
+- Supervisor responses
+- Tool calls (spawn_worker, list_workers, etc.)
+- Worker completion results
 
-**What does NOT go in the thread:**
+**What does NOT go in thread:**
 
-- Roundabout monitoring checks
-- "Continue waiting" decisions
-- Intermediate activity logs
-- Per-tool-call status updates
+- ~~Monitoring loop check-ins~~ (removed in v2.0)
+- ~~Heuristic decision outputs~~ (removed in v2.0)
+- Worker tool events (available via artifacts, not in thread)
 
-This keeps the thread clean. After a month of usage, the supervisor's context is meaningful conversation, not thousands of "ssh_exec still running..." messages.
+**Philosophy:** Thread is the supervisor's memory. It should contain meaningful conversation, not implementation details.
 
-## Roundabout Architecture
-
-### Entry Condition
-
-Roundabout begins when supervisor calls `spawn_worker()`. The tool doesn't immediately return - instead it enters monitoring mode.
-
-```python
-# Conceptual flow
-def spawn_worker(task: str) -> str:
-    job = create_worker_job(task)
-
-    # Enter roundabout
-    while True:
-        status = check_worker_status(job.id)
-
-        # Present to supervisor (ephemeral, not persisted to thread)
-        decision = supervisor_check_in(status)
-
-        if decision == "exit_early":
-            return format_early_exit(status)
-        if decision == "intervene":
-            handle_intervention(job.id)
-        if status.complete:
-            return format_completion(status)
-
-        sleep(5)  # Check interval
-```
-
-### What Supervisor Sees Each Iteration
-
-Every 5 seconds, supervisor receives a status prompt:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ WORKER MONITOR - Job #1 (elapsed: 15s)                      │
-├─────────────────────────────────────────────────────────────┤
-│ Task: Check disk space on cube                              │
-│ Status: running                                             │
-│                                                             │
-│ Activity Log:                                               │
-│   [00:00] Worker started                                    │
-│   [00:02] ssh_exec(cube, "df -h") → success (1.8s)         │
-│   [00:04] Analyzing output...                               │
-│   [00:05] ssh_exec(cube, "du -sh /var/*") → running (10s)  │
-│                                                             │
-│ Current Operation:                                          │
-│   Tool: ssh_exec                                            │
-│   Args: {host: "cube", command: "du -sh /var/*"}           │
-│   Running for: 10s                                          │
-│                                                             │
-│ Options:                                                    │
-│   [wait] Continue monitoring                                │
-│   [exit] Return with current findings                       │
-│   [cancel] Abort worker (something's wrong)                 │
-│   [peek] Read full worker logs                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Supervisor Decision Options
-
-**wait** (default): Continue monitoring. Check again in 5s.
-
-**exit**: Supervisor has seen enough. Maybe the answer is already visible in the activity log. Exit roundabout and return current state as result.
-
-**cancel**: Something is wrong (stuck, wrong approach). Cancel the worker and return with explanation of why.
-
-**peek**: Supervisor wants more detail. Read full worker thread.jsonl or specific tool output. Then continue monitoring.
-
-### Exit Conditions
-
-1. **Worker completes** - Natural exit. Return worker result.
-
-2. **Supervisor exits early** - Saw the answer, doesn't need to wait.
-
-3. **Supervisor cancels** - Worker is stuck or wrong. Abort and explain.
-
-4. **Hard timeout** - Safety net. Default 5 minutes, configurable.
-
-5. **Error** - Worker crashes. Return error details.
-
-## What Gets Returned to Thread
-
-When roundabout exits, a single tool response is added to the supervisor thread:
-
-### Success Case
-
-```json
-{
-  "status": "complete",
-  "job_id": 1,
-  "worker_id": "2024-12-05T10-30-00_disk-check",
-  "duration_seconds": 23,
-  "summary": "Checked disk on cube: 78% used, healthy",
-  "result": "Full result text from worker...",
-  "activity_summary": {
-    "tool_calls": 3,
-    "tools_used": ["ssh_exec"],
-    "hosts_accessed": ["cube"]
-  }
-}
-```
-
-### Early Exit Case
-
-```json
-{
-  "status": "early_exit",
-  "job_id": 1,
-  "reason": "Supervisor identified answer in activity log",
-  "partial_findings": "df -h showed 78% disk usage",
-  "activity_at_exit": {
-    "elapsed_seconds": 8,
-    "completed_operations": 1,
-    "pending_operations": 1
-  }
-}
-```
-
-### Failure Case
-
-```json
-{
-  "status": "failed",
-  "job_id": 1,
-  "error": "SSH connection failed - no credentials configured",
-  "activity_at_failure": {
-    "elapsed_seconds": 5,
-    "last_operation": "ssh_exec(cube, 'df -h')",
-    "failure_details": "No SSH key found at ~/.ssh/id_ed25519"
-  },
-  "suggestion": "Infrastructure access not configured for this environment"
-}
-```
+---
 
 ## UI Integration
 
-While the roundabout executes, the Jarvis UI shows an activity ticker:
+### Activity Ticker (Kept from v1.0)
+
+While worker executes, Jarvis UI shows real-time progress:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -252,411 +310,475 @@ While the roundabout executes, the Jarvis UI shows an activity ticker:
 │                                         │
 │ Worker: Check disk on cube              │
 │ ├─ ssh_exec "df -h" ✓ (1.8s)           │
-│ └─ ssh_exec "du -sh /var/*" ⏳ 10s...   │
+│ └─ ssh_exec "du -sh /var/*" ⏳ 35s...   │
 │                                         │
 │ [Details] [Cancel]                      │
 └─────────────────────────────────────────┘
 ```
 
-This streams via SSE events:
+**Events:**
 
-- `worker_tool_started` - tool call begins
-- `worker_tool_completed` - tool call finished
-- `worker_status_update` - periodic status (every 5s)
+- `worker_tool_started` → Show tool with spinner
+- `worker_tool_completed` → Show checkmark + duration
+- `worker_complete` → Hide ticker
 
-UI receives events, displays ticker, clears when roundabout exits.
+**Why keep:** Users want visibility. Tool activity events provide this without architectural complexity.
 
-## Event Flow
+---
 
-```
-                    ┌─────────────────────┐
-                    │   Jarvis Frontend   │
-                    │   (Activity Ticker) │
-                    └──────────▲──────────┘
-                               │ SSE events
-                               │
-┌──────────────┐    ┌──────────┴──────────┐    ┌─────────────────┐
-│  Supervisor  │◄───│    Event Stream     │◄───│     Worker      │
-│   (LLM)      │    │                     │    │   (Execution)   │
-└──────┬───────┘    └─────────────────────┘    └────────┬────────┘
-       │                                                │
-       │ Roundabout                                     │
-       │ check-ins                                      │
-       │ (ephemeral)                                    │
-       │                                                │
-       ▼                                                ▼
-┌──────────────┐                              ┌─────────────────┐
-│  Supervisor  │                              │  Disk Artifacts │
-│   Thread     │                              │  (Full Logs)    │
-│ (Persisted)  │                              │                 │
-└──────────────┘                              └─────────────────┘
-```
+## Migration from v1.0 to v2.0
 
-## Implementation Phases
+### Code to Remove
 
-### Phase 1: Tool Activity Events ✅ COMPLETE
+1. **RoundaboutMonitor polling loop:**
 
-**Implementation details**: See `docs/completed/worker-tool-events-implementation.md`
+   ```python
+   # DELETE: apps/zerg/backend/zerg/services/roundabout_monitor.py
+   # Lines: Polling while loop, check_worker_status calls
 
-Events implemented:
+   class RoundaboutMonitor:
+       async def wait_for_completion(self, job_id):
+           while True:  # ❌ DELETE this pattern
+               await asyncio.sleep(5)
+               status = check_status()
+               decision = make_decision()
+               ...
+   ```
 
-- `WORKER_TOOL_STARTED` - emitted when tool begins
-- `WORKER_TOOL_COMPLETED` - emitted when tool succeeds
-- `WORKER_TOOL_FAILED` - emitted when tool fails (via error_envelope detection)
+2. **Heuristic decision engine:**
 
-Key components:
+   ```python
+   # DELETE: make_heuristic_decision() function
+   # DELETE: RoundaboutDecision enum (WAIT, EXIT, CANCEL, PEEK)
+   # DELETE: DecisionContext dataclass
 
-- `zerg/context.py` - WorkerContext via ContextVars
-- `zerg/tools/result_utils.py` - Error detection + secret redaction
-- Modified `zerg_react_agent._call_tool_async` for event emission
-- Modified `WorkerRunner.run_worker` for context setup/teardown
+   def make_heuristic_decision(context):  # ❌ DELETE
+       if context.stuck > 60:
+           return "CANCEL"
+       ...
+   ```
 
-### Phase 2: UI Activity Ticker ✅ COMPLETE
+3. **Monitoring check logs:**
+   ```python
+   # DELETE: monitoring/ directory creation
+   # DELETE: check_NNNs.json file writing
+   ```
 
-**Implementation details:**
+### Code to Keep
 
-Backend:
+1. **Tool activity events:**
 
-- Added tool event subscriptions to SSE endpoint (`jarvis.py`)
-- Events: `WORKER_TOOL_STARTED`, `WORKER_TOOL_COMPLETED`, `WORKER_TOOL_FAILED`
+   ```python
+   # KEEP: Event emission in zerg_react_agent._call_tool_async
+   await event_bus.publish(EventType.WORKER_TOOL_STARTED, {...})
+   await event_bus.publish(EventType.WORKER_TOOL_COMPLETED, {...})
+   ```
 
-Frontend (`apps/jarvis/apps/web/`):
+2. **SSE event forwarding:**
 
-- Added tool event types to `lib/event-bus.ts`
-- Added event forwarding in `lib/tool-factory.ts`
-- Enhanced `lib/supervisor-progress.ts` to track/display tool calls per worker
-- Added CSS styles in `styles/supervisor-progress.css`
+   ```python
+   # KEEP: Tool event subscriptions in jarvis.py
+   event_bus.subscribe(EventType.WORKER_TOOL_STARTED, ...)
+   ```
 
-UI displays:
+3. **UI activity ticker:**
+   ```typescript
+   // KEEP: apps/jarvis/apps/web/lib/supervisor-progress.ts
+   // Tool call tracking and display
+   ```
 
-- Tool name, status icon (⏳ running, ✓ completed, ✗ failed)
-- Duration (elapsed while running, final ms when done)
-- Args preview (while running) or error (if failed)
-- Tool calls nested under each worker with visual hierarchy
+### Code to Simplify
 
-### Phase 3: Roundabout Loop ✅ COMPLETE
+1. **spawn_worker tool:**
 
-**Implementation details:**
+   ```python
+   # BEFORE (v1.0):
+   async def spawn_worker(task, wait=True):
+       job = create_job(task)
+       if wait:
+           return await roundabout.wait_for_completion(job.id)  # Polling
+       return job.id
 
-Files created/modified:
+   # AFTER (v2.0):
+   async def spawn_worker(task):
+       """Spawn worker and return handle immediately."""
+       job = create_job(task)
+       return {
+           "job_id": job.id,
+           "status": "queued",
+           "task": task
+       }
+   ```
 
-- `zerg/services/roundabout_monitor.py` - New monitoring service
-- `zerg/tools/builtin/supervisor_tools.py` - Modified spawn_worker
+2. **Supervisor can query status if needed:**
 
-Key components:
+   ```python
+   # NEW tool (optional):
+   async def get_worker_status(job_id):
+       """Query current worker state on-demand."""
+       job = db.get(WorkerJob, job_id)
 
-- `RoundaboutMonitor` class with `wait_for_completion()` method
-- Polling interval: 5 seconds (configurable via `ROUNDABOUT_CHECK_INTERVAL`)
-- Hard timeout: 300 seconds / 5 minutes (configurable)
-- Status tracking via `RoundaboutStatus` dataclass
-- Result formatting via `format_roundabout_result()`
+       # Include current operation from latest tool event
+       current_op = get_latest_tool_activity(job.worker_id)
 
-Behavior:
+       return {
+           "status": job.status,
+           "elapsed_ms": ...,
+           "current_operation": current_op,
+           "completed_operations": get_completed_tools(job.worker_id)
+       }
+   ```
 
-- `spawn_worker(task)` returns immediately (fire-and-forget, backward compatible)
-- `spawn_worker(task, wait=True)` enters roundabout monitoring loop
-- Subscribes to tool events via event bus for activity tracking
-- Polling refreshes database session to see worker status changes
-- Monitoring checks logged to `/data/workers/{worker_id}/monitoring/`
-- Returns structured result with duration, summary, activity stats
+---
 
-Timeout semantics:
+## Testing Strategy (Behavior-Focused)
 
-- `monitor_timeout` status distinct from job failure
-- `worker_still_running` flag indicates if worker continues after monitor exits
-- Clear messaging guides supervisor on next steps
-
-Configuration constants in `roundabout_monitor.py`:
-
-```python
-ROUNDABOUT_CHECK_INTERVAL = 5  # seconds
-ROUNDABOUT_HARD_TIMEOUT = 300  # 5 minutes
-ROUNDABOUT_STUCK_THRESHOLD = 30  # flag as slow
-ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # entries to track
-```
-
-### Phase 4: Supervisor Decision Handling ✅ COMPLETE
-
-**Implementation details:**
-
-Files modified:
-
-- `zerg/services/roundabout_monitor.py` - Added decision types and heuristic function
-
-Key components:
-
-- `RoundaboutDecision` enum: WAIT, EXIT, CANCEL, PEEK
-- `DecisionContext` dataclass: Current state for decision making
-- `make_heuristic_decision()` function: Rules-based decision logic
-
-Heuristic rules (v1 - rules-based, future v2 could add LLM):
-
-- **EXIT**: Worker status changed to success/failed, OR final answer pattern detected in tool output
-- **CANCEL**: Stuck > 60s without completing operation, OR no progress for 6+ consecutive polls
-- **WAIT**: Default when none of the above conditions apply
-- **PEEK**: Reserved for future LLM-based decisions
-
-Configuration constants:
+### v1.0 Tests (Implementation-Focused)
 
 ```python
-ROUNDABOUT_CANCEL_STUCK_THRESHOLD = 60  # seconds
-ROUNDABOUT_NO_PROGRESS_POLLS = 6  # consecutive polls
-FINAL_ANSWER_PATTERNS = ["Result:", "Summary:", "Completed successfully", ...]
+# Testing that polling loop works
+def test_roundabout_waits_for_completion():
+    monitor = RoundaboutMonitor()
+    result = await monitor.wait_for_completion(job_id)
+    assert result.check_count > 0
+
+# Testing heuristic rules
+def test_heuristic_decides_cancel_when_stuck():
+    context = DecisionContext(stuck_seconds=65)
+    decision = make_heuristic_decision(context)
+    assert decision == RoundaboutDecision.CANCEL
 ```
 
-Result types added:
-
-- `early_exit`: Exited before worker completion (answer detected)
-- `cancelled`: Worker cancelled due to stuck/no progress
-- `peek`: Drill-down requested (returns hint for supervisor to call read_worker_file)
-
-Tests added in `tests/test_roundabout_monitor.py`:
-
-- Unit tests for `make_heuristic_decision()` covering all decision paths
-- Integration test for cancel-on-no-progress behavior
-
-### Phase 5: LLM-Gated Decisions ✅ COMPLETE
-
-**Implementation details:**
-
-Files created/modified:
-
-- `zerg/services/llm_decider.py` - New module for LLM-based decision making
-- `zerg/services/roundabout_monitor.py` - Added decision mode configuration and integration
-- `zerg/tools/builtin/supervisor_tools.py` - Added `decision_mode` parameter to `spawn_worker`
-
-Key components:
-
-- `DecisionMode` enum: HEURISTIC (default), LLM, HYBRID
-- `LLMDeciderStats` dataclass: Tracks calls, timeouts, errors, skipped calls
-- `LLMDecisionPayload` dataclass: Compact payload for LLM (~1-2KB)
-- `decide_roundabout_action()` function: Makes LLM decision with timeout
-
-**Decision Modes:**
-
-- **heuristic** (default): Rules-based decisions only. Fast, no cost, safe.
-- **llm**: LLM-based decisions only. Smarter but adds latency (~500-1500ms) and cost.
-- **hybrid**: Heuristic first, LLM for ambiguous cases. Best of both worlds.
-
-**Safeguards:**
-
-All safeguards ensure safe fallback to "wait" on any failure:
-
-| Safeguard             | Default     | Description                                |
-| --------------------- | ----------- | ------------------------------------------ |
-| `llm_poll_interval`   | 2           | Only call LLM every N polls (reduces cost) |
-| `llm_max_calls`       | 3           | Maximum LLM calls per job (budget limit)   |
-| `llm_timeout_seconds` | 1.5s        | Max time to wait for LLM response          |
-| `llm_model`           | gpt-4o-mini | Fast, cheap model for decisions            |
-
-**Telemetry:**
-
-The `activity_summary` in `RoundaboutResult` now includes:
+### v2.0 Tests (Behavior-Focused)
 
 ```python
+# Test that supervisor can answer questions
+async def test_can_answer_backup_status():
+    """Test behavior: Can system answer 'is backup working?'"""
+
+    # Mock SSH response
+    mock_ssh('cube', /kopia snapshot list/, """
+        last-snapshot: 2025-12-07 03:00:15
+        status: success
+        size: 157GB
+    """)
+
+    # Ask naturally
+    answer = await supervisor.execute("Is my backup working?")
+
+    # Verify intelligent interpretation
+    assert "successful" in answer
+    assert "3am" in answer or "last ran" in answer
+    assert "157GB" in answer
+
+async def test_can_diagnose_disk_issue():
+    """Test behavior: Can system diagnose disk problems?"""
+
+    mock_ssh('cube', /df -h/, """
+        Filesystem      Size  Used Avail Use% Mounted on
+        /dev/sda1       500G  475G   25G  95% /
+    """)
+
+    answer = await supervisor.execute("Check disk space on cube")
+
+    # Verify interpretation (not just repeating numbers)
+    assert "95%" in answer
+    assert "almost full" in answer or "critical" in answer
+    assert "clean up" in answer or "add storage" in answer
+```
+
+**Key difference:** Test outcomes (can it answer?), not implementation (does it poll?).
+
+---
+
+## SSE Events for UI
+
+**Events that matter for user experience:**
+
+### Worker Lifecycle Events
+
+```json
+{"type": "worker_started", "job_id": 123, "task": "Check servers"}
+{"type": "worker_complete", "job_id": 123, "status": "success"}
+{"type": "worker_summary_ready", "summary": "All healthy..."}
+```
+
+### Tool Activity Events (Real-time progress)
+
+```json
+{"type": "worker_tool_started", "tool": "ssh_exec", "args": "cube: df -h"}
+{"type": "worker_tool_completed", "tool": "ssh_exec", "duration_ms": 1800}
+{"type": "worker_tool_failed", "tool": "ssh_exec", "error": "Connection refused"}
+```
+
+### Supervisor Events
+
+```json
+{"type": "supervisor_started", "task": "Check my servers"}
+{"type": "supervisor_complete", "result": "Your servers are healthy..."}
+```
+
+**UI displays:**
+
+- Floating progress toast (always visible)
+- Worker task description
+- Real-time tool calls with status icons
+- Duration counters
+
+**Removed in v2.0:**
+
+- ~~worker_status_update (periodic polling)~~ - Not needed with events
+- ~~roundabout_decision~~ - Internal implementation detail
+
+---
+
+## Supervisor Prompt Guidance
+
+**v1.0 prompt (prescriptive):**
+
+```
+When you spawn a worker:
+1. Enter the roundabout monitoring loop
+2. You will receive status updates every 5 seconds
+3. Respond with: WAIT, EXIT, CANCEL, or PEEK
+4. EXIT if you see the answer in activity logs
+5. CANCEL if operation is stuck for > 60 seconds
+```
+
+**v2.0 prompt (trusting):**
+
+```
+When you spawn a worker, you'll receive events when they complete.
+
+If you need to check worker progress:
+- Use get_worker_status(job_id) to see current state
+- Interpret the output - you're smart enough to judge if it's stuck
+- Decide: wait longer, read the partial result, or cancel if clearly wrong
+
+Example reasoning:
+"Worker has been running du -sh for 35 seconds. This can take 30-60s
+on large directories, so that's normal. I'll wait."
+
+OR:
+
+"Worker already completed df -h which shows 78% disk. I can answer
+the user's question without waiting for du -sh to finish."
+```
+
+**Key difference:** Prompt gives context and trusts LLM judgment. No decision rules.
+
+---
+
+## Implementation Phases (Updated)
+
+### ✅ Phase 1: Tool Activity Events (COMPLETE - KEEP)
+
+- Workers emit tool start/complete/fail events
+- Events include tool name, args preview, duration
+- Backend → SSE → UI activity ticker
+- **Status:** Working well, no changes needed
+
+### ✅ Phase 2: UI Activity Ticker (COMPLETE - KEEP)
+
+- Jarvis displays real-time tool calls
+- Nested under each worker in progress UI
+- **Status:** Working well, no changes needed
+
+### ⚠️ Phase 3-5: Roundabout Loop + Decisions (IMPLEMENTED - MARK FOR REMOVAL)
+
+- Polling loop every 5s
+- Heuristic decision engine
+- LLM-gated decisions
+- **Status:** Overengineered. Replace with event-driven + autonomous decisions
+
+### ✅ Phase 6: Graceful Failure (COMPLETE - KEEP)
+
+- Workers detect critical errors and fail fast
+- Error messages passed to supervisor
+- **Status:** Working well, keep as-is
+
+---
+
+## Refactoring Plan
+
+### Step 1: Make spawn_worker non-blocking (1 day)
+
+```python
+# Change spawn_worker to return immediately
+# Remove wait=True parameter
+# Supervisor doesn't block waiting for completion
+```
+
+### Step 2: Add get_worker_status tool (1 day)
+
+```python
+# Supervisor can query worker state on-demand
+# Returns current operation, elapsed time, completed operations
+# LLM interprets and decides next action
+```
+
+### Step 3: Remove RoundaboutMonitor (2 days)
+
+```python
+# Delete monitoring loop
+# Delete heuristic decision engine
+# Delete monitoring/ artifact directory
+# Update tests to be behavior-focused
+```
+
+### Step 4: Update supervisor prompt (1 day)
+
+```python
+# Remove prescriptive decision rules
+# Add guidance for autonomous status checking
+# Include examples of natural reasoning
+```
+
+**Total effort:** ~5 days to simplify architecture by 1000+ LOC.
+
+---
+
+## Technical Benefits of v2.0
+
+| Aspect               | v1.0 (Polling)                     | v2.0 (Event-Driven)                   |
+| -------------------- | ---------------------------------- | ------------------------------------- |
+| CPU usage            | Polls DB every 5s                  | Events trigger on state change        |
+| Latency              | 0-5s delay to see events           | Immediate event propagation           |
+| Complexity           | Monitoring loop + decision engine  | Workers notify, supervisor interprets |
+| Supervisor reasoning | Gated by heuristics                | Fully autonomous                      |
+| Code to maintain     | ~1000+ LOC (monitor + decider)     | ~200 LOC (event handlers)             |
+| Test coverage        | Implementation tests (loop, rules) | Behavior tests (can it answer?)       |
+
+---
+
+## Appendix A: Event Schema
+
+### worker_started
+
+```json
 {
-    "llm_calls": 3,              # Total LLM calls made
-    "llm_calls_succeeded": 2,    # Successful calls
-    "llm_timeouts": 1,           # Calls that timed out
-    "llm_errors": 0,             # Calls that errored
-    "llm_skipped_budget": 2,     # Skipped due to budget exhaustion
-    "llm_skipped_interval": 5,   # Skipped due to poll interval
-    "llm_avg_response_ms": 850,  # Average response time
-    "decision_mode": "hybrid",   # Mode used for this job
+  "type": "worker_started",
+  "job_id": 123,
+  "worker_id": "2025-12-07T20-33-15_...",
+  "task": "Check disk space on cube",
+  "timestamp": "2025-12-07T20:33:15Z"
 }
 ```
 
-**Usage:**
+### worker_tool_started
 
-```python
-# Default: heuristic only (fast, safe)
-spawn_worker("Check disk on cube", wait=True)
-
-# Hybrid: heuristic + LLM for ambiguous cases
-spawn_worker("Complex research task", wait=True, decision_mode="hybrid")
-
-# LLM only: full LLM control (use sparingly)
-spawn_worker("Task needing smart decisions", wait=True, decision_mode="llm")
-```
-
-**Cost/Latency Expectations:**
-
-- Model: `gpt-4o-mini` (~$0.15/1M input, ~$0.60/1M output)
-- Average response time: 500-1500ms
-- Cost per job (hybrid, 3 calls): ~$0.001-0.003
-- Max latency impact: 3 calls × 1.5s timeout = 4.5s worst case
-
-Tests added in `tests/test_llm_decider.py` and `tests/test_roundabout_monitor.py`:
-
-- Unit tests for `LLMDeciderStats`, payload building, prompt generation
-- Unit tests for LLM call handling (success, timeout, error fallback)
-- Integration tests for all decision modes
-- Integration tests for budget and interval enforcement
-
-### Phase 6: Graceful Failure Handling ✅ COMPLETE
-
-**Implementation details:**
-
-Workers fail fast on critical tool errors, allowing supervisors to immediately understand and respond to failures rather than waiting for timeout or receiving opaque errors.
-
-Files modified:
-
-- `zerg/context.py` - Added critical error tracking to WorkerContext
-- `zerg/agents_def/zerg_react_agent.py` - Added critical error detection and fail-fast logic
-- `zerg/services/worker_runner.py` - Check for critical errors and mark worker as failed
-
-Key components:
-
-- `WorkerContext.has_critical_error` - Flag indicating a critical error occurred
-- `WorkerContext.critical_error_message` - Human-readable error message
-- `WorkerContext.mark_critical_error()` - Mark that a critical error occurred
-- `_is_critical_error()` - Determine if a tool error is critical
-- `_format_critical_error()` - Format error messages for supervisor
-
-**Critical vs Non-Critical Errors:**
-
-Critical errors (trigger fail-fast):
-
-- Configuration errors: SSH key missing, connector not configured, API not set up
-- Permission errors: Access denied, invalid credentials
-- Validation errors: Invalid tool arguments, missing required parameters
-- Infrastructure errors: SSH client not found, service unreachable
-
-Non-critical errors (agent continues):
-
-- Transient failures: Timeout, rate limit, temporarily unavailable
-- Command failures: Non-zero exit codes, grep no matches
-- Recoverable errors: Network hiccup, retry-able API errors
-
-**Behavior:**
-
-1. When a tool returns an error, `_call_tool_async` checks if it's critical via `_is_critical_error()`
-2. If critical, `WorkerContext.mark_critical_error()` is called with formatted message
-3. Agent execution loop checks `ctx.has_critical_error` after each tool batch
-4. If set, agent immediately returns with error explanation, skipping further tool calls
-5. `WorkerRunner` detects the critical error flag and marks worker as "failed"
-6. Roundabout receives failed status and exits immediately
-7. Supervisor sees clear error message explaining what went wrong and how to fix it
-
-**Error Message Format:**
-
-```
-Tool 'ssh_exec' failed: SSH client not found. Ensure OpenSSH is installed.
-```
-
-Messages are extracted from error envelopes' `user_message` field, providing actionable guidance for the supervisor.
-
-**Tests:**
-
-Added `tests/test_worker_fail_fast.py`:
-
-- Test worker fails fast on critical SSH error
-- Test worker succeeds without critical errors
-- Test WorkerContext tracks critical errors correctly
-- Test critical error detection logic
-- Test roundabout exits immediately on worker failure
-- Test error message formatting
-
-All existing worker and roundabout tests continue to pass, ensuring backward compatibility.
-
-## Configuration
-
-```python
-ROUNDABOUT_CONFIG = {
-    "check_interval_seconds": 5,      # How often to check
-    "hard_timeout_seconds": 300,      # Max time in roundabout
-    "stuck_threshold_seconds": 30,    # When to flag operation as slow
-    "activity_log_max_entries": 20,   # How many recent entries to show
+```json
+{
+  "type": "worker_tool_started",
+  "worker_id": "2025-12-07T20-33-15_...",
+  "tool_name": "ssh_exec",
+  "tool_call_id": "call_abc123",
+  "args_preview": "cube: df -h",
+  "timestamp": "2025-12-07T20:33:17Z"
 }
 ```
 
-## Example Scenarios
+### worker_tool_completed
 
-### Scenario 1: Normal Completion
-
-```
-User: "Check disk on cube"
-Supervisor: spawn_worker("Check disk on cube")
-
-[Roundabout enters]
-  5s: Worker running, ssh_exec complete, analyzing → wait
-  10s: Worker running, generating result → wait
-  15s: Worker complete!
-[Roundabout exits]
-
-Thread receives: "Worker complete: 78% disk used on cube"
-Supervisor: "Your cube server is at 78% disk usage, which is healthy."
+```json
+{
+  "type": "worker_tool_completed",
+  "worker_id": "2025-12-07T20-33-15_...",
+  "tool_name": "ssh_exec",
+  "tool_call_id": "call_abc123",
+  "duration_ms": 1800,
+  "result_preview": "Filesystem 500G, 78% used",
+  "timestamp": "2025-12-07T20:33:19Z"
+}
 ```
 
-### Scenario 2: Early Exit (Answer Visible)
+### worker_complete
 
-```
-User: "Is cube online?"
-Supervisor: spawn_worker("Check if cube is reachable")
-
-[Roundabout enters]
-  5s: ssh_exec(cube, "echo ping") → success (0.5s)
-
-  Supervisor sees: "ssh_exec succeeded, cube is reachable"
-  Supervisor decides: EXIT (answer is clear, don't need full analysis)
-[Roundabout exits early]
-
-Thread receives: "Early exit: cube is reachable (ssh_exec succeeded)"
-Supervisor: "Yes, cube is online and responding."
+```json
+{
+  "type": "worker_complete",
+  "job_id": 123,
+  "worker_id": "2025-12-07T20-33-15_...",
+  "status": "success",
+  "duration_ms": 16547,
+  "timestamp": "2025-12-07T20:33:32Z"
+}
 ```
 
-### Scenario 3: Stuck Operation
+### worker_summary_ready
 
-```
-User: "Check disk on cube"
-Supervisor: spawn_worker("Check disk on cube")
-
-[Roundabout enters]
-  5s: ssh_exec running for 5s → wait
-  10s: ssh_exec running for 10s → wait
-  15s: ssh_exec running for 15s → wait
-  20s: ssh_exec running for 20s → wait
-  25s: ssh_exec running for 25s → wait
-  30s: ssh_exec running for 30s ⚠️ SLOW
-
-  Supervisor sees: "ssh_exec has been running for 30s, this is unusual"
-  Supervisor decides: CANCEL (something is wrong)
-[Roundabout exits with cancellation]
-
-Thread receives: "Cancelled: ssh_exec stuck for 30s, possible connection issue"
-Supervisor: "I wasn't able to reach cube - the SSH connection appears stuck.
-             This might indicate a network issue or the server being unresponsive."
+```json
+{
+  "type": "worker_summary_ready",
+  "job_id": 123,
+  "summary": "Cube disk at 78%, healthy, ~2-3 months capacity remaining",
+  "timestamp": "2025-12-07T20:33:32Z"
+}
 ```
 
-### Scenario 4: Configuration Error
+---
+
+## Appendix B: Autonomous Decision Examples
+
+### Example 1: Normal Progress (Wait)
+
+**Worker state:**
 
 ```
-User: "Check disk on cube"
-Supervisor: spawn_worker("Check disk on cube")
-
-[Roundabout enters]
-  2s: ssh_exec failed immediately: "No SSH key found"
-
-  Worker returns error, roundabout exits
-[Roundabout exits with error]
-
-Thread receives: "Failed: SSH not configured - no key at ~/.ssh/id_ed25519"
-Supervisor: "I can't check cube right now - SSH access isn't configured
-             in this environment. Please ensure SSH keys are available."
+Task: Check backup status
+Elapsed: 8 seconds
+Current: ssh_exec(cube, "kopia snapshot list") - running 5s
 ```
 
-## Open Questions
+**Supervisor reasoning:**
 
-1. **Concurrent workers**: If supervisor spawns multiple workers, do we have nested roundabouts? Or one combined monitoring view?
+> "SSH to cube and running kopia can take 5-15 seconds. 8 seconds total elapsed is reasonable. The worker is actively executing - I'll wait for it to complete."
 
-2. **Worker-to-supervisor communication**: Can a worker explicitly signal "I'm stuck, need help"? Or is detection purely observation-based?
+**Decision:** Continue waiting (implicit - supervisor doesn't take action)
 
-3. **Intervention depth**: Beyond cancel, can supervisor send instructions to a running worker? "Try a different approach"?
+### Example 2: Early Exit (Enough Info)
 
-4. **Roundabout nesting**: If supervisor calls peek and reads worker logs, that's a sub-operation. How deep can this go?
+**Worker state:**
 
-## Related Documents
+```
+Task: Check disk space
+Elapsed: 12 seconds
+Completed: ssh_exec(cube, "df -h") → "Filesystem 78% used"
+Current: ssh_exec(cube, "du -sh /var/*") - running 10s
+```
 
-- [Super Siri Architecture](./super-siri-architecture.md) - Overall system design
-- [Worker Artifact Store](../backend/zerg/services/worker_artifact_store.py) - Disk persistence
-- [Supervisor Tools](../backend/zerg/tools/builtin/supervisor_tools.py) - Current supervisor capabilities
+**Supervisor reasoning:**
+
+> "I already know disk is at 78% from df -h. The user just asked if disk is healthy - I can answer yes. The du -sh command would give more detail but isn't necessary to answer the question."
+
+**Decision:** Read partial result, synthesize answer, don't wait for du completion
+
+### Example 3: Intervention (Cancel)
+
+**Worker state:**
+
+```
+Task: Check if API is responding
+Elapsed: 95 seconds
+Current: http_request(api.slow-service.com/health) - running 90s
+```
+
+**Supervisor reasoning:**
+
+> "HTTP health check is taking 90 seconds. Normal health checks return in 1-5 seconds. This endpoint is clearly timing out or extremely slow. Waiting longer won't help."
+
+**Decision:** Cancel worker, report: "API health check timed out - endpoint not responding. This suggests the service is down or severely degraded."
+
+**Key point:** Supervisor makes these decisions by reading the state and reasoning, not by following hardcoded rules like "if > 60s then cancel".
+
+---
+
+_End of Specification v2.0_
+
+**Summary:**
+
+- Workers execute asynchronously and emit events
+- Supervisor interprets worker state autonomously (no heuristics)
+- Tool activity events provide UI progress (keep this)
+- Polling loop and decision engine removed (trust LLM reasoning)
+- ~1000+ LOC simpler, more flexible, equally capable
