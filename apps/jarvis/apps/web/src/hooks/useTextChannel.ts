@@ -61,8 +61,9 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         // This ensures text messages survive page refresh
         const persisted = await conversationController.addUserTurn(trimmedText)
         if (!persisted) {
-          // Session not initialized - message will show in UI but won't survive refresh
-          console.warn('[useTextChannel] Message not persisted - sessionManager not ready')
+          // Abort send if persistence failed - don't send orphan messages
+          // This prevents messages from being sent but not surviving refresh
+          throw new Error('Unable to save message - please try again')
         }
 
         // Send to backend via appController

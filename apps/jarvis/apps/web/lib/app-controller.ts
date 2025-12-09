@@ -362,13 +362,20 @@ export class AppController {
         voiceController.handleSpeechStop();
       }
 
-      // Streaming Response
-      if (t.startsWith('response.output_audio') || t === 'response.output_text.delta') {
+      // Streaming Response - handle both text and audio transcript deltas
+      // - response.output_text.delta: Text mode responses
+      // - response.audio_transcript.delta: Voice mode transcript of what assistant is saying
+      if (t === 'response.output_text.delta' || t === 'response.audio_transcript.delta') {
         const delta = event.delta || '';
         if (delta) {
           conversationController.appendStreaming(delta);
           stateManager.setVoiceStatus('speaking');
         }
+      }
+
+      // Track when audio output starts (for visual feedback)
+      if (t.startsWith('response.output_audio')) {
+        stateManager.setVoiceStatus('speaking');
       }
 
       // Audio Monitoring

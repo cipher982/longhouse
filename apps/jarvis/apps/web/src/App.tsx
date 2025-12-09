@@ -6,7 +6,7 @@
  * and React hooks subscribe to those events and update React state.
  */
 
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
@@ -18,7 +18,6 @@ console.info('[Jarvis] Starting React application with realtime session integrat
 export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
-  const historyLoadedRef = useRef(false)
 
   // NOTE: History loading is now handled via SSOT in useRealtimeSession
   // appController.connect() calls bootstrapSession() which loads history ONCE
@@ -79,10 +78,7 @@ export default function App() {
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATION_ID', id: newId })
 
-    // 4. Reset history loaded flag so we can load new history on next conversation
-    historyLoadedRef.current = false
-
-    // 5. Reconnect session with empty history for fresh context
+    // 4. Reconnect session with empty history for fresh context
     console.log('[App] Reconnecting session for new conversation context...')
     try {
       await realtimeSession.reconnect()
@@ -138,40 +134,18 @@ export default function App() {
       // 2. Update React state with conversation ID
       dispatch({ type: 'SET_CONVERSATION_ID', id })
 
-      // 3. Load this conversation's history from IndexedDB
-      const history = await sessionManager.getConversationHistory()
-      console.log('[App] Loaded conversation history:', history.length, 'turns')
+      // 3. Clear current messages while we reconnect
+      // History will be loaded via SSOT callback during reconnect
+      dispatch({ type: 'SET_MESSAGES', messages: [] })
 
-      // 4. Convert turns to messages and update UI
-      const messages: ChatMessage[] = []
-      for (const turn of history) {
-        if (turn.userTranscript) {
-          messages.push({
-            id: turn.id || crypto.randomUUID(),
-            role: 'user',
-            content: turn.userTranscript,
-            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-          })
-        }
-        if (turn.assistantResponse) {
-          messages.push({
-            id: `${turn.id}-asst` || crypto.randomUUID(),
-            role: 'assistant',
-            content: turn.assistantResponse,
-            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-          })
-        }
-      }
-      dispatch({ type: 'SET_MESSAGES', messages })
-
-      // 5. Reset history loaded flag
-      historyLoadedRef.current = true
-
-      // 6. Reconnect session to hydrate new history into model context
+      // 4. Reconnect session - this triggers bootstrapSession() which:
+      //    - Loads history ONCE from IndexedDB (SSOT)
+      //    - Hydrates Realtime with history
+      //    - Calls onHistoryLoaded callback to update UI
       console.log('[App] Reconnecting session for new conversation context...')
       try {
         await realtimeSession.reconnect()
-        console.log('[App] Session reconnected with conversation history')
+        console.log('[App] Session reconnected with conversation history (SSOT)')
       } catch (error) {
         console.warn('[App] Reconnect failed:', error)
       }

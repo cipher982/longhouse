@@ -70,6 +70,7 @@ describe('Text Channel Persistence', () => {
 
       vi.mocked(conversationController.addUserTurn).mockImplementation(async () => {
         callOrder.push('addUserTurn')
+        return true  // Persistence succeeded
       })
 
       vi.mocked(appController.sendText).mockImplementation(async () => {
@@ -123,7 +124,26 @@ describe('Text Channel Persistence', () => {
       })
     })
 
-    it('should handle persistence errors gracefully', async () => {
+    it('should abort send and surface error when persistence fails', async () => {
+      // Simulate persistence failure (sessionManager not ready)
+      vi.mocked(conversationController.addUserTurn).mockResolvedValueOnce(false)
+
+      const onError = vi.fn()
+      const { result } = renderHook(() => useTextChannel({ onError }))
+
+      await act(async () => {
+        await result.current.sendMessage('Test')
+      })
+
+      // Should have attempted to persist
+      expect(conversationController.addUserTurn).toHaveBeenCalled()
+      // Should NOT have sent to backend since persistence failed
+      expect(appController.sendText).not.toHaveBeenCalled()
+      // Error should be surfaced
+      expect(onError).toHaveBeenCalled()
+    })
+
+    it('should handle persistence exceptions gracefully', async () => {
       const error = new Error('IndexedDB write failed')
       vi.mocked(conversationController.addUserTurn).mockRejectedValueOnce(error)
 
@@ -134,8 +154,10 @@ describe('Text Channel Persistence', () => {
         await result.current.sendMessage('Test')
       })
 
-      // Should still have attempted to persist
+      // Should have attempted to persist
       expect(conversationController.addUserTurn).toHaveBeenCalled()
+      // Should NOT have sent to backend since persistence threw
+      expect(appController.sendText).not.toHaveBeenCalled()
       // Error should be surfaced
       expect(onError).toHaveBeenCalled()
     })
