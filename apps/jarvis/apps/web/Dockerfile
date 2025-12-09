@@ -13,6 +13,15 @@ WORKDIR /app
 COPY apps/jarvis/package.json ./package.json
 COPY apps/jarvis/bun.lock* ./
 
+# Copy monorepo config (models.json required by @swarm/config)
+COPY config ./config
+
+# Copy @swarm/config package (from root packages/)
+COPY packages/config/package.json ./swarm-packages/config/package.json
+COPY packages/config/src ./swarm-packages/config/src
+# Symlink models.json so @swarm/config can import it
+RUN ln -s /app/config/models.json /app/swarm-packages/config/models.json
+
 # Copy jarvis workspace package.json files
 COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
 COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
@@ -29,6 +38,9 @@ COPY apps/jarvis/packages ./packages
 COPY apps/jarvis/configs ./configs
 COPY apps/jarvis/apps/web ./apps/web
 
+# Fail-fast verification: Ensure critical config files exist
+RUN test -f /app/config/models.json || (echo "❌ FATAL: models.json not found" && exit 1)
+
 # Set working directory to web app
 WORKDIR /app/apps/web
 
@@ -39,5 +51,9 @@ ENV JARVIS_WEB_PORT=$JARVIS_WEB_PORT
 # Static EXPOSE (documentation only)
 EXPOSE 8080
 
-# Run Vite dev server
-CMD ["sh", "-c", "bun run dev -- --port ${JARVIS_WEB_PORT} --host 0.0.0.0"]
+# Copy runtime verification script
+COPY apps/jarvis/apps/web/verify-config.sh /app/verify-config.sh
+RUN chmod +x /app/verify-config.sh
+
+# Run Vite dev server with config verification
+CMD ["sh", "-c", "/app/verify-config.sh && bun run dev -- --port ${JARVIS_WEB_PORT} --host 0.0.0.0"]

@@ -6,7 +6,8 @@
     "packages": [
       "apps/*",
       "packages/core",
-      "packages/data/local"
+      "packages/data/local",
+      "swarm-packages/config"
     ]
   },
   "scripts": {
@@ -19,6 +20,9 @@
     "server:dev": "bun run --filter @jarvis/server dev",
     "native:dev": "bun run --filter @jarvis/native dev",
     "start:test": "concurrently \"bun run server:dev\" \"bun run web:dev\" --kill-others --success first"
+  },
+  "dependencies": {
+    "idb": "^8.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

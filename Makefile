@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help dev zerg jarvis stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile
+.PHONY: help dev zerg jarvis jarvis-stop stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -27,40 +27,97 @@ help: ## Show this help message
 	@echo ""
 
 # ---------------------------------------------------------------------------
+# Environment Validation
+# ---------------------------------------------------------------------------
+env-check: ## Validate required environment variables
+	@missing=0; \
+	warn=0; \
+	echo "🔍 Checking environment variables..."; \
+	\
+	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
+		if [ -z "$$(eval echo \$$$$var)" ]; then \
+			echo "❌ Missing required: $$var"; \
+			missing=1; \
+		fi; \
+	done; \
+	\
+	if [ -z "$$OPENAI_API_KEY" ]; then \
+		echo "⚠️  Warning: OPENAI_API_KEY not set (LLM features disabled)"; \
+		warn=1; \
+	fi; \
+	\
+	if [ $$missing -eq 1 ]; then \
+		echo ""; \
+		echo "💡 Copy .env.example to .env and fill in required values"; \
+		exit 1; \
+	fi; \
+	\
+	if [ $$warn -eq 0 ]; then \
+		echo "✅ All required environment variables set"; \
+	else \
+		echo "✅ Required variables set (warnings above are optional)"; \
+	fi
+
+env-check-prod: ## Validate production environment variables
+	@missing=0; \
+	echo "🔍 Checking production environment variables..."; \
+	\
+	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB \
+	           JWT_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
+	           GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+	           OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
+		if [ -z "$$(eval echo \$$$$var)" ]; then \
+			echo "❌ Missing required for prod: $$var"; \
+			missing=1; \
+		fi; \
+	done; \
+	\
+	if [ "$$AUTH_DISABLED" = "1" ]; then \
+		echo "❌ AUTH_DISABLED must be 0 for production"; \
+		missing=1; \
+	fi; \
+	\
+	if [ $$missing -eq 1 ]; then \
+		echo ""; \
+		echo "💡 Set all required production variables before deploying"; \
+		exit 1; \
+	fi; \
+	echo "✅ All production environment variables set"
+
+# ---------------------------------------------------------------------------
 # Core Development Commands
 # ---------------------------------------------------------------------------
-dev: ## ⭐ Start full platform (Docker + Nginx, isolated ports)
+dev: env-check ## ⭐ Start full platform (Docker + Nginx, isolated ports)
 	@echo "🚀 Starting full platform (Docker)..."
 	@./scripts/dev-docker.sh
 
-zerg: ## Start Zerg only (Postgres + Backend + Frontend)
+zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "🚀 Starting Zerg platform..."
-	docker compose -f docker/docker-compose.dev.yml up -d --build
+	docker compose -f docker/docker-compose.yml --profile zerg up -d --build
 	@sleep 3
-	@docker compose -f docker/docker-compose.dev.yml ps
+	@docker compose -f docker/docker-compose.yml --profile zerg ps
 	@echo ""
-	@echo "✅ Backend:  http://localhost:$${ZERG_BACKEND_PORT:-47300}"
-	@echo "✅ Frontend: http://localhost:$${ZERG_FRONTEND_PORT:-47200}"
+	@echo "✅ Backend:  http://localhost:$${BACKEND_PORT:-47300}"
+	@echo "✅ Frontend: http://localhost:$${FRONTEND_PORT:-47200}"
 
-jarvis: ## Start Jarvis only (native Node processes)
-	@echo "🤖 Starting Jarvis..."
+jarvis: ## Start Jarvis standalone (native, no Docker)
+	@echo "🤖 Starting Jarvis (native mode)..."
+	@echo "   For Docker mode, use 'make dev'"
 	cd apps/jarvis && $(MAKE) start
 
-stop: ## Stop all services (dev, zerg, jarvis)
+jarvis-stop: ## Stop native Jarvis processes (for 'make jarvis')
+	@cd apps/jarvis && $(MAKE) stop
+
+stop: ## Stop all Docker services
 	@echo "🛑 Stopping all services..."
-	@docker compose -f docker/docker-compose.unified.yml down 2>/dev/null || true
-	@docker compose -f docker/docker-compose.dev.yml down 2>/dev/null || true
-	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
+	@docker compose -f docker/docker-compose.yml --profile full down 2>/dev/null || true
+	@docker compose -f docker/docker-compose.yml --profile zerg down 2>/dev/null || true
+	@docker compose -f docker/docker-compose.yml --profile prod down 2>/dev/null || true
 	@echo "✅ All services stopped"
 
 logs: ## View logs from running services
-	@echo "📋 Checking for running services..."
-	@if docker compose -f docker/docker-compose.unified.yml ps -q 2>/dev/null | grep -q .; then \
-		echo "Following logs from unified dev environment..."; \
-		docker compose -f docker/docker-compose.unified.yml logs -f; \
-	elif docker compose -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
-		echo "Following logs from Zerg..."; \
-		docker compose -f docker/docker-compose.dev.yml logs -f; \
+	@if docker compose -f docker/docker-compose.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose -f docker/docker-compose.yml logs -f; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
@@ -68,8 +125,8 @@ logs: ## View logs from running services
 
 reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
-	@docker compose -f docker/docker-compose.dev.yml down -v
-	@docker compose -f docker/docker-compose.dev.yml up -d
+	@docker compose -f docker/docker-compose.yml down -v 2>/dev/null || true
+	@docker compose -f docker/docker-compose.yml --profile zerg up -d
 	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------

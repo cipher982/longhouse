@@ -11,6 +11,7 @@
     "./session-manager": "./src/session-manager.ts"
   },
   "dependencies": {
-    "@jarvis/data-local": "file:../data/local"
+    "@jarvis/data-local": "file:../data/local",
+    "@swarm/config": "workspace:*"
   }
 }

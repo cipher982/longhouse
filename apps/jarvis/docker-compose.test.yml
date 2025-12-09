@@ -41,10 +41,18 @@ services:
     environment:
       JARVIS_WEB_PORT: ${TEST_WEB_PORT:-8080}
       NODE_ENV: test
+      MODELS_CONFIG_PATH: /app/config/models.json
+      # Enable bridge mode for e2e tests
+      VITE_JARVIS_ENABLE_REALTIME_BRIDGE: "true"
+      VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-device-secret}
+      VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
       # Model configuration - Vite env vars need VITE_ prefix
       VITE_JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
       VITE_JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
       VITE_JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
+    volumes:
+      # Mount config for live updates (same pattern as main docker-compose.yml)
+      - ../../config:/app/config:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${TEST_WEB_PORT:-8080}"]
       interval: 5s

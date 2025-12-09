@@ -333,9 +333,14 @@ export class VoiceController {
   async initialize(): Promise<void> {}
 }
 
-export let voiceController: VoiceController;
+// Initialize voiceController singleton immediately so it's available when imported
+// This ensures bridge mode (useRealtimeSession) doesn't crash when accessing voiceController
+export const voiceController = new VoiceController({});
 
+// Keep initializeVoiceController for backwards compatibility with main.ts (legacy entry point)
 export function initializeVoiceController(config: VoiceConfig): VoiceController {
-  voiceController = new VoiceController(config);
+  // Re-initialize with custom config if needed (rare case)
+  // Note: this returns the existing instance since we can't reassign a const
+  // If custom config is truly needed, caller should create new VoiceController directly
   return voiceController;
 }

@@ -9,7 +9,8 @@
     "apps/jarvis/packages/*",
     "apps/jarvis/packages/data/*",
     "apps/zerg/frontend-web",
-    "apps/zerg/e2e"
+    "apps/zerg/e2e",
+    "packages/*"
   ],
   "scripts": {
     "dev": "make dev",
