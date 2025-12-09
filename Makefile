@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help dev zerg jarvis stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -100,32 +100,24 @@ zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "✅ Backend:  http://localhost:$${BACKEND_PORT:-47300}"
 	@echo "✅ Frontend: http://localhost:$${FRONTEND_PORT:-47200}"
 
-jarvis: ## Start Jarvis only (native Node processes)
-	@echo "🤖 Starting Jarvis..."
+jarvis: ## Start Jarvis standalone (native, no Docker)
+	@echo "🤖 Starting Jarvis (native mode)..."
+	@echo "   For Docker mode, use 'make dev'"
 	cd apps/jarvis && $(MAKE) start
 
-stop: ## Stop all services (dev, zerg, jarvis)
+jarvis-stop: ## Stop native Jarvis processes (for 'make jarvis')
+	@cd apps/jarvis && $(MAKE) stop
+
+stop: ## Stop all Docker services
 	@echo "🛑 Stopping all services..."
 	@docker compose -f docker/docker-compose.yml --profile full down 2>/dev/null || true
 	@docker compose -f docker/docker-compose.yml --profile zerg down 2>/dev/null || true
 	@docker compose -f docker/docker-compose.yml --profile prod down 2>/dev/null || true
-	@# Legacy compose files (can be removed after migration verified)
-	@docker compose -f docker/docker-compose.unified.yml down 2>/dev/null || true
-	@docker compose -f docker/docker-compose.dev.yml down 2>/dev/null || true
-	@cd apps/jarvis && $(MAKE) stop 2>/dev/null || true
 	@echo "✅ All services stopped"
 
 logs: ## View logs from running services
-	@echo "📋 Checking for running services..."
 	@if docker compose -f docker/docker-compose.yml ps -q 2>/dev/null | grep -q .; then \
-		echo "Following logs from swarm platform..."; \
 		docker compose -f docker/docker-compose.yml logs -f; \
-	elif docker compose -f docker/docker-compose.unified.yml ps -q 2>/dev/null | grep -q .; then \
-		echo "Following logs from legacy unified environment..."; \
-		docker compose -f docker/docker-compose.unified.yml logs -f; \
-	elif docker compose -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
-		echo "Following logs from legacy Zerg..."; \
-		docker compose -f docker/docker-compose.dev.yml logs -f; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
