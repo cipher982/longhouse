@@ -18,6 +18,7 @@ const initialState: AppState = {
   // Conversation state
   messages: [],
   streamingContent: '',
+  userTranscriptPreview: '',
   currentConversationId: null,
   conversations: [],
 
@@ -54,6 +55,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, messages: [...state.messages, action.message] }
     case 'SET_STREAMING_CONTENT':
       return { ...state, streamingContent: action.content }
+    case 'SET_USER_TRANSCRIPT_PREVIEW':
+      return { ...state, userTranscriptPreview: action.text }
     case 'SET_CONVERSATION_ID':
       return { ...state, currentConversationId: action.id }
     case 'SET_CONVERSATIONS':

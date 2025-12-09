@@ -16,22 +16,25 @@ interface ChatContainerProps {
   messages: ChatMessage[]
   isStreaming?: boolean
   streamingContent?: string
+  userTranscriptPreview?: string  // Live voice transcript preview
 }
 
-export function ChatContainer({ messages, isStreaming, streamingContent }: ChatContainerProps) {
+export function ChatContainer({ messages, isStreaming, streamingContent, userTranscriptPreview }: ChatContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or during streaming
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
     }
-  }, [messages, streamingContent])
+  }, [messages, streamingContent, userTranscriptPreview])
+
+  const hasContent = messages.length > 0 || isStreaming || userTranscriptPreview
 
   return (
-    <div className="chat-container">
+    <div className="chat-wrapper">
       <div className="transcript" ref={containerRef}>
-        {messages.length === 0 && !isStreaming ? (
+        {!hasContent ? (
           <div className="status-message">
             <div className="status-text">System Ready</div>
             <div className="status-subtext">Tap the microphone or type a message to begin</div>
@@ -43,6 +46,13 @@ export function ChatContainer({ messages, isStreaming, streamingContent }: ChatC
                 <div className="message-content">{message.content}</div>
               </div>
             ))}
+            {/* Show live user voice transcript preview */}
+            {userTranscriptPreview && (
+              <div className="message user preview">
+                <div className="message-content">{userTranscriptPreview}</div>
+              </div>
+            )}
+            {/* Show assistant streaming response */}
             {isStreaming && streamingContent && (
               <div className="message assistant streaming">
                 <div className="message-content">{streamingContent}</div>

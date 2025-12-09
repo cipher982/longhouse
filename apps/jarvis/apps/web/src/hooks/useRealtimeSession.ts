@@ -63,15 +63,14 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     const handleVoiceEvent = (event: VoiceEvent) => {
       switch (event.type) {
         case 'stateChange':
-          // Map voice state to React state
+          // Only use voice controller for active listening states
+          // The ready/idle states are managed by stateManager via app-controller
           const voiceState = event.state
-          if (voiceState.active) {
+          if (voiceState.active || voiceState.vadActive) {
             dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
-          } else if (voiceState.vadActive) {
-            dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
-          } else {
-            dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
           }
+          // Note: We don't set 'idle' here - that's handled by VOICE_STATUS_CHANGED
+          // from app-controller when it explicitly sets ready/idle
 
           // Update voice mode
           const mode = voiceState.handsFree ? 'hands-free' : 'push-to-talk'
@@ -79,7 +78,15 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           break
 
         case 'transcript':
+          // Pass transcript to callback AND update streaming content for live preview
           options.onTranscript?.(event.text, event.isFinal)
+          if (!event.isFinal) {
+            // Show interim transcript as user typing preview
+            dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: event.text })
+          } else {
+            // Clear preview when final
+            dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
+          }
           break
 
         case 'error':

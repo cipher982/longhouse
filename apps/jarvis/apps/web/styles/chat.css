@@ -157,6 +157,17 @@
   text-shadow: 0 0 8px var(--color-neon-cyan);
 }
 
+/* Preview message - live voice transcript */
+.message.preview .message-content {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.message.user.preview .message-content::after {
+  content: "...";
+  animation: pulse 1s ease-in-out infinite;
+}
+
 /* Time stamps */
 .message-time {
   font-size: 0.7rem;

@@ -48,6 +48,7 @@ export interface AppState {
   // Conversation state
   messages: ChatMessage[]
   streamingContent: string
+  userTranscriptPreview: string  // Live voice transcript preview
   currentConversationId: string | null
   conversations: Conversation[]
 
@@ -77,6 +78,7 @@ export type AppAction =
   | { type: 'SET_MESSAGES'; messages: ChatMessage[] }
   | { type: 'ADD_MESSAGE'; message: ChatMessage }
   | { type: 'SET_STREAMING_CONTENT'; content: string }
+  | { type: 'SET_USER_TRANSCRIPT_PREVIEW'; text: string }
   | { type: 'SET_CONVERSATION_ID'; id: string | null }
   | { type: 'SET_CONVERSATIONS'; conversations: Conversation[] }
   | { type: 'SET_VOICE_MODE'; mode: VoiceMode }
