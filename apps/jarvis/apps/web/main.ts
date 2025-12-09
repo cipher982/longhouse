@@ -1,27 +1,28 @@
 /**
- * ⚠️  DEPRECATED - DO NOT USE
+ * ⚠️  DEPRECATED ENTRY POINT - DO NOT USE
  *
  * This is the LEGACY vanilla TypeScript entry point.
  * It has been REPLACED by the React app in src/main.tsx.
  *
- * Status: DEPRECATED as of Dec 2024
- * Removal Date: March 1, 2025
+ * Status: DEPRECATED (Dec 2024)
  *
- * The lib/ controllers are still used via useRealtimeSession bridge hook
- * when VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true, but this will be removed.
+ * The lib/ controllers ARE still used via the React hooks when
+ * VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true (bridge mode).
+ * This file itself is not used - only the lib/ modules are imported by hooks.
  *
  * DO NOT:
- * - Import this file
+ * - Import this file directly
  * - Add new features here
- * - Maintain this code path
+ * - Use this as an entry point
  *
- * Instead: Work in src/ with React components and hooks
+ * Instead: Work in src/ with React components and hooks.
+ * Bridge mode uses lib/ controllers via src/hooks/useRealtimeSession.ts
  */
 
 throw new Error(
-  'LEGACY ENTRY POINT - This file (main.ts) is deprecated. ' +
-  'Use src/main.tsx (React app) instead. ' +
-  'If you need legacy bridge mode, set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true in .env'
+  'LEGACY ENTRY POINT - This file (main.ts) should not be imported. ' +
+  'Use src/main.tsx (React app) as the entry point. ' +
+  'Bridge mode (VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true) imports lib/ modules directly, not this file.'
 )
 
 // Rest of file kept for reference during migration (unused)

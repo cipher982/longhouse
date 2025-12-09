@@ -27,21 +27,31 @@ VITE_JARVIS_ENABLE_REALTIME_BRIDGE=false  # Default: Standalone React mode
 | **Standalone React** (default) | Pure React implementation with simulated responses     | Development, testing, UI work                    |
 | **Legacy Bridge**              | Connects to old controllers for full realtime features | Production (temporary), full voice/audio testing |
 
-### Timeline
+### Status
 
-- **Now (Dec 2024)**: Default is standalone mode
-- **Jan-Feb 2025**: Migrate remaining business logic from controllers to hooks
-- **March 1, 2025**: Remove legacy bridge and old controllers
+- **Standalone mode** (default, `VITE_JARVIS_ENABLE_REALTIME_BRIDGE=false`): Pure React with simulated responses for UI development
+- **Bridge mode** (`VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true`): Full functionality via legacy controllers
+
+**Recommendation**: Use bridge mode (`VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true`) for:
+
+- Production deployments
+- Full voice/audio testing
+- Backend integration testing
+
+### Migration Progress
+
+The legacy bridge is actively maintained while React hooks are being enhanced.
+Legacy code removal will happen after React hooks achieve feature parity with:
+
+- Text message sending (via realtime session)
+- Voice PTT and hands-free modes
+- Conversation history management
+- Context/session handling
 
 ### Warning
 
-When `ENABLE_REALTIME_BRIDGE=true`, the console will show:
-
-```
-⚠️  Legacy realtime bridge is active.
-This feature will be removed after 2025-03-01.
-Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=false to use standalone React mode.
-```
+When `ENABLE_REALTIME_BRIDGE=true`, the console will show a deprecation notice.
+This is informational - bridge mode is fully functional and recommended for production.
 
 ## Migration Status
 

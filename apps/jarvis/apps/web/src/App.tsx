@@ -10,16 +10,20 @@ import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner
 
 // Feature flag for enabling realtime session bridge
 // Controlled via VITE_JARVIS_ENABLE_REALTIME_BRIDGE env var
-// Default: false (standalone React mode)
-// WARNING: Legacy bridge will be removed after 2025-03-01
+// Default: false (standalone React mode with simulated responses)
+// Bridge mode: true (full functionality via legacy controllers - recommended for production)
 const ENABLE_REALTIME_BRIDGE = import.meta.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
 
-// Log warning if legacy bridge is active
+// Log info about active mode
 if (ENABLE_REALTIME_BRIDGE) {
-  console.warn(
-    '[Jarvis] ⚠️  Legacy realtime bridge is active. ' +
-    'This feature will be removed after 2025-03-01. ' +
-    'Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=false to use standalone React mode.'
+  console.info(
+    '[Jarvis] Bridge mode active - using legacy controllers for full realtime functionality. ' +
+    'This is the recommended mode for production until React hooks achieve feature parity.'
+  )
+} else {
+  console.info(
+    '[Jarvis] Standalone React mode active - responses are simulated. ' +
+    'Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true for full backend integration.'
   )
 }
 
