@@ -124,21 +124,33 @@
   animation: fadeInUp 0.8s ease-out;
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Wrapper for Logo + Visual */
+.landing-hero-visual-wrapper {
+  position: relative;
+  width: 400px;
+  height: 400px;
+  margin: 0 auto var(--space-8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
+/* The SVG Visual */
+.landing-hero-visual-wrapper .hero-visual-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  opacity: 0.8;
+}
+
+/* The Logo */
 .landing-hero-logo {
-  margin-bottom: var(--space-8);
-  filter: drop-shadow(0 0 40px rgb(139 92 246 / 40%));
+  position: relative;
+  z-index: 10;
+  filter: drop-shadow(0 0 40px rgb(139 92 246 / 50%));
 }
 
 .landing-hero-headline {
@@ -189,17 +201,153 @@
   transform: translateY(-2px);
 }
 
+/* REMOVED OLD VISUAL STYLES */
 /* Hero visual */
-.landing-hero-visual {
-  margin-top: var(--space-12);
-  max-width: 700px;
-  animation: fadeInUp 1s ease-out 0.3s backwards;
-}
+/* .landing-hero-visual { ... } */
 
-.landing-hero-image {
+.hero-visual-svg {
   width: 100%;
   height: auto;
-  border-radius: var(--radius-xl);
+  overflow: visible;
+}
+
+.hero-hex-core {
+  fill: url(#hero-core-grad);
+  animation: hero-breathe 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 20px rgb(99 102 241 / 50%));
+}
+
+.hero-orbit-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+}
+
+.hero-orbit-track-outer {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+  stroke-dasharray: 2 10;
+}
+
+.hero-orbit-track-inner {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+.hero-bg-pulse {
+  animation: hero-bg-breathe 8s ease-in-out infinite;
+}
+
+.hero-starfield {
+  transform-origin: 250px 250px;
+  animation: hero-spin 120s linear infinite;
+}
+
+.hero-scanner {
+  transform-origin: 250px 250px;
+  animation: hero-spin 15s linear infinite;
+}
+
+.hero-hex-inner {
+  animation: hero-spin 20s linear infinite reverse;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.hero-core-pulse {
+  animation: hero-core-pulse-anim 3s ease-in-out infinite;
+}
+
+.hero-connector-line {
+  fill: none;
+  stroke: url(#hero-line-grad);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.6;
+}
+
+.hero-icon-bg {
+  fill: rgba(15, 23, 42, 0.95);
+  stroke: rgba(255, 255, 255, 0.2);
+  stroke-width: 1;
+  filter: drop-shadow(0 0 15px rgba(99, 102, 241, 0.3));
+}
+
+.hero-orbit-group {
+  animation: hero-spin 60s linear infinite;
+  transform-origin: 250px 250px;
+  transform-box: view-box;
+}
+
+.hero-orbit-icon {
+  animation: hero-spin 60s linear infinite reverse;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.hero-icon-scale {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.hero-icon-scale:hover {
+  transform: scale(1.2);
+  cursor: pointer;
+}
+
+.hero-icon-scale:hover .hero-icon-bg {
+  stroke: rgba(99, 102, 241, 0.8);
+  filter: drop-shadow(0 0 20px rgba(99, 102, 241, 0.6));
+}
+
+@keyframes hero-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hero-breathe {
+  0%,
+  100% {
+    opacity: 0.8;
+    transform: scale(0.95);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+@keyframes hero-bg-breathe {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+@keyframes hero-core-pulse-anim {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.2);
+  }
 }
 
 /* --------------------------------------------------------
@@ -965,7 +1113,13 @@
    RESPONSIVE
    -------------------------------------------------------- */
 
+/* Responsive adjustments for the new wrapper */
 @media (width <= 768px) {
+  .landing-hero-visual-wrapper {
+    width: 320px;
+    height: 320px;
+  }
+
   .landing-hero-headline {
     font-size: 2rem;
   }

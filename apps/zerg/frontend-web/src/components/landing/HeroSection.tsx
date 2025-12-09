@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { useAuth } from "../../lib/auth";
 import config from "../../lib/config";
+import { HeroVisual } from "./HeroVisual";
 
 interface HeroSectionProps {
   onScrollToScenarios: () => void;
@@ -38,7 +39,10 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
   return (
     <section className="landing-hero">
       <div className="landing-hero-content">
-        <SwarmLogo size={100} className="landing-hero-logo" />
+        <div className="landing-hero-visual-wrapper">
+          <HeroVisual hideCore={true} />
+          <SwarmLogo size={120} className="landing-hero-logo" />
+        </div>
 
         <h1 className="landing-hero-headline">
           Your own <span className="gradient-text">super-Siri</span> for email,
@@ -57,15 +61,6 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
           <button className="btn-ghost btn-lg" onClick={onScrollToScenarios}>
             See it in action ↓
           </button>
-        </div>
-
-        {/* Hero visual - Connected AI brain */}
-        <div className="landing-hero-visual">
-          <img
-            src="/images/landing/hero-orb.png"
-            alt="AI brain connected to your apps - health, email, home, calendar, and more"
-            className="landing-hero-image"
-          />
         </div>
       </div>
 
