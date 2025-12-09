@@ -22,6 +22,15 @@ export interface SessionConnectionOptions {
 }
 
 /**
+ * Session connection options with pre-loaded history (SSOT pattern)
+ * Used by bootstrapSession to ensure UI and Realtime use same data.
+ */
+export interface SessionConnectionWithHistoryOptions extends SessionConnectionOptions {
+  /** Pre-loaded and mapped history items - do not re-query */
+  historyItems: import('@openai/agents/realtime').RealtimeMessageItem[];
+}
+
+/**
  * Session handler configuration
  */
 export interface SessionHandlerConfig {
@@ -134,6 +143,91 @@ export class SessionHandler {
           // Non-fatal: session can still work without history
           logger.warn('Failed to hydrate conversation history:', historyError);
         }
+      }
+
+      // Success feedback
+      logger.info('✅ Session connected successfully');
+
+      // Notify callback
+      this.config.onSessionReady?.(session, agent);
+
+      return { session, agent };
+
+    } catch (error) {
+      logger.error('❌ Failed to connect session:', error);
+      this.config.onSessionError?.(error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create and connect a session with pre-loaded history (SSOT pattern)
+   * This method accepts already-loaded and mapped history items,
+   * ensuring UI and Realtime hydration use the exact same data.
+   *
+   * @param options - Connection options including pre-loaded historyItems
+   */
+  async connectWithHistory(options: SessionConnectionWithHistoryOptions): Promise<{ session: RealtimeSession; agent: RealtimeAgent }> {
+    try {
+      this.isDestroying = false;
+
+      // Always create a new agent to ensure tools are fresh
+      const agent = new RealtimeAgent({
+        name: options.context.name,
+        instructions: options.context.instructions,
+        tools: options.tools || []
+      });
+
+      logger.info(`🤖 Created agent: ${options.context.name} with ${options.tools?.length || 0} tools`);
+
+      // Create WebRTC transport
+      const transport = new OpenAIRealtimeWebRTC({
+        mediaStream: options.mediaStream,
+        audioElement: options.audioElement,
+      });
+
+      // Create the RealtimeSession
+      const session = new RealtimeSession(agent, {
+        transport,
+        model: getRealtimeModel(),
+        config: {
+          inputAudioTranscription: { model: 'whisper-1' },
+          audio: {
+            output: {
+              voice: 'verse',
+              speed: 1.3
+            }
+          },
+          turnDetection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 1500
+          }
+        }
+      });
+
+      // Store references
+      this.currentSession = session;
+      this.currentAgent = agent;
+
+      // Get token and connect
+      if (options.onTokenRequest) {
+        logger.info('🎫 Requesting session token...');
+        const token = await options.onTokenRequest();
+        logger.info('🔌 Connecting to OpenAI Realtime...');
+        await session.connect({ apiKey: token });
+      } else {
+        throw new Error('No token request handler provided');
+      }
+
+      // Use the pre-loaded history items (SSOT - same data UI received)
+      const items = options.historyItems;
+      if (items.length > 0) {
+        session.updateHistory(items);
+        logger.info(`📜 Hydrated ${items.length} history items into Realtime session (SSOT)`);
+      } else {
+        logger.debug('No conversation history to hydrate');
       }
 
       // Success feedback
