@@ -13,8 +13,14 @@ WORKDIR /app
 COPY apps/jarvis/package.json ./package.json
 COPY apps/jarvis/bun.lock* ./
 
-# Copy shared config (needed by @jarvis/core)
+# Copy shared config (needed by @swarm/config)
 COPY config ./config
+
+# Copy @swarm/config package (from root packages/)
+COPY packages/config/package.json ./swarm-packages/config/package.json
+COPY packages/config/src ./swarm-packages/config/src
+# Symlink models.json so @swarm/config can import it
+RUN ln -s /app/config/models.json /app/swarm-packages/config/models.json
 
 # Copy jarvis workspace package.json files
 COPY apps/jarvis/packages/core/package.json ./packages/core/package.json

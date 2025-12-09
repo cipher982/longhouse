@@ -6,7 +6,8 @@
     "packages": [
       "apps/*",
       "packages/core",
-      "packages/data/local"
+      "packages/data/local",
+      "swarm-packages/config"
     ]
   },
   "scripts": {
