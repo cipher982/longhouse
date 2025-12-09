@@ -1,8 +1,8 @@
 # Swarm Platform Deployment Guide
 
-**Version**: 1.0
-**Date**: October 6, 2025
-**Status**: Production Ready (Backend), UI Integration Pending
+**Version**: 2.0
+**Date**: December 2025
+**Status**: Production Ready
 
 ## Overview
 
@@ -46,32 +46,27 @@ This guide covers deploying the Swarm Platform (Jarvis + Zerg) to production env
 
 ### Option 1: Docker Compose (Recommended)
 
-The simplest deployment uses Docker Compose with Coolify:
+The simplest deployment uses the unified Docker Compose with the `prod` profile:
 
-```yaml
-# docker-compose.prod.yml (already exists in repo)
-services:
-  backend:
-    build: ./apps/zerg/backend
-    environment:
-      - DATABASE_URL=postgresql://user:pass@db:5432/zerg
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - JARVIS_DEVICE_SECRET=${JARVIS_DEVICE_SECRET}
-      - JWT_SECRET=${JWT_SECRET}
-    ports:
-      - "47300:47300"
+```bash
+# Development (full platform with nginx at port 30080)
+docker compose -f docker/docker-compose.yml --profile full up
 
-  db:
-    image: postgres:15-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+# Production (hardened, no debug tools)
+docker compose -f docker/docker-compose.yml --profile prod up -d
 ```
+
+| Profile | Services                                              | Use Case                         |
+| ------- | ----------------------------------------------------- | -------------------------------- |
+| `full`  | postgres, zerg-_, jarvis-_, reverse-proxy             | Full platform via nginx at 30080 |
+| `zerg`  | postgres, zerg-backend-exposed, zerg-frontend-exposed | Zerg only, direct ports          |
+| `prod`  | postgres, zerg-backend-prod, zerg-frontend-prod       | Production hardened              |
 
 Deploy to Coolify:
 
 1. Push code to git repository
 2. Create new application in Coolify
-3. Point to `docker-compose.prod.yml`
+3. Point to `docker/docker-compose.yml` with profile `prod`
 4. Set environment variables in Coolify UI
 5. Deploy
 
@@ -108,9 +103,10 @@ sudo systemctl start zerg-backend
 
 ```bash
 # 1. Build Jarvis PWA
-cd /opt/swarm/apps/jarvis/apps/web
-npm install
-npm run build
+cd /opt/swarm
+bun install  # From repo root
+cd apps/jarvis/apps/web
+bun run build
 
 # 2. Serve static files with nginx
 sudo cp /opt/swarm/deploy/nginx-jarvis.conf /etc/nginx/sites-available/jarvis
