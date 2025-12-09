@@ -3,134 +3,122 @@
  * Main application component
  */
 
+import { useState, useCallback } from 'react'
+import {
+  Sidebar,
+  Header,
+  VoiceControls,
+  ChatContainer,
+  TextInput,
+  type VoiceMode,
+  type VoiceStatus,
+  type ChatMessage,
+} from './components'
+
 export default function App() {
+  // UI State
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [conversations, setConversations] = useState<{ id: string; name: string; meta: string; active?: boolean }[]>([])
+
+  // Voice State
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>('push-to-talk')
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('ready')
+
+  // Chat State
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [streamingContent, setStreamingContent] = useState('')
+
+  // Sidebar handlers
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => !prev)
+  }, [])
+
+  const handleNewConversation = useCallback(() => {
+    console.log('New conversation')
+    // TODO: Implement with real logic
+  }, [])
+
+  const handleClearAll = useCallback(() => {
+    console.log('Clear all conversations')
+    setConversations([])
+    setMessages([])
+  }, [])
+
+  const handleSelectConversation = useCallback((id: string) => {
+    console.log('Select conversation:', id)
+    // TODO: Implement with real logic
+  }, [])
+
+  // Header handlers
+  const handleSync = useCallback(() => {
+    console.log('Sync conversations')
+    // TODO: Implement with real logic
+  }, [])
+
+  // Voice handlers
+  const handleModeToggle = useCallback(() => {
+    setVoiceMode((prev) => (prev === 'push-to-talk' ? 'hands-free' : 'push-to-talk'))
+  }, [])
+
+  const handleVoiceButtonPress = useCallback(() => {
+    console.log('Voice button pressed')
+    setVoiceStatus('listening')
+    // TODO: Implement with real voice logic
+  }, [])
+
+  const handleVoiceButtonRelease = useCallback(() => {
+    console.log('Voice button released')
+    setVoiceStatus('ready')
+    // TODO: Implement with real voice logic
+  }, [])
+
+  // Text input handler
+  const handleSendMessage = useCallback((text: string) => {
+    const newMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      timestamp: new Date(),
+    }
+    setMessages((prev) => [...prev, newMessage])
+
+    // TODO: Send to backend and handle response
+    console.log('Send message:', text)
+  }, [])
+
   return (
     <div className="app-container">
-      {/* Sidebar Toggle (mobile) */}
-      <button
-        className="sidebar-toggle"
-        id="sidebarToggle"
-        type="button"
-        aria-label="Open conversation sidebar"
-        aria-expanded="false"
-      >
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M3 12h18M3 6h18M3 18h18" />
-        </svg>
-      </button>
+      <Sidebar
+        conversations={conversations}
+        isOpen={sidebarOpen}
+        onToggle={handleToggleSidebar}
+        onNewConversation={handleNewConversation}
+        onClearAll={handleClearAll}
+        onSelectConversation={handleSelectConversation}
+      />
 
-      {/* Sidebar */}
-      <div className="sidebar" id="sidebar">
-        <div className="sidebar-header">
-          <h2>Conversations</h2>
-        </div>
-        <div className="sidebar-content">
-          <button id="newConversationBtn" className="sidebar-button primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            New Conversation
-          </button>
-          <button id="clearConvosBtn" className="sidebar-button danger">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14zM10 11v6M14 11v6" />
-            </svg>
-            Clear All
-          </button>
-          <div id="conversationList">
-            <div className="conversation-item empty">
-              <div className="conversation-name">No conversations yet</div>
-              <div className="conversation-meta">Start your first conversation</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
       <div className="main-content">
-        <div className="main-header">
-          <h1 id="appTitle">Jarvis AI</h1>
-          <div className="header-actions">
-            <a href="/dashboard" className="header-button" title="Open Dashboard">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-              </svg>
-              <span>Dashboard</span>
-            </a>
-            <button id="syncNowBtn" className="header-button" title="Sync conversations">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.64A9 9 0 0 1 3.51 15" />
-              </svg>
-              <span>Sync</span>
-            </button>
-          </div>
-        </div>
+        <Header title="Jarvis AI" onSync={handleSync} />
 
-        <div className="chat-container">
-          <div id="transcript">
-            {/* Chat messages will render here */}
-            <div className="status-message">
-              React migration in progress...
-            </div>
-          </div>
-        </div>
+        <ChatContainer
+          messages={messages}
+          isStreaming={isStreaming}
+          streamingContent={streamingContent}
+        />
 
-        {/* Voice Controls */}
-        <div className="voice-controls">
-          <div className="mode-toggle-container">
-            <span className="mode-label">Push-to-Talk</span>
-            <button
-              id="handsFreeToggle"
-              className="mode-toggle"
-              type="button"
-              role="switch"
-              aria-checked="false"
-              aria-label="Toggle hands-free mode"
-            >
-              <span className="mode-toggle-slider"></span>
-            </button>
-            <span className="mode-label">Hands-free</span>
-          </div>
+        <VoiceControls
+          mode={voiceMode}
+          status={voiceStatus}
+          onModeToggle={handleModeToggle}
+          onVoiceButtonPress={handleVoiceButtonPress}
+          onVoiceButtonRelease={handleVoiceButtonRelease}
+        />
 
-          <div className="voice-button-wrapper">
-            <button id="pttBtn" className="voice-button" type="button" aria-label="Press to talk">
-              <div className="voice-button-ring"></div>
-              <svg className="voice-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-                <path d="M19 10v2a7 7 0 01-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="voice-status">
-            <span className="voice-status-text">Ready</span>
-          </div>
-        </div>
-
-        {/* Text Input */}
-        <div className="text-input-container">
-          <input
-            type="text"
-            id="textInput"
-            className="text-input"
-            placeholder="Type a message..."
-            aria-label="Message input"
-          />
-          <button id="sendTextBtn" className="send-button" type="button" aria-label="Send message">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-        </div>
+        <TextInput onSend={handleSendMessage} />
       </div>
 
-      {/* Supervisor Progress Panel */}
+      {/* Supervisor Progress Panel (hidden by default) */}
       <div id="supervisor-progress" className="supervisor-progress-panel hidden"></div>
 
       {/* Hidden audio element for remote playback */}
