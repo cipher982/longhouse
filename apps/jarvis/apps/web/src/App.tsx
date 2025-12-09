@@ -21,13 +21,15 @@ export default function App() {
   const historyLoadedRef = useRef(false)
 
   // Load conversation history when session is ready
+  // Only seeds messages if none exist yet (avoids overwriting live messages)
   useEffect(() => {
     if (!isInitialized || historyLoadedRef.current) return
 
     const loadHistory = async () => {
       try {
         const history = await conversationController.getHistory()
-        if (history.length > 0) {
+        // Only seed if no messages have been added yet (prevents race condition)
+        if (history.length > 0 && state.messages.length === 0) {
           console.log('[App] Loading conversation history:', history.length, 'turns')
           const messages: ChatMessage[] = history.map((turn) => ({
             id: turn.id || crypto.randomUUID(),
@@ -37,14 +39,16 @@ export default function App() {
           }))
           dispatch({ type: 'SET_MESSAGES', messages })
         }
-        historyLoadedRef.current = true
       } catch (error) {
         console.error('[App] Failed to load conversation history:', error)
+      } finally {
+        // Always mark as loaded to prevent retry spam
+        historyLoadedRef.current = true
       }
     }
 
     loadHistory()
-  }, [isInitialized, dispatch])
+  }, [isInitialized, dispatch, state.messages.length])
 
   // Text channel handling (always active)
   const textChannel = useTextChannel({

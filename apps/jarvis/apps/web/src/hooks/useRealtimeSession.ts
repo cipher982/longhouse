@@ -106,6 +106,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           if (event.session) {
             options.onConnected?.()
           } else {
+            // Clear stale voice preview on disconnect
+            dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
             options.onDisconnected?.()
           }
           break
@@ -130,6 +132,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           break
 
         case 'CONNECTION_ERROR':
+          // Clear stale voice preview on connection error
+          dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
           dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
           options.onError?.(event.error)
           break
