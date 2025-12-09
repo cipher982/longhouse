@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  logLevel: 'warn',
   plugins: [
     react(),
     VitePWA({
