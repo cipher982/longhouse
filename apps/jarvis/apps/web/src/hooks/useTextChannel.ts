@@ -8,6 +8,7 @@
 import { useCallback, useState } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
 import { appController } from '../../lib/app-controller'
+import { conversationController } from '../../lib/conversation-controller'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
@@ -55,6 +56,10 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
 
       try {
         console.log('[useTextChannel] Sending message:', trimmedText)
+
+        // Persist user message to IndexedDB (SSOT - same path as voice)
+        // This ensures text messages survive page refresh
+        await conversationController.addUserTurn(trimmedText)
 
         // Send to backend via appController
         await appController.sendText(trimmedText)
