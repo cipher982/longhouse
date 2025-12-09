@@ -9,8 +9,19 @@ import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 
 // Feature flag for enabling realtime session bridge
-// Set to true to use the old controllers, false for standalone React mode
-const ENABLE_REALTIME_BRIDGE = false
+// Controlled via VITE_JARVIS_ENABLE_REALTIME_BRIDGE env var
+// Default: false (standalone React mode)
+// WARNING: Legacy bridge will be removed after 2025-03-01
+const ENABLE_REALTIME_BRIDGE = import.meta.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
+
+// Log warning if legacy bridge is active
+if (ENABLE_REALTIME_BRIDGE) {
+  console.warn(
+    '[Jarvis] ⚠️  Legacy realtime bridge is active. ' +
+    'This feature will be removed after 2025-03-01. ' +
+    'Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=false to use standalone React mode.'
+  )
+}
 
 export default function App() {
   const state = useAppState()
