@@ -5,7 +5,7 @@
  * It imports the singleton controllers and syncs their state to React.
  */
 
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppDispatch } from '../context'
 
 // Import existing controllers (singleton instances)
@@ -118,6 +118,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   // Auto-connect on mount if enabled (default: true)
   const autoConnect = options.autoConnect !== false
   const connectAttemptedRef = useRef(false)
+  const [connectionError, setConnectionError] = useState<Error | null>(null)
 
   useEffect(() => {
     if (!autoConnect || connectAttemptedRef.current || !initializedRef.current) {
@@ -131,13 +132,17 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     const timeoutId = setTimeout(async () => {
       try {
         dispatch({ type: 'SET_VOICE_STATUS', status: 'connecting' })
+        setConnectionError(null)
         await appController.connect()
         dispatch({ type: 'SET_CONNECTED', connected: true })
         options.onConnected?.()
       } catch (error) {
         console.error('[useRealtimeSession] Auto-connect failed:', error)
         dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
+        setConnectionError(error as Error)
         options.onError?.(error as Error)
+        // Allow retry by resetting the flag after failure
+        connectAttemptedRef.current = false
       }
     }, 100)
 
@@ -148,15 +153,28 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const connect = useCallback(async () => {
     try {
       dispatch({ type: 'SET_VOICE_STATUS', status: 'connecting' })
+      setConnectionError(null)
       await appController.connect()
       dispatch({ type: 'SET_CONNECTED', connected: true })
       options.onConnected?.()
     } catch (error) {
       console.error('[useRealtimeSession] Connect failed:', error)
       dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
+      setConnectionError(error as Error)
       options.onError?.(error as Error)
     }
   }, [dispatch, options])
+
+  // Reconnect after failure - resets state and attempts connection
+  const reconnect = useCallback(async () => {
+    console.log('[useRealtimeSession] Reconnecting...')
+    connectAttemptedRef.current = false
+    setConnectionError(null)
+    dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
+    // Slight delay then connect
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    return connect()
+  }, [connect, dispatch])
 
   // Disconnect from realtime session
   const disconnect = useCallback(() => {
@@ -201,10 +219,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   return {
     // State
     isConnected,
+    connectionError,
 
     // Actions
     connect,
     disconnect,
+    reconnect,
     handlePTTPress,
     handlePTTRelease,
     toggleHandsFree,
