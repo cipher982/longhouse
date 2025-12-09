@@ -348,6 +348,15 @@ export class AppController {
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
+      // Debug: Log response events to help identify event types
+      if (t.startsWith('response.') && !t.includes('audio.delta')) {
+        logger.debug(`📡 Transport event: ${t}`, {
+          hasTranscript: !!event.transcript,
+          hasDelta: !!event.delta,
+          deltaType: typeof event.delta,
+        });
+      }
+
       // Forward to VoiceController
       if (t === 'conversation.item.input_audio_transcription.delta') {
         voiceController.handleTranscript(event.delta || '', false);
@@ -362,33 +371,40 @@ export class AppController {
         voiceController.handleSpeechStop();
       }
 
-      // Streaming Response - handle both text and audio transcript deltas
-      // - response.output_text.delta: Text mode responses
-      // - response.audio_transcript.delta: Voice mode transcript of what assistant is saying
-      if (t === 'response.output_text.delta' || t === 'response.audio_transcript.delta') {
-        const delta = event.delta || '';
-        if (delta) {
-          conversationController.appendStreaming(delta);
+      // Streaming Response - handle text deltas from various event types
+      // The OpenAI Agents SDK may emit different event names:
+      // - response.output_text.delta: Text mode responses (SDK naming)
+      // - response.audio_transcript.delta: Voice transcript (raw API naming)
+      // - response.text.delta: Alternative text delta
+      // Also check for transcript field on audio events
+      const isTextDelta =
+        t === 'response.output_text.delta' ||
+        t === 'response.audio_transcript.delta' ||
+        t === 'response.text.delta' ||
+        (t.includes('audio') && event.transcript);
+
+      if (isTextDelta) {
+        // Prefer transcript field, fall back to delta
+        const text = event.transcript || event.delta || '';
+        if (text && typeof text === 'string') {
+          conversationController.appendStreaming(text);
           stateManager.setVoiceStatus('speaking');
         }
       }
 
       // Track when audio output starts (for visual feedback)
-      if (t.startsWith('response.output_audio')) {
+      if (t.startsWith('response.output_audio') || t.startsWith('response.audio')) {
         stateManager.setVoiceStatus('speaking');
-      }
-
-      // Audio Monitoring
-      if (t.startsWith('response.output_audio')) {
         void audioController.startSpeakerMonitor();
       }
 
-      // Response Completion
+      // Response Completion - ALWAYS reset status, finalize if streaming
       if (t === 'response.done') {
         if (conversationController.isStreaming()) {
           conversationController.finalizeStreaming();
-          stateManager.setVoiceStatus('ready');
         }
+        // Always reset to ready when response is complete
+        stateManager.setVoiceStatus('ready');
       }
 
       // Item handling
