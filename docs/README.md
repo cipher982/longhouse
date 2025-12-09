@@ -1,26 +1,25 @@
 # Documentation
 
-## Quick Start
+## For Developers
 
-- **[DEVELOPMENT.md](./DEVELOPMENT.md)** - Local development setup
-- **[AGENTS.md](../AGENTS.md)** - Project overview and commands (canonical reference)
-
-## Directories
-
-| Directory    | Purpose                                                                |
-| ------------ | ---------------------------------------------------------------------- |
-| `specs/`     | Architecture and design docs (start with `super-siri-architecture.md`) |
-| `prds/`      | Future feature designs (not yet implemented)                           |
-| `completed/` | Historical docs for implemented features                               |
-| `archive/`   | Obsolete/superseded docs                                               |
-| `research/`  | Research notes and explorations                                        |
+| File                               | Purpose                                                       |
+| ---------------------------------- | ------------------------------------------------------------- |
+| [DEVELOPMENT.md](./DEVELOPMENT.md) | Local dev setup, commands, troubleshooting                    |
+| [DEPLOYMENT.md](./DEPLOYMENT.md)   | Production deployment guide                                   |
+| [../AGENTS.md](../AGENTS.md)       | **Start here** - Project overview, architecture, key commands |
 
 ## Architecture
 
-The main architecture spec is **[specs/super-siri-architecture.md](./specs/super-siri-architecture.md)** - this defines the v2.0 "Trust the AI" philosophy and system design.
+The v2.0 architecture spec: **[specs/super-siri-architecture.md](./specs/super-siri-architecture.md)**
 
-Supporting specs:
+## Directories
 
-- `specs/supervisor-ui-spec.md` - UI components
-- `specs/worker-supervision-roundabout.md` - Worker monitoring
-- `specs/ops_control_plane.md` - SSH security model
+| Directory    | What's in it             | Lifecycle                        |
+| ------------ | ------------------------ | -------------------------------- |
+| `specs/`     | Architecture & design    | Permanent (evolves slowly)       |
+| `work/`      | Active PRDs & task docs  | **Temporary** - delete when done |
+| `completed/` | Implemented feature docs | Archive                          |
+| `archive/`   | Obsolete/superseded      | Archive                          |
+| `research/`  | Research notes           | Reference                        |
+
+> **Note:** `work/` should be empty when no features are in flight. PRDs get deleted (not moved) once implemented.
