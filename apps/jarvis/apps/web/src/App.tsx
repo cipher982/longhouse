@@ -1,97 +1,98 @@
 /**
  * Jarvis PWA - React App
- * Main application component
+ * Main application component using Context for state management
  */
 
-import { useState, useCallback } from 'react'
-import {
-  Sidebar,
-  Header,
-  VoiceControls,
-  ChatContainer,
-  TextInput,
-  type VoiceMode,
-  type VoiceStatus,
-  type ChatMessage,
-} from './components'
+import { useCallback } from 'react'
+import { useAppState, useAppDispatch, type ChatMessage } from './context'
+import { Sidebar, Header, VoiceControls, ChatContainer, TextInput } from './components'
 
 export default function App() {
-  // UI State
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [conversations, setConversations] = useState<{ id: string; name: string; meta: string; active?: boolean }[]>([])
-
-  // Voice State
-  const [voiceMode, setVoiceMode] = useState<VoiceMode>('push-to-talk')
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('ready')
-
-  // Chat State
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [streamingContent, setStreamingContent] = useState('')
+  const state = useAppState()
+  const dispatch = useAppDispatch()
 
   // Sidebar handlers
   const handleToggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev)
-  }, [])
+    dispatch({ type: 'SET_SIDEBAR_OPEN', open: !state.sidebarOpen })
+  }, [dispatch, state.sidebarOpen])
 
   const handleNewConversation = useCallback(() => {
     console.log('New conversation')
-    // TODO: Implement with real logic
-  }, [])
+    dispatch({ type: 'SET_MESSAGES', messages: [] })
+    dispatch({ type: 'SET_CONVERSATION_ID', id: null })
+    dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
+  }, [dispatch])
 
   const handleClearAll = useCallback(() => {
     console.log('Clear all conversations')
-    setConversations([])
-    setMessages([])
-  }, [])
+    dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
+    dispatch({ type: 'SET_MESSAGES', messages: [] })
+  }, [dispatch])
 
-  const handleSelectConversation = useCallback((id: string) => {
-    console.log('Select conversation:', id)
-    // TODO: Implement with real logic
-  }, [])
+  const handleSelectConversation = useCallback(
+    (id: string) => {
+      console.log('Select conversation:', id)
+      dispatch({ type: 'SET_CONVERSATION_ID', id })
+      // TODO: Load conversation messages from storage
+    },
+    [dispatch]
+  )
 
   // Header handlers
   const handleSync = useCallback(() => {
     console.log('Sync conversations')
-    // TODO: Implement with real logic
+    // TODO: Implement sync with backend
   }, [])
 
   // Voice handlers
   const handleModeToggle = useCallback(() => {
-    setVoiceMode((prev) => (prev === 'push-to-talk' ? 'hands-free' : 'push-to-talk'))
-  }, [])
+    const newMode = state.voiceMode === 'push-to-talk' ? 'hands-free' : 'push-to-talk'
+    dispatch({ type: 'SET_VOICE_MODE', mode: newMode })
+  }, [dispatch, state.voiceMode])
 
   const handleVoiceButtonPress = useCallback(() => {
     console.log('Voice button pressed')
-    setVoiceStatus('listening')
-    // TODO: Implement with real voice logic
-  }, [])
+    dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
+    // TODO: Wire up real voice logic
+  }, [dispatch])
 
   const handleVoiceButtonRelease = useCallback(() => {
     console.log('Voice button released')
-    setVoiceStatus('ready')
-    // TODO: Implement with real voice logic
-  }, [])
+    dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
+    // TODO: Wire up real voice logic
+  }, [dispatch])
 
   // Text input handler
-  const handleSendMessage = useCallback((text: string) => {
-    const newMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: text,
-      timestamp: new Date(),
-    }
-    setMessages((prev) => [...prev, newMessage])
+  const handleSendMessage = useCallback(
+    (text: string) => {
+      const newMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        timestamp: new Date(),
+      }
+      dispatch({ type: 'ADD_MESSAGE', message: newMessage })
+      console.log('Send message:', text)
+      // TODO: Send to backend and handle response
+    },
+    [dispatch]
+  )
 
-    // TODO: Send to backend and handle response
-    console.log('Send message:', text)
-  }, [])
+  // Map voice status for VoiceControls component
+  const voiceStatusMap: Record<string, 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
+    idle: 'ready',
+    connecting: 'processing',
+    listening: 'listening',
+    processing: 'processing',
+    speaking: 'speaking',
+    error: 'error',
+  }
 
   return (
     <div className="app-container">
       <Sidebar
-        conversations={conversations}
-        isOpen={sidebarOpen}
+        conversations={state.conversations}
+        isOpen={state.sidebarOpen}
         onToggle={handleToggleSidebar}
         onNewConversation={handleNewConversation}
         onClearAll={handleClearAll}
@@ -102,14 +103,14 @@ export default function App() {
         <Header title="Jarvis AI" onSync={handleSync} />
 
         <ChatContainer
-          messages={messages}
-          isStreaming={isStreaming}
-          streamingContent={streamingContent}
+          messages={state.messages}
+          isStreaming={state.streamingContent.length > 0}
+          streamingContent={state.streamingContent}
         />
 
         <VoiceControls
-          mode={voiceMode}
-          status={voiceStatus}
+          mode={state.voiceMode}
+          status={voiceStatusMap[state.voiceStatus] || 'ready'}
           onModeToggle={handleModeToggle}
           onVoiceButtonPress={handleVoiceButtonPress}
           onVoiceButtonRelease={handleVoiceButtonRelease}
