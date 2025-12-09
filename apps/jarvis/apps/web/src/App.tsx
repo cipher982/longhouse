@@ -1,43 +1,60 @@
 /**
  * Jarvis PWA - React App
- * Main application component using hooks for business logic
+ * Main application component with realtime session integration
  */
 
-import { useCallback, useEffect } from 'react'
-import { useAppState, useAppDispatch } from './context'
-import { useVoice, useTextChannel, useJarvisClient } from './hooks'
+import { useCallback, useEffect, useState } from 'react'
+import { useAppState, useAppDispatch, type ChatMessage } from './context'
+import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput } from './components'
+
+// Feature flag for enabling realtime session bridge
+// Set to true to use the old controllers, false for standalone React mode
+const ENABLE_REALTIME_BRIDGE = false
 
 export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
+  const [isInitialized, setIsInitialized] = useState(false)
 
-  // Initialize Jarvis client
-  const { initialize: initClient } = useJarvisClient({
-    autoConnect: true,
-    onConnected: () => console.log('[App] Connected to Zerg backend'),
-    onError: (error) => console.error('[App] Client error:', error),
-  })
-
-  // Voice handling
-  const voice = useVoice({
-    onTranscript: (text, isFinal) => {
-      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
-    },
-    onError: (error) => console.error('[App] Voice error:', error),
-  })
-
-  // Text channel handling
+  // Text channel handling (always active)
   const textChannel = useTextChannel({
     onMessageSent: (msg) => console.log('[App] Message sent:', msg.content),
     onResponse: (msg) => console.log('[App] Response received:', msg.content),
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
-  // Initialize on mount
+  // Realtime session bridge (optional, controlled by feature flag)
+  const realtimeSession = ENABLE_REALTIME_BRIDGE
+    ? useRealtimeSession({
+        onConnected: () => {
+          console.log('[App] Realtime session connected')
+          setIsInitialized(true)
+        },
+        onDisconnected: () => console.log('[App] Realtime session disconnected'),
+        onTranscript: (text, isFinal) => {
+          console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
+          if (isFinal && text.trim()) {
+            // Add user message from voice transcript
+            const userMessage: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: text,
+              timestamp: new Date(),
+            }
+            dispatch({ type: 'ADD_MESSAGE', message: userMessage })
+          }
+        },
+        onError: (error) => console.error('[App] Realtime error:', error),
+      })
+    : null
+
+  // Initialize standalone mode if not using realtime bridge
   useEffect(() => {
-    initClient()
-  }, [initClient])
+    if (!ENABLE_REALTIME_BRIDGE) {
+      setIsInitialized(true)
+    }
+  }, [])
 
   // Sidebar handlers
   const handleToggleSidebar = useCallback(() => {
@@ -60,7 +77,6 @@ export default function App() {
     (id: string) => {
       console.log('[App] Select conversation:', id)
       dispatch({ type: 'SET_CONVERSATION_ID', id })
-      // TODO: Load conversation messages from storage
     },
     [dispatch]
   )
@@ -68,8 +84,35 @@ export default function App() {
   // Header handlers
   const handleSync = useCallback(() => {
     console.log('[App] Sync conversations')
-    // TODO: Implement sync with backend
   }, [])
+
+  // Voice handlers
+  const handleModeToggle = useCallback(() => {
+    if (realtimeSession) {
+      realtimeSession.toggleHandsFree()
+    } else {
+      const newMode = state.voiceMode === 'push-to-talk' ? 'hands-free' : 'push-to-talk'
+      dispatch({ type: 'SET_VOICE_MODE', mode: newMode })
+    }
+  }, [dispatch, state.voiceMode, realtimeSession])
+
+  const handleVoiceButtonPress = useCallback(() => {
+    if (realtimeSession) {
+      realtimeSession.handlePTTPress()
+    } else {
+      console.log('[App] Voice button pressed (standalone mode)')
+      dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
+    }
+  }, [dispatch, realtimeSession])
+
+  const handleVoiceButtonRelease = useCallback(() => {
+    if (realtimeSession) {
+      realtimeSession.handlePTTRelease()
+    } else {
+      console.log('[App] Voice button released (standalone mode)')
+      dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
+    }
+  }, [dispatch, realtimeSession])
 
   // Map voice status for component
   const voiceStatusMap: Record<string, 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
@@ -102,11 +145,11 @@ export default function App() {
         />
 
         <VoiceControls
-          mode={voice.mode}
+          mode={state.voiceMode}
           status={voiceStatusMap[state.voiceStatus] || 'ready'}
-          onModeToggle={voice.toggleMode}
-          onVoiceButtonPress={voice.handlePTTPress}
-          onVoiceButtonRelease={voice.handlePTTRelease}
+          onModeToggle={handleModeToggle}
+          onVoiceButtonPress={handleVoiceButtonPress}
+          onVoiceButtonRelease={handleVoiceButtonRelease}
         />
 
         <TextInput
