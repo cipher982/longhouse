@@ -12,7 +12,9 @@
  */
 
 // @ts-expect-error - JSON import works with bundlers, TS may complain without resolveJsonModule
-// Path: packages/core/src -> ../../.. = /app -> /app/config/models.json
+// Path: packages/core/src -> ../../.. = /app -> /app/config/models.json (Docker layout)
+// NOTE: Local tests use vitest alias to map this path correctly.
+// TODO: Replace with @swarm/config import once Docker builds are updated (Phase 2)
 import modelsConfig from '../../../config/models.json';
 
 // =============================================================================
@@ -21,8 +23,8 @@ import modelsConfig from '../../../config/models.json';
 
 const realtime = modelsConfig.realtime;
 const text = modelsConfig.text;
-const aliases: Record<string, string> = realtime.aliases ?? {};
-const defaultVoice: string = realtime.defaultVoice ?? 'verse';
+const aliases: Record<string, string> = modelsConfig.realtime.aliases ?? {};
+const defaultVoice: string = modelsConfig.realtime.defaultVoice ?? 'verse';
 
 // Realtime model tiers (Jarvis voice interface)
 export const REALTIME_TIER_1 = realtime.tiers.TIER_1;
