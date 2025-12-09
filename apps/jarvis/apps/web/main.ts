@@ -1,17 +1,30 @@
 /**
- * LEGACY ENTRY POINT
+ * ⚠️  DEPRECATED - DO NOT USE
  *
- * This file is the original vanilla TypeScript entry point.
- * It has been replaced by the React app in src/main.tsx.
+ * This is the LEGACY vanilla TypeScript entry point.
+ * It has been REPLACED by the React app in src/main.tsx.
  *
- * The lib/ directory controllers are still used by the React app
- * via the useRealtimeSession bridge hook when ENABLE_REALTIME_BRIDGE=true.
+ * Status: DEPRECATED as of Dec 2024
+ * Removal Date: March 1, 2025
  *
- * TODO: Once React migration is complete and stable:
- * 1. Move remaining business logic from lib/ to React hooks
- * 2. Delete this file and the lib/ directory
- * 3. Remove the legacy contexts/ directory
+ * The lib/ controllers are still used via useRealtimeSession bridge hook
+ * when VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true, but this will be removed.
+ *
+ * DO NOT:
+ * - Import this file
+ * - Add new features here
+ * - Maintain this code path
+ *
+ * Instead: Work in src/ with React components and hooks
  */
+
+throw new Error(
+  'LEGACY ENTRY POINT - This file (main.ts) is deprecated. ' +
+  'Use src/main.tsx (React app) instead. ' +
+  'If you need legacy bridge mode, set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true in .env'
+)
+
+// Rest of file kept for reference during migration (unused)
 // Jarvis PWA - Refactored Entry Point (LEGACY)
 // CSS loaded via <link> tags in index.html (blocking, prevents FOUC)
 
