@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
-import { Sidebar, Header, VoiceControls, ChatContainer, TextInput } from './components'
+import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 
 // Feature flag for enabling realtime session bridge
 // Set to true to use the old controllers, false for standalone React mode
@@ -125,8 +125,10 @@ export default function App() {
   }
 
   return (
-    <div className="app-container">
-      <Sidebar
+    <>
+      <OfflineBanner />
+      <div className="app-container">
+        <Sidebar
         conversations={state.conversations}
         isOpen={state.sidebarOpen}
         onToggle={handleToggleSidebar}
@@ -163,6 +165,7 @@ export default function App() {
 
       {/* Hidden audio element for remote playback */}
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>
-    </div>
+      </div>
+    </>
   )
 }
