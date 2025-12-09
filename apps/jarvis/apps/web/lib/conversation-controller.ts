@@ -93,15 +93,17 @@ export class ConversationController {
   /**
    * Add user turn and persist to IndexedDB
    * NOTE: React UI handles displaying the message, this only persists
+   * @returns true if persisted successfully, false if skipped (no sessionManager or timestamp provided)
    */
-  async addUserTurn(transcript: string, timestamp?: Date): Promise<void> {
+  async addUserTurn(transcript: string, timestamp?: Date): Promise<boolean> {
     // Clear any pending message state
     this.state.pendingUserMessageId = null;
 
     // Record to IndexedDB if not from history loading (no timestamp provided)
     if (!timestamp) {
-      await this.recordTurn('user', transcript);
+      return await this.recordTurn('user', transcript);
     }
+    return false; // Skipped persistence (from history loading)
   }
 
   /**
@@ -117,9 +119,13 @@ export class ConversationController {
 
   /**
    * Record turn to IndexedDB
+   * @returns true if persisted successfully, false if no sessionManager
    */
-  private async recordTurn(type: 'user' | 'assistant', content: string): Promise<void> {
-    if (!this.sessionManager) return;
+  private async recordTurn(type: 'user' | 'assistant', content: string): Promise<boolean> {
+    if (!this.sessionManager) {
+      logger.warn('Cannot persist turn: sessionManager not initialized');
+      return false;
+    }
 
     try {
       const turn: ConversationTurn = {
@@ -134,8 +140,10 @@ export class ConversationController {
 
       await this.sessionManager.addConversationTurn(turn);
       logger.debug('Recorded conversation turn', `${type}: ${content.substring(0, 50)}...`);
+      return true;
     } catch (error) {
       console.error('Failed to record conversation turn:', error);
+      return false;
     }
   }
 

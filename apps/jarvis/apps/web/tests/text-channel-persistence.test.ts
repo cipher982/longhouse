@@ -21,8 +21,8 @@ vi.mock('../lib/app-controller', () => ({
 // Mock conversationController
 vi.mock('../lib/conversation-controller', () => ({
   conversationController: {
-    addUserTurn: vi.fn().mockResolvedValue(undefined),
-    addAssistantTurn: vi.fn().mockResolvedValue(undefined),
+    addUserTurn: vi.fn().mockResolvedValue(true), // Returns true on successful persistence
+    addAssistantTurn: vi.fn().mockResolvedValue(true),
   },
 }))
 

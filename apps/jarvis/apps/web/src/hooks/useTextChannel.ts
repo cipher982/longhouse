@@ -59,7 +59,11 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
 
         // Persist user message to IndexedDB (SSOT - same path as voice)
         // This ensures text messages survive page refresh
-        await conversationController.addUserTurn(trimmedText)
+        const persisted = await conversationController.addUserTurn(trimmedText)
+        if (!persisted) {
+          // Session not initialized - message will show in UI but won't survive refresh
+          console.warn('[useTextChannel] Message not persisted - sessionManager not ready')
+        }
 
         // Send to backend via appController
         await appController.sendText(trimmedText)

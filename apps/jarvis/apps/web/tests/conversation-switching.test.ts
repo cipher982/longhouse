@@ -17,7 +17,7 @@ describe('Conversation Switching', () => {
   let mockSessionManager: any
   let mockConversationController: any
   let mockStateManager: any
-  let mockDispatch: jest.Mock
+  let mockDispatch: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.clearAllMocks()

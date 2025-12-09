@@ -9,9 +9,11 @@
 
 import { type RealtimeSession } from '@openai/agents/realtime';
 import { logger, getJarvisClient, SessionManager } from '@jarvis/core';
+import type { ConversationTurn } from '@jarvis/data-local';
 import { stateManager } from './state-manager';
 import { getZergApiUrl } from './config';
 import { sessionHandler } from './session-handler';
+import { bootstrapSession, type BootstrapResult } from './session-bootstrap';
 import { audioController } from './audio-controller';
 import { voiceController, type VoiceEvent } from './voice-controller';
 import { conversationController } from './conversation-controller';
@@ -25,6 +27,8 @@ export class AppController {
   private initialized = false;
   private connecting = false;
   private textChannelController: TextChannelController | null = null;
+  private lastBootstrapResult: BootstrapResult | null = null;
+  private onHistoryLoaded: ((history: ConversationTurn[]) => void) | null = null;
 
   constructor() {
     // Bind methods to this
@@ -116,11 +120,8 @@ export class AppController {
       stateManager.setSessionManager(sessionManager);
       conversationController.setSessionManager(sessionManager);
 
-      // Configure SessionHandler with history hydration
-      sessionHandler.setConfig({
-        getConversationHistory: () => sessionManager.getConversationHistory(),
-        realtimeHistoryTurns: currentContext.settings?.realtimeHistoryTurns ?? 8,
-      });
+      // NOTE: History hydration is now handled by bootstrapSession() in connect()
+      // This ensures SSOT - UI and Realtime get history from a single query
 
       // Initialize session
       const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
@@ -135,7 +136,24 @@ export class AppController {
   }
 
   /**
+   * Set callback for when history is loaded during connect
+   * This allows App.tsx to receive history from the single SSOT query
+   */
+  setOnHistoryLoaded(callback: ((history: ConversationTurn[]) => void) | null): void {
+    this.onHistoryLoaded = callback;
+  }
+
+  /**
+   * Get the last bootstrap result (for accessing history after connect)
+   */
+  getLastBootstrapResult(): BootstrapResult | null {
+    return this.lastBootstrapResult;
+  }
+
+  /**
    * Connect to Voice Session
+   * Uses bootstrapSession for SSOT - history is loaded once and provided to both
+   * UI (via callback) and Realtime (via hydration)
    */
   async connect(): Promise<void> {
     if (this.connecting) return;
@@ -147,6 +165,7 @@ export class AppController {
       stateManager.setVoiceStatus('connecting');
 
       const currentContext = stateManager.getState().currentContext;
+      const sessionManager = stateManager.getState().sessionManager;
 
       // 1. Acquire Microphone (via AudioController)
       const micStream = await audioController.requestMicrophone();
@@ -154,35 +173,57 @@ export class AppController {
       // PRIVACY-CRITICAL: Mute immediately
       audioController.muteMicrophone();
 
-      // 2. Connect Session
+      // 2. Validate prerequisites
       if (!currentContext) {
         throw new Error('No active context loaded');
       }
+      if (!sessionManager) {
+        throw new Error('No session manager available');
+      }
 
       // Create tools using factory
-      const tools = createContextTools(currentContext, stateManager.getState().sessionManager);
+      const tools = createContextTools(currentContext, sessionManager);
 
-      const { session, agent } = await sessionHandler.connect({
+      // 3. Bootstrap session with SSOT history
+      // This loads history ONCE and provides it to both UI and Realtime
+      const bootstrapResult = await bootstrapSession({
         context: currentContext,
+        sessionManager,
         mediaStream: micStream,
         audioElement: undefined,
-        tools: tools,
-        onTokenRequest: this.getSessionToken
+        tools,
+        onTokenRequest: this.getSessionToken,
+        realtimeHistoryTurns: currentContext.settings?.realtimeHistoryTurns ?? 8,
       });
 
-      // 3. Update State
+      const { session, agent, history, conversationId, hydratedItemCount } = bootstrapResult;
+      this.lastBootstrapResult = bootstrapResult;
+
+      logger.info(`📜 SSOT Bootstrap: ${history.length} turns loaded, ${hydratedItemCount} items hydrated`);
+
+      // 4. Notify callback with history (for UI to consume)
+      // This is the SAME data used for Realtime hydration
+      if (this.onHistoryLoaded && history.length > 0) {
+        this.onHistoryLoaded(history);
+      }
+
+      // 5. Update State
       stateManager.setSession(session);
       stateManager.setAgent(agent);
+      if (conversationId) {
+        stateManager.setConversationId(conversationId);
+        conversationController.setConversationId(conversationId);
+      }
 
-      // 4. Wire up Session Events
+      // 6. Wire up Session Events
       this.setupSessionEvents(session);
 
-      // 5. Wire up Controllers
+      // 7. Wire up Controllers
       voiceController.setSession(session);
       voiceController.setMicrophoneStream(micStream);
       this.textChannelController?.setSession(session);
 
-      // 6. Finalize State
+      // 8. Finalize State
       stateManager.setVoiceStatus('ready');
       this.connecting = false;
 
@@ -353,8 +394,9 @@ export class AppController {
 
       // Error handling
       if (t === 'error') {
-        logger.error('Session error event', event);
-        stateManager.showToast('Session error occurred', 'error');
+        const errorMsg = event.error?.message || event.error?.code || 'Unknown error';
+        logger.error('Session error event', { type: t, error: event.error, message: errorMsg });
+        stateManager.showToast(`Session error: ${errorMsg}`, 'error');
       }
     });
   }

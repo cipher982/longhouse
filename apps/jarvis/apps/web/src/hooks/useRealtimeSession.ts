@@ -36,8 +36,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const dispatch = useAppDispatch()
   const initializedRef = useRef(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const optionsRef = useRef(options)
+  optionsRef.current = options  // Always keep ref up to date
 
-  // Initialize controllers on mount
+  // One-time controller initialization
   useEffect(() => {
     if (initializedRef.current) return
     initializedRef.current = true
@@ -56,21 +58,56 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     // Initialize app controller (this sets up JarvisClient, etc.)
     appController.initialize().catch((error) => {
       console.error('[useRealtimeSession] App controller init failed:', error)
-      options.onError?.(error)
+      optionsRef.current.onError?.(error)
     })
 
+    // Set up SSOT history callback - receives history from single bootstrap query
+    // This is called during connect() with the same data used for Realtime hydration
+    appController.setOnHistoryLoaded((history) => {
+      console.log('[useRealtimeSession] SSOT History loaded:', history.length, 'turns')
+      // Convert turns to ChatMessages for React state
+      const messages: ChatMessage[] = []
+      for (const turn of history) {
+        if (turn.userTranscript) {
+          messages.push({
+            id: turn.id || crypto.randomUUID(),
+            role: 'user',
+            content: turn.userTranscript,
+            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+          })
+        }
+        if (turn.assistantResponse) {
+          messages.push({
+            id: `${turn.id}-asst` || crypto.randomUUID(),
+            role: 'assistant',
+            content: turn.assistantResponse,
+            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+          })
+        }
+      }
+      dispatch({ type: 'SET_MESSAGES', messages })
+    })
+
+    // Cleanup callback on unmount
+    return () => {
+      appController.setOnHistoryLoaded(null)
+    }
+  }, [dispatch])  // dispatch needed for history callback
+
+  // Subscribe to controller events - SEPARATE effect so it always runs
+  useEffect(() => {
     // Subscribe to voice controller events
     const handleVoiceEvent = (event: VoiceEvent) => {
       switch (event.type) {
         case 'stateChange':
-          // Only use voice controller for active listening states
-          // The ready/idle states are managed by stateManager via app-controller
           const voiceState = event.state
+          // Update voice status based on active state
           if (voiceState.active || voiceState.vadActive) {
             dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
+          } else if (voiceController.isConnected()) {
+            // When PTT released but still connected, go back to ready
+            dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
           }
-          // Note: We don't set 'idle' here - that's handled by VOICE_STATUS_CHANGED
-          // from app-controller when it explicitly sets ready/idle
 
           // Update voice mode
           const mode = voiceState.handsFree ? 'hands-free' : 'push-to-talk'
@@ -79,7 +116,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
         case 'transcript':
           // Pass transcript to callback AND update streaming content for live preview
-          options.onTranscript?.(event.text, event.isFinal)
+          optionsRef.current.onTranscript?.(event.text, event.isFinal)
           if (!event.isFinal) {
             // Show interim transcript as user typing preview
             dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: event.text })
@@ -91,7 +128,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
         case 'error':
           dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
-          options.onError?.(event.error)
+          optionsRef.current.onError?.(event.error)
           break
       }
     }
@@ -104,11 +141,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         case 'SESSION_CHANGED':
           dispatch({ type: 'SET_CONNECTED', connected: event.session !== null })
           if (event.session) {
-            options.onConnected?.()
+            optionsRef.current.onConnected?.()
           } else {
             // Clear stale voice preview on disconnect
             dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
-            options.onDisconnected?.()
+            optionsRef.current.onDisconnected?.()
           }
           break
 
@@ -135,7 +172,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           // Clear stale voice preview on connection error
           dispatch({ type: 'SET_USER_TRANSCRIPT_PREVIEW', text: '' })
           dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
-          options.onError?.(event.error)
+          optionsRef.current.onError?.(event.error)
           break
       }
     }
@@ -147,7 +184,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       voiceController.removeListener(handleVoiceEvent)
       stateManager.removeListener(handleStateChange)
     }
-  }, [dispatch, options])
+  }, [dispatch])  // Only dispatch - options accessed via ref
 
   // Auto-connect on mount if enabled (default: true)
   const autoConnect = options.autoConnect !== false
@@ -169,19 +206,20 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         setConnectionError(null)
         await appController.connect()
         dispatch({ type: 'SET_CONNECTED', connected: true })
-        options.onConnected?.()
+        dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
+        optionsRef.current.onConnected?.()
       } catch (error) {
         console.error('[useRealtimeSession] Auto-connect failed:', error)
         dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
         setConnectionError(error as Error)
-        options.onError?.(error as Error)
+        optionsRef.current.onError?.(error as Error)
         // Allow retry by resetting the flag after failure
         connectAttemptedRef.current = false
       }
     }, 100)
 
     return () => clearTimeout(timeoutId)
-  }, [autoConnect, dispatch, options])
+  }, [autoConnect, dispatch])
 
   // Connect to realtime session
   const connect = useCallback(async () => {
@@ -190,14 +228,15 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       setConnectionError(null)
       await appController.connect()
       dispatch({ type: 'SET_CONNECTED', connected: true })
-      options.onConnected?.()
+      dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
+      optionsRef.current.onConnected?.()
     } catch (error) {
       console.error('[useRealtimeSession] Connect failed:', error)
       dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
       setConnectionError(error as Error)
-      options.onError?.(error as Error)
+      optionsRef.current.onError?.(error as Error)
     }
-  }, [dispatch, options])
+  }, [dispatch])
 
   // Reconnect after failure - resets state and attempts connection
   const reconnect = useCallback(async () => {
@@ -216,12 +255,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       appController.disconnect()
       dispatch({ type: 'SET_CONNECTED', connected: false })
       dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
-      options.onDisconnected?.()
+      optionsRef.current.onDisconnected?.()
     } catch (error) {
       console.error('[useRealtimeSession] Disconnect failed:', error)
-      options.onError?.(error as Error)
+      optionsRef.current.onError?.(error as Error)
     }
-  }, [dispatch, options])
+  }, [dispatch])
 
   // Check if connected
   const isConnected = useCallback(() => {

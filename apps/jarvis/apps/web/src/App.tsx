@@ -6,7 +6,7 @@
  * and React hooks subscribe to those events and update React state.
  */
 
-import { useCallback, useEffect, useState, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
@@ -18,38 +18,12 @@ console.info('[Jarvis] Starting React application with realtime session integrat
 export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
-  const [isInitialized, setIsInitialized] = useState(false)
   const historyLoadedRef = useRef(false)
 
-  // Load conversation history when session is ready
-  // Only seeds messages if none exist yet (avoids overwriting live messages)
-  useEffect(() => {
-    if (!isInitialized || historyLoadedRef.current) return
-
-    const loadHistory = async () => {
-      try {
-        const history = await conversationController.getHistory()
-        // Only seed if no messages have been added yet (prevents race condition)
-        if (history.length > 0 && state.messages.length === 0) {
-          console.log('[App] Loading conversation history:', history.length, 'turns')
-          const messages: ChatMessage[] = history.map((turn) => ({
-            id: turn.id || crypto.randomUUID(),
-            role: turn.userTranscript ? 'user' : 'assistant',
-            content: turn.userTranscript || turn.assistantResponse || '',
-            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-          }))
-          dispatch({ type: 'SET_MESSAGES', messages })
-        }
-      } catch (error) {
-        console.error('[App] Failed to load conversation history:', error)
-      } finally {
-        // Always mark as loaded to prevent retry spam
-        historyLoadedRef.current = true
-      }
-    }
-
-    loadHistory()
-  }, [isInitialized, dispatch, state.messages.length])
+  // NOTE: History loading is now handled via SSOT in useRealtimeSession
+  // appController.connect() calls bootstrapSession() which loads history ONCE
+  // and provides it to BOTH the UI (via callback) and Realtime (via hydration)
+  // This eliminates the two-query problem that caused UI/model divergence
 
   // Text channel handling (always active)
   const textChannel = useTextChannel({
@@ -59,11 +33,9 @@ export default function App() {
   })
 
   // Realtime session - always active
+  // History is loaded via SSOT callback in useRealtimeSession during connect()
   const realtimeSession = useRealtimeSession({
-    onConnected: () => {
-      console.log('[App] Realtime session connected')
-      setIsInitialized(true)
-    },
+    onConnected: () => console.log('[App] Realtime session connected'),
     onDisconnected: () => console.log('[App] Realtime session disconnected'),
     onTranscript: (text, isFinal) => {
       console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
