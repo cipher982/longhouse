@@ -1,15 +1,43 @@
 /**
  * Jarvis PWA - React App
- * Main application component using Context for state management
+ * Main application component using hooks for business logic
  */
 
-import { useCallback } from 'react'
-import { useAppState, useAppDispatch, type ChatMessage } from './context'
+import { useCallback, useEffect } from 'react'
+import { useAppState, useAppDispatch } from './context'
+import { useVoice, useTextChannel, useJarvisClient } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput } from './components'
 
 export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
+
+  // Initialize Jarvis client
+  const { initialize: initClient } = useJarvisClient({
+    autoConnect: true,
+    onConnected: () => console.log('[App] Connected to Zerg backend'),
+    onError: (error) => console.error('[App] Client error:', error),
+  })
+
+  // Voice handling
+  const voice = useVoice({
+    onTranscript: (text, isFinal) => {
+      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
+    },
+    onError: (error) => console.error('[App] Voice error:', error),
+  })
+
+  // Text channel handling
+  const textChannel = useTextChannel({
+    onMessageSent: (msg) => console.log('[App] Message sent:', msg.content),
+    onResponse: (msg) => console.log('[App] Response received:', msg.content),
+    onError: (error) => console.error('[App] Text channel error:', error),
+  })
+
+  // Initialize on mount
+  useEffect(() => {
+    initClient()
+  }, [initClient])
 
   // Sidebar handlers
   const handleToggleSidebar = useCallback(() => {
@@ -17,21 +45,20 @@ export default function App() {
   }, [dispatch, state.sidebarOpen])
 
   const handleNewConversation = useCallback(() => {
-    console.log('New conversation')
-    dispatch({ type: 'SET_MESSAGES', messages: [] })
+    console.log('[App] New conversation')
+    textChannel.clearMessages()
     dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-    dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
-  }, [dispatch])
+  }, [dispatch, textChannel])
 
   const handleClearAll = useCallback(() => {
-    console.log('Clear all conversations')
+    console.log('[App] Clear all conversations')
     dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
-    dispatch({ type: 'SET_MESSAGES', messages: [] })
-  }, [dispatch])
+    textChannel.clearMessages()
+  }, [dispatch, textChannel])
 
   const handleSelectConversation = useCallback(
     (id: string) => {
-      console.log('Select conversation:', id)
+      console.log('[App] Select conversation:', id)
       dispatch({ type: 'SET_CONVERSATION_ID', id })
       // TODO: Load conversation messages from storage
     },
@@ -40,45 +67,11 @@ export default function App() {
 
   // Header handlers
   const handleSync = useCallback(() => {
-    console.log('Sync conversations')
+    console.log('[App] Sync conversations')
     // TODO: Implement sync with backend
   }, [])
 
-  // Voice handlers
-  const handleModeToggle = useCallback(() => {
-    const newMode = state.voiceMode === 'push-to-talk' ? 'hands-free' : 'push-to-talk'
-    dispatch({ type: 'SET_VOICE_MODE', mode: newMode })
-  }, [dispatch, state.voiceMode])
-
-  const handleVoiceButtonPress = useCallback(() => {
-    console.log('Voice button pressed')
-    dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
-    // TODO: Wire up real voice logic
-  }, [dispatch])
-
-  const handleVoiceButtonRelease = useCallback(() => {
-    console.log('Voice button released')
-    dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
-    // TODO: Wire up real voice logic
-  }, [dispatch])
-
-  // Text input handler
-  const handleSendMessage = useCallback(
-    (text: string) => {
-      const newMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: text,
-        timestamp: new Date(),
-      }
-      dispatch({ type: 'ADD_MESSAGE', message: newMessage })
-      console.log('Send message:', text)
-      // TODO: Send to backend and handle response
-    },
-    [dispatch]
-  )
-
-  // Map voice status for VoiceControls component
+  // Map voice status for component
   const voiceStatusMap: Record<string, 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
     idle: 'ready',
     connecting: 'processing',
@@ -103,20 +96,23 @@ export default function App() {
         <Header title="Jarvis AI" onSync={handleSync} />
 
         <ChatContainer
-          messages={state.messages}
-          isStreaming={state.streamingContent.length > 0}
-          streamingContent={state.streamingContent}
+          messages={textChannel.messages}
+          isStreaming={textChannel.isStreaming}
+          streamingContent={textChannel.streamingContent}
         />
 
         <VoiceControls
-          mode={state.voiceMode}
+          mode={voice.mode}
           status={voiceStatusMap[state.voiceStatus] || 'ready'}
-          onModeToggle={handleModeToggle}
-          onVoiceButtonPress={handleVoiceButtonPress}
-          onVoiceButtonRelease={handleVoiceButtonRelease}
+          onModeToggle={voice.toggleMode}
+          onVoiceButtonPress={voice.handlePTTPress}
+          onVoiceButtonRelease={voice.handlePTTRelease}
         />
 
-        <TextInput onSend={handleSendMessage} />
+        <TextInput
+          onSend={textChannel.sendMessage}
+          disabled={textChannel.isSending}
+        />
       </div>
 
       {/* Supervisor Progress Panel (hidden by default) */}
