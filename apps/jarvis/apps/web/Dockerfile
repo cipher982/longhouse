@@ -29,6 +29,12 @@ COPY apps/jarvis/packages ./packages
 COPY apps/jarvis/configs ./configs
 COPY apps/jarvis/apps/web ./apps/web
 
+# Copy monorepo config (models.json required by @jarvis/core)
+COPY config ./config
+
+# Fail-fast verification: Ensure critical config files exist
+RUN test -f /app/config/models.json || (echo "❌ FATAL: models.json not found" && exit 1)
+
 # Set working directory to web app
 WORKDIR /app/apps/web
 
@@ -39,5 +45,9 @@ ENV JARVIS_WEB_PORT=$JARVIS_WEB_PORT
 # Static EXPOSE (documentation only)
 EXPOSE 8080
 
-# Run Vite dev server
-CMD ["sh", "-c", "bun run dev -- --port ${JARVIS_WEB_PORT} --host 0.0.0.0"]
+# Copy runtime verification script
+COPY apps/jarvis/apps/web/verify-config.sh /app/verify-config.sh
+RUN chmod +x /app/verify-config.sh
+
+# Run Vite dev server with config verification
+CMD ["sh", "-c", "/app/verify-config.sh && bun run dev -- --port ${JARVIS_WEB_PORT} --host 0.0.0.0"]

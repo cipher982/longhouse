@@ -12,6 +12,7 @@
 import { logger, type SessionManager } from '@jarvis/core';
 import type { ConversationTurn } from '@jarvis/data-local';
 import type { ConversationRenderer } from './conversation-renderer';
+import { stateManager } from './state-manager';
 
 export interface ConversationState {
   conversationId: string | null;
@@ -222,36 +223,61 @@ export class ConversationController {
 
     this.state.streamingText += delta;
 
+    // Update legacy DOM renderer (for backward compatibility with main.ts)
     if (this.renderer && this.state.streamingMessageId) {
       this.renderer.updateMessage(this.state.streamingMessageId, {
         content: this.state.streamingText,
         isStreaming: true
       });
     }
+
+    // Notify React via stateManager (for bridge mode with React UI)
+    stateManager.setStreamingText(this.state.streamingText);
   }
 
   /**
    * Finalize streaming response
    */
   async finalizeStreaming(): Promise<void> {
-    if (!this.renderer || !this.state.streamingMessageId) return;
+    if (!this.state.streamingMessageId) return;
 
-    logger.streamingResponse(this.state.streamingText, true);
+    const finalText = this.state.streamingText;
+    logger.streamingResponse(finalText, true);
 
-    // Finalize message in renderer
-    this.renderer.updateMessage(this.state.streamingMessageId, {
-      content: this.state.streamingText,
-      isStreaming: false
-    });
+    // Update legacy DOM renderer (for backward compatibility)
+    if (this.renderer) {
+      this.renderer.updateMessage(this.state.streamingMessageId, {
+        content: finalText,
+        isStreaming: false
+      });
+    }
 
     // Record to IndexedDB
-    if (this.state.streamingText) {
-      await this.recordTurn('assistant', this.state.streamingText);
+    if (finalText) {
+      await this.recordTurn('assistant', finalText);
     }
 
     // Clean up streaming state
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
+
+    // Clear streaming text in React state
+    stateManager.setStreamingText('');
+
+    // CRITICAL: This was missing! Add finalized message to React messages array
+    // Without this, streaming text appears then disappears when finalized
+    // Note: We use a synthetic event bus approach here since we're in a controller
+    // The proper fix would be to have conversationController emit events that React subscribes to
+    // But for now, we broadcast via window.dispatchEvent so React can pick it up
+    const event = new CustomEvent('jarvis:streaming-finalized', {
+      detail: {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: finalText,
+        timestamp: new Date(),
+      }
+    });
+    window.dispatchEvent(event);
 
     this.emit({ type: 'streamingStop' });
   }

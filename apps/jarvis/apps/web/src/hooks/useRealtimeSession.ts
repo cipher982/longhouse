@@ -108,10 +108,19 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
     stateManager.addListener(handleStateChange)
 
+    // Listen for streaming finalization events from conversationController
+    const handleStreamingFinalized = ((event: CustomEvent) => {
+      const message = event.detail
+      dispatch({ type: 'ADD_MESSAGE', message })
+    }) as EventListener
+
+    window.addEventListener('jarvis:streaming-finalized', handleStreamingFinalized)
+
     // Cleanup
     return () => {
       voiceController.removeListener(handleVoiceEvent)
       stateManager.removeListener(handleStateChange)
+      window.removeEventListener('jarvis:streaming-finalized', handleStreamingFinalized)
     }
   }, [dispatch, options])
 

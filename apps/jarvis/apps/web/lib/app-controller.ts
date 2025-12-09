@@ -5,7 +5,7 @@
  */
 
 import { type RealtimeSession } from '@openai/agents/realtime';
-import { logger, getJarvisClient } from '@jarvis/core';
+import { logger, getJarvisClient, SessionManager } from '@jarvis/core';
 import { stateManager } from './state-manager';
 import { getZergApiUrl } from './config';
 import { sessionHandler } from './session-handler';
@@ -15,9 +15,10 @@ import { conversationController } from './conversation-controller';
 import { uiEnhancements } from './ui-enhancements';
 import { uiController } from './ui-controller'; // Import UI Controller directly
 import { feedbackSystem } from './feedback-system';
-import { VoiceButtonState, CONFIG } from './config';
+import { VoiceButtonState, CONFIG, buildConversationManagerOptions } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { createContextTools } from './tool-factory';
+import { contextLoader } from '../contexts/context-loader';
 
 export class AppController {
   private initialized = false;
@@ -41,10 +42,13 @@ export class AppController {
     // 1. Initialize JarvisClient for Zerg backend communication
     await this.initializeJarvisClient();
 
-    // 2. Setup Event Listeners
+    // 2. Load context (required for voice/text sessions)
+    await this.initializeContext();
+
+    // 3. Setup Event Listeners
     this.setupVoiceListeners();
 
-    // 3. Initialize Text Channel Controller
+    // 4. Initialize Text Channel Controller
     this.textChannelController = new TextChannelController({
       autoConnect: true,
       maxRetries: 3
@@ -52,7 +56,7 @@ export class AppController {
     this.textChannelController.setVoiceController(voiceController);
     this.textChannelController.setConnectCallback(this.connect);
 
-    // 4. Async initialization
+    // 5. Async initialization
     await this.textChannelController.initialize();
 
     // Initialize UI
@@ -91,6 +95,44 @@ export class AppController {
     } catch (error) {
       logger.error('❌ Failed to initialize JarvisClient:', error);
       // Non-fatal - supervisor features will be unavailable but voice still works
+    }
+  }
+
+  /**
+   * Initialize context and session manager
+   */
+  private async initializeContext(): Promise<void> {
+    try {
+      // Auto-detect and load context (defaults to 'personal')
+      const contextName = await contextLoader.autoDetectContext();
+      logger.info(`📋 Loading context: ${contextName}`);
+
+      const currentContext = await contextLoader.loadContext(contextName);
+      stateManager.setContext(currentContext);
+
+      // Initialize Session Manager for this context (same as main.ts)
+      const sessionManager = new SessionManager({}, {
+        conversationManagerOptions: buildConversationManagerOptions(currentContext),
+        maxHistoryTurns: currentContext.settings?.maxHistoryTurns ?? 50,
+      });
+      stateManager.setSessionManager(sessionManager);
+      conversationController.setSessionManager(sessionManager);
+
+      // Configure SessionHandler with history hydration
+      sessionHandler.setConfig({
+        getConversationHistory: () => sessionManager.getConversationHistory(),
+        realtimeHistoryTurns: currentContext.settings?.realtimeHistoryTurns ?? 8,
+      });
+
+      // Initialize session
+      const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
+      stateManager.setConversationId(initialConversationId);
+      conversationController.setConversationId(initialConversationId);
+
+      logger.info(`✅ Context initialized: ${contextName}`);
+    } catch (error) {
+      logger.error('❌ Failed to initialize context:', error);
+      throw error; // Context is required, so we propagate the error
     }
   }
 
