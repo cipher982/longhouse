@@ -33,7 +33,8 @@ export function ChatContainer({ messages, isStreaming, streamingContent }: ChatC
       <div className="transcript" ref={containerRef}>
         {messages.length === 0 && !isStreaming ? (
           <div className="status-message">
-            Ready to chat. Tap the microphone or type a message.
+            <div className="status-text">System Ready</div>
+            <div className="status-subtext">Tap the microphone or type a message to begin</div>
           </div>
         ) : (
           <>

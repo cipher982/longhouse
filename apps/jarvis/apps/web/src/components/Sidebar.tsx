@@ -30,6 +30,7 @@ export function Sidebar({
     <>
       {/* Mobile Menu Toggle */}
       <button
+        id="sidebarToggle"
         className="sidebar-toggle"
         type="button"
         aria-label="Open conversation sidebar"

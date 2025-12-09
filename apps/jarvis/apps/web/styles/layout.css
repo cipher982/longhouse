@@ -5,28 +5,51 @@
   grid-template-columns: 280px 1fr;
   height: 100vh;
   position: relative;
-  background: radial-gradient(
-    circle at 50% -20%,
-    var(--color-surface-dark) 0%,
-    var(--color-void) 60%
-  );
+  overflow: hidden;
+  background-color: var(--color-void);
+  /* Living Void Layer 1: Deep Nebula */
+  background-image:
+    radial-gradient(
+      circle at 15% 50%,
+      rgb(99 102 241 / 8%) 0%,
+      transparent 25%
+    ),
+    radial-gradient(circle at 85% 30%, rgb(236 72 153 / 8%) 0%, transparent 25%);
 }
 
-/* Ambient Background Glows */
+/* Living Void Layer 2: Moving Grid */
+.app-container::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+  transform: perspective(500px) rotateX(60deg);
+  animation: grid-move 20s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: radial-gradient(circle, black 30%, transparent 70%);
+}
+
+/* Living Void Layer 3: Dynamic Ambient Glows */
 .app-container::after {
   content: "";
   position: absolute;
-  width: 600px;
-  height: 600px;
-  background: radial-gradient(circle, rgb(99 102 241 / 8%) 0%, transparent 70%);
-  top: -200px;
-  right: -200px;
-  border-radius: 50%;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background:
+    radial-gradient(circle at 50% 50%, rgb(99 102 241 / 5%), transparent 40%),
+    radial-gradient(circle at 80% 20%, rgb(6 182 212 / 5%), transparent 30%);
+  animation: nebula-drift 30s ease-in-out infinite;
   pointer-events: none;
   z-index: 0;
-  filter: blur(80px);
-  opacity: 0.6;
-  animation: pulse-glow 10s ease-in-out infinite alternate;
+  filter: blur(60px);
 }
 
 .main-content {
@@ -36,8 +59,10 @@
   overflow: hidden;
   position: relative;
   z-index: 1;
-  background: rgb(3 3 5 / 30%);
+  /* Glass panel effect over the void */
+  background: rgb(3 3 5 / 40%);
   backdrop-filter: blur(var(--blur-sm));
+  box-shadow: inset 0 0 100px rgb(0 0 0 / 50%);
 }
 
 /* Header - HUD Style */
