@@ -31,8 +31,14 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isSending, setIsSending] = useState(false)
+  const [lastError, setLastError] = useState<Error | null>(null)
 
   const { messages, streamingContent, isConnected } = state
+
+  // Clear error state
+  const clearError = useCallback(() => {
+    setLastError(null)
+  }, [])
 
   // Send a text message
   const sendMessage = useCallback(
@@ -55,6 +61,9 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       // Add to messages
       dispatch({ type: 'ADD_MESSAGE', message: userMessage })
       options.onMessageSent?.(userMessage)
+
+      // Clear any previous error
+      setLastError(null)
 
       try {
         console.log('[useTextChannel] Sending message:', trimmedText)
@@ -90,12 +99,23 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         }
       } catch (error) {
         console.error('[useTextChannel] Error sending message:', error)
+
+        // Rollback: Remove the optimistic user message on failure
+        dispatch({
+          type: 'SET_MESSAGES',
+          messages: messages.filter((m) => m.id !== userMessage.id),
+        })
+
         dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
-        options.onError?.(error as Error)
+
+        // Surface error to UI
+        const err = error as Error
+        setLastError(err)
+        options.onError?.(err)
         setIsSending(false)
       }
     },
-    [dispatch, options]
+    [dispatch, options, messages]
   )
 
   // Clear all messages
@@ -111,9 +131,11 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
     isStreaming: streamingContent.length > 0,
     isSending,
     isConnected,
+    lastError,
 
     // Actions
     sendMessage,
     clearMessages,
+    clearError,
   }
 }
