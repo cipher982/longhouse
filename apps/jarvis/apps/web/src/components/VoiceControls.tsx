@@ -51,6 +51,7 @@ export function VoiceControls({
       {/* Main Voice Button */}
       <div className="voice-button-wrapper">
         <button
+          id="pttBtn"
           className={`voice-button ${status}`}
           type="button"
           aria-label="Press to talk"

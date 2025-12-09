@@ -17,6 +17,8 @@ import { conversationController } from '../../lib/conversation-controller'
 import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
 
 export interface UseRealtimeSessionOptions {
+  /** Automatically connect on mount (default: true) */
+  autoConnect?: boolean
   onConnected?: () => void
   onDisconnected?: () => void
   onTranscript?: (text: string, isFinal: boolean) => void
@@ -113,6 +115,35 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     }
   }, [dispatch, options])
 
+  // Auto-connect on mount if enabled (default: true)
+  const autoConnect = options.autoConnect !== false
+  const connectAttemptedRef = useRef(false)
+
+  useEffect(() => {
+    if (!autoConnect || connectAttemptedRef.current || !initializedRef.current) {
+      return
+    }
+
+    connectAttemptedRef.current = true
+    console.log('[useRealtimeSession] Auto-connecting to realtime session')
+
+    // Slight delay to ensure DOM elements (pttBtn, remoteAudio) are mounted
+    const timeoutId = setTimeout(async () => {
+      try {
+        dispatch({ type: 'SET_VOICE_STATUS', status: 'connecting' })
+        await appController.connect()
+        dispatch({ type: 'SET_CONNECTED', connected: true })
+        options.onConnected?.()
+      } catch (error) {
+        console.error('[useRealtimeSession] Auto-connect failed:', error)
+        dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
+        options.onError?.(error as Error)
+      }
+    }, 100)
+
+    return () => clearTimeout(timeoutId)
+  }, [autoConnect, dispatch, options])
+
   // Connect to realtime session
   const connect = useCallback(async () => {
     try {
@@ -140,13 +171,25 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     }
   }, [dispatch, options])
 
-  // PTT press handler
+  // Check if connected
+  const isConnected = useCallback(() => {
+    return voiceController.isConnected()
+  }, [])
+
+  // PTT press handler - only works when connected
   const handlePTTPress = useCallback(() => {
+    if (!voiceController.isConnected()) {
+      console.warn('[useRealtimeSession] PTT press ignored - not connected')
+      return
+    }
     voiceController.startPTT()
   }, [])
 
-  // PTT release handler
+  // PTT release handler - only works when connected
   const handlePTTRelease = useCallback(() => {
+    if (!voiceController.isConnected()) {
+      return
+    }
     voiceController.stopPTT()
   }, [])
 
@@ -156,6 +199,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   }, [])
 
   return {
+    // State
+    isConnected,
+
     // Actions
     connect,
     disconnect,
