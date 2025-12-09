@@ -77,8 +77,13 @@ export function VoiceControls({
         <span className="mode-label">Hands-free</span>
       </div>
 
-      {/* Main Voice Button */}
-      <div className="voice-button-wrapper">
+      {/* Main Voice Button with Reactor Core */}
+      <div className={`voice-button-wrapper ${status}`}>
+        {/* Reactor Rings - Pure CSS animated */}
+        <div className="reactor-ring reactor-ring-outer" aria-hidden="true" />
+        <div className="reactor-ring reactor-ring-middle" aria-hidden="true" />
+        <div className="reactor-ring reactor-ring-inner" aria-hidden="true" />
+
         <button
           id="pttBtn"
           className={`voice-button ${status} ${disabled ? 'disabled' : ''}`}
@@ -92,7 +97,6 @@ export function VoiceControls({
           onTouchStart={handlePress}
           onTouchEnd={handleRelease}
         >
-          <div className="voice-button-ring"></div>
           <svg className="voice-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
             <path d="M19 10v2a7 7 0 01-14 0v-2" />

@@ -1,7 +1,7 @@
-/* Voice Button - Enhanced Cyber Edition
+/* Voice Button - Reactor Core Edition
    ====================================
-   Compatible with RadialVisualizer canvas injection from bridge mode.
-   Uses box-shadow for glows (not pseudo-elements that conflict with canvas).
+   Pure CSS sci-fi voice button with rotating reactor rings.
+   All effects are CSS-only, GPU-accelerated.
 */
 
 .voice-controls {
@@ -13,50 +13,274 @@
   padding: var(--space-6);
   position: relative;
   background: linear-gradient(0deg, var(--color-void) 0%, transparent 100%);
-  /* Cinematic unfold animation */
   animation: unfold-vertical 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
   transform-origin: bottom center;
 }
 
-/* Voice Button Wrapper - Holds the button and RadialVisualizer canvas */
+/* ============================
+   Reactor Core Container
+   ============================ */
+
 .voice-button-wrapper {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
-  /* Ambient glow halo - doesn't interfere with canvas */
-  filter: drop-shadow(0 0 40px rgb(99 102 241 / 15%));
-  transition: filter 0.5s ease;
+  justify-content: center;
+  width: 200px;
+  height: 200px;
 }
 
-.voice-button-wrapper:hover {
-  filter: drop-shadow(0 0 60px rgb(99 102 241 / 25%));
+/* ============================
+   Reactor Rings
+   ============================ */
+
+.reactor-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  pointer-events: none;
+  /* GPU acceleration */
+  will-change: transform, opacity;
+  backface-visibility: hidden;
 }
 
-/* The Core Button */
+/* Outer Ring - Largest, slowest */
+.reactor-ring-outer {
+  width: 180px;
+  height: 180px;
+  border: 2px dashed rgb(99 102 241 / 30%);
+  animation: ring-rotate 12s linear infinite;
+}
+
+/* Middle Ring - Counter-rotation */
+.reactor-ring-middle {
+  width: 155px;
+  height: 155px;
+  border: 1.5px solid rgb(99 102 241 / 20%);
+  border-top-color: rgb(99 102 241 / 60%);
+  border-right-color: transparent;
+  border-bottom-color: rgb(99 102 241 / 60%);
+  border-left-color: transparent;
+  animation: ring-rotate-reverse 8s linear infinite;
+}
+
+/* Inner Ring - Closest to button, fastest */
+.reactor-ring-inner {
+  width: 138px;
+  height: 138px;
+  border: 1px dotted rgb(99 102 241 / 25%);
+  animation: ring-rotate 5s linear infinite;
+}
+
+/* Ring rotation animations */
+@keyframes ring-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-rotate-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+/* ============================
+   State-Based Ring Behavior
+   ============================ */
+
+/* Idle - Slow, subtle */
+.voice-button-wrapper.idle .reactor-ring-outer {
+  animation-duration: 20s;
+  opacity: 0.5;
+}
+
+.voice-button-wrapper.idle .reactor-ring-middle {
+  animation-duration: 15s;
+  opacity: 0.4;
+}
+
+.voice-button-wrapper.idle .reactor-ring-inner {
+  animation-duration: 10s;
+  opacity: 0.3;
+}
+
+/* Connecting - Speed up, pulse */
+.voice-button-wrapper.connecting .reactor-ring {
+  animation-duration: 3s;
+  opacity: 0.8;
+}
+
+.voice-button-wrapper.connecting .reactor-ring-outer {
+  border-color: rgb(99 102 241 / 50%);
+  animation:
+    ring-rotate 3s linear infinite,
+    ring-pulse 1.5s ease-in-out infinite;
+}
+
+.voice-button-wrapper.connecting .reactor-ring-middle {
+  border-top-color: var(--color-neon-primary);
+  border-bottom-color: var(--color-neon-primary);
+}
+
+/* Ready - Gentle glow, green tint */
+.voice-button-wrapper.ready .reactor-ring-outer {
+  border-color: rgb(34 197 94 / 30%);
+  animation-duration: 15s;
+}
+
+.voice-button-wrapper.ready .reactor-ring-middle {
+  border-top-color: rgb(34 197 94 / 50%);
+  border-bottom-color: rgb(34 197 94 / 50%);
+  animation-duration: 10s;
+}
+
+.voice-button-wrapper.ready .reactor-ring-inner {
+  border-color: rgb(34 197 94 / 20%);
+  animation-duration: 8s;
+}
+
+/* Listening - Fast, cyan energy burst */
+.voice-button-wrapper.listening .reactor-ring {
+  opacity: 1;
+}
+
+.voice-button-wrapper.listening .reactor-ring-outer {
+  border-color: rgb(6 182 212 / 50%);
+  animation: ring-rotate 4s linear infinite;
+  box-shadow: 0 0 20px rgb(6 182 212 / 30%);
+}
+
+.voice-button-wrapper.listening .reactor-ring-middle {
+  border-top-color: var(--color-neon-cyan);
+  border-bottom-color: var(--color-neon-cyan);
+  animation: ring-rotate-reverse 2.5s linear infinite;
+  box-shadow: 0 0 15px rgb(6 182 212 / 40%);
+}
+
+.voice-button-wrapper.listening .reactor-ring-inner {
+  border-color: rgb(6 182 212 / 40%);
+  animation: ring-rotate 1.5s linear infinite;
+  box-shadow: 0 0 10px rgb(6 182 212 / 30%);
+}
+
+/* Speaking - Pink energy pulse */
+.voice-button-wrapper.speaking .reactor-ring-outer {
+  border-color: rgb(236 72 153 / 40%);
+  animation:
+    ring-rotate 6s linear infinite,
+    ring-pulse-pink 1s ease-in-out infinite;
+}
+
+.voice-button-wrapper.speaking .reactor-ring-middle {
+  border-top-color: var(--color-neon-pink);
+  border-bottom-color: var(--color-neon-pink);
+  animation: ring-rotate-reverse 4s linear infinite;
+}
+
+.voice-button-wrapper.speaking .reactor-ring-inner {
+  border-color: rgb(236 72 153 / 30%);
+  animation: ring-rotate 2s linear infinite;
+}
+
+/* Processing - Rainbow cycle */
+.voice-button-wrapper.processing .reactor-ring {
+  animation:
+    ring-rotate 2s linear infinite,
+    ring-color-cycle 2s linear infinite;
+}
+
+/* Error - Red warning */
+.voice-button-wrapper.error .reactor-ring {
+  border-color: rgb(239 68 68 / 40%);
+  animation:
+    ring-rotate 3s linear infinite,
+    ring-shake 0.5s ease-in-out infinite;
+}
+
+/* Ring animation variants */
+@keyframes ring-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(180deg) scale(1.02);
+  }
+}
+
+@keyframes ring-pulse-pink {
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgb(236 72 153 / 20%);
+  }
+  50% {
+    box-shadow: 0 0 30px rgb(236 72 153 / 50%);
+  }
+}
+
+@keyframes ring-color-cycle {
+  0% {
+    border-color: var(--color-neon-primary);
+  }
+  25% {
+    border-color: var(--color-neon-cyan);
+  }
+  50% {
+    border-color: var(--color-neon-pink);
+  }
+  75% {
+    border-color: var(--color-neon-secondary);
+  }
+  100% {
+    border-color: var(--color-neon-primary);
+  }
+}
+
+@keyframes ring-shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(2deg);
+  }
+  75% {
+    transform: rotate(-2deg);
+  }
+}
+
+/* ============================
+   The Core Button
+   ============================ */
+
 .voice-button {
   width: 120px;
   height: 120px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #2a2a45 0%, #0a0a12 70%);
+  background: radial-gradient(circle at 30% 30%, #1e1e2e 0%, #0a0a12 70%);
   border: 2px solid rgb(99 102 241 / 30%);
   cursor: pointer;
   position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
-  overflow: visible; /* Allow RadialVisualizer to extend outside */
-
-  /* Layered shadows for depth */
+  z-index: 10;
   box-shadow:
-    /* Inner glow */
     inset 0 0 30px rgb(0 0 0 / 60%),
     inset 0 2px 4px rgb(255 255 255 / 5%),
-    /* Mid-range shadow */ 0 8px 30px rgb(0 0 0 / 50%),
-    /* Outer glow ring */ 0 0 0 1px rgb(255 255 255 / 5%),
-    /* Ambient glow */ 0 0 30px rgb(99 102 241 / 15%);
-
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 1px rgb(255 255 255 / 5%),
+    0 0 30px rgb(99 102 241 / 15%);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -66,32 +290,26 @@
   height: 32px;
   color: rgb(255 255 255 / 50%);
   transition: all 0.3s ease;
-  z-index: 10; /* Above RadialVisualizer canvas */
   filter: drop-shadow(0 0 3px rgb(255 255 255 / 20%));
 }
 
-/* Ring element - hidden, RadialVisualizer provides visualization */
-.voice-button-ring {
-  display: none;
-}
-
 /* ============================
-   State-Based Styling
+   Button State Styling
    ============================ */
 
-/* Idle State - Ready to connect */
+/* Idle */
 .voice-button.idle {
-  animation: idle-pulse 4s ease-in-out infinite;
+  animation: button-idle-pulse 4s ease-in-out infinite;
 }
 
 .voice-button.idle .voice-icon {
   color: rgb(255 255 255 / 60%);
 }
 
-/* Connecting State */
+/* Connecting */
 .voice-button.connecting {
   border-color: rgb(99 102 241 / 50%);
-  animation: connecting-pulse 1.5s ease-in-out infinite;
+  animation: button-connecting 1.5s ease-in-out infinite;
 }
 
 .voice-button.connecting .voice-icon {
@@ -99,16 +317,15 @@
   animation: icon-blink 1s steps(2, start) infinite;
 }
 
-/* Ready State - Connected, waiting for input */
+/* Ready */
 .voice-button.ready {
   border-color: rgb(34 197 94 / 40%);
   box-shadow:
     inset 0 0 30px rgb(0 0 0 / 60%),
-    inset 0 2px 4px rgb(255 255 255 / 5%),
     0 8px 30px rgb(0 0 0 / 50%),
     0 0 0 1px rgb(34 197 94 / 20%),
     0 0 40px rgb(34 197 94 / 15%);
-  animation: ready-breathe 3s ease-in-out infinite;
+  animation: button-ready-breathe 3s ease-in-out infinite;
 }
 
 .voice-button.ready .voice-icon {
@@ -116,19 +333,18 @@
   filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
 }
 
-/* Listening State - User speaking */
+/* Listening */
 .voice-button.listening {
   border-color: var(--color-neon-cyan);
-  background: radial-gradient(circle at 30% 30%, #1a2a3a 0%, #0a1020 70%);
+  background: radial-gradient(circle at 30% 30%, #0f2027 0%, #0a1015 70%);
   transform: scale(1.05);
   box-shadow:
     inset 0 0 40px rgb(6 182 212 / 15%),
-    inset 0 2px 4px rgb(255 255 255 / 5%),
     0 8px 30px rgb(0 0 0 / 50%),
     0 0 0 2px rgb(6 182 212 / 40%),
     0 0 60px rgb(6 182 212 / 30%),
     0 0 100px rgb(6 182 212 / 15%);
-  animation: listening-glow 1.5s ease-in-out infinite;
+  animation: button-listening 1.5s ease-in-out infinite;
 }
 
 .voice-button.listening .voice-icon {
@@ -137,10 +353,10 @@
   animation: icon-float 2s ease-in-out infinite;
 }
 
-/* Processing State */
+/* Processing */
 .voice-button.processing {
   border-color: var(--color-neon-secondary);
-  animation: processing-spin 2s linear infinite;
+  animation: button-processing 2s linear infinite;
 }
 
 .voice-button.processing .voice-icon {
@@ -148,17 +364,16 @@
   filter: drop-shadow(0 0 8px var(--color-neon-secondary));
 }
 
-/* Speaking State - Assistant responding */
+/* Speaking */
 .voice-button.speaking {
   border-color: var(--color-neon-pink);
-  background: radial-gradient(circle at 30% 30%, #2a1a2a 0%, #150a15 70%);
+  background: radial-gradient(circle at 30% 30%, #1a0a15 0%, #0f050a 70%);
   box-shadow:
     inset 0 0 40px rgb(236 72 153 / 15%),
-    inset 0 2px 4px rgb(255 255 255 / 5%),
     0 8px 30px rgb(0 0 0 / 50%),
     0 0 0 2px rgb(236 72 153 / 40%),
     0 0 50px rgb(236 72 153 / 25%);
-  animation: speaking-pulse 1s ease-in-out infinite;
+  animation: button-speaking 1s ease-in-out infinite;
 }
 
 .voice-button.speaking .voice-icon {
@@ -166,7 +381,7 @@
   filter: drop-shadow(0 0 8px var(--color-neon-pink));
 }
 
-/* Error State */
+/* Error */
 .voice-button.error {
   border-color: var(--color-intent-error);
   box-shadow:
@@ -180,14 +395,14 @@
   color: var(--color-intent-error);
 }
 
-/* Disabled State */
+/* Disabled */
 .voice-button.disabled {
   opacity: 0.5;
   cursor: not-allowed;
   filter: grayscale(50%);
 }
 
-/* Hover States */
+/* Hover */
 .voice-button:hover:not(.disabled):not(.listening) {
   transform: scale(1.02);
   border-color: var(--color-neon-primary);
@@ -197,16 +412,16 @@
   color: #fff;
 }
 
-/* Active/Click State */
+/* Active */
 .voice-button:active:not(.disabled) {
   transform: scale(0.98);
 }
 
 /* ============================
-   Animations
+   Button Animations
    ============================ */
 
-@keyframes idle-pulse {
+@keyframes button-idle-pulse {
   0%,
   100% {
     box-shadow:
@@ -220,11 +435,11 @@
       inset 0 0 30px rgb(0 0 0 / 60%),
       0 8px 30px rgb(0 0 0 / 50%),
       0 0 0 1px rgb(255 255 255 / 8%),
-      0 0 40px rgb(99 102 241 / 25%);
+      0 0 50px rgb(99 102 241 / 25%);
   }
 }
 
-@keyframes connecting-pulse {
+@keyframes button-connecting {
   0%,
   100% {
     opacity: 1;
@@ -239,12 +454,12 @@
     box-shadow:
       inset 0 0 30px rgb(0 0 0 / 60%),
       0 8px 30px rgb(0 0 0 / 50%),
-      0 0 0 12px rgb(99 102 241 / 0%),
-      0 0 50px rgb(99 102 241 / 35%);
+      0 0 0 15px rgb(99 102 241 / 0%),
+      0 0 60px rgb(99 102 241 / 40%);
   }
 }
 
-@keyframes ready-breathe {
+@keyframes button-ready-breathe {
   0%,
   100% {
     box-shadow:
@@ -262,7 +477,7 @@
   }
 }
 
-@keyframes listening-glow {
+@keyframes button-listening {
   0%,
   100% {
     box-shadow:
@@ -280,7 +495,25 @@
   }
 }
 
-@keyframes speaking-pulse {
+@keyframes button-processing {
+  0% {
+    border-color: var(--color-neon-secondary);
+  }
+  25% {
+    border-color: var(--color-neon-primary);
+  }
+  50% {
+    border-color: var(--color-neon-cyan);
+  }
+  75% {
+    border-color: var(--color-neon-pink);
+  }
+  100% {
+    border-color: var(--color-neon-secondary);
+  }
+}
+
+@keyframes button-speaking {
   0%,
   100% {
     box-shadow:
@@ -297,24 +530,6 @@
       0 0 0 4px rgb(236 72 153 / 50%),
       0 0 70px rgb(236 72 153 / 35%);
     transform: scale(1.02);
-  }
-}
-
-@keyframes processing-spin {
-  0% {
-    border-color: var(--color-neon-secondary);
-  }
-  25% {
-    border-color: var(--color-neon-primary);
-  }
-  50% {
-    border-color: var(--color-neon-cyan);
-  }
-  75% {
-    border-color: var(--color-neon-pink);
-  }
-  100% {
-    border-color: var(--color-neon-secondary);
   }
 }
 
@@ -459,7 +674,7 @@
   color: var(--color-text-secondary);
 }
 
-/* Disabled toggle state */
+/* Disabled toggle */
 .mode-toggle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
