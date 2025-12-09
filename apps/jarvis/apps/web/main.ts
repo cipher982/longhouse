@@ -1,4 +1,18 @@
-// Jarvis PWA - Refactored Entry Point
+/**
+ * LEGACY ENTRY POINT
+ *
+ * This file is the original vanilla TypeScript entry point.
+ * It has been replaced by the React app in src/main.tsx.
+ *
+ * The lib/ directory controllers are still used by the React app
+ * via the useRealtimeSession bridge hook when ENABLE_REALTIME_BRIDGE=true.
+ *
+ * TODO: Once React migration is complete and stable:
+ * 1. Move remaining business logic from lib/ to React hooks
+ * 2. Delete this file and the lib/ directory
+ * 3. Remove the legacy contexts/ directory
+ */
+// Jarvis PWA - Refactored Entry Point (LEGACY)
 // CSS loaded via <link> tags in index.html (blocking, prevents FOUC)
 
 import { logger, getJarvisClient, SessionManager } from '@jarvis/core';
