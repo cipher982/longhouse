@@ -226,18 +226,22 @@ export class RadialVisualizer {
     const intensity = this.displayLevel;
     const accent = this.renderColor;
 
-    // Ambient glow - hide when idle, show when active
-    if (micActive || assistantActive) {
-      const ambientGradient = ctx.createRadialGradient(cx, cy, innerR * 0.4, cx, cy, baseR + 36);
-      const glowOpacity = 0.2 + intensity * 0.35;
-      ambientGradient.addColorStop(0, `rgba(99,102,241,${glowOpacity})`);
-      ambientGradient.addColorStop(1, 'rgba(15,23,42,0)');
-      ctx.beginPath();
-      ctx.arc(cx, cy, baseR + 32, 0, Math.PI * 2);
-      ctx.fillStyle = ambientGradient;
-      ctx.fill();
+    // IDLE STATE: Draw nothing - let CSS handle the glow
+    // The button already has nice CSS-based glow effects
+    if (!micActive && !assistantActive) {
+      return; // Exit early - no canvas drawing in idle state
     }
 
+    // ACTIVE STATE: Draw full visualizer
+    // Ambient glow
+    const ambientGradient = ctx.createRadialGradient(cx, cy, innerR * 0.4, cx, cy, baseR + 36);
+    const glowOpacity = 0.2 + intensity * 0.35;
+    ambientGradient.addColorStop(0, `rgba(99,102,241,${glowOpacity})`);
+    ambientGradient.addColorStop(1, 'rgba(15,23,42,0)');
+    ctx.beginPath();
+    ctx.arc(cx, cy, baseR + 32, 0, Math.PI * 2);
+    ctx.fillStyle = ambientGradient;
+    ctx.fill();
 
     // Render spectrum bars using analyser data when available; otherwise synthesize
     const bars = 120;
@@ -259,7 +263,6 @@ export class RadialVisualizer {
       }
     }
 
-    const innerAlpha = micActive || assistantActive ? 0.28 + intensity * 0.4 : 0.18;
     const barColor = ctx.createLinearGradient(cx, cy - innerR, cx, cy + baseR);
     barColor.addColorStop(0, assistantActive && !micActive ? '#38bdf8' : accent);
     barColor.addColorStop(1, micActive && !assistantActive ? '#f472b6' : '#6366f1');
@@ -293,19 +296,17 @@ export class RadialVisualizer {
     ctx.fillStyle = coreGradient;
     ctx.fill();
 
-    // Highlight pulses for mic / assistant activity
-    if (micActive || assistantActive) {
-      const pulseCount = micActive && assistantActive ? 3 : 2;
-      for (let i = 0; i < pulseCount; i++) {
-        const progress = (this.pulseClock * (micActive ? 1.45 : 1.1) + i * 0.6) % 1;
-        const pulseRadius = innerR + progress * (baseR - innerR);
-        const alpha = Math.max(0, 0.35 - progress * (0.5 + intensity * 0.5));
-        ctx.beginPath();
-        ctx.arc(cx, cy, pulseRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(236,72,153,${micActive ? alpha : alpha * 0.6})`;
-        ctx.lineWidth = 1.5 + intensity * 1.5;
-        ctx.stroke();
-      }
+    // Highlight pulses for activity
+    const pulseCount = micActive && assistantActive ? 3 : 2;
+    for (let i = 0; i < pulseCount; i++) {
+      const progress = (this.pulseClock * (micActive ? 1.45 : 1.1) + i * 0.6) % 1;
+      const pulseRadius = innerR + progress * (baseR - innerR);
+      const alpha = Math.max(0, 0.35 - progress * (0.5 + intensity * 0.5));
+      ctx.beginPath();
+      ctx.arc(cx, cy, pulseRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(236,72,153,${micActive ? alpha : alpha * 0.6})`;
+      ctx.lineWidth = 1.5 + intensity * 1.5;
+      ctx.stroke();
     }
   }
 

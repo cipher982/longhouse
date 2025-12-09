@@ -1,245 +1,470 @@
-/* Voice Button - Reactor Core Design */
+/* Voice Button - Enhanced Cyber Edition
+   ====================================
+   Compatible with RadialVisualizer canvas injection from bridge mode.
+   Uses box-shadow for glows (not pseudo-elements that conflict with canvas).
+*/
 
 .voice-controls {
-  perspective: 1000px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  position: relative;
+  background: linear-gradient(0deg, var(--color-void) 0%, transparent 100%);
+  /* Cinematic unfold animation */
+  animation: unfold-vertical 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: bottom center;
 }
 
+/* Voice Button Wrapper - Holds the button and RadialVisualizer canvas */
 .voice-button-wrapper {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-5);
-  transform-style: preserve-3d;
+  gap: var(--space-3);
+  /* Ambient glow halo - doesn't interfere with canvas */
+  filter: drop-shadow(0 0 40px rgb(99 102 241 / 15%));
+  transition: filter 0.5s ease;
 }
 
-/* The Core */
+.voice-button-wrapper:hover {
+  filter: drop-shadow(0 0 60px rgb(99 102 241 / 25%));
+}
+
+/* The Core Button */
 .voice-button {
   width: 120px;
   height: 120px;
   border-radius: 50%;
-  background: radial-gradient(circle at center, #1e1e2e 0%, #050508 100%);
-  border: 1px solid rgb(255 255 255 / 5%);
+  background: radial-gradient(circle at 30% 30%, #2a2a45 0%, #0a0a12 70%);
+  border: 2px solid rgb(99 102 241 / 30%);
   cursor: pointer;
   position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
+  overflow: visible; /* Allow RadialVisualizer to extend outside */
+
+  /* Layered shadows for depth */
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 5%),
-    0 20px 50px rgb(0 0 0 / 60%),
-    inset 0 0 60px rgb(0 0 0 / 90%);
-  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 10;
-}
+    /* Inner glow */
+    inset 0 0 30px rgb(0 0 0 / 60%),
+    inset 0 2px 4px rgb(255 255 255 / 5%),
+    /* Mid-range shadow */ 0 8px 30px rgb(0 0 0 / 50%),
+    /* Outer glow ring */ 0 0 0 1px rgb(255 255 255 / 5%),
+    /* Ambient glow */ 0 0 30px rgb(99 102 241 / 15%);
 
-/* Inner Glowing Core */
-.voice-button::before {
-  content: "";
-  position: absolute;
-  inset: 15px;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    rgb(99 102 241 / 30%) 0%,
-    transparent 70%
-  );
-  filter: blur(8px);
-  opacity: 0.3;
-  transition: all 0.5s ease;
-  mix-blend-mode: screen;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
-
-/* Rotating Rings Container */
-.voice-button-ring {
-  position: absolute;
-  inset: -15px;
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-/* Ring 1: Primary Orbital */
-.voice-button-ring::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1px solid transparent;
-  border-top-color: rgb(99 102 241 / 50%);
-  border-right-color: rgb(99 102 241 / 20%);
-  transform: rotate(45deg);
-  transition: all 0.5s ease;
-  animation: spin-slow 12s linear infinite;
-}
-
-/* Ring 2: Dashed Technical Ring */
-.voice-button-ring::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-radius: 50%;
-  border: 1px dashed rgb(255 255 255 / 15%);
-  animation: spin-reverse 20s linear infinite;
-}
-
-/* Ring 3: Inner Fast Ring (Added via box-shadow on button hover/active) */
 
 /* Icon */
 .voice-icon {
-  width: 36px;
-  height: 36px;
-  color: rgb(255 255 255 / 40%);
+  width: 32px;
+  height: 32px;
+  color: rgb(255 255 255 / 50%);
   transition: all 0.3s ease;
-  z-index: 2;
-  filter: drop-shadow(0 0 5px rgb(0 0 0 / 50%));
+  z-index: 10; /* Above RadialVisualizer canvas */
+  filter: drop-shadow(0 0 3px rgb(255 255 255 / 20%));
 }
 
-/* States */
+/* Ring element - hidden, RadialVisualizer provides visualization */
+.voice-button-ring {
+  display: none;
+}
 
-/* Hover */
-.voice-button:hover {
-  transform: scale(1.02);
+/* ============================
+   State-Based Styling
+   ============================ */
+
+/* Idle State - Ready to connect */
+.voice-button.idle {
+  animation: idle-pulse 4s ease-in-out infinite;
+}
+
+.voice-button.idle .voice-icon {
+  color: rgb(255 255 255 / 60%);
+}
+
+/* Connecting State */
+.voice-button.connecting {
+  border-color: rgb(99 102 241 / 50%);
+  animation: connecting-pulse 1.5s ease-in-out infinite;
+}
+
+.voice-button.connecting .voice-icon {
+  color: var(--color-neon-primary);
+  animation: icon-blink 1s steps(2, start) infinite;
+}
+
+/* Ready State - Connected, waiting for input */
+.voice-button.ready {
+  border-color: rgb(34 197 94 / 40%);
   box-shadow:
-    0 0 0 1px rgb(99 102 241 / 30%),
-    0 0 40px rgb(99 102 241 / 15%),
-    inset 0 0 40px rgb(0 0 0 / 80%);
-  border-color: rgb(99 102 241 / 40%);
+    inset 0 0 30px rgb(0 0 0 / 60%),
+    inset 0 2px 4px rgb(255 255 255 / 5%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 1px rgb(34 197 94 / 20%),
+    0 0 40px rgb(34 197 94 / 15%);
+  animation: ready-breathe 3s ease-in-out infinite;
 }
 
-.voice-button:hover .voice-icon {
-  color: #fff;
-  filter: drop-shadow(0 0 10px var(--color-neon-primary));
+.voice-button.ready .voice-icon {
+  color: #22c55e;
+  filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
 }
 
-/* ACTIVE: Listening - The Reactor Spools Up */
+/* Listening State - User speaking */
 .voice-button.listening {
-  background: radial-gradient(circle at center, #1e1e2e 0%, #000 100%);
-  box-shadow:
-    0 0 0 2px var(--color-neon-primary),
-    0 0 60px rgb(99 102 241 / 40%),
-    inset 0 0 20px rgb(99 102 241 / 20%);
   border-color: var(--color-neon-cyan);
-  animation: breathe-intense 2s ease-in-out infinite;
-}
-
-.voice-button.listening .voice-button-ring::before {
-  border-top-color: var(--color-neon-cyan);
-  border-right-color: var(--color-neon-primary);
-  border-width: 2px;
-  animation: spin-fast 1.5s linear infinite;
-  box-shadow: 0 0 20px rgb(6 182 212 / 30%);
-}
-
-.voice-button.listening .voice-button-ring::after {
-  border-color: rgb(255 255 255 / 30%);
-  animation: spin-reverse 5s linear infinite;
+  background: radial-gradient(circle at 30% 30%, #1a2a3a 0%, #0a1020 70%);
+  transform: scale(1.05);
+  box-shadow:
+    inset 0 0 40px rgb(6 182 212 / 15%),
+    inset 0 2px 4px rgb(255 255 255 / 5%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(6 182 212 / 40%),
+    0 0 60px rgb(6 182 212 / 30%),
+    0 0 100px rgb(6 182 212 / 15%);
+  animation: listening-glow 1.5s ease-in-out infinite;
 }
 
 .voice-button.listening .voice-icon {
-  color: #fff;
-  filter: drop-shadow(0 0 20px var(--color-neon-cyan));
-  animation: pulse-icon 2s ease-in-out infinite;
+  color: var(--color-neon-cyan);
+  filter: drop-shadow(0 0 10px var(--color-neon-cyan));
+  animation: icon-float 2s ease-in-out infinite;
 }
 
-.voice-button.listening::before {
-  opacity: 0.8;
-  background: radial-gradient(
-    circle,
-    var(--color-neon-cyan) 0%,
-    transparent 60%
-  );
-  animation: core-pulse 1s ease-in-out infinite alternate;
+/* Processing State */
+.voice-button.processing {
+  border-color: var(--color-neon-secondary);
+  animation: processing-spin 2s linear infinite;
 }
 
-/* ACTIVE: Speaking/Processing */
+.voice-button.processing .voice-icon {
+  color: var(--color-neon-secondary);
+  filter: drop-shadow(0 0 8px var(--color-neon-secondary));
+}
+
+/* Speaking State - Assistant responding */
 .voice-button.speaking {
-  box-shadow:
-    0 0 80px rgb(236 72 153 / 40%),
-    inset 0 0 30px rgb(236 72 153 / 20%);
   border-color: var(--color-neon-pink);
+  background: radial-gradient(circle at 30% 30%, #2a1a2a 0%, #150a15 70%);
+  box-shadow:
+    inset 0 0 40px rgb(236 72 153 / 15%),
+    inset 0 2px 4px rgb(255 255 255 / 5%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(236 72 153 / 40%),
+    0 0 50px rgb(236 72 153 / 25%);
+  animation: speaking-pulse 1s ease-in-out infinite;
 }
 
 .voice-button.speaking .voice-icon {
   color: var(--color-neon-pink);
+  filter: drop-shadow(0 0 8px var(--color-neon-pink));
 }
 
-.voice-button.speaking .voice-button-ring::before {
-  border-top-color: var(--color-neon-pink);
-  border-right-color: rgb(236 72 153 / 50%);
+/* Error State */
+.voice-button.error {
+  border-color: var(--color-intent-error);
+  box-shadow:
+    inset 0 0 30px rgb(239 68 68 / 10%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(239 68 68 / 30%),
+    0 0 30px rgb(239 68 68 / 20%);
 }
 
-/* Status Text */
+.voice-button.error .voice-icon {
+  color: var(--color-intent-error);
+}
+
+/* Disabled State */
+.voice-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(50%);
+}
+
+/* Hover States */
+.voice-button:hover:not(.disabled):not(.listening) {
+  transform: scale(1.02);
+  border-color: var(--color-neon-primary);
+}
+
+.voice-button:hover:not(.disabled) .voice-icon {
+  color: #fff;
+}
+
+/* Active/Click State */
+.voice-button:active:not(.disabled) {
+  transform: scale(0.98);
+}
+
+/* ============================
+   Animations
+   ============================ */
+
+@keyframes idle-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(255 255 255 / 5%),
+      0 0 30px rgb(99 102 241 / 15%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(255 255 255 / 8%),
+      0 0 40px rgb(99 102 241 / 25%);
+  }
+}
+
+@keyframes connecting-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 0 rgb(99 102 241 / 40%),
+      0 0 30px rgb(99 102 241 / 20%);
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 12px rgb(99 102 241 / 0%),
+      0 0 50px rgb(99 102 241 / 35%);
+  }
+}
+
+@keyframes ready-breathe {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(34 197 94 / 20%),
+      0 0 40px rgb(34 197 94 / 15%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 3px rgb(34 197 94 / 30%),
+      0 0 60px rgb(34 197 94 / 25%);
+  }
+}
+
+@keyframes listening-glow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 40px rgb(6 182 212 / 15%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 2px rgb(6 182 212 / 40%),
+      0 0 60px rgb(6 182 212 / 30%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 50px rgb(6 182 212 / 25%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 4px rgb(6 182 212 / 50%),
+      0 0 80px rgb(6 182 212 / 40%);
+  }
+}
+
+@keyframes speaking-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 40px rgb(236 72 153 / 15%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 2px rgb(236 72 153 / 40%),
+      0 0 50px rgb(236 72 153 / 25%);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 50px rgb(236 72 153 / 25%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 4px rgb(236 72 153 / 50%),
+      0 0 70px rgb(236 72 153 / 35%);
+    transform: scale(1.02);
+  }
+}
+
+@keyframes processing-spin {
+  0% {
+    border-color: var(--color-neon-secondary);
+  }
+  25% {
+    border-color: var(--color-neon-primary);
+  }
+  50% {
+    border-color: var(--color-neon-cyan);
+  }
+  75% {
+    border-color: var(--color-neon-pink);
+  }
+  100% {
+    border-color: var(--color-neon-secondary);
+  }
+}
+
+@keyframes icon-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes icon-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+/* ============================
+   Status Text
+   ============================ */
+
+.voice-status {
+  text-align: center;
+  animation: slide-up-fade 0.4s ease-out 0.2s backwards;
+}
+
 .voice-status-text {
   font-family: var(--font-family-mono);
   font-size: 0.75rem;
-  letter-spacing: 3px;
+  letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--color-text-secondary);
-  text-shadow: 0 0 10px rgb(0 0 0 / 50%);
   opacity: 0.8;
+  transition: color 0.3s ease;
+}
+
+/* Status text color by state */
+.voice-button.connecting ~ .voice-status .voice-status-text {
+  color: var(--color-neon-primary);
+}
+
+.voice-button.ready ~ .voice-status .voice-status-text {
+  color: #22c55e;
+}
+
+.voice-button.listening ~ .voice-status .voice-status-text {
+  color: var(--color-neon-cyan);
+}
+
+.voice-button.speaking ~ .voice-status .voice-status-text,
+.voice-button.processing ~ .voice-status .voice-status-text {
+  color: var(--color-neon-pink);
+}
+
+/* ============================
+   Mode Toggle - Cyber Switch
+   ============================ */
+
+.mode-toggle-container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: rgb(255 255 255 / 3%);
+  padding: 8px 16px;
+  border-radius: 24px;
+  border: 1px solid var(--color-border-muted);
+  backdrop-filter: blur(8px);
+  animation: slide-up-fade 0.4s ease-out 0.3s backwards;
   transition: all 0.3s ease;
 }
 
-.voice-controls:hover .voice-status-text {
-  color: var(--color-text-primary);
-  text-shadow: 0 0 20px var(--color-neon-primary);
-  opacity: 1;
+.mode-toggle-container:hover {
+  background: rgb(255 255 255 / 5%);
+  border-color: rgb(255 255 255 / 15%);
 }
 
-/* Animations */
-@keyframes spin-slow {
-  to {
-    transform: rotate(360deg);
-  }
+.mode-toggle {
+  width: 48px;
+  height: 24px;
+  background: rgb(0 0 0 / 60%);
+  border-radius: 24px;
+  position: relative;
+  cursor: pointer;
+  border: 1px solid rgb(255 255 255 / 10%);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow:
+    inset 0 2px 4px rgb(0 0 0 / 30%),
+    0 1px 0 rgb(255 255 255 / 5%);
 }
 
-@keyframes spin-reverse {
-  to {
-    transform: rotate(-360deg);
-  }
+.mode-toggle[aria-checked="true"] {
+  background: linear-gradient(
+    135deg,
+    rgb(99 102 241 / 40%) 0%,
+    rgb(6 182 212 / 40%) 100%
+  );
+  border-color: var(--color-neon-cyan);
+  box-shadow:
+    inset 0 2px 4px rgb(0 0 0 / 20%),
+    0 0 15px rgb(6 182 212 / 30%);
 }
 
-@keyframes spin-fast {
-  to {
-    transform: rotate(360deg);
-  }
+.mode-toggle-slider {
+  width: 18px;
+  height: 18px;
+  background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 30%),
+    0 0 0 1px rgb(255 255 255 / 10%);
 }
 
-@keyframes breathe-intense {
-  0%,
-  100% {
-    transform: scale(1);
-    box-shadow:
-      0 0 0 2px var(--color-neon-primary),
-      0 0 60px rgb(99 102 241 / 40%);
-  }
-  50% {
-    transform: scale(1.05);
-    box-shadow:
-      0 0 0 2px var(--color-neon-cyan),
-      0 0 80px rgb(6 182 212 / 50%);
-  }
+.mode-toggle[aria-checked="true"] .mode-toggle-slider {
+  transform: translateX(24px);
+  background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #22d3ee 100%);
+  box-shadow:
+    0 2px 8px rgb(6 182 212 / 50%),
+    0 0 12px var(--color-neon-cyan);
 }
 
-@keyframes core-pulse {
-  0% {
-    opacity: 0.5;
-    transform: scale(0.8);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1.2);
-  }
+.mode-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--color-text-muted);
+  transition: color 0.3s ease;
 }
 
-@keyframes pulse-icon {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(0.9);
-  }
+.mode-toggle-container:hover .mode-label {
+  color: var(--color-text-secondary);
+}
+
+/* Disabled toggle state */
+.mode-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mode-toggle:disabled + .mode-label {
+  opacity: 0.4;
 }

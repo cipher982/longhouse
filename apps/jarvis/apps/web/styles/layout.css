@@ -184,18 +184,6 @@
   );
 }
 
-/* Voice Controls - Floating Island */
-.voice-controls {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-4);
-  padding: var(--space-6);
-  position: relative;
-  background: linear-gradient(0deg, var(--color-void) 0%, rgb(3 3 5 / 0%) 100%);
-}
-
 /* Text Input - Floating Capsule */
 .text-input-container {
   padding: 0 var(--space-6) var(--space-6);
