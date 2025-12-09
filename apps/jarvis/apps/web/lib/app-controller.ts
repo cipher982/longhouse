@@ -1,7 +1,10 @@
 /**
  * App Controller
  * High-level orchestrator for the Jarvis Application.
- * Coordinates Audio, Voice, Session, and UI State.
+ * Coordinates Audio, Voice, Session, and State.
+ *
+ * NOTE: This controller does NOT manipulate the DOM directly.
+ * All UI updates are done via stateManager events → React hooks → React state.
  */
 
 import { type RealtimeSession } from '@openai/agents/realtime';
@@ -12,10 +15,8 @@ import { sessionHandler } from './session-handler';
 import { audioController } from './audio-controller';
 import { voiceController, type VoiceEvent } from './voice-controller';
 import { conversationController } from './conversation-controller';
-import { uiEnhancements } from './ui-enhancements';
-import { uiController } from './ui-controller'; // Import UI Controller directly
 import { feedbackSystem } from './feedback-system';
-import { VoiceButtonState, CONFIG, buildConversationManagerOptions } from './config';
+import { CONFIG, buildConversationManagerOptions } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { createContextTools } from './tool-factory';
 import { contextLoader } from '../contexts/context-loader';
@@ -58,9 +59,6 @@ export class AppController {
 
     // 5. Async initialization
     await this.textChannelController.initialize();
-
-    // Initialize UI
-    uiController.initialize();
 
     this.initialized = true;
     logger.info('✅ App Controller initialized');
@@ -145,11 +143,8 @@ export class AppController {
 
     logger.info('🔗 Connect sequence starting...');
 
-    let loadingOverlay: HTMLDivElement | null = null;
-
     try {
-      uiController.updateButtonState(VoiceButtonState.CONNECTING);
-      loadingOverlay = uiEnhancements.showLoading('Requesting microphone access...');
+      stateManager.setVoiceStatus('connecting');
 
       const currentContext = stateManager.getState().currentContext;
 
@@ -158,10 +153,6 @@ export class AppController {
 
       // PRIVACY-CRITICAL: Mute immediately
       audioController.muteMicrophone();
-
-      if (loadingOverlay) {
-        loadingOverlay.querySelector('.loading-text')!.textContent = 'Connecting to OpenAI...';
-      }
 
       // 2. Connect Session
       if (!currentContext) {
@@ -191,17 +182,16 @@ export class AppController {
       voiceController.setMicrophoneStream(micStream);
       this.textChannelController?.setSession(session);
 
-      // 6. Finalize UI State
-      uiController.updateButtonState(VoiceButtonState.READY);
+      // 6. Finalize State
+      stateManager.setVoiceStatus('ready');
       this.connecting = false;
 
       // Set voice mode ready state after connection
       voiceController.transitionToVoice({ handsFree: false });
 
-      // Feedback
+      // Audio feedback
       feedbackSystem.playConnectChime();
-      if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
-      uiEnhancements.showToast('Connected successfully', 'success');
+      stateManager.showToast('Connected successfully', 'success');
 
     } catch (error: any) {
       logger.error('Connection failed', error);
@@ -209,10 +199,9 @@ export class AppController {
 
       // Cleanup
       audioController.releaseMicrophone();
-      uiController.updateButtonState(VoiceButtonState.IDLE);
-
-      if (loadingOverlay) uiEnhancements.hideLoading(loadingOverlay);
-      uiEnhancements.showToast(`Connection failed: ${error.message}`, 'error');
+      stateManager.setVoiceStatus('error');
+      stateManager.setConnectionError(error);
+      stateManager.showToast(`Connection failed: ${error.message}`, 'error');
       feedbackSystem.playErrorTone();
     }
   }
@@ -233,8 +222,7 @@ export class AppController {
   async disconnect(): Promise<void> {
     logger.info('🔌 Disconnect sequence starting...');
 
-    // UI Feedback
-    uiEnhancements.showToast('Disconnecting...', 'info');
+    stateManager.showToast('Disconnecting...', 'info');
     audioController.setListeningMode(false);
 
     try {
@@ -251,12 +239,12 @@ export class AppController {
       audioController.dispose(); // Releases mic and stops monitor
 
       logger.info('✅ Disconnected successfully');
-      uiEnhancements.showToast('Disconnected', 'info');
+      stateManager.showToast('Disconnected', 'info');
 
     } catch (error) {
       logger.error('Disconnect error', error);
     } finally {
-      uiController.updateButtonState(VoiceButtonState.IDLE);
+      stateManager.setVoiceStatus('idle');
     }
   }
 
@@ -282,7 +270,7 @@ export class AppController {
           break;
         case 'error':
           logger.error('Voice controller error:', event.error);
-          uiEnhancements.showToast(`Voice error: ${event.error.message}`, 'error');
+          stateManager.showToast(`Voice error: ${event.error.message}`, 'error');
           break;
       }
     });
@@ -293,12 +281,12 @@ export class AppController {
     // VAD active means we should visualize listening
     if (state.vadActive || state.active) {
       audioController.setListeningMode(true).catch(() => {});
-      uiController.updateButtonState(VoiceButtonState.SPEAKING); // Or SPEAKING/ACTIVE
+      stateManager.setVoiceStatus('listening');
     } else {
       audioController.setListeningMode(false).catch(() => {});
       // If connected but not active, set to READY
       if (voiceController.isConnected()) {
-         uiController.updateButtonState(VoiceButtonState.READY);
+        stateManager.setVoiceStatus('ready');
       }
     }
 
@@ -311,7 +299,7 @@ export class AppController {
     const finalText = text.trim();
     if (!finalText) return;
 
-    // Add to UI/Conversation
+    // Add to conversation controller (for persistence)
     conversationController.addUserTurn(finalText);
   }
 
@@ -338,7 +326,7 @@ export class AppController {
         const delta = event.delta || '';
         if (delta) {
           conversationController.appendStreaming(delta);
-          uiController.updateButtonState(VoiceButtonState.RESPONDING);
+          stateManager.setVoiceStatus('speaking');
         }
       }
 
@@ -351,7 +339,7 @@ export class AppController {
       if (t === 'response.done') {
         if (conversationController.isStreaming()) {
           conversationController.finalizeStreaming();
-          uiController.updateButtonState(VoiceButtonState.READY);
+          stateManager.setVoiceStatus('ready');
         }
       }
 
@@ -366,7 +354,7 @@ export class AppController {
       // Error handling
       if (t === 'error') {
         logger.error('Session error event', event);
-        uiEnhancements.showToast('Session error occurred', 'error');
+        stateManager.showToast('Session error occurred', 'error');
       }
     });
   }

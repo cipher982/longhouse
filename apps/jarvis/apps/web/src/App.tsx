@@ -1,6 +1,9 @@
 /**
  * Jarvis PWA - React App
  * Main application component with realtime session integration
+ *
+ * This is a pure React application. Controllers emit events via stateManager,
+ * and React hooks subscribe to those events and update React state.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -8,24 +11,7 @@ import { useAppState, useAppDispatch, type ChatMessage } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 
-// Feature flag for enabling realtime session bridge
-// Controlled via VITE_JARVIS_ENABLE_REALTIME_BRIDGE env var
-// Default: false (standalone React mode with simulated responses)
-// Bridge mode: true (full functionality via legacy controllers - recommended for production)
-const ENABLE_REALTIME_BRIDGE = import.meta.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
-
-// Log info about active mode
-if (ENABLE_REALTIME_BRIDGE) {
-  console.info(
-    '[Jarvis] Bridge mode active - using legacy controllers for full realtime functionality. ' +
-    'This is the recommended mode for production until React hooks achieve feature parity.'
-  )
-} else {
-  console.info(
-    '[Jarvis] Standalone React mode active - responses are simulated. ' +
-    'Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true for full backend integration.'
-  )
-}
+console.info('[Jarvis] Starting React application with realtime session integration')
 
 export default function App() {
   const state = useAppState()
@@ -39,37 +25,28 @@ export default function App() {
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
-  // Realtime session bridge (optional, controlled by feature flag)
-  const realtimeSession = ENABLE_REALTIME_BRIDGE
-    ? useRealtimeSession({
-        onConnected: () => {
-          console.log('[App] Realtime session connected')
-          setIsInitialized(true)
-        },
-        onDisconnected: () => console.log('[App] Realtime session disconnected'),
-        onTranscript: (text, isFinal) => {
-          console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
-          if (isFinal && text.trim()) {
-            // Add user message from voice transcript
-            const userMessage: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: text,
-              timestamp: new Date(),
-            }
-            dispatch({ type: 'ADD_MESSAGE', message: userMessage })
-          }
-        },
-        onError: (error) => console.error('[App] Realtime error:', error),
-      })
-    : null
-
-  // Initialize standalone mode if not using realtime bridge
-  useEffect(() => {
-    if (!ENABLE_REALTIME_BRIDGE) {
+  // Realtime session - always active
+  const realtimeSession = useRealtimeSession({
+    onConnected: () => {
+      console.log('[App] Realtime session connected')
       setIsInitialized(true)
-    }
-  }, [])
+    },
+    onDisconnected: () => console.log('[App] Realtime session disconnected'),
+    onTranscript: (text, isFinal) => {
+      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
+      if (isFinal && text.trim()) {
+        // Add user message from voice transcript
+        const userMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: text,
+          timestamp: new Date(),
+        }
+        dispatch({ type: 'ADD_MESSAGE', message: userMessage })
+      }
+    },
+    onError: (error) => console.error('[App] Realtime error:', error),
+  })
 
   // Sidebar handlers
   const handleToggleSidebar = useCallback(() => {
@@ -103,31 +80,16 @@ export default function App() {
 
   // Voice handlers
   const handleModeToggle = useCallback(() => {
-    if (realtimeSession) {
-      realtimeSession.toggleHandsFree()
-    } else {
-      const newMode = state.voiceMode === 'push-to-talk' ? 'hands-free' : 'push-to-talk'
-      dispatch({ type: 'SET_VOICE_MODE', mode: newMode })
-    }
-  }, [dispatch, state.voiceMode, realtimeSession])
+    realtimeSession.toggleHandsFree()
+  }, [realtimeSession])
 
   const handleVoiceButtonPress = useCallback(() => {
-    if (realtimeSession) {
-      realtimeSession.handlePTTPress()
-    } else {
-      console.log('[App] Voice button pressed (standalone mode)')
-      dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
-    }
-  }, [dispatch, realtimeSession])
+    realtimeSession.handlePTTPress()
+  }, [realtimeSession])
 
   const handleVoiceButtonRelease = useCallback(() => {
-    if (realtimeSession) {
-      realtimeSession.handlePTTRelease()
-    } else {
-      console.log('[App] Voice button released (standalone mode)')
-      dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
-    }
-  }, [dispatch, realtimeSession])
+    realtimeSession.handlePTTRelease()
+  }, [realtimeSession])
 
   // Map voice status for component - now uses full status including idle/connecting
   const voiceStatusMap: Record<string, 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
@@ -142,13 +104,8 @@ export default function App() {
 
   // Handle connect request from VoiceControls
   const handleConnect = useCallback(() => {
-    if (realtimeSession) {
-      realtimeSession.reconnect()
-    } else {
-      console.log('[App] Connect requested (standalone mode)')
-      dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
-    }
-  }, [dispatch, realtimeSession])
+    realtimeSession.reconnect()
+  }, [realtimeSession])
 
   return (
     <>

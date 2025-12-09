@@ -22,9 +22,7 @@ if (!globalThis.crypto?.randomUUID) {
 }
 
 // Mock import.meta.env for tests
-const mockEnv = {
-  VITE_JARVIS_ENABLE_REALTIME_BRIDGE: 'false',
-}
+const mockEnv = {}
 
 Object.defineProperty(globalThis, 'import', {
   value: {

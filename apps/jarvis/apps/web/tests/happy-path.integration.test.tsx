@@ -10,21 +10,16 @@
  * - No test that verified AI responses actually render in the UI
  *
  * This test requires:
- * - VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true
  * - Running jarvis-server (for session token)
  * - Valid OPENAI_API_KEY (for actual API calls)
  *
- * Run with: VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true bun test happy-path.integration
+ * Run with: bun test happy-path.integration
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { AppProvider } from '../src/context'
 import App from '../src/App'
-
-// Skip if bridge mode is not enabled
-const BRIDGE_ENABLED = process.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
-const describeIf = BRIDGE_ENABLED ? describe : describe.skip
 
 // Mock MediaDevices for microphone access
 const mockMediaStream = {
@@ -41,7 +36,7 @@ const mockMediaStream = {
   getTracks: () => [],
 }
 
-describeIf('Happy Path Integration - Message Send and Response', () => {
+describe('Happy Path Integration - Message Send and Response', () => {
   beforeEach(() => {
     // Mock navigator.mediaDevices
     if (!navigator.mediaDevices) {
@@ -270,17 +265,3 @@ describeIf('Happy Path Integration - Message Send and Response', () => {
     expect(count42).toBeGreaterThanOrEqual(2) // At least in user msg and assistant response
   }, 90000)
 })
-
-// Helpful message if tests are skipped
-if (!BRIDGE_ENABLED) {
-  console.log(
-    '\n⚠️  Happy path integration tests skipped\n' +
-    'These tests verify the critical user journey:\n' +
-    '  Load UI → Send message → See AI response\n\n' +
-    'To run these tests:\n' +
-    '1. Start services: make dev\n' +
-    '2. Set environment: export VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true\n' +
-    '3. Ensure OPENAI_API_KEY is set\n' +
-    '4. Run tests: bun test happy-path.integration\n'
-  )
-}

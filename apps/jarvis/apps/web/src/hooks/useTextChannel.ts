@@ -2,24 +2,12 @@
  * useTextChannel hook - Text message sending
  *
  * This hook manages sending text messages to the assistant.
- * When bridge mode is enabled, uses appController.sendText() for real backend communication.
- * When standalone mode is enabled, simulates responses (development only).
+ * Uses appController.sendText() for backend communication.
  */
 
 import { useCallback, useState } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
-
-// Feature flag - must match App.tsx
-const ENABLE_REALTIME_BRIDGE = import.meta.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
-
-// Lazy import for bridge mode to avoid loading legacy code in standalone mode
-let appControllerPromise: Promise<typeof import('../../lib/app-controller')> | null = null
-function getAppController() {
-  if (!appControllerPromise) {
-    appControllerPromise = import('../../lib/app-controller')
-  }
-  return appControllerPromise
-}
+import { appController } from '../../lib/app-controller'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
@@ -68,35 +56,11 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       try {
         console.log('[useTextChannel] Sending message:', trimmedText)
 
-        if (ENABLE_REALTIME_BRIDGE) {
-          // Bridge mode: Use appController to send to real backend
-          const { appController } = await getAppController()
-          await appController.sendText(trimmedText)
-          // Response will come through realtime session events
-          // The conversation controller handles adding assistant messages
-          setIsSending(false)
-        } else {
-          // Standalone mode: Simulate response (development/testing only)
-          console.warn(
-            '[useTextChannel] Running in standalone mode - responses are simulated. ' +
-            'Set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true for real backend integration.'
-          )
-
-          dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
-
-          setTimeout(() => {
-            const assistantMessage: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: 'assistant',
-              content: `[Standalone mode] Received: "${trimmedText}"\n\nTo enable real responses, set VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true`,
-              timestamp: new Date(),
-            }
-            dispatch({ type: 'ADD_MESSAGE', message: assistantMessage })
-            dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
-            options.onResponse?.(assistantMessage)
-            setIsSending(false)
-          }, 500)
-        }
+        // Send to backend via appController
+        await appController.sendText(trimmedText)
+        // Response will come through realtime session events
+        // The conversation controller handles adding assistant messages
+        setIsSending(false)
       } catch (error) {
         console.error('[useTextChannel] Error sending message:', error)
 

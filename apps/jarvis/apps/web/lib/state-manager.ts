@@ -8,6 +8,11 @@ import type { SessionManager } from '@jarvis/core';
 import type { VoiceAgentConfig } from '../contexts/types';
 
 /**
+ * Voice/connection status for React UI
+ */
+export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error';
+
+/**
  * Global application state
  */
 export interface AppState {
@@ -27,6 +32,7 @@ export interface AppState {
 
   // UI state
   statusActive: boolean;
+  voiceStatus: VoiceStatus;
 
   // Media state
   sharedMicStream: MediaStream | null;
@@ -41,7 +47,11 @@ export type StateChangeEvent =
   | { type: 'CONTEXT_CHANGED'; context: any }
   | { type: 'STATUS_CHANGED'; active: boolean }
   | { type: 'STREAMING_TEXT_CHANGED'; text: string }
-  | { type: 'CONVERSATION_ID_CHANGED'; id: string | null };
+  | { type: 'CONVERSATION_ID_CHANGED'; id: string | null }
+  | { type: 'VOICE_STATUS_CHANGED'; status: VoiceStatus }
+  | { type: 'CONNECTION_ERROR'; error: Error }
+  | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
+  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date } };
 
 /**
  * State change listener
@@ -77,6 +87,7 @@ export class StateManager {
 
       // UI state
       statusActive: false,
+      voiceStatus: 'idle',
 
       // Media
       sharedMicStream: null,
@@ -122,6 +133,43 @@ export class StateManager {
       this.state.statusActive = active;
       this.notifyListeners({ type: 'STATUS_CHANGED', active });
     }
+  }
+
+  /**
+   * Update voice status (for React UI)
+   */
+  setVoiceStatus(status: VoiceStatus): void {
+    if (this.state.voiceStatus !== status) {
+      this.state.voiceStatus = status;
+      this.notifyListeners({ type: 'VOICE_STATUS_CHANGED', status });
+    }
+  }
+
+  /**
+   * Show a toast notification (emits event for React to handle)
+   */
+  showToast(message: string, variant: 'success' | 'error' | 'info' = 'info'): void {
+    this.notifyListeners({ type: 'TOAST', message, variant });
+  }
+
+  /**
+   * Report connection error
+   */
+  setConnectionError(error: Error): void {
+    this.notifyListeners({ type: 'CONNECTION_ERROR', error });
+  }
+
+  /**
+   * Notify that a message has been finalized (streaming complete)
+   */
+  finalizeMessage(content: string): void {
+    const message = {
+      id: crypto.randomUUID(),
+      role: 'assistant' as const,
+      content,
+      timestamp: new Date(),
+    };
+    this.notifyListeners({ type: 'MESSAGE_FINALIZED', message });
   }
 
   /**

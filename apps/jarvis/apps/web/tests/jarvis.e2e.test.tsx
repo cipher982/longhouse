@@ -1,15 +1,14 @@
 /**
- * Bridge Mode E2E Tests
+ * Jarvis E2E Tests
  *
- * Tests full integration with jarvis-server and legacy controllers.
- * These tests require VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true.
+ * Tests full integration with jarvis-server and realtime controllers.
  *
  * Prerequisites:
  * - jarvis-server running (via docker-compose)
  * - VITE_JARVIS_DEVICE_SECRET set in .env
  * - Mock OpenAI or real API key configured
  *
- * Run with: VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true bun test bridge-mode.e2e
+ * Run with: bun test jarvis.e2e
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -17,11 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '../src/context'
 import App from '../src/App'
 
-// Skip these tests if bridge mode is not enabled
-const BRIDGE_ENABLED = process.env.VITE_JARVIS_ENABLE_REALTIME_BRIDGE === 'true'
-const describeIf = BRIDGE_ENABLED ? describe : describe.skip
-
-describeIf('Bridge Mode E2E', () => {
+describe('Jarvis E2E', () => {
   beforeEach(() => {
     // Mock navigator.mediaDevices for voice tests
     if (!navigator.mediaDevices) {
@@ -56,12 +51,10 @@ describeIf('Bridge Mode E2E', () => {
 
     const voiceButton = document.getElementById('pttBtn') as HTMLButtonElement
 
-    // In bridge mode with autoConnect=true, should transition from connecting to ready/error
-    // Initial state might be 'connecting'
+    // Should transition from connecting to ready/error
     await waitFor(
       () => {
         const className = voiceButton.className
-        // Should not remain in 'idle' or 'connecting' - should reach ready or error
         expect(className).not.toContain('connecting')
       },
       { timeout: 5000 }
@@ -112,7 +105,7 @@ describeIf('Bridge Mode E2E', () => {
     // Input should be cleared
     expect(input.value).toBe('')
 
-    // In bridge mode, message should be sent to backend
+    // Message should be sent to backend
     // If backend is available and responds, we should see a response
     // If not available, the optimistic message might be rolled back (error handling)
     // Give it time to potentially roll back or respond
@@ -267,14 +260,3 @@ describeIf('Bridge Mode E2E', () => {
     }
   }, 10000)
 })
-
-// Provide helpful message if tests are skipped
-if (!BRIDGE_ENABLED) {
-  console.log(
-    '\n⚠️  Bridge mode e2e tests skipped\n' +
-      'To run these tests:\n' +
-      '1. Start services: make dev\n' +
-      '2. Set environment: export VITE_JARVIS_ENABLE_REALTIME_BRIDGE=true\n' +
-      '3. Run tests: bun test bridge-mode.e2e\n'
-  )
-}

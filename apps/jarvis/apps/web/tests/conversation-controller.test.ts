@@ -1,13 +1,23 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { ConversationController } from '../lib/conversation-controller';
 
+// Mock stateManager
+vi.mock('../lib/state-manager', () => ({
+  stateManager: {
+    setStreamingText: vi.fn(),
+    finalizeMessage: vi.fn(),
+  }
+}));
+
+import { stateManager } from '../lib/state-manager';
+
 describe('ConversationController', () => {
   let controller: ConversationController;
   let mockSessionManager: any;
-  let mockRenderer: any;
   let listener: Mock;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     controller = new ConversationController();
     listener = vi.fn();
     controller.addListener(listener);
@@ -17,16 +27,7 @@ describe('ConversationController', () => {
       getConversationHistory: vi.fn().mockResolvedValue([])
     };
 
-    mockRenderer = {
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      clear: vi.fn(),
-      setStatus: vi.fn(),
-      loadFromHistory: vi.fn()
-    };
-
     controller.setSessionManager(mockSessionManager);
-    controller.setRenderer(mockRenderer);
   });
 
   describe('Setup', () => {
@@ -48,17 +49,6 @@ describe('ConversationController', () => {
   });
 
   describe('Turn Management', () => {
-    it('should add user turn to UI', async () => {
-      await controller.addUserTurn('Hello');
-
-      expect(mockRenderer.addMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'user',
-          content: 'Hello'
-        })
-      );
-    });
-
     it('should persist user turn to IndexedDB', async () => {
       controller.setConversationId('conv-123');
       await controller.addUserTurn('Hello');
@@ -75,17 +65,6 @@ describe('ConversationController', () => {
       await controller.addUserTurn('Hello', new Date());
 
       expect(mockSessionManager.addConversationTurn).not.toHaveBeenCalled();
-    });
-
-    it('should add assistant turn to UI', async () => {
-      await controller.addAssistantTurn('Hi there');
-
-      expect(mockRenderer.addMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'assistant',
-          content: 'Hi there'
-        })
-      );
     });
 
     it('should persist assistant turn to IndexedDB', async () => {
@@ -105,35 +84,26 @@ describe('ConversationController', () => {
     it('should start streaming response', () => {
       controller.startStreaming();
 
-      expect(mockRenderer.addMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: 'assistant',
-          content: '',
-          isStreaming: true
-        })
-      );
-
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'streamingStart' })
       );
-
-      // Note: controller internal state tracking of streaming might be implicit via renderer or state
-      // If isStreaming() method exists, check it
-      // The controller implementation has `state.streamingMessageId`
     });
 
-    it('should append streaming text', () => {
+    it('should append streaming text and notify stateManager', () => {
       controller.startStreaming();
       controller.appendStreaming('Hello');
       controller.appendStreaming(' world');
 
-      expect(mockRenderer.updateMessage).toHaveBeenCalledTimes(2);
+      expect(stateManager.setStreamingText).toHaveBeenCalledWith('Hello');
+      expect(stateManager.setStreamingText).toHaveBeenCalledWith('Hello world');
     });
 
     it('should auto-start streaming on first append', () => {
       controller.appendStreaming('First chunk');
 
-      expect(mockRenderer.addMessage).toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'streamingStart' })
+      );
     });
 
     it('should finalize streaming response', async () => {
@@ -144,30 +114,13 @@ describe('ConversationController', () => {
       listener.mockClear();
       await controller.finalizeStreaming();
 
-      expect(mockRenderer.updateMessage).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          isStreaming: false
-        })
-      );
       expect(mockSessionManager.addConversationTurn).toHaveBeenCalled();
+      expect(stateManager.setStreamingText).toHaveBeenCalledWith('');
+      expect(stateManager.finalizeMessage).toHaveBeenCalledWith('Complete message');
 
       expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'streamingStop' })
       );
-    });
-
-    it('should clear streaming state after finalize', async () => {
-      controller.startStreaming();
-      controller.appendStreaming('Text');
-      await controller.finalizeStreaming();
-
-      // Verify state is cleared (assuming getter exists or implementation detail)
-      // The new implementation has getStreamingText()
-      // And we can check if appendStreaming starts a NEW message
-
-      controller.appendStreaming('New');
-      expect(mockRenderer.addMessage).toHaveBeenCalledTimes(2); // Once for first stream, once for new
     });
 
     it('should handle multiple streaming sessions', async () => {
@@ -186,7 +139,7 @@ describe('ConversationController', () => {
   });
 
   describe('History Management', () => {
-    it('should load history from IndexedDB', async () => {
+    it('should return history from IndexedDB', async () => {
       const mockHistory = [
         { id: '1', userTranscript: 'Hello', timestamp: new Date() },
         { id: '2', assistantResponse: 'Hi', timestamp: new Date() }
@@ -194,44 +147,25 @@ describe('ConversationController', () => {
       mockSessionManager.getConversationHistory.mockResolvedValue(mockHistory);
       controller.setConversationId('conv-123');
 
-      await controller.loadHistory();
+      const history = await controller.getHistory();
 
-      expect(mockRenderer.loadFromHistory).toHaveBeenCalledWith(mockHistory);
+      expect(history).toEqual(mockHistory);
     });
 
-    it('should show placeholder when no history', async () => {
-      mockSessionManager.getConversationHistory.mockResolvedValue([]);
-      controller.setConversationId('conv-123');
+    it('should return empty array when no conversation ID', async () => {
+      const history = await controller.getHistory();
 
-      await controller.loadHistory();
-
-      expect(mockRenderer.clear).toHaveBeenCalled();
-      expect(mockRenderer.setStatus).toHaveBeenCalledWith(
-        'No messages yet - tap the microphone to start',
-        true
-      );
+      expect(history).toEqual([]);
+      expect(mockSessionManager.getConversationHistory).not.toHaveBeenCalled();
     });
 
-    it('should handle history load failure', async () => {
+    it('should return empty array on error', async () => {
       mockSessionManager.getConversationHistory.mockRejectedValue(new Error('DB error'));
       controller.setConversationId('conv-123');
 
-      await controller.loadHistory();
+      const history = await controller.getHistory();
 
-      expect(mockRenderer.setStatus).toHaveBeenCalledWith(
-        'Failed to load conversation history',
-        true
-      );
-    });
-
-    it('should not load history without conversation ID', async () => {
-      await controller.loadHistory();
-
-      expect(mockSessionManager.getConversationHistory).not.toHaveBeenCalled();
-      expect(mockRenderer.setStatus).toHaveBeenCalledWith(
-        'Tap the microphone to start',
-        true
-      );
+      expect(history).toEqual([]);
     });
   });
 
@@ -250,36 +184,22 @@ describe('ConversationController', () => {
   });
 
   describe('Utility Methods', () => {
-    it('should clear conversation', () => {
+    it('should clear streaming state', () => {
       controller.startStreaming();
       controller.appendStreaming('Text');
       controller.clear();
 
-      expect(mockRenderer.clear).toHaveBeenCalled();
-    });
-
-    it('should set status message', () => {
-      controller.setStatus('Connecting...', true);
-
-      expect(mockRenderer.setStatus).toHaveBeenCalledWith('Connecting...', true);
+      expect(stateManager.setStreamingText).toHaveBeenCalledWith('');
     });
   });
 
   describe('Edge Cases', () => {
-    it('should handle operations without renderer', async () => {
-      controller.setRenderer(null);
-
-      await expect(controller.addUserTurn('Hello')).resolves.not.toThrow();
-      controller.startStreaming();
-      controller.appendStreaming('Text');
-      await expect(controller.finalizeStreaming()).resolves.not.toThrow();
-    });
-
     it('should handle operations without session manager', async () => {
       controller.setSessionManager(null);
 
       await expect(controller.addUserTurn('Hello')).resolves.not.toThrow();
-      await expect(controller.loadHistory()).resolves.not.toThrow();
+      const history = await controller.getHistory();
+      expect(history).toEqual([]);
     });
 
     it('should handle empty streaming finalization', async () => {
@@ -297,7 +217,7 @@ describe('ConversationController', () => {
       controller.setConversationId('conv-123');
       controller.dispose();
 
-      expect(mockRenderer.clear).toHaveBeenCalled();
+      expect(stateManager.setStreamingText).toHaveBeenCalledWith('');
     });
   });
 });

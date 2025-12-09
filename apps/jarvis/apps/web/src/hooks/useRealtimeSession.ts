@@ -3,10 +3,13 @@
  *
  * This hook bridges the existing vanilla TypeScript controllers with React.
  * It imports the singleton controllers and syncs their state to React.
+ *
+ * The controllers emit events via stateManager, and this hook subscribes
+ * to those events and dispatches to React context.
  */
 
 import { useEffect, useCallback, useRef, useState } from 'react'
-import { useAppDispatch } from '../context'
+import { useAppDispatch, type ChatMessage } from '../context'
 
 // Import existing controllers (singleton instances)
 import { voiceController, type VoiceEvent } from '../../lib/voice-controller'
@@ -103,24 +106,35 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         case 'STREAMING_TEXT_CHANGED':
           dispatch({ type: 'SET_STREAMING_CONTENT', content: event.text })
           break
+
+        case 'VOICE_STATUS_CHANGED':
+          dispatch({ type: 'SET_VOICE_STATUS', status: event.status })
+          break
+
+        case 'MESSAGE_FINALIZED':
+          // Add the finalized assistant message to React state
+          dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
+          break
+
+        case 'TOAST':
+          // Could dispatch to a toast system in React context
+          // For now, just log it
+          console.log(`[Toast] ${event.variant}: ${event.message}`)
+          break
+
+        case 'CONNECTION_ERROR':
+          dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
+          options.onError?.(event.error)
+          break
       }
     }
 
     stateManager.addListener(handleStateChange)
 
-    // Listen for streaming finalization events from conversationController
-    const handleStreamingFinalized = ((event: CustomEvent) => {
-      const message = event.detail
-      dispatch({ type: 'ADD_MESSAGE', message })
-    }) as EventListener
-
-    window.addEventListener('jarvis:streaming-finalized', handleStreamingFinalized)
-
     // Cleanup
     return () => {
       voiceController.removeListener(handleVoiceEvent)
       stateManager.removeListener(handleStateChange)
-      window.removeEventListener('jarvis:streaming-finalized', handleStreamingFinalized)
     }
   }, [dispatch, options])
 

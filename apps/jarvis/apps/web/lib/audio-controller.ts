@@ -1,10 +1,11 @@
 /**
  * Audio Controller
- * Manages microphone streams, visualization, and remote audio monitoring
+ * Manages microphone streams and remote audio monitoring
+ *
+ * NOTE: Visualization has been removed. React components handle their own UI.
  */
 
 import { logger } from '@jarvis/core';
-import { RadialVisualizer } from './radial-visualizer';
 
 export enum AudioState {
   IDLE = 0,
@@ -14,7 +15,6 @@ export enum AudioState {
 
 export class AudioController {
   private micStream: MediaStream | null = null;
-  private radialViz: RadialVisualizer | null = null;
 
   // Speaker monitoring
   private audioState: AudioState = AudioState.IDLE;
@@ -33,22 +33,14 @@ export class AudioController {
 
   // DOM references
   private remoteAudio: HTMLAudioElement | null = null;
-  private visualizationContainer: HTMLElement | null = null;
 
   constructor() {}
 
   /**
    * Initialize with DOM elements
    */
-  initialize(remoteAudio: HTMLAudioElement | null, visualizationContainer: HTMLElement | null): void {
+  initialize(remoteAudio: HTMLAudioElement | null, _visualizationContainer?: HTMLElement | null): void {
     this.remoteAudio = remoteAudio;
-    this.visualizationContainer = visualizationContainer;
-
-    if (this.visualizationContainer) {
-      this.radialViz = new RadialVisualizer(this.visualizationContainer, {
-        onLevel: (level) => this.handleMicLevel(level)
-      });
-    }
 
     if (this.remoteAudio) {
       this.setupRemoteAudioListeners();
@@ -74,10 +66,6 @@ export class AudioController {
         }
       });
       logger.info('✅ Microphone access granted');
-
-      // Update visualizer
-      this.radialViz?.provideStream(this.micStream);
-
       return this.micStream;
     } catch (error) {
       logger.error('❌ Failed to request microphone:', error);
@@ -96,7 +84,6 @@ export class AudioController {
         track.stop();
       });
       this.micStream = null;
-      this.radialViz?.provideStream(null);
     }
 
     this.setAudioStateFlag(AudioState.MIC_ACTIVE, false);
@@ -123,7 +110,7 @@ export class AudioController {
   }
 
   /**
-   * Update visualization state for listening mode
+   * Update state for listening mode
    */
   async setListeningMode(active: boolean): Promise<void> {
     if (!active) {
@@ -132,17 +119,11 @@ export class AudioController {
 
     this.setAudioStateFlag(AudioState.MIC_ACTIVE, active);
 
+    // Update CSS class for any styling needs
     if (active) {
       document.body.classList.add('listening-mode');
-      try {
-        await this.radialViz?.start();
-      } catch (error) {
-        logger.warn('Failed to start radial visualizer', error);
-      }
     } else {
       document.body.classList.remove('listening-mode');
-      this.radialViz?.stop();
-      this.updateAudioVisualization();
     }
   }
 
@@ -232,8 +213,6 @@ export class AudioController {
     this.speakerDataArray = null;
     this.speakerSource = null;
     this.speakerStream = null;
-    this.radialViz?.destroy();
-    this.radialViz = null;
   }
 
   // Internal Helpers
@@ -290,44 +269,11 @@ export class AudioController {
 
   private handleMicLevel(level: number): void {
     this.micLevel = level;
-    this.updateAudioVisualization();
   }
 
   private updateAudioVisualization(): void {
-    const micActive = this.hasAudioState(AudioState.MIC_ACTIVE);
-    const assistantActive = this.hasAudioState(AudioState.ASSISTANT_SPEAKING);
-
-    let level = 0;
-    if (micActive && assistantActive) {
-      level = Math.max(this.micLevel, this.speakerLevel);
-    } else if (micActive) {
-      level = this.micLevel;
-    } else if (assistantActive) {
-      level = this.speakerLevel;
-    }
-
-    // Define colors
-    const MIC_COLOR = '#ec4899';
-    const ASSISTANT_COLOR = '#3b82f6';
-    const BOTH_COLOR = '#a855f7';
-    const IDLE_COLOR = '#475569';
-
-    const color = micActive && assistantActive
-      ? BOTH_COLOR
-      : micActive
-        ? MIC_COLOR
-        : assistantActive
-          ? ASSISTANT_COLOR
-          : IDLE_COLOR;
-
-    if (this.radialViz) {
-      this.radialViz.render(level, color, this.audioState);
-    }
-
-    // Sync with DOM for CSS states
-    if (this.visualizationContainer) {
-      this.visualizationContainer.dataset.state = `${this.audioState}`;
-    }
+    // Visualization removed - React components handle their own UI
+    // This method is kept for internal state tracking
   }
 
   private setAssistantSpeakingState(active: boolean): void {

@@ -6,12 +6,14 @@
  * - Manage conversation turns (user/assistant)
  * - Handle streaming responses
  * - Persist to IndexedDB via SessionManager
- * - Render to UI via ConversationRenderer
+ * - Emit state changes via stateManager (React handles UI)
+ *
+ * NOTE: This controller does NOT manipulate the DOM directly.
+ * All UI updates are done via stateManager events → React hooks → React state.
  */
 
 import { logger, type SessionManager } from '@jarvis/core';
 import type { ConversationTurn } from '@jarvis/data-local';
-import type { ConversationRenderer } from './conversation-renderer';
 import { stateManager } from './state-manager';
 
 export interface ConversationState {
@@ -37,7 +39,6 @@ export class ConversationController {
   };
 
   private sessionManager: SessionManager | null = null;
-  private renderer: ConversationRenderer | null = null;
   private listeners: Set<ConversationListener> = new Set();
 
   constructor() {}
@@ -64,13 +65,6 @@ export class ConversationController {
   }
 
   /**
-   * Set the conversation renderer for UI updates
-   */
-  setRenderer(renderer: ConversationRenderer | null): void {
-    this.renderer = renderer;
-  }
-
-  /**
    * Set current conversation ID
    */
   setConversationId(id: string | null): void {
@@ -89,51 +83,20 @@ export class ConversationController {
 
   /**
    * Update a pending user turn (preview)
+   * NOTE: This is now a no-op since React handles user input display
    */
-  async updateUserPreview(transcript: string): Promise<void> {
-    if (!this.renderer) return;
-
-    if (!this.state.pendingUserMessageId) {
-      // Create new pending message
-      this.state.pendingUserMessageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      this.renderer.addMessage({
-        id: this.state.pendingUserMessageId,
-        role: 'user',
-        content: transcript,
-        timestamp: new Date()
-      });
-    } else {
-      // Update existing
-      this.renderer.updateMessage(this.state.pendingUserMessageId, {
-        content: transcript
-      });
-    }
+  async updateUserPreview(_transcript: string): Promise<void> {
+    // React handles user input preview via TextInput component
+    // This method kept for backward compatibility but does nothing
   }
 
   /**
-   * Add user turn to UI and persist
+   * Add user turn and persist to IndexedDB
+   * NOTE: React UI handles displaying the message, this only persists
    */
   async addUserTurn(transcript: string, timestamp?: Date): Promise<void> {
-    if (!this.renderer) return;
-
-    // If we have a pending message, use it to preserve the original timestamp
-    if (this.state.pendingUserMessageId && !timestamp) {
-      this.renderer.updateMessage(this.state.pendingUserMessageId, {
-        content: transcript
-      });
-      this.state.pendingUserMessageId = null;
-    } else {
-      // Create new if no pending or if loading from history
-      const messageTimestamp = timestamp || new Date();
-      const messageId = `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-      this.renderer.addMessage({
-        id: messageId,
-        role: 'user',
-        content: transcript,
-        timestamp: messageTimestamp
-      });
-    }
+    // Clear any pending message state
+    this.state.pendingUserMessageId = null;
 
     // Record to IndexedDB if not from history loading (no timestamp provided)
     if (!timestamp) {
@@ -142,21 +105,10 @@ export class ConversationController {
   }
 
   /**
-   * Add assistant turn to UI and persist
+   * Add assistant turn and persist to IndexedDB
+   * NOTE: React UI handles displaying the message, this only persists
    */
   async addAssistantTurn(response: string, timestamp?: Date): Promise<void> {
-    if (!this.renderer) return;
-
-    const messageTimestamp = timestamp || new Date();
-    const messageId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    this.renderer.addMessage({
-      id: messageId,
-      role: 'assistant',
-      content: response,
-      timestamp: messageTimestamp
-    });
-
     // Record to IndexedDB if not from history loading
     if (!timestamp) {
       await this.recordTurn('assistant', response);
@@ -195,19 +147,9 @@ export class ConversationController {
   startStreaming(): void {
     logger.debug('Starting streaming response');
 
-    if (!this.renderer) return;
-
-    // Create streaming message
+    // Create streaming message ID
     this.state.streamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.state.streamingText = '';
-
-    this.renderer.addMessage({
-      id: this.state.streamingMessageId,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-      isStreaming: true
-    });
 
     this.emit({ type: 'streamingStart' });
   }
@@ -223,15 +165,7 @@ export class ConversationController {
 
     this.state.streamingText += delta;
 
-    // Update legacy DOM renderer (for backward compatibility with main.ts)
-    if (this.renderer && this.state.streamingMessageId) {
-      this.renderer.updateMessage(this.state.streamingMessageId, {
-        content: this.state.streamingText,
-        isStreaming: true
-      });
-    }
-
-    // Notify React via stateManager (for bridge mode with React UI)
+    // Notify React via stateManager
     stateManager.setStreamingText(this.state.streamingText);
   }
 
@@ -244,14 +178,6 @@ export class ConversationController {
     const finalText = this.state.streamingText;
     logger.streamingResponse(finalText, true);
 
-    // Update legacy DOM renderer (for backward compatibility)
-    if (this.renderer) {
-      this.renderer.updateMessage(this.state.streamingMessageId, {
-        content: finalText,
-        isStreaming: false
-      });
-    }
-
     // Record to IndexedDB
     if (finalText) {
       await this.recordTurn('assistant', finalText);
@@ -261,23 +187,9 @@ export class ConversationController {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
 
-    // Clear streaming text in React state
+    // Clear streaming text and notify React of finalized message
     stateManager.setStreamingText('');
-
-    // CRITICAL: This was missing! Add finalized message to React messages array
-    // Without this, streaming text appears then disappears when finalized
-    // Note: We use a synthetic event bus approach here since we're in a controller
-    // The proper fix would be to have conversationController emit events that React subscribes to
-    // But for now, we broadcast via window.dispatchEvent so React can pick it up
-    const event = new CustomEvent('jarvis:streaming-finalized', {
-      detail: {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: finalText,
-        timestamp: new Date(),
-      }
-    });
-    window.dispatchEvent(event);
+    stateManager.finalizeMessage(finalText);
 
     this.emit({ type: 'streamingStop' });
   }
@@ -299,54 +211,32 @@ export class ConversationController {
   // ============= History Management =============
 
   /**
-   * Load conversation history from IndexedDB and display in UI
+   * Get conversation history from IndexedDB
+   * Returns history array for React to render
    */
-  async loadHistory(): Promise<void> {
-    if (!this.sessionManager || !this.state.conversationId || !this.renderer) {
-      if (this.renderer) {
-        this.renderer.clear();
-        this.renderer.setStatus('Tap the microphone to start', true);
-      }
-      return;
+  async getHistory(): Promise<ConversationTurn[]> {
+    if (!this.sessionManager || !this.state.conversationId) {
+      return [];
     }
 
     try {
       const history = await this.sessionManager.getConversationHistory();
-
-      if (history.length === 0) {
-        this.renderer.clear();
-        this.renderer.setStatus('No messages yet - tap the microphone to start', true);
-        return;
-      }
-
-      // Use renderer's loadFromHistory method
-      this.renderer.loadFromHistory(history);
-
-      logger.conversation('Loaded conversation turns into UI', history.length);
+      logger.conversation('Retrieved conversation history', history.length);
+      return history;
     } catch (error) {
       console.error('Failed to load conversation history:', error);
-      if (this.renderer) {
-        this.renderer.clear();
-        this.renderer.setStatus('Failed to load conversation history', true);
-      }
+      return [];
     }
   }
 
   /**
-   * Clear conversation display
+   * Clear controller state
    */
   clear(): void {
-    this.renderer?.clear();
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
     this.state.pendingUserMessageId = null;
-  }
-
-  /**
-   * Set status message in conversation area
-   */
-  setStatus(message: string, placeholder: boolean = false): void {
-    this.renderer?.setStatus(message, placeholder);
+    stateManager.setStreamingText('');
   }
 
   // ============= Conversation Item Events (OpenAI Realtime) =============
@@ -373,7 +263,6 @@ export class ConversationController {
   dispose(): void {
     this.clear();
     this.sessionManager = null;
-    this.renderer = null;
     logger.info('Conversation controller disposed');
   }
 }
