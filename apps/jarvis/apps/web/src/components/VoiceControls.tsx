@@ -3,32 +3,60 @@
  */
 
 export type VoiceMode = 'push-to-talk' | 'hands-free'
-export type VoiceStatus = 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
+export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
 interface VoiceControlsProps {
   mode: VoiceMode
   status: VoiceStatus
+  disabled?: boolean
   onModeToggle: () => void
   onVoiceButtonPress: () => void
   onVoiceButtonRelease: () => void
+  onConnect?: () => void
 }
 
 const STATUS_TEXT: Record<VoiceStatus, string> = {
-  ready: 'Ready',
+  idle: 'Tap to connect',
+  connecting: 'Connecting...',
+  ready: 'Ready - hold to talk',
   listening: 'Listening...',
   processing: 'Processing...',
   speaking: 'Speaking...',
-  error: 'Error',
+  error: 'Connection failed - tap to retry',
 }
 
 export function VoiceControls({
   mode,
   status,
+  disabled = false,
   onModeToggle,
   onVoiceButtonPress,
   onVoiceButtonRelease,
+  onConnect,
 }: VoiceControlsProps) {
   const isHandsFree = mode === 'hands-free'
+  const isConnected = status !== 'idle' && status !== 'connecting' && status !== 'error'
+  const isConnecting = status === 'connecting'
+
+  // Handle button click for non-connected states
+  const handleButtonClick = () => {
+    if (status === 'idle' || status === 'error') {
+      onConnect?.()
+    }
+  }
+
+  // Only allow PTT in connected state
+  const handlePress = () => {
+    if (isConnected && !disabled) {
+      onVoiceButtonPress()
+    }
+  }
+
+  const handleRelease = () => {
+    if (isConnected && !disabled) {
+      onVoiceButtonRelease()
+    }
+  }
 
   return (
     <div className="voice-controls">
@@ -42,6 +70,7 @@ export function VoiceControls({
           aria-checked={isHandsFree}
           aria-label="Toggle hands-free mode"
           onClick={onModeToggle}
+          disabled={!isConnected || disabled}
         >
           <span className="mode-toggle-slider"></span>
         </button>
@@ -52,14 +81,16 @@ export function VoiceControls({
       <div className="voice-button-wrapper">
         <button
           id="pttBtn"
-          className={`voice-button ${status}`}
+          className={`voice-button ${status} ${disabled ? 'disabled' : ''}`}
           type="button"
-          aria-label="Press to talk"
-          onMouseDown={onVoiceButtonPress}
-          onMouseUp={onVoiceButtonRelease}
-          onMouseLeave={onVoiceButtonRelease}
-          onTouchStart={onVoiceButtonPress}
-          onTouchEnd={onVoiceButtonRelease}
+          aria-label={isConnected ? 'Press to talk' : 'Connect to voice'}
+          disabled={isConnecting || disabled}
+          onClick={handleButtonClick}
+          onMouseDown={handlePress}
+          onMouseUp={handleRelease}
+          onMouseLeave={handleRelease}
+          onTouchStart={handlePress}
+          onTouchEnd={handleRelease}
         >
           <div className="voice-button-ring"></div>
           <svg className="voice-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

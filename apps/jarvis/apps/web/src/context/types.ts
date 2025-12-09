@@ -23,7 +23,7 @@ export type VoiceMode = 'push-to-talk' | 'hands-free'
 /**
  * Voice status
  */
-export type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'processing' | 'speaking' | 'error'
+export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
 /**
  * Chat message

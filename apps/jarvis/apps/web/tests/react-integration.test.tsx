@@ -34,7 +34,8 @@ describe('Jarvis React App', () => {
 
     expect(screen.getByText('Jarvis AI')).toBeDefined()
     expect(screen.getByPlaceholderText('Type a message...')).toBeDefined()
-    expect(screen.getByLabelText('Press to talk')).toBeDefined()
+    // Voice button exists (label changes based on connection state)
+    expect(document.getElementById('pttBtn')).toBeDefined()
   })
 
   it('toggles sidebar on button click', async () => {
@@ -87,12 +88,19 @@ describe('Jarvis React App', () => {
       </AppProvider>
     )
 
-    const voiceButton = screen.getByLabelText('Press to talk')
+    const voiceButton = document.getElementById('pttBtn') as HTMLButtonElement
 
-    // Initial state
-    expect(voiceButton.className).not.toContain('listening')
+    // Initial state: idle (not connected in standalone mode)
+    expect(voiceButton.className).toContain('idle')
 
-    // Press button (mouseDown)
+    // Click to "connect" in standalone mode (transitions to ready)
+    fireEvent.click(voiceButton)
+
+    await waitFor(() => {
+      expect(voiceButton.className).toContain('ready')
+    })
+
+    // Now press button (mouseDown) for PTT
     fireEvent.mouseDown(voiceButton)
 
     // Should update to listening state
@@ -116,7 +124,21 @@ describe('Jarvis React App', () => {
       </AppProvider>
     )
 
+    const voiceButton = document.getElementById('pttBtn') as HTMLButtonElement
     const modeToggle = screen.getByLabelText('Toggle hands-free mode')
+
+    // Mode toggle should be disabled when not connected
+    expect(modeToggle).toHaveProperty('disabled', true)
+
+    // Connect first (in standalone mode)
+    fireEvent.click(voiceButton)
+
+    await waitFor(() => {
+      expect(voiceButton.className).toContain('ready')
+    })
+
+    // Now toggle should be enabled
+    expect(modeToggle).toHaveProperty('disabled', false)
 
     // Initial state: push-to-talk
     expect(modeToggle.getAttribute('aria-checked')).toBe('false')

@@ -129,15 +129,26 @@ export default function App() {
     }
   }, [dispatch, realtimeSession])
 
-  // Map voice status for component
-  const voiceStatusMap: Record<string, 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
-    idle: 'ready',
-    connecting: 'processing',
+  // Map voice status for component - now uses full status including idle/connecting
+  const voiceStatusMap: Record<string, 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
+    idle: 'idle',
+    connecting: 'connecting',
+    ready: 'ready',
     listening: 'listening',
     processing: 'processing',
     speaking: 'speaking',
     error: 'error',
   }
+
+  // Handle connect request from VoiceControls
+  const handleConnect = useCallback(() => {
+    if (realtimeSession) {
+      realtimeSession.reconnect()
+    } else {
+      console.log('[App] Connect requested (standalone mode)')
+      dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
+    }
+  }, [dispatch, realtimeSession])
 
   return (
     <>
@@ -163,10 +174,11 @@ export default function App() {
 
         <VoiceControls
           mode={state.voiceMode}
-          status={voiceStatusMap[state.voiceStatus] || 'ready'}
+          status={voiceStatusMap[state.voiceStatus] || 'idle'}
           onModeToggle={handleModeToggle}
           onVoiceButtonPress={handleVoiceButtonPress}
           onVoiceButtonRelease={handleVoiceButtonRelease}
+          onConnect={handleConnect}
         />
 
         <TextInput
