@@ -205,9 +205,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         dispatch({ type: 'SET_VOICE_STATUS', status: 'connecting' })
         setConnectionError(null)
         await appController.connect()
-        dispatch({ type: 'SET_CONNECTED', connected: true })
+        // NOTE: Don't call onConnected here - SESSION_CHANGED listener handles it
+        // This prevents duplicate callbacks when both this effect AND the
+        // state change listener would otherwise both call onConnected
         dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
-        optionsRef.current.onConnected?.()
       } catch (error) {
         console.error('[useRealtimeSession] Auto-connect failed:', error)
         dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
@@ -227,9 +228,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       dispatch({ type: 'SET_VOICE_STATUS', status: 'connecting' })
       setConnectionError(null)
       await appController.connect()
-      dispatch({ type: 'SET_CONNECTED', connected: true })
+      // NOTE: Don't call onConnected here - SESSION_CHANGED listener handles it
+      // This prevents duplicate callbacks
       dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
-      optionsRef.current.onConnected?.()
     } catch (error) {
       console.error('[useRealtimeSession] Connect failed:', error)
       dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
@@ -253,9 +254,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const disconnect = useCallback(() => {
     try {
       appController.disconnect()
-      dispatch({ type: 'SET_CONNECTED', connected: false })
+      // NOTE: SESSION_CHANGED listener handles SET_CONNECTED and onDisconnected
       dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
-      optionsRef.current.onDisconnected?.()
     } catch (error) {
       console.error('[useRealtimeSession] Disconnect failed:', error)
       optionsRef.current.onError?.(error as Error)
