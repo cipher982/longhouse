@@ -66,8 +66,8 @@ services:
   zerg-backend:
     profiles: [full]
     build:
-      context: ../apps/zerg/backend
-      dockerfile: ../../../docker/backend.dockerfile
+      context: ..
+      dockerfile: docker/backend.dockerfile
       target: development
       args:
         BUILD_ENV: development
@@ -117,8 +117,8 @@ services:
   zerg-backend-exposed:
     profiles: [zerg]
     build:
-      context: ../apps/zerg/backend
-      dockerfile: ../../../docker/backend.dockerfile
+      context: ..
+      dockerfile: docker/backend.dockerfile
       target: development
       args:
         BUILD_ENV: development
