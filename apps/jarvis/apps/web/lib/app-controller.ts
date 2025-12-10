@@ -359,14 +359,14 @@ export class AppController {
       // Streaming Response - handle text deltas from various event types
       // The OpenAI Agents SDK may emit different event names:
       // - response.output_text.delta: Text mode responses (SDK naming)
-      // - response.audio_transcript.delta: Voice transcript (raw API naming)
+      // - response.output_audio_transcript.delta: Audio with transcript (actual event from API)
+      // - response.audio_transcript.delta: Voice transcript (alternative naming)
       // - response.text.delta: Alternative text delta
-      // Also check for transcript field on audio events
       const isTextDelta =
         t === 'response.output_text.delta' ||
+        t === 'response.output_audio_transcript.delta' ||
         t === 'response.audio_transcript.delta' ||
-        t === 'response.text.delta' ||
-        (t.includes('audio') && event.transcript);
+        t === 'response.text.delta';
 
       if (isTextDelta) {
         // Prefer transcript field, fall back to delta

@@ -72,6 +72,13 @@
   transform-origin: center bottom;
 }
 
+/* Streaming messages appear immediately without animation */
+.message.streaming,
+.message.preview {
+  opacity: 1;
+  animation: none;
+}
+
 .message.user {
   flex-direction: row-reverse;
 }
