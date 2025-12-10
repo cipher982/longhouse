@@ -348,12 +348,15 @@ export class AppController {
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
-      // Debug: Log response events to help identify event types
-      if (t.startsWith('response.') && !t.includes('audio.delta')) {
-        logger.debug(`📡 Transport event: ${t}`, {
+      // Debug: Log ALL transport events (except high-frequency audio deltas)
+      // This helps identify what event types are actually being received
+      if (!t.includes('audio.delta') && !t.includes('input_audio_buffer.append')) {
+        console.log(`[Transport] ${t}`, {
           hasTranscript: !!event.transcript,
           hasDelta: !!event.delta,
           deltaType: typeof event.delta,
+          deltaPreview: typeof event.delta === 'string' ? event.delta.substring(0, 50) : undefined,
+          transcriptPreview: typeof event.transcript === 'string' ? event.transcript.substring(0, 50) : undefined,
         });
       }
 
@@ -400,6 +403,9 @@ export class AppController {
 
       // Response Completion - ALWAYS reset status, finalize if streaming
       if (t === 'response.done') {
+        // Debug: Log the full response.done event to understand structure
+        console.log('[Transport] response.done full event:', JSON.stringify(event, null, 2).substring(0, 1000));
+
         if (conversationController.isStreaming()) {
           conversationController.finalizeStreaming();
         }
@@ -412,6 +418,16 @@ export class AppController {
         conversationController.handleItemAdded(event);
       }
       if (t === 'conversation.item.done') {
+        // Debug: Log to understand item structure
+        console.log('[Transport] conversation.item.done:', {
+          itemId: event.item?.id,
+          itemRole: event.item?.role,
+          hasContent: !!event.item?.content,
+          contentLength: event.item?.content?.length,
+          firstContentType: event.item?.content?.[0]?.type,
+          firstContentText: event.item?.content?.[0]?.text?.substring(0, 100),
+          firstContentTranscript: event.item?.content?.[0]?.transcript?.substring(0, 100),
+        });
         conversationController.handleItemDone(event);
       }
 
