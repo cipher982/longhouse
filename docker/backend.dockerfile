@@ -1,5 +1,8 @@
 # Multi-stage build for Zerg AI Agent Platform Backend
 # Optimized for production-grade caching and security
+#
+# BUILD CONTEXT: This Dockerfile expects repo root as build context
+# Example: docker build -f docker/backend.dockerfile .
 
 # Dependencies stage - cache Python packages efficiently
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS dependencies
@@ -11,7 +14,8 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
 
 # Cache dependencies separately from app code for better cache hits
-COPY uv.lock pyproject.toml ./
+# Paths are relative to repo root (build context)
+COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Builder stage - application with dependencies
@@ -25,8 +29,11 @@ WORKDIR /app
 # Copy virtual environment from dependencies stage
 COPY --from=dependencies /app/.venv /app/.venv
 
-# Copy application source
-COPY . .
+# Copy application source (from repo root context)
+COPY apps/zerg/backend/ ./
+
+# Copy shared config (models.json) - required for model configuration
+COPY config/models.json /config/models.json
 
 # Install the project itself using cached dependencies
 RUN uv sync --frozen --no-dev
@@ -52,6 +59,9 @@ WORKDIR /app
 # Copy application and virtual environment from builder
 COPY --from=builder --chown=zerg:zerg /app /app
 
+# Copy config from builder stage
+COPY --from=builder --chown=zerg:zerg /config /config
+
 # Create required directories with proper permissions
 RUN mkdir -p /app/static/avatars \
     && chown zerg:zerg /app/static \
@@ -62,11 +72,12 @@ RUN mkdir -p /app/static/avatars \
 # Switch to non-root user
 USER zerg
 
-# Add virtual environment to PATH
+# Add virtual environment to PATH and set config path
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    MODELS_CONFIG_PATH="/config/models.json"
 
 # Health check with retry logic
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

@@ -27,16 +27,27 @@ test.describe('Text Message Happy Path', () => {
     // Wait for app to be loaded - React app uses .transcript (class), not #transcript (ID)
     await page.waitForSelector('.transcript', { timeout: 30000 });
 
-    // Wait for the app to initialize AND connect
-    // The text input should be visible and ENABLED (not disabled)
-    // This indicates the session is connected and ready for text input
-    await page.waitForSelector('input[placeholder*="Type a message"]:not([disabled])', {
-      state: 'visible',
-      timeout: 60000
-    });
+    // Wait for the text input to be visible first
+    const textInput = page.locator('input[placeholder*="Type a message"]');
+    await textInput.waitFor({ state: 'visible', timeout: 30000 });
+
+    // Wait for the session to connect (input becomes enabled)
+    // The session may take time to connect to OpenAI
+    try {
+      await page.waitForSelector('input[placeholder*="Type a message"]:not([disabled])', {
+        state: 'visible',
+        timeout: 90000  // Give more time for session connection
+      });
+      console.log('✅ Session connected - input is enabled');
+    } catch (e) {
+      // If session didn't connect, log the error and take a screenshot
+      console.error('❌ Session did not connect within timeout');
+      await page.screenshot({ path: './test-results/session-not-connected.png', fullPage: true });
+      throw new Error('Session did not connect - text input remained disabled. Check OPENAI_API_KEY and network connectivity.');
+    }
 
     // Small delay to ensure session is fully ready
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
   });
 
   test('should send text message and display AI response', async ({ page }) => {
