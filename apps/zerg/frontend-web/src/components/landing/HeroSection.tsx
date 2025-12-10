@@ -14,11 +14,23 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
 
   const handleStartFree = () => {
+    // Track CTA click
+    if (window.SwarmletFunnel) {
+      window.SwarmletFunnel.track('cta_clicked', { location: 'hero' });
+    }
     setShowLogin(true);
+    // Track modal opened
+    if (window.SwarmletFunnel) {
+      window.SwarmletFunnel.track('signup_modal_opened');
+    }
   };
 
   const handleDevLogin = async () => {
     setIsDevLoginLoading(true);
+    // Track signup submitted (dev login)
+    if (window.SwarmletFunnel) {
+      window.SwarmletFunnel.track('signup_submitted', { method: 'dev_login' });
+    }
     try {
       const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
         method: 'POST',
@@ -27,6 +39,23 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
       if (response.ok) {
         const data = await response.json();
         localStorage.setItem('zerg_jwt', data.access_token);
+
+        // Track signup completed and stitch visitor to user
+        if (window.SwarmletFunnel) {
+          const visitorId = window.SwarmletFunnel.getVisitorId();
+          window.SwarmletFunnel.track('signup_completed', { method: 'dev_login' });
+
+          // Stitch visitor to user (fire and forget)
+          fetch(`${config.apiBaseUrl}/funnel/stitch-visitor`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              visitor_id: visitorId,
+              user_id: data.user_id || 'dev_user'
+            })
+          }).catch(() => {});
+        }
+
         window.location.href = '/dashboard';
       }
     } catch (error) {
@@ -108,8 +137,31 @@ function GoogleSignInButtonWrapper() {
   useEffect(() => {
     const handleCredentialResponse = async (response: { credential: string }) => {
       setIsLoading(true);
+
+      // Track signup submitted (Google OAuth)
+      if (window.SwarmletFunnel) {
+        window.SwarmletFunnel.track('signup_submitted', { method: 'google_oauth' });
+      }
+
       try {
-        await login(response.credential);
+        const loginResult = await login(response.credential);
+
+        // Track signup completed and stitch visitor to user
+        if (window.SwarmletFunnel && loginResult) {
+          const visitorId = window.SwarmletFunnel.getVisitorId();
+          window.SwarmletFunnel.track('signup_completed', { method: 'google_oauth' });
+
+          // Stitch visitor to user (fire and forget)
+          fetch(config.apiBaseUrl + '/funnel/stitch-visitor', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              visitor_id: visitorId,
+              user_id: loginResult.user?.id || 'unknown'
+            })
+          }).catch(() => {});
+        }
+
         window.location.href = '/dashboard';
       } catch (error) {
         console.error('Login failed:', error);

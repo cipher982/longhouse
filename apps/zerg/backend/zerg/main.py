@@ -52,6 +52,7 @@ from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
+from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
@@ -386,6 +387,7 @@ app.include_router(ops_beacon_router, prefix=f"{API_PREFIX}")  # Public beacon (
 app.include_router(agent_config_router, prefix=f"{API_PREFIX}")
 app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent connector credentials
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
+app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
