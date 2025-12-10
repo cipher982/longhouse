@@ -3,7 +3,7 @@
 # PROFILES:
 #   zerg  - Zerg only (backend + frontend + postgres), direct port exposure
 #   full  - Full platform with Jarvis + nginx reverse proxy (development)
-#   prod  - Production mode with security hardening (Zerg only, no Jarvis)
+#   prod  - Production mode with security hardening (Zerg + Jarvis)
 #
 # USAGE:
 #   docker compose --profile full up      # Full platform (make dev)
@@ -330,6 +330,60 @@ services:
     logging: *default-logging
 
   # ---------------------------------------------------------------------------
+  # Production Jarvis Web UI (prod profile)
+  # ---------------------------------------------------------------------------
+  jarvis-web-prod:
+    profiles: [prod]
+    build:
+      context: ..
+      dockerfile: apps/jarvis/apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      DOCKER: "1"
+      VITE_ZERG_API_URL: /api
+      VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET}
+      VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
+      VITE_VOICE_CONTEXT: "personal"
+      VITE_JARVIS_ENABLE_REALTIME_BRIDGE: "true"
+      MODELS_CONFIG_PATH: /app/config/models.json
+    volumes:
+      - ../config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - swarm-network
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Production Jarvis Server (prod profile)
+  # ---------------------------------------------------------------------------
+  jarvis-server-prod:
+    profiles: [prod]
+    build:
+      context: ..
+      dockerfile: apps/jarvis/apps/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 8787
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SKIP_MCP: ${SKIP_MCP:-1}
+    volumes:
+      - ../config:/app/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8787/session"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - swarm-network
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
   # Production Backend (prod profile)
   # ---------------------------------------------------------------------------
   zerg-backend-prod:
@@ -439,6 +493,8 @@ services:
     depends_on:
       - zerg-frontend-prod
       - zerg-backend-prod
+      - jarvis-web-prod
+      - jarvis-server-prod
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
       interval: 30s
