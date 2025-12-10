@@ -81,6 +81,49 @@ services:
           memory: 512M
           cpus: '0.25'
 
+  # Jarvis Web UI (Chat interface)
+  jarvis-web:
+    build:
+      context: .
+      dockerfile: apps/jarvis/apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      DOCKER: "1"
+      VITE_ZERG_API_URL: ${API_BASE_URL:-https://api.swarmlet.com}
+      VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET}
+      VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
+      VITE_VOICE_CONTEXT: "personal"
+      VITE_JARVIS_ENABLE_REALTIME_BRIDGE: "true"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - zerg-network
+    logging: *default-logging
+
+  # Jarvis Server (OpenAI Realtime bridge)
+  jarvis-server:
+    build:
+      context: .
+      dockerfile: apps/jarvis/apps/server/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 8787
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SKIP_MCP: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8787/session"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - zerg-network
+    logging: *default-logging
+
   # Frontend Service - React UI (switched from Rust/WASM)
   frontend:
     build:
