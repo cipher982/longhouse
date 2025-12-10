@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs reset test test-jarvis test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -142,6 +142,35 @@ test: ## Run ALL tests (Jarvis + Zerg + integration)
 test-jarvis: ## Run Jarvis tests only
 	@echo "🧪 Running Jarvis tests..."
 	cd apps/jarvis/apps/web && bun vitest run --reporter=basic --silent
+
+# Granular Jarvis test targets (for faster iteration)
+test-jarvis-unit: ## Run Jarvis unit tests (no Docker)
+	@echo "🧪 Running Jarvis unit tests (fast)..."
+	cd apps/jarvis/apps/web && npm test -- --run
+
+test-jarvis-watch: ## Run Jarvis unit tests in watch mode (TDD)
+	@echo "🧪 Running Jarvis unit tests in watch mode..."
+	cd apps/jarvis/apps/web && npm test -- --watch
+
+test-jarvis-e2e: ## Run Jarvis E2E tests (Docker required)
+	@echo "🧪 Running Jarvis E2E tests..."
+	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test
+
+test-jarvis-e2e-ui: ## Run Jarvis E2E tests with interactive UI
+	@echo "🧪 Running Jarvis E2E tests (UI mode)..."
+	cd apps/jarvis && npx playwright test --ui
+
+test-jarvis-text: ## Run text message E2E tests only
+	@echo "🧪 Running text message tests..."
+	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test text-message-happy-path
+
+test-jarvis-history: ## Run history hydration E2E tests only
+	@echo "🧪 Running history hydration tests..."
+	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test history-hydration
+
+test-jarvis-grep: ## Run specific test by name (usage: make test-jarvis-grep GREP="test name")
+	@test -n "$(GREP)" || (echo "❌ Usage: make test-jarvis-grep GREP='test name'" && exit 1)
+	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test --grep "$(GREP)"
 
 test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."
