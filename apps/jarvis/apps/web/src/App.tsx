@@ -7,7 +7,7 @@
  */
 
 import { useCallback } from 'react'
-import { useAppState, useAppDispatch, type ChatMessage } from './context'
+import { useAppState, useAppDispatch } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 import { conversationController } from '../lib/conversation-controller'
@@ -33,21 +33,14 @@ export default function App() {
 
   // Realtime session - always active
   // History is loaded via SSOT callback in useRealtimeSession during connect()
+  // User voice messages are handled via USER_VOICE_COMMITTED/USER_VOICE_TRANSCRIPT events
   const realtimeSession = useRealtimeSession({
     onConnected: () => console.log('[App] Realtime session connected'),
     onDisconnected: () => console.log('[App] Realtime session disconnected'),
     onTranscript: (text, isFinal) => {
+      // Transcript events are for preview/logging only
+      // User message is added via USER_VOICE_COMMITTED (placeholder) + USER_VOICE_TRANSCRIPT (content)
       console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
-      if (isFinal && text.trim()) {
-        // Add user message from voice transcript
-        const userMessage: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: text,
-          timestamp: new Date(),
-        }
-        dispatch({ type: 'ADD_MESSAGE', message: userMessage })
-      }
     },
     onError: (error) => console.error('[App] Realtime error:', error),
   })

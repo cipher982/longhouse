@@ -28,7 +28,6 @@ export class AppController {
   private connecting = false;
   private textChannelController: TextChannelController | null = null;
   private lastBootstrapResult: BootstrapResult | null = null;
-  private onHistoryLoaded: ((history: ConversationTurn[]) => void) | null = null;
 
   constructor() {
     // Bind methods to this
@@ -120,27 +119,22 @@ export class AppController {
       stateManager.setSessionManager(sessionManager);
       conversationController.setSessionManager(sessionManager);
 
-      // NOTE: History hydration is now handled by bootstrapSession() in connect()
-      // This ensures SSOT - UI and Realtime get history from a single query
-
       // Initialize session
       const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
       stateManager.setConversationId(initialConversationId);
       conversationController.setConversationId(initialConversationId);
+
+      // Load history immediately for UI (don't wait for Realtime connection)
+      const history = await sessionManager.getConversationHistory();
+      if (history.length > 0) {
+        stateManager.historyLoaded(history);
+      }
 
       logger.info(`✅ Context initialized: ${contextName}`);
     } catch (error) {
       logger.error('❌ Failed to initialize context:', error);
       throw error; // Context is required, so we propagate the error
     }
-  }
-
-  /**
-   * Set callback for when history is loaded during connect
-   * This allows App.tsx to receive history from the single SSOT query
-   */
-  setOnHistoryLoaded(callback: ((history: ConversationTurn[]) => void) | null): void {
-    this.onHistoryLoaded = callback;
   }
 
   /**
@@ -201,10 +195,10 @@ export class AppController {
 
       logger.info(`📜 SSOT Bootstrap: ${history.length} turns loaded, ${hydratedItemCount} items hydrated`);
 
-      // 4. Notify callback with history (for UI to consume)
+      // 4. Notify UI with history via stateManager event
       // This is the SAME data used for Realtime hydration
-      if (this.onHistoryLoaded && history.length > 0) {
-        this.onHistoryLoaded(history);
+      if (history.length > 0) {
+        stateManager.historyLoaded(history);
       }
 
       // 5. Update State
@@ -348,18 +342,6 @@ export class AppController {
     session.on('transport_event', async (event: any) => {
       const t = event.type || '';
 
-      // Debug: Log ALL transport events (except high-frequency audio deltas)
-      // This helps identify what event types are actually being received
-      if (!t.includes('audio.delta') && !t.includes('input_audio_buffer.append')) {
-        console.log(`[Transport] ${t}`, {
-          hasTranscript: !!event.transcript,
-          hasDelta: !!event.delta,
-          deltaType: typeof event.delta,
-          deltaPreview: typeof event.delta === 'string' ? event.delta.substring(0, 50) : undefined,
-          transcriptPreview: typeof event.transcript === 'string' ? event.transcript.substring(0, 50) : undefined,
-        });
-      }
-
       // Forward to VoiceController
       if (t === 'conversation.item.input_audio_transcription.delta') {
         voiceController.handleTranscript(event.delta || '', false);
@@ -403,9 +385,6 @@ export class AppController {
 
       // Response Completion - ALWAYS reset status, finalize if streaming
       if (t === 'response.done') {
-        // Debug: Log the full response.done event to understand structure
-        console.log('[Transport] response.done full event:', JSON.stringify(event, null, 2).substring(0, 1000));
-
         if (conversationController.isStreaming()) {
           conversationController.finalizeStreaming();
         }
@@ -418,17 +397,26 @@ export class AppController {
         conversationController.handleItemAdded(event);
       }
       if (t === 'conversation.item.done') {
-        // Debug: Log to understand item structure
-        console.log('[Transport] conversation.item.done:', {
-          itemId: event.item?.id,
-          itemRole: event.item?.role,
-          hasContent: !!event.item?.content,
-          contentLength: event.item?.content?.length,
-          firstContentType: event.item?.content?.[0]?.type,
-          firstContentText: event.item?.content?.[0]?.text?.substring(0, 100),
-          firstContentTranscript: event.item?.content?.[0]?.transcript?.substring(0, 100),
-        });
         conversationController.handleItemDone(event);
+
+        // User voice committed - add placeholder immediately for correct ordering
+        const item = event.item;
+        if (item?.role === 'user' && item?.id) {
+          const contentType = item.content?.[0]?.type;
+          if (contentType === 'input_audio') {
+            stateManager.userVoiceCommitted(item.id);
+          }
+        }
+      }
+
+      // User voice transcript ready - update placeholder with actual text
+      if (t === 'conversation.item.input_audio_transcription.completed') {
+        // Find the item ID from the event (it references the user message item)
+        const itemId = event.item_id;
+        const transcript = event.transcript || '';
+        if (itemId && transcript) {
+          stateManager.userVoiceTranscript(itemId, transcript);
+        }
       }
 
       // Error handling

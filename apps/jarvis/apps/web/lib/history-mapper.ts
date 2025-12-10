@@ -10,6 +10,16 @@ import type { ConversationTurn } from '@jarvis/data-local';
 import type { RealtimeMessageItem } from '@openai/agents/realtime';
 
 /**
+ * Generate a short ID suitable for OpenAI Realtime API (max 32 chars).
+ * Uses base36 encoding of timestamp + random suffix for uniqueness.
+ */
+function generateShortId(): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${timestamp}_${random}`.slice(0, 32);
+}
+
+/**
  * Map IndexedDB conversation turns to OpenAI Realtime message items.
  *
  * Each ConversationTurn can produce 0-2 RealtimeMessageItems:
@@ -35,7 +45,7 @@ export function mapConversationToRealtimeItems(
   for (const turn of sorted) {
     // Handle user message
     if (turn.userTranscript?.trim()) {
-      const itemId = crypto.randomUUID();
+      const itemId = generateShortId();
       items.push({
         type: 'message',
         role: 'user',
@@ -50,7 +60,7 @@ export function mapConversationToRealtimeItems(
     // Handle assistant message (normalize field names)
     const assistantText = turn.assistantResponse ?? turn.assistantText;
     if (assistantText?.trim()) {
-      const itemId = crypto.randomUUID();
+      const itemId = generateShortId();
       items.push({
         type: 'message',
         role: 'assistant',

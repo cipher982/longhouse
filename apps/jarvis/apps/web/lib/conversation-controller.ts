@@ -283,7 +283,6 @@ export class ConversationController {
         // If we're not already streaming this content, emit it
         // This handles the case where text.delta events weren't received
         if (!this.isStreaming() || this.state.streamingText !== text) {
-          console.log('[ConversationController] Processing item.done text:', text.substring(0, 50));
           // Start fresh streaming with the complete text
           this.startStreaming();
           this.state.streamingText = text;

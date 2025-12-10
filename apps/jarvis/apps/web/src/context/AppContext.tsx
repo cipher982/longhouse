@@ -53,6 +53,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, messages: action.messages }
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.message] }
+    case 'UPDATE_MESSAGE': {
+      const idx = state.messages.findIndex(m => m.itemId === action.itemId)
+      if (idx === -1) return state
+      const updated = [...state.messages]
+      updated[idx] = { ...updated[idx], content: action.content }
+      return { ...state, messages: updated }
+    }
     case 'SET_STREAMING_CONTENT':
       return { ...state, streamingContent: action.content }
     case 'SET_USER_TRANSCRIPT_PREVIEW':

@@ -60,38 +60,6 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       console.error('[useRealtimeSession] App controller init failed:', error)
       optionsRef.current.onError?.(error)
     })
-
-    // Set up SSOT history callback - receives history from single bootstrap query
-    // This is called during connect() with the same data used for Realtime hydration
-    appController.setOnHistoryLoaded((history) => {
-      console.log('[useRealtimeSession] SSOT History loaded:', history.length, 'turns')
-      // Convert turns to ChatMessages for React state
-      const messages: ChatMessage[] = []
-      for (const turn of history) {
-        if (turn.userTranscript) {
-          messages.push({
-            id: turn.id || crypto.randomUUID(),
-            role: 'user',
-            content: turn.userTranscript,
-            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-          })
-        }
-        if (turn.assistantResponse) {
-          messages.push({
-            id: `${turn.id}-asst` || crypto.randomUUID(),
-            role: 'assistant',
-            content: turn.assistantResponse,
-            timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
-          })
-        }
-      }
-      dispatch({ type: 'SET_MESSAGES', messages })
-    })
-
-    // Cleanup callback on unmount
-    return () => {
-      appController.setOnHistoryLoaded(null)
-    }
   }, [dispatch])  // dispatch needed for history callback
 
   // Subscribe to controller events - SEPARATE effect so it always runs
@@ -161,6 +129,50 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           // Add the finalized assistant message to React state
           dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
           break
+
+        case 'USER_VOICE_COMMITTED':
+          // Add placeholder user message immediately for correct ordering
+          dispatch({
+            type: 'ADD_MESSAGE',
+            message: {
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: '...',
+              timestamp: new Date(),
+              itemId: event.itemId,
+            },
+          })
+          break
+
+        case 'USER_VOICE_TRANSCRIPT':
+          // Update placeholder with actual transcript
+          dispatch({ type: 'UPDATE_MESSAGE', itemId: event.itemId, content: event.transcript })
+          break
+
+        case 'HISTORY_LOADED': {
+          // Convert turns to ChatMessages for React state
+          const messages: ChatMessage[] = []
+          for (const turn of event.history) {
+            if (turn.userTranscript) {
+              messages.push({
+                id: turn.id || crypto.randomUUID(),
+                role: 'user',
+                content: turn.userTranscript,
+                timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+              })
+            }
+            if (turn.assistantResponse) {
+              messages.push({
+                id: `${turn.id}-asst` || crypto.randomUUID(),
+                role: 'assistant',
+                content: turn.assistantResponse,
+                timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+              })
+            }
+          }
+          dispatch({ type: 'SET_MESSAGES', messages })
+          break
+        }
 
         case 'TOAST':
           // Could dispatch to a toast system in React context

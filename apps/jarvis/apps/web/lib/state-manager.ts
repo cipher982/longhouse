@@ -51,7 +51,10 @@ export type StateChangeEvent =
   | { type: 'VOICE_STATUS_CHANGED'; status: VoiceStatus }
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
-  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date } };
+  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date } }
+  | { type: 'USER_VOICE_COMMITTED'; itemId: string }
+  | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
+  | { type: 'HISTORY_LOADED'; history: any[] };
 
 /**
  * State change listener
@@ -170,6 +173,27 @@ export class StateManager {
       timestamp: new Date(),
     };
     this.notifyListeners({ type: 'MESSAGE_FINALIZED', message });
+  }
+
+  /**
+   * Notify that user voice input was committed (placeholder should be shown)
+   */
+  userVoiceCommitted(itemId: string): void {
+    this.notifyListeners({ type: 'USER_VOICE_COMMITTED', itemId });
+  }
+
+  /**
+   * Notify that user voice transcript is ready (update placeholder content)
+   */
+  userVoiceTranscript(itemId: string, transcript: string): void {
+    this.notifyListeners({ type: 'USER_VOICE_TRANSCRIPT', itemId, transcript });
+  }
+
+  /**
+   * Notify that conversation history was loaded (for UI hydration)
+   */
+  historyLoaded(history: any[]): void {
+    this.notifyListeners({ type: 'HISTORY_LOADED', history });
   }
 
   /**

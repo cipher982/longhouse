@@ -34,6 +34,8 @@ export interface ChatMessage {
   content: string
   timestamp?: Date
   isStreaming?: boolean
+  /** OpenAI item ID for matching transcripts to placeholders */
+  itemId?: string
 }
 
 /**
@@ -77,6 +79,7 @@ export type AppAction =
   | { type: 'SET_SESSION_MANAGER'; sessionManager: SessionManager | null }
   | { type: 'SET_MESSAGES'; messages: ChatMessage[] }
   | { type: 'ADD_MESSAGE'; message: ChatMessage }
+  | { type: 'UPDATE_MESSAGE'; itemId: string; content: string }
   | { type: 'SET_STREAMING_CONTENT'; content: string }
   | { type: 'SET_USER_TRANSCRIPT_PREVIEW'; text: string }
   | { type: 'SET_CONVERSATION_ID'; id: string | null }
