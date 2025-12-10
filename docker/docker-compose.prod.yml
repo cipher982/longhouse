@@ -169,7 +169,7 @@ services:
       - jarvis-web
       - jarvis-server
     volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
       interval: 30s
