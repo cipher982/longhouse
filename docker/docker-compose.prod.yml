@@ -161,15 +161,15 @@ services:
   # Reverse Proxy - Routes paths to internal services
   # Coolify/Caddy handles SSL, this handles path-based routing
   reverse-proxy:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: docker/nginx.dockerfile
     restart: unless-stopped
     depends_on:
       - frontend
       - backend
       - jarvis-web
       - jarvis-server
-    volumes:
-      - ./docker/nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
       interval: 30s
