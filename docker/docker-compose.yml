@@ -234,6 +234,7 @@ services:
       dockerfile: apps/jarvis/apps/web/Dockerfile
     restart: unless-stopped
     environment:
+      DOCKER: "1"
       VITE_ZERG_API_URL: /api
       VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET:-test-secret}
       VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}

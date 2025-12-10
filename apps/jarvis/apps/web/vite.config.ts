@@ -3,6 +3,12 @@ import { resolve } from 'path'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// Detect if running in Docker (service names) or native (localhost)
+const isDocker = process.env.DOCKER === '1' || process.env.NODE_ENV === 'docker'
+const JARVIS_SERVER = isDocker ? 'http://jarvis-server:8787' : 'http://localhost:8787'
+const ZERG_BACKEND = isDocker ? 'http://zerg-backend:8000' : 'http://localhost:47300'
+const ZERG_WS = isDocker ? 'ws://zerg-backend:8000' : 'ws://localhost:47300'
+
 export default defineConfig({
   logLevel: 'warn',
   plugins: [
@@ -106,44 +112,45 @@ export default defineConfig({
       usePolling: true,
       interval: 500,
     },
-    // HMR config for Docker behind nginx proxy
+    // HMR config - use nginx proxy port in Docker, direct port in native
     hmr: {
       protocol: 'ws',
       host: 'localhost',
-      // Browser connects to nginx proxy port, not container port
-      clientPort: process.env.JARPXY_PORT ? parseInt(process.env.JARPXY_PORT) : 30080,
+      clientPort: isDocker
+        ? (process.env.JARPXY_PORT ? parseInt(process.env.JARPXY_PORT) : 30080)
+        : 8080,
     },
     proxy: {
       // Jarvis realtime bridge
       '/api/session': {
-        target: 'http://jarvis-server:8787',
+        target: JARVIS_SERVER,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/api/tool': {
-        target: 'http://jarvis-server:8787',
+        target: JARVIS_SERVER,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/api/sync': {
-        target: 'http://jarvis-server:8787',
+        target: JARVIS_SERVER,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
 
       // Zerg backend (REST + SSE)
       '/api/ws': {
-        target: 'ws://zerg-backend:8000',
+        target: ZERG_WS,
         ws: true,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://zerg-backend:8000',
+        target: ZERG_WS,
         ws: true,
         changeOrigin: true,
       },
       '/api': {
-        target: 'http://zerg-backend:8000',
+        target: ZERG_BACKEND,
         changeOrigin: true,
       },
     }
