@@ -11,10 +11,10 @@
 
 .transcript {
   flex: 1;
-  padding: var(--space-6);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-4);
   max-width: 960px;
   margin: 0 auto;
   width: 100%;
@@ -85,16 +85,16 @@
 
 /* Avatars */
 .message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
   background: rgb(255 255 255 / 5%);
   border: 1px solid var(--color-border-muted);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
   color: var(--color-text-secondary);
   box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
 }
@@ -119,10 +119,10 @@
 /* Bubbles */
 .message-content {
   max-width: 80%;
-  padding: var(--space-3) var(--space-5);
-  border-radius: 18px;
-  font-size: var(--font-size-base);
-  line-height: 1.6;
+  padding: var(--space-2) var(--space-4);
+  border-radius: 16px;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
   position: relative;
   /* Glass border effect */
   border: 1px solid rgb(255 255 255 / 10%);
@@ -209,9 +209,9 @@
 /* Turn-based Message Bubbles (conversation-renderer.ts output) */
 .user-turn,
 .assistant-turn {
-  margin: 16px 0;
-  padding: 16px 20px;
-  border-radius: 18px;
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-radius: 14px;
   position: relative;
   max-width: 85%;
 }
@@ -247,10 +247,10 @@
 .turn-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 8px;
+  font-size: 11px;
+  margin-bottom: 6px;
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -258,8 +258,8 @@
 
 /* SVG Role Icons */
 .role-icon {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   flex-shrink: 0;
 }
 
@@ -272,7 +272,8 @@
 }
 
 .turn-content {
-  line-height: 1.6;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
   color: var(--color-text-primary);
 }
 

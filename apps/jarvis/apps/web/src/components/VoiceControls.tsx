@@ -60,9 +60,9 @@ export function VoiceControls({
 
   return (
     <div className="voice-controls">
-      {/* Mode Toggle Switch */}
+      {/* Mode Toggle Switch - Left side */}
       <div className="mode-toggle-container">
-        <span className="mode-label">Push-to-Talk</span>
+        <span className="mode-label">PTT</span>
         <button
           className={`mode-toggle ${isHandsFree ? 'active' : ''}`}
           type="button"
@@ -74,10 +74,10 @@ export function VoiceControls({
         >
           <span className="mode-toggle-slider"></span>
         </button>
-        <span className="mode-label">Hands-free</span>
+        <span className="mode-label">HF</span>
       </div>
 
-      {/* Main Voice Button with Reactor Core */}
+      {/* Main Voice Button with Reactor Core - Center */}
       <div className={`voice-button-wrapper ${status}`}>
         {/* Reactor Rings - Pure CSS animated */}
         <div className="reactor-ring reactor-ring-outer" aria-hidden="true" />
@@ -97,7 +97,7 @@ export function VoiceControls({
           onTouchStart={handlePress}
           onTouchEnd={handleRelease}
         >
-          <svg className="voice-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg className="voice-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
             <path d="M19 10v2a7 7 0 01-14 0v-2" />
             <line x1="12" y1="19" x2="12" y2="23" />
@@ -106,7 +106,7 @@ export function VoiceControls({
         </button>
       </div>
 
-      {/* Status Text */}
+      {/* Status Text - Right side */}
       <div className="voice-status">
         <span className="voice-status-text" aria-live="polite">
           {STATUS_TEXT[status]}

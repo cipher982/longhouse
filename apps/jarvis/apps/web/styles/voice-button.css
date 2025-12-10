@@ -6,11 +6,11 @@
 
 .voice-controls {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: var(--space-4);
-  padding: var(--space-6);
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
   position: relative;
   background: linear-gradient(0deg, var(--color-void) 0%, transparent 100%);
   animation: unfold-vertical 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -27,8 +27,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 200px;
-  height: 200px;
+  width: 140px;
+  height: 140px;
 }
 
 /* ============================
@@ -47,16 +47,16 @@
 
 /* Outer Ring - Largest, slowest */
 .reactor-ring-outer {
-  width: 180px;
-  height: 180px;
+  width: 130px;
+  height: 130px;
   border: 2px dashed rgb(99 102 241 / 30%);
   animation: ring-rotate 12s linear infinite;
 }
 
 /* Middle Ring - Counter-rotation */
 .reactor-ring-middle {
-  width: 155px;
-  height: 155px;
+  width: 110px;
+  height: 110px;
   border: 1.5px solid rgb(99 102 241 / 20%);
   border-top-color: rgb(99 102 241 / 60%);
   border-right-color: transparent;
@@ -67,8 +67,8 @@
 
 /* Inner Ring - Closest to button, fastest */
 .reactor-ring-inner {
-  width: 138px;
-  height: 138px;
+  width: 95px;
+  height: 95px;
   border: 1px dotted rgb(99 102 241 / 25%);
   animation: ring-rotate 5s linear infinite;
 }
@@ -264,8 +264,8 @@
    ============================ */
 
 .voice-button {
-  width: 120px;
-  height: 120px;
+  width: 80px;
+  height: 80px;
   border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #1e1e2e 0%, #0a0a12 70%);
   border: 2px solid rgb(99 102 241 / 30%);
@@ -276,18 +276,18 @@
   align-items: center;
   z-index: 10;
   box-shadow:
-    inset 0 0 30px rgb(0 0 0 / 60%),
+    inset 0 0 20px rgb(0 0 0 / 60%),
     inset 0 2px 4px rgb(255 255 255 / 5%),
-    0 8px 30px rgb(0 0 0 / 50%),
+    0 6px 20px rgb(0 0 0 / 50%),
     0 0 0 1px rgb(255 255 255 / 5%),
-    0 0 30px rgb(99 102 241 / 15%);
+    0 0 20px rgb(99 102 241 / 15%);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Icon */
 .voice-icon {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   color: rgb(255 255 255 / 50%);
   transition: all 0.3s ease;
   filter: drop-shadow(0 0 3px rgb(255 255 255 / 20%));
@@ -561,12 +561,13 @@
 .voice-status {
   text-align: center;
   animation: slide-up-fade 0.4s ease-out 0.2s backwards;
+  min-width: 120px;
 }
 
 .voice-status-text {
   font-family: var(--font-family-mono);
-  font-size: 0.75rem;
-  letter-spacing: 2px;
+  font-size: 0.7rem;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--color-text-secondary);
   opacity: 0.8;
@@ -598,14 +599,16 @@
 .mode-toggle-container {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   background: rgb(255 255 255 / 3%);
-  padding: 8px 16px;
-  border-radius: 24px;
+  padding: 6px 12px;
+  border-radius: 20px;
   border: 1px solid var(--color-border-muted);
   backdrop-filter: blur(8px);
   animation: slide-up-fade 0.4s ease-out 0.3s backwards;
   transition: all 0.3s ease;
+  min-width: 120px;
+  justify-content: center;
 }
 
 .mode-toggle-container:hover {
@@ -614,10 +617,10 @@
 }
 
 .mode-toggle {
-  width: 48px;
-  height: 24px;
+  width: 40px;
+  height: 20px;
   background: rgb(0 0 0 / 60%);
-  border-radius: 24px;
+  border-radius: 20px;
   position: relative;
   cursor: pointer;
   border: 1px solid rgb(255 255 255 / 10%);
@@ -640,8 +643,8 @@
 }
 
 .mode-toggle-slider {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
   border-radius: 50%;
   position: absolute;
@@ -654,7 +657,7 @@
 }
 
 .mode-toggle[aria-checked="true"] .mode-toggle-slider {
-  transform: translateX(24px);
+  transform: translateX(20px);
   background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #22d3ee 100%);
   box-shadow:
     0 2px 8px rgb(6 182 212 / 50%),
@@ -662,10 +665,10 @@
 }
 
 .mode-label {
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   color: var(--color-text-muted);
   transition: color 0.3s ease;
 }
