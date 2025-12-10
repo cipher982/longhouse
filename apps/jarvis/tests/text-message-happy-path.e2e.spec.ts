@@ -27,12 +27,16 @@ test.describe('Text Message Happy Path', () => {
     // Wait for app to be loaded - React app uses .transcript (class), not #transcript (ID)
     await page.waitForSelector('.transcript', { timeout: 30000 });
 
-    // Wait for the app to initialize
-    // The text input should be visible and enabled
-    await page.waitForSelector('input[placeholder*="Type a message"]', {
+    // Wait for the app to initialize AND connect
+    // The text input should be visible and ENABLED (not disabled)
+    // This indicates the session is connected and ready for text input
+    await page.waitForSelector('input[placeholder*="Type a message"]:not([disabled])', {
       state: 'visible',
-      timeout: 30000
+      timeout: 60000
     });
+
+    // Small delay to ensure session is fully ready
+    await page.waitForTimeout(1000);
   });
 
   test('should send text message and display AI response', async ({ page }) => {
