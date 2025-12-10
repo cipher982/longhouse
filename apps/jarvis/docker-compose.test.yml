@@ -53,6 +53,10 @@ services:
     volumes:
       # Mount config for live updates (same pattern as main docker-compose.yml)
       - ../../config:/app/config:ro
+      # Mount source code for hot reload (no rebuild needed for code changes)
+      - ../../apps/jarvis/apps/web/src:/app/apps/web/src:ro
+      - ../../apps/jarvis/apps/web/lib:/app/apps/web/lib:ro
+      - ../../apps/jarvis/packages:/app/packages:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:${TEST_WEB_PORT:-8080}"]
       interval: 5s
@@ -84,6 +88,8 @@ services:
       # Mount test results back to host for inspection
       - ./test-results:/app/test-results
       - ./playwright-report:/app/playwright-report
+      # Mount test files for hot reload (edit tests without rebuild)
+      - ./tests:/app/tests:ro
     networks:
       - test
 
