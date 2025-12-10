@@ -4,8 +4,8 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
-    "dev": "node server.js",
-    "start": "node server.js"
+    "dev": "bun run server.js",
+    "start": "bun run server.js"
   },
   "dependencies": {
     "@jarvis/core": "workspace:*",
