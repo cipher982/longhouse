@@ -258,9 +258,40 @@ export class ConversationController {
 
   /**
    * Handle conversation.item.done event from OpenAI
+   * This event contains the complete item with all content
    */
   handleItemDone(event: any): void {
     logger.debug('Conversation item done', event);
+
+    // Extract assistant response from item.done event
+    // Structure: event.item.content[].text or event.item.content[].transcript
+    const item = event?.item;
+    if (!item || item.role !== 'assistant') {
+      return;
+    }
+
+    // Get text from content array
+    const content = item.content;
+    if (!Array.isArray(content)) {
+      return;
+    }
+
+    // Find text content (could be type 'text' or 'audio' with transcript)
+    for (const part of content) {
+      const text = part.text || part.transcript;
+      if (text && typeof text === 'string' && text.trim()) {
+        // If we're not already streaming this content, emit it
+        // This handles the case where text.delta events weren't received
+        if (!this.isStreaming() || this.state.streamingText !== text) {
+          console.log('[ConversationController] Processing item.done text:', text.substring(0, 50));
+          // Start fresh streaming with the complete text
+          this.startStreaming();
+          this.state.streamingText = text;
+          stateManager.setStreamingText(text);
+        }
+        break;
+      }
+    }
   }
 
   // ============= Cleanup =============
