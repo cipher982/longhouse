@@ -3,6 +3,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { renderMarkdown, renderStreamingContent } from '../../lib/markdown-renderer'
 
 export interface ChatMessage {
   id: string
@@ -43,7 +44,10 @@ export function ChatContainer({ messages, isStreaming, streamingContent, userTra
           <>
             {messages.map((message) => (
               <div key={message.id} className={`message ${message.role}`}>
-                <div className="message-content">{message.content}</div>
+                <div
+                  className="message-content"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
+                />
               </div>
             ))}
             {/* Show live user voice transcript preview */}
@@ -55,7 +59,10 @@ export function ChatContainer({ messages, isStreaming, streamingContent, userTra
             {/* Show assistant streaming response */}
             {isStreaming && streamingContent && (
               <div className="message assistant streaming">
-                <div className="message-content">{streamingContent}</div>
+                <div
+                  className="message-content"
+                  dangerouslySetInnerHTML={{ __html: renderStreamingContent(streamingContent) }}
+                />
               </div>
             )}
           </>
