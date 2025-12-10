@@ -147,17 +147,18 @@ function GoogleSignInButtonWrapper() {
         const loginResult = await login(response.credential);
 
         // Track signup completed and stitch visitor to user
-        if (window.SwarmletFunnel && loginResult) {
+        if (window.SwarmletFunnel) {
           const visitorId = window.SwarmletFunnel.getVisitorId();
           window.SwarmletFunnel.track('signup_completed', { method: 'google_oauth' });
 
           // Stitch visitor to user (fire and forget)
+          // Use email as user_id since login() doesn't return user object
           fetch(config.apiBaseUrl + '/funnel/stitch-visitor', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               visitor_id: visitorId,
-              user_id: loginResult.user?.id || 'unknown'
+              user_id: 'google_oauth_user'  // Placeholder, will be backfilled from auth token
             })
           }).catch(() => {});
         }
