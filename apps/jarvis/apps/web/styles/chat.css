@@ -74,7 +74,8 @@
 
 /* Streaming messages appear immediately without animation */
 .message.streaming,
-.message.preview {
+.message.preview,
+.message.no-animate {
   opacity: 1;
   animation: none;
 }
@@ -468,4 +469,26 @@
 
 .turn-content tr:nth-child(even) {
   background: rgb(255 255 255 / 2%);
+}
+
+/* Streaming cursor animations */
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }

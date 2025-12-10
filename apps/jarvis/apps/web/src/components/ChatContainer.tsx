@@ -11,6 +11,7 @@ export interface ChatMessage {
   content: string
   timestamp?: Date
   isStreaming?: boolean
+  skipAnimation?: boolean
 }
 
 interface ChatContainerProps {
@@ -43,7 +44,7 @@ export function ChatContainer({ messages, isStreaming, streamingContent, userTra
         ) : (
           <>
             {messages.map((message) => (
-              <div key={message.id} className={`message ${message.role}`}>
+              <div key={message.id} className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}`}>
                 <div
                   className="message-content"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}

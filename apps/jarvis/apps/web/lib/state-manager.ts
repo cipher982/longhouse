@@ -171,6 +171,7 @@ export class StateManager {
       role: 'assistant' as const,
       content,
       timestamp: new Date(),
+      skipAnimation: true, // Skip fade-in since user already saw it streaming
     };
     this.notifyListeners({ type: 'MESSAGE_FINALIZED', message });
   }

@@ -34,23 +34,24 @@
 
 /* Remove unused legacy .card styling for minimalism */
 
-.personal-context .streaming {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgb(34 211 238 / 10%) 50%,
-    transparent 100%
-  );
+.personal-context .streaming .message-content {
   animation: pulse-personal 2s ease-in-out infinite alternate;
 }
 
 @keyframes pulse-personal {
   from {
-    background-color: rgb(34 211 238 / 5%);
+    background: linear-gradient(
+      135deg,
+      rgb(34 211 238 / 5%) 0%,
+      rgb(6 182 212 / 5%) 100%
+    );
   }
-
   to {
-    background-color: rgb(34 211 238 / 15%);
+    background: linear-gradient(
+      135deg,
+      rgb(34 211 238 / 15%) 0%,
+      rgb(6 182 212 / 15%) 100%
+    );
   }
 }
 
