@@ -10,7 +10,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Central compose file reference - use unified compose with profile
-export COMPOSE_FILE="docker/docker-compose.yml"
+export COMPOSE_FILE="docker/docker-compose.dev.yml"
 export COMPOSE_PROFILE="full"
 STARTED=false
 LOGS_PID=""
