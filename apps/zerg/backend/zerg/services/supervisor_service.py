@@ -27,7 +27,7 @@ from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import WorkerJob
-from zerg.prompts.supervisor_prompt import get_supervisor_prompt
+from zerg.prompts import build_supervisor_prompt
 from zerg.services.supervisor_context import reset_seq
 from zerg.services.thread_service import ThreadService
 from zerg.services.worker_artifact_store import WorkerArtifactStore
@@ -96,6 +96,11 @@ class SupervisorService:
         # Create new supervisor agent
         logger.info(f"Creating supervisor agent for user {owner_id}")
 
+        # Fetch user for context-aware prompt composition
+        user = crud.get_user(self.db, owner_id)
+        if not user:
+            raise ValueError(f"User {owner_id} not found")
+
         supervisor_config = {
             "is_supervisor": True,
             "temperature": 0.7,
@@ -119,7 +124,7 @@ class SupervisorService:
             owner_id=owner_id,
             name="Supervisor",
             model=DEFAULT_MODEL_ID,
-            system_instructions=get_supervisor_prompt(),
+            system_instructions=build_supervisor_prompt(user),
             task_instructions="You are helping the user accomplish their goals. "
             "Analyze their request and decide how to handle it.",
             config=supervisor_config,

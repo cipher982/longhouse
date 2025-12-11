@@ -68,6 +68,9 @@ class User(Base):
     # Store arbitrary UI preferences (theme, timezone, etc.)
     prefs = Column(MutableDict.as_mutable(JSON), nullable=True, default={})
 
+    # User context for prompt composition (servers, integrations, preferences)
+    context = Column(MutableDict.as_mutable(JSON), nullable=False, default={})
+
     # Login tracking
     last_login = Column(DateTime, nullable=True)
 

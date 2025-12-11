@@ -33,6 +33,7 @@ from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.thread_service import ThreadService
 from zerg.services.thread_service import _db_to_langchain
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.prompts import build_worker_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +404,11 @@ class WorkerRunner:
             if user is None:
                 raise ValueError("No users found - cannot create worker agent")
             owner_id = user.id
+        else:
+            # Fetch user object for context-aware prompt composition
+            user = crud.get_user(db, owner_id)
+            if not user:
+                raise ValueError(f"User {owner_id} not found")
 
         # Default worker tools: infrastructure access + utilities
         # Workers are disposable and should have the tools they need for common tasks
@@ -421,9 +427,7 @@ class WorkerRunner:
             model=config.get("model", DEFAULT_WORKER_MODEL_ID),
             system_instructions=config.get(
                 "system_instructions",
-                "You are a worker agent executing a specific task. "
-                "You have access to SSH for remote commands on servers (cube, clifford, zerg, slim). "
-                "Complete the task and provide a clear, concise result with findings.",
+                build_worker_prompt(user),
             ),
             task_instructions=task,
         )

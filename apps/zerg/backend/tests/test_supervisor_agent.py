@@ -90,17 +90,15 @@ class TestSupervisorConfiguration:
         prompt = get_supervisor_prompt()
 
         # Verify key concepts are present
-        assert "Supervisor Agent" in prompt
+        assert "Supervisor" in prompt
         assert "spawn_worker" in prompt
         assert "list_workers" in prompt
-        assert "delegate" in prompt.lower()
         assert "worker" in prompt.lower()
-        assert "context" in prompt.lower()
 
         # Verify guidance sections
-        assert "When to Spawn Workers" in prompt
+        assert "Your Role" in prompt
         assert "Querying Past Work" in prompt
-        assert "Communication Style" in prompt
+        assert "Response Style" in prompt
 
     def test_supervisor_not_scheduled(self, db_session, test_user):
         """Test that supervisor is not scheduled (interactive only)."""
