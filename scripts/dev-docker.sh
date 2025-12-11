@@ -16,6 +16,7 @@ export COMPOSE_PROJECT_NAME="zerg"
 STARTED=false
 LOGS_PID=""
 CLEANUP_DONE=false
+EXIT_REASON=""
 
 # Helper for compose commands with profile.
 # Important: compose file lives in `docker/`, but `.env` lives at repo root.
@@ -27,6 +28,12 @@ compose_cmd() {
 cleanup() {
     # Preserve exit status FIRST (before any other operations)
     local exit_status=$?
+
+    # Treat user interrupts as a clean exit if we successfully clean up.
+    # This avoids `make: *** [dev] Error 130` when you intentionally hit Ctrl+C.
+    if [ "$EXIT_REASON" = "interrupt" ] || [ "$EXIT_REASON" = "terminate" ]; then
+        exit_status=0
+    fi
 
     # Guard against double cleanup (EXIT trap can race with INT)
     if [ "$CLEANUP_DONE" = true ]; then
@@ -52,9 +59,11 @@ cleanup() {
     exit "$exit_status"
 }
 
-# Trap EXIT catches normal exit, errors, and external stop
-# INT/TERM for Ctrl+C and kill signals
-trap cleanup EXIT INT TERM
+# Trap EXIT catches normal exit, errors, and external stop.
+# INT/TERM trigger cleanup but should not show as an error in `make dev`.
+trap cleanup EXIT
+trap 'EXIT_REASON="interrupt"; cleanup' INT
+trap 'EXIT_REASON="terminate"; cleanup' TERM
 
 echo -e "${BLUE}🚀 Starting unified development environment...${NC}"
 echo -e "${BLUE}   (Full Docker with Nginx proxy - isolated ports)${NC}"
