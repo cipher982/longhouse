@@ -40,5 +40,9 @@ echo "=== Migration Log $(date) ===" > "$MIGRATION_LOG"
 # Also output to stderr so it appears in Docker logs
 cat "$MIGRATION_LOG" >&2
 
+# Auto-seed user context if local config exists (idempotent - skips if already set)
+echo "🌱 Checking for user context seed..."
+python scripts/seed_user_context.py 2>&1 || echo "Context seeding skipped or failed (non-fatal)"
+
 echo "Starting server..."
 exec python -m uvicorn zerg.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
