@@ -66,16 +66,23 @@ def load_context(path: Path | None = None) -> dict:
 
 
 def main():
-    """Seed user context from local config file."""
-    # Get optional path argument
-    context_path = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    """Seed user context from local config file.
+
+    Use --force to overwrite existing context.
+    Without --force, skips if user already has context (idempotent).
+    """
+    # Parse arguments
+    force = "--force" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    context_path = Path(args[0]) if args else None
 
     # Load context from file
     try:
         context = load_context(context_path)
     except FileNotFoundError as e:
-        print(f"ERROR: {e}")
-        return 1
+        # In auto-seed mode (no file), just skip silently
+        print(f"SKIP: {e}")
+        return 0  # Return success - no file is not an error for auto-seed
 
     # Connect to database and update user
     db = SessionLocal()
@@ -85,8 +92,13 @@ def main():
         user = result.scalar_one_or_none()
 
         if not user:
-            print("ERROR: No users found in database. Create a user first.")
-            return 1
+            print("SKIP: No users found in database yet.")
+            return 0  # Not an error - user may not exist yet
+
+        # Check if user already has context (idempotent)
+        if user.context and user.context.get("display_name") and not force:
+            print(f"SKIP: User {user.email} already has context. Use --force to overwrite.")
+            return 0
 
         print(f"Seeding context for user: {user.email} (ID: {user.id})")
 
