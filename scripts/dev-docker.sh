@@ -16,9 +16,11 @@ STARTED=false
 LOGS_PID=""
 CLEANUP_DONE=false
 
-# Helper for compose commands with profile
+# Helper for compose commands with profile.
+# Important: compose file lives in `docker/`, but `.env` lives at repo root.
+# `--env-file` makes env interpolation deterministic regardless of CWD.
 compose_cmd() {
-    docker compose -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" "$@"
+    docker compose --env-file .env -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" "$@"
 }
 
 cleanup() {
@@ -57,13 +59,17 @@ echo -e "${BLUE}🚀 Starting unified development environment...${NC}"
 echo -e "${BLUE}   (Full Docker with Nginx proxy - isolated ports)${NC}"
 echo ""
 
-# Load .env if present (respects user customizations)
-if [ -f .env ]; then
-    echo -e "${BLUE}📄 Loading .env file...${NC}"
-    set -a
-    source .env
-    set +a
+# Require .env (fail fast)
+if [ ! -f .env ]; then
+    echo -e "${RED}❌ Missing .env file${NC}"
+    echo -e "${YELLOW}💡 Copy .env.example to .env and fill in required values.${NC}"
+    exit 1
 fi
+
+echo -e "${BLUE}📄 Loading .env file...${NC}"
+set -a
+source .env
+set +a
 
 # Set defaults only if not already set (respects existing env/exports)
 export JARPXY_PORT="${JARPXY_PORT:-30080}"
@@ -77,6 +83,18 @@ export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-zerg}"
 export AUTH_DISABLED="${AUTH_DISABLED:-1}"
 export DEV_ADMIN="${DEV_ADMIN:-1}"
 # OPENAI_API_KEY must come from env or .env - no default
+
+# Validate required env vars (fail fast, don't start half-configured stacks)
+missing=0
+for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do
+    if [ -z "${!var:-}" ]; then
+        echo -e "${RED}❌ Missing required env var: ${var}${NC}"
+        missing=1
+    fi
+done
+if [ "$missing" = "1" ]; then
+    exit 1
+fi
 
 # Start in background
 echo -e "${BLUE}📦 Starting containers (profile: $COMPOSE_PROFILE)...${NC}"
@@ -99,8 +117,15 @@ echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop everything${NC}"
 echo ""
 
-# Follow logs in background so Ctrl+C hits our trap first
-compose_cmd logs -f &
+# Follow logs in background so Ctrl+C hits our trap first.
+# Default: hide noisy Postgres logs (healthchecks, checkpoints) to keep dev output usable.
+# Set INCLUDE_DB_LOGS=1 to include Postgres.
+LOG_SERVICES=(reverse-proxy zerg-backend zerg-frontend jarvis-web jarvis-server)
+if [ "${INCLUDE_DB_LOGS:-0}" = "1" ]; then
+    LOG_SERVICES+=(postgres)
+fi
+
+compose_cmd logs -f "${LOG_SERVICES[@]}" &
 LOGS_PID=$!
 
 # Wait for logs process (keeps script alive)
