@@ -1089,32 +1089,3 @@ async def jarvis_tool_proxy(request: Request):
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
     except httpx.ConnectError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
-
-
-@router.api_route("/sync/{path:path}", methods=["GET", "POST"])
-async def jarvis_sync_proxy(request: Request, path: str):
-    """Proxy sync operations to jarvis-server."""
-    import httpx
-
-    settings = get_settings()
-    jarvis_url = settings.jarvis_server_url
-    if not jarvis_url:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
-
-    try:
-        body = await request.body() if request.method == "POST" else None
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            target_url = f"{jarvis_url}/sync/{path}"
-            if request.query_params:
-                target_url += f"?{request.query_params}"
-
-            if request.method == "POST":
-                resp = await client.post(target_url, content=body, headers={"Content-Type": "application/json"})
-            else:
-                resp = await client.get(target_url)
-
-            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
