@@ -112,11 +112,7 @@ jarvis-stop: ## Stop native Jarvis processes (for 'make jarvis')
 	@cd apps/jarvis && $(MAKE) stop
 
 stop: ## Stop all Docker services
-	@echo "🛑 Stopping all services..."
-	@$(COMPOSE_DEV) --profile full down 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile zerg down 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile prod down 2>/dev/null || true
-	@echo "✅ All services stopped"
+	@./scripts/stop-docker.sh
 
 dev-clean: ## Stop/remove zerg dev containers (keeps DB volume)
 	@echo "🧹 Cleaning zerg dev containers (keeping volumes)..."
