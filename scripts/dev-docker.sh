@@ -52,7 +52,8 @@ cleanup() {
 
     if [ "$STARTED" = true ]; then
         echo -e "${BLUE}  Stopping containers...${NC}"
-        compose_cmd down || true
+        # Match `make stop` UX: be quiet and print a clear success message.
+        compose_cmd down --remove-orphans >/dev/null 2>&1 || true
         echo -e "${GREEN}✅ All services stopped${NC}"
     fi
 
