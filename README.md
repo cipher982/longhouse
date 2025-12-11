@@ -36,7 +36,7 @@ Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (b
 - **Worker supervision (Phases 1–6 complete):** tool events, activity ticker, roundabout monitoring, heuristic/LLM decisions, fail-fast critical errors.
 - **Unified frontend (Phases 0–7 complete):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
 - **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.
-- **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker-compose.unified.yml`; enable auth in prod.
+- **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker/docker-compose.dev.yml`; enable auth in prod.
 
 ---
 
@@ -59,7 +59,7 @@ apps/
 │   └── e2e/            # Playwright unified tests
 └── jarvis/             # PWA UI + Node bridge
 
-docker/                 # Compose incl. docker-compose.unified.yml
+docker/                 # Compose files + nginx reverse-proxy configs
 docs/                   # Specs/PRDs (see below)
 scripts/                # Dev tools + generators
 ```
@@ -72,7 +72,7 @@ scripts/                # Dev tools + generators
 - `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
 - `docs/specs/super-siri-architecture.md` – overall vision.
 - `docs/specs/supervisor-ui-spec.md` – pending (future UI work).
-- `docs/DEPLOYMENT.md` / `docker/docker-compose.unified.yml` – dev/prod entrypoints.
+- `docs/DEPLOYMENT.md` / `docker/docker-compose.dev.yml` – dev/prod entrypoints (profiles: `full|zerg|prod`).
 
 ---
 

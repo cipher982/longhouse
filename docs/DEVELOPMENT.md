@@ -15,20 +15,22 @@ That's it. One command to start, Ctrl+C to stop. Everything shuts down cleanly.
 
 ## What `make dev` Does
 
-1. **Starts Zerg** (Docker containers on ports 47200/47300)
-2. **Starts Jarvis** (Node server on 8787, Vite UI on 8080)
-3. **Traps Ctrl+C** to shut down both properly
+1. **Starts Docker Compose (profile: `full`)** behind a single nginx entrypoint
+2. **Routes everything same-origin** at `http://localhost:30080` (dashboard, chat, API)
+3. **Traps Ctrl+C** to shut down everything cleanly
 4. **Shows status** of all services
 
 ### Services & Ports
 
-| Service             | Port  | URL                        |
-| ------------------- | ----- | -------------------------- |
-| **Jarvis UI**       | 8080  | http://localhost:8080      |
-| Jarvis Voice Server | 8787  | Internal (proxied from UI) |
-| Zerg Backend API    | 47300 | http://localhost:47300     |
-| Zerg Frontend       | 47200 | http://localhost:47200     |
-| PostgreSQL          | 5432  | Internal (Docker network)  |
+With `make dev`, the intended entry point is nginx:
+
+| Service (entrypoint)    | Port  | URL                              |
+| ----------------------- | ----- | -------------------------------- |
+| **Unified App (nginx)** | 30080 | http://localhost:30080           |
+| Chat                    | 30080 | http://localhost:30080/chat      |
+| Dashboard               | 30080 | http://localhost:30080/dashboard |
+
+Internal service ports exist, but are not exposed to the host in `make dev`.
 
 ---
 
@@ -37,13 +39,12 @@ That's it. One command to start, Ctrl+C to stop. Everything shuts down cleanly.
 ### Start Individual Services
 
 ```bash
-# Just Zerg (Docker)
-make zerg-up
-make zerg-down
+# Just Zerg (Docker, direct ports)
+make zerg
 
-# Just Jarvis (Node processes)
-make jarvis-dev
-cd apps/jarvis && make stop
+# Just Jarvis (native mode, no Docker)
+make jarvis
+make jarvis-stop
 ```
 
 ### Monitoring
@@ -72,9 +73,7 @@ make help
 cd apps/jarvis && make status
 
 # Reset Zerg database (DESTROYS DATA)
-make zerg-down
-make zerg-reset
-make zerg-up
+make dev-reset-db
 ```
 
 ---
@@ -87,10 +86,7 @@ Something didn't shut down properly:
 
 ```bash
 # Nuclear option - kill everything
-make zerg-down
-cd apps/jarvis && make stop
-pkill -f vite
-pkill -f "node.*server.js"
+make stop
 
 # Then restart
 make dev
@@ -166,7 +162,7 @@ Ctrl+C
 **Zerg changes** (Docker):
 
 - Edit files in `apps/zerg/backend/` or `apps/zerg/frontend-web/`
-- Must rebuild: `make zerg-down && make zerg-up`
+- Typically hot-reloads; if you need a clean rebuild: `make dev-clean && make dev`
 
 ---
 
@@ -267,7 +263,7 @@ Copy from `.env.example` if missing.
 1. **Check logs**: Browser console + terminal output
 2. **Run diagnostics**: `cd apps/jarvis && make status`
 3. **Check Docker**: `docker ps` and `make zerg-logs`
-4. **Nuclear restart**: `make zerg-down && cd apps/jarvis && make stop && make dev`
+4. **Nuclear restart**: `make dev-reset-db && make dev`
 
 ---
 

@@ -120,7 +120,7 @@ const tools = getToolsForContext("personal");
 
 ```bash
 # Start Jarvis and verify tool is available
-make jarvis-dev
+make jarvis
 
 # Dispatch an agent that uses the tool
 curl -X POST http://localhost:47300/api/jarvis/dispatch \
