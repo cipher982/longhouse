@@ -98,8 +98,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 8080,
-    // Allow docker service hostnames for e2e testing
-    allowedHosts: ['jarvis-web', 'localhost'],
+    // Allow docker service hostnames for e2e testing + production domains
+    allowedHosts: ['jarvis-web', 'localhost', 'swarmlet.com', '.swarmlet.com'],
     fs: {
       // Allow reading workspace root AND top-level config (models.json)
       allow: [
