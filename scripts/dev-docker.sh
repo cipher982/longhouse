@@ -12,6 +12,7 @@ NC='\033[0m'
 # Central compose file reference - use unified compose with profile
 export COMPOSE_FILE="docker/docker-compose.dev.yml"
 export COMPOSE_PROFILE="full"
+export COMPOSE_PROJECT_NAME="zerg"
 STARTED=false
 LOGS_PID=""
 CLEANUP_DONE=false
@@ -20,7 +21,7 @@ CLEANUP_DONE=false
 # Important: compose file lives in `docker/`, but `.env` lives at repo root.
 # `--env-file` makes env interpolation deterministic regardless of CWD.
 compose_cmd() {
-    docker compose --env-file .env -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" "$@"
+    docker compose --project-name "$COMPOSE_PROJECT_NAME" --env-file .env -f "$COMPOSE_FILE" --profile "$COMPOSE_PROFILE" "$@"
 }
 
 cleanup() {
