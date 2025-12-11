@@ -9,6 +9,7 @@ import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import DashboardPage from "../pages/DashboardPage";
 import ProfilePage from "../pages/ProfilePage";
+import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import AdminPage from "../pages/AdminPage";
 import { AuthGuard } from "../lib/auth";
@@ -144,6 +145,14 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <ProfilePage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/settings",
+          element: (
+            <ErrorBoundary>
+              <SettingsPage />
             </ErrorBoundary>
           )
         },

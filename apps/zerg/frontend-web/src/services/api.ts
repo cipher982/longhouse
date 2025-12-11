@@ -636,3 +636,45 @@ export async function deleteAccountConnector(
     method: "DELETE",
   });
 }
+
+// ---------------------------------------------------------------------------
+// User Context API
+// ---------------------------------------------------------------------------
+
+export interface UserContext {
+  display_name?: string;
+  role?: string;
+  location?: string;
+  description?: string;
+  servers?: Array<{
+    name: string;
+    ip: string;
+    purpose: string;
+    platform?: string;
+    notes?: string;
+  }>;
+  integrations?: Record<string, string>;
+  custom_instructions?: string;
+}
+
+export interface UserContextResponse {
+  context: UserContext;
+}
+
+export async function getUserContext(): Promise<UserContextResponse> {
+  return request<UserContextResponse>(`/users/me/context`);
+}
+
+export async function updateUserContext(context: UserContext): Promise<UserContextResponse> {
+  return request<UserContextResponse>(`/users/me/context`, {
+    method: "PATCH",
+    body: JSON.stringify({ context }),
+  });
+}
+
+export async function replaceUserContext(context: UserContext): Promise<UserContextResponse> {
+  return request<UserContextResponse>(`/users/me/context`, {
+    method: "PUT",
+    body: JSON.stringify({ context }),
+  });
+}
