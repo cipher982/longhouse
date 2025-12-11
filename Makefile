@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -141,6 +141,33 @@ logs-db: ## View logs for Postgres only
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
 	fi
+
+doctor: ## Print quick diagnostics for dev stack
+	@echo "🔎 Swarm dev diagnostics"
+	@echo "  - Repo:   $$(pwd)"
+	@echo "  - Branch: $$(git rev-parse --abbrev-ref HEAD)"
+	@echo ""
+	@echo "📄 .env (presence + required vars)"
+	@test -f .env && echo "  ✅ .env exists" || (echo "  ❌ missing .env" && exit 1)
+	@missing=0; \
+	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
+		if [ -z "$$(eval echo \$$$$var)" ]; then \
+			echo "  ❌ $$var is empty"; \
+			missing=1; \
+		else \
+			echo "  ✅ $$var is set"; \
+		fi; \
+	done; \
+	if [ $$missing -eq 1 ]; then exit 1; fi
+	@echo ""
+	@echo "🐳 Docker"
+	@docker version >/dev/null 2>&1 && echo "  ✅ docker is reachable" || (echo "  ❌ docker not reachable" && exit 1)
+	@echo ""
+	@echo "🧩 Compose config (resolved env interpolation)"
+	@$(COMPOSE_DEV) config >/dev/null && echo "  ✅ compose config renders" || (echo "  ❌ compose config failed" && exit 1)
+	@echo ""
+	@echo "📦 Running services (zerg project)"
+	@$(COMPOSE_DEV) ps
 
 reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
