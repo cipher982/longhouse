@@ -1,0 +1,27 @@
+{
+  "display_name": "Your Name",
+  "role": "software engineer",
+  "location": "Your City",
+  "description": "Brief description of what you do and what you want your AI assistant to help with.",
+  "servers": [
+    {
+      "name": "server1",
+      "ip": "192.168.1.100",
+      "purpose": "What this server is used for",
+      "platform": "Ubuntu 22.04",
+      "notes": "Any additional notes about this server"
+    },
+    {
+      "name": "server2",
+      "ip": "10.0.0.50",
+      "purpose": "Another server's purpose",
+      "platform": "Debian 12"
+    }
+  ],
+  "integrations": {
+    "health_tracker": "e.g., WHOOP, Fitbit, Apple Health",
+    "notes": "e.g., Obsidian, Notion, Apple Notes",
+    "backups": "e.g., Kopia, Restic, Time Machine"
+  },
+  "custom_instructions": "Any specific preferences for how the AI should respond to you."
+}

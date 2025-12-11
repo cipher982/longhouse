@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Seed user context for David (or first user in database).
+"""Seed user context from a local config file.
 
 This script populates the user's context field with servers, integrations,
 and preferences that will be injected into AI agent prompts.
+
+Usage:
+    python scripts/seed_user_context.py                    # Uses default path
+    python scripts/seed_user_context.py /path/to/context.json
+
+The context file should be a JSON file with the user context structure.
+See scripts/user_context.example.json for the expected format.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -16,53 +24,63 @@ from zerg.database import SessionLocal
 from zerg.models.models import User
 
 
-DAVID_CONTEXT = {
-    "display_name": "David",
-    "role": "software engineer",
-    "location": "NYC",
-    "description": "I manage several servers running Docker containers for web apps and AI projects. I use Kopia for backups to a Synology NAS, track health with WHOOP, and keep notes in Obsidian.",
-    "servers": [
-        {
-            "name": "cube",
-            "ip": "100.70.237.79",
-            "purpose": "Home GPU server - AI workloads, cameras (Frigate), Stop Sign Nanny, home automation",
-            "platform": "Ubuntu 22.04",
-            "notes": "Has RTX GPU, 32GB RAM. Runs Kopia backups to Bremen NAS.",
-        },
-        {
-            "name": "clifford",
-            "ip": "REDACTED_IP",
-            "purpose": "Production VPS - 90% of web apps via Coolify",
-            "platform": "Ubuntu 22.04 on Hetzner",
-        },
-        {
-            "name": "zerg",
-            "ip": "5.161.92.127",
-            "purpose": "Zerg platform itself, dedicated project workloads",
-            "platform": "Ubuntu 22.04 on Hetzner",
-        },
-        {
-            "name": "slim",
-            "ip": "135.181.204.0",
-            "purpose": "EU VPS, mostly unused ($5/month placeholder)",
-            "platform": "Ubuntu 22.04 on Hetzner",
-        },
-    ],
-    "integrations": {
-        "health_tracker": "WHOOP - tracks recovery score, sleep quality, strain",
-        "notes": "Obsidian - personal knowledge base and project docs",
-        "location": "Traccar - GPS tracking",
-        "backups": "Kopia - backs up to Bremen NAS (Synology) with MinIO S3",
-    },
-    "custom_instructions": "I prefer concise responses. Get to the point quickly. Don't be verbose or bureaucratic.",
-}
+# Default locations to look for context file (in order)
+DEFAULT_CONTEXT_PATHS = [
+    Path(__file__).parent / "user_context.local.json",  # scripts/user_context.local.json
+    Path.home() / ".config" / "zerg" / "user_context.json",  # ~/.config/zerg/user_context.json
+]
+
+
+def load_context(path: Path | None = None) -> dict:
+    """Load user context from JSON file.
+
+    Args:
+        path: Explicit path to context file, or None to search defaults
+
+    Returns:
+        User context dictionary
+
+    Raises:
+        FileNotFoundError: If no context file found
+    """
+    if path:
+        paths_to_try = [path]
+    else:
+        paths_to_try = DEFAULT_CONTEXT_PATHS
+
+    for p in paths_to_try:
+        if p.exists():
+            print(f"Loading context from: {p}")
+            with open(p) as f:
+                return json.load(f)
+
+    # No file found - provide helpful error
+    raise FileNotFoundError(
+        f"No user context file found. Looked in:\n"
+        f"  - {DEFAULT_CONTEXT_PATHS[0]}\n"
+        f"  - {DEFAULT_CONTEXT_PATHS[1]}\n\n"
+        f"Create a context file by copying the example:\n"
+        f"  cp scripts/user_context.example.json scripts/user_context.local.json\n"
+        f"Then edit it with your personal configuration."
+    )
 
 
 def main():
-    """Seed user context for the first user (David)."""
+    """Seed user context from local config file."""
+    # Get optional path argument
+    context_path = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+
+    # Load context from file
+    try:
+        context = load_context(context_path)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    # Connect to database and update user
     db = SessionLocal()
     try:
-        # Find first user (or David specifically if email is known)
+        # Find first user
         result = db.execute(select(User).limit(1))
         user = result.scalar_one_or_none()
 
@@ -73,13 +91,13 @@ def main():
         print(f"Seeding context for user: {user.email} (ID: {user.id})")
 
         # Update context
-        user.context = DAVID_CONTEXT
+        user.context = context
         db.commit()
 
         print("SUCCESS: User context updated!")
-        print(f"  - Display name: {DAVID_CONTEXT['display_name']}")
-        print(f"  - Servers: {len(DAVID_CONTEXT['servers'])}")
-        print(f"  - Integrations: {len(DAVID_CONTEXT['integrations'])}")
+        print(f"  - Display name: {context.get('display_name', '(not set)')}")
+        print(f"  - Servers: {len(context.get('servers', []))}")
+        print(f"  - Integrations: {len(context.get('integrations', {}))}")
 
         return 0
 
