@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
-from zerg.database import SessionLocal
+from zerg.database import default_session_factory
 from zerg.models.models import User
 
 
@@ -85,7 +85,7 @@ def main():
         return 0  # Return success - no file is not an error for auto-seed
 
     # Connect to database and update user
-    db = SessionLocal()
+    db = default_session_factory()
     try:
         # Find first user
         result = db.execute(select(User).limit(1))
