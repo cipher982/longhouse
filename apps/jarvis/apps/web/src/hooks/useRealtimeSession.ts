@@ -226,8 +226,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
         setConnectionError(error as Error)
         optionsRef.current.onError?.(error as Error)
-        // Allow retry by resetting the flag after failure
-        connectAttemptedRef.current = false
+        // DON'T reset flag - prevents infinite retry loop
+        // User must manually reconnect via UI button
       }
     }, 100)
 
