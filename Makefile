@@ -14,7 +14,7 @@ ZERG_FRONTEND_PORT ?= 47200
 JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -118,6 +118,22 @@ stop: ## Stop all Docker services
 logs: ## View logs from running services
 	@if docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
 		docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml logs -f; \
+	else \
+		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		exit 1; \
+	fi
+
+logs-app: ## View logs for app services (excludes Postgres)
+	@if docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed jarvis-web jarvis-server; \
+	else \
+		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		exit 1; \
+	fi
+
+logs-db: ## View logs for Postgres only
+	@if docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml logs -f postgres; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
