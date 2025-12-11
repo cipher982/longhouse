@@ -97,7 +97,7 @@ export class SessionHandler {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' }
         ],
-        iceTransportPolicy: 'all',  // Allow all candidates but configure properly
+        iceTransportPolicy: 'relay',  // Block local network scanning
         iceCandidatePoolSize: 0
       }
     });
