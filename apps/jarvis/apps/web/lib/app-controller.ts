@@ -429,7 +429,7 @@ export class AppController {
   }
 
   private async getSessionToken(): Promise<string> {
-    const r = await fetch(`${CONFIG.API_BASE}/session`);
+    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`);
     if (!r.ok) throw new Error('Failed to get session token');
     const js = await r.json();
     return js.value || js.client_secret?.value;

@@ -11,6 +11,10 @@ export const CONFIG = {
   // Use relative path for API - proxied through Nginx
   API_BASE: '/api',
 
+  // Jarvis-specific API endpoints (BFF layer through zerg-backend)
+  // These endpoints are proxied by zerg-backend to jarvis-server
+  JARVIS_API_BASE: '/api/jarvis',
+
   // Default Zerg API URL
   DEFAULT_ZERG_API_URL: 'http://localhost:47300',
 
@@ -73,7 +77,7 @@ export interface FeedbackPreferences {
  * Resolve a sync base URL from various input formats
  */
 export function resolveSyncBaseUrl(raw?: string): string {
-  const fallback = CONFIG.API_BASE;
+  const fallback = CONFIG.JARVIS_API_BASE;
   if (!raw) return fallback;
 
   const trimmed = raw.trim();

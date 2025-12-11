@@ -21,7 +21,7 @@ const locationTool = tool({
   async execute() {
     console.log('📍 Calling location tool');
     try {
-      const response = await fetch(`${CONFIG.API_BASE}/tool`, {
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -55,7 +55,7 @@ const whoopTool = tool({
   }),
   async execute({ date }) {
     try {
-      const response = await fetch(`${CONFIG.API_BASE}/tool`, {
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
