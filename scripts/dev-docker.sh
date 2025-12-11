@@ -72,15 +72,13 @@ set -a
 source .env
 set +a
 
-# Set defaults only if not already set (respects existing env/exports)
+# Set defaults only for non-critical dev ports/flags.
+# Secrets/credentials must come from `.env` (validated below).
 export JARPXY_PORT="${JARPXY_PORT:-30080}"
 export JARVIS_WEB_PORT="${JARVIS_WEB_PORT:-8080}"
 export JARVIS_SERVER_PORT="${JARVIS_SERVER_PORT:-8787}"
 export ZERG_BACKEND_PORT="${ZERG_BACKEND_PORT:-8000}"
 export ZERG_FRONTEND_PORT="${ZERG_FRONTEND_PORT:-5173}"
-export POSTGRES_DB="${POSTGRES_DB:-zerg}"
-export POSTGRES_USER="${POSTGRES_USER:-zerg}"
-export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-zerg}"
 export AUTH_DISABLED="${AUTH_DISABLED:-1}"
 export DEV_ADMIN="${DEV_ADMIN:-1}"
 # OPENAI_API_KEY must come from env or .env - no default
