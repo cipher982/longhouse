@@ -6,11 +6,14 @@ import { registerSW } from 'virtual:pwa-register'
 
 // CSS loaded via <link> tags in index.html (prevents FOUC)
 
-// Register service worker with auto-update
+// Register service worker - NO auto-update to prevent refresh loops in prod
+// When running Vite dev server (which Coolify uses), HMR causes constant
+// "new content" detection, triggering infinite reloads
 const updateSW = registerSW({
   onNeedRefresh() {
-    console.log('[PWA] New content available, reloading...')
-    updateSW(true)
+    // Don't auto-reload - user can manually refresh if they want latest version
+    // This prevents infinite refresh loops when running dev server in production
+    console.log('[PWA] New content available - refresh page to update')
   },
   onOfflineReady() {
     console.log('[PWA] App ready to work offline')

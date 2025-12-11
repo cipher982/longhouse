@@ -31,10 +31,14 @@ export default function App() {
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
-  // Realtime session - always active
-  // History is loaded via SSOT callback in useRealtimeSession during connect()
-  // User voice messages are handled via USER_VOICE_COMMITTED/USER_VOICE_TRANSCRIPT events
+  // Realtime session - manual connect only
+  // Auto-connect disabled to prevent:
+  // 1. Scary "local network scanning" permission prompt on page load
+  // 2. Mic permission request before user wants voice features
+  // 3. Wasted API calls for visitors who just want text chat
+  // User clicks mic button → manually triggers connection
   const realtimeSession = useRealtimeSession({
+    autoConnect: false,  // User must click Connect button
     onConnected: () => console.log('[App] Realtime session connected'),
     onDisconnected: () => console.log('[App] Realtime session disconnected'),
     onTranscript: (text, isFinal) => {
