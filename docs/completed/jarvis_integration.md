@@ -558,10 +558,10 @@ OPENAI_API_KEY="sk-..."
 ```bash
 # Start all services
 cd /Users/davidrose/git/zerg
-./start-unified-dev.sh
+make dev
 
 # Wait for containers to be healthy (10-15 seconds)
-docker compose -f docker-compose.unified.yml ps
+docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml --profile full ps
 
 # Test endpoints (store cookie jar)
 COOKIE_JAR=cookies.txt
@@ -571,15 +571,15 @@ curl -s -X POST http://localhost:30080/api/session \
   -c "$COOKIE_JAR" -b "$COOKIE_JAR"
 
 # Note: Unified mode uses /api/session (proxied to jarvis-server)
-# /api/zerg/* routes are proxied to zerg-backend
+# All other /api/* routes are proxied to zerg-backend
 ```
 
 #### Option B: Traditional Setup
 
 ```bash
-# Start Zerg backend
+# Start Zerg only (direct ports)
 cd /Users/davidrose/git/zerg
-make zerg-dev
+make zerg
 
 # In another terminal, test endpoints (store cookie jar)
 COOKIE_JAR=cookies.txt
@@ -614,10 +614,11 @@ curl -N http://localhost:47300/api/jarvis/events \
 
 ```bash
 cd /Users/davidrose/git/zerg
-./start-unified-dev.sh
+make dev
 
 # Wait for backend to be healthy, then seed:
-docker exec zerg-backend-1 uv run python scripts/seed_jarvis_agents.py
+BACKEND=$(docker ps --format "{{.Names}}" | rg "backend" | head -n 1)
+docker exec "$BACKEND" uv run python scripts/seed_jarvis_agents.py
 ```
 
 #### Option B: Traditional Setup
