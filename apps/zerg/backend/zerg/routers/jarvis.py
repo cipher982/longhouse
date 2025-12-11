@@ -990,3 +990,120 @@ async def jarvis_events(
         EventSourceResponse streaming SSE events
     """
     return EventSourceResponse(_jarvis_event_generator(current_user))
+
+
+# ---------------------------------------------------------------------------
+# BFF Proxy Endpoints
+# ---------------------------------------------------------------------------
+
+
+class JarvisBootstrapResponse(BaseModel):
+    """Bootstrap response with prompt, tools, and user context."""
+
+    prompt: str = Field(..., description="Complete Jarvis system prompt")
+    enabled_tools: List[dict] = Field(..., description="List of available tools")
+    user_context: dict = Field(..., description="User context summary (safe subset)")
+
+
+@router.get("/bootstrap", response_model=JarvisBootstrapResponse)
+def jarvis_bootstrap(
+    current_user=Depends(get_current_jarvis_user),
+) -> JarvisBootstrapResponse:
+    """Get Jarvis bootstrap configuration.
+
+    Returns the complete system prompt (built from user context),
+    list of enabled tools, and a safe subset of user context for display.
+
+    This is the single source of truth for Jarvis configuration.
+    """
+    from zerg.prompts.composer import build_jarvis_prompt
+
+    enabled_tools = [
+        {"name": "get_current_location", "description": "Get current GPS location via Traccar"},
+        {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
+        {"name": "search_notes", "description": "Search notes via Obsidian"},
+        {"name": "route_to_supervisor", "description": "Delegate complex tasks to supervisor agent"},
+    ]
+
+    prompt = build_jarvis_prompt(current_user, enabled_tools)
+
+    ctx = current_user.context or {}
+    user_context = {
+        "display_name": ctx.get("display_name"),
+        "role": ctx.get("role"),
+        "location": ctx.get("location"),
+        "servers": [{"name": s.get("name"), "purpose": s.get("purpose")} for s in ctx.get("servers", [])],
+    }
+
+    return JarvisBootstrapResponse(prompt=prompt, enabled_tools=enabled_tools, user_context=user_context)
+
+
+@router.post("/session")
+async def jarvis_session_proxy(request: Request):
+    """Proxy OpenAI Realtime session token minting to jarvis-server."""
+    import httpx
+
+    settings = get_settings()
+    jarvis_url = settings.jarvis_server_url
+    if not jarvis_url:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+
+    try:
+        body = await request.body()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(f"{jarvis_url}/session", content=body, headers={"Content-Type": "application/json"})
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
+
+
+@router.post("/tool")
+async def jarvis_tool_proxy(request: Request):
+    """Proxy tool execution to jarvis-server."""
+    import httpx
+
+    settings = get_settings()
+    jarvis_url = settings.jarvis_server_url
+    if not jarvis_url:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+
+    try:
+        body = await request.body()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(f"{jarvis_url}/tool", content=body, headers={"Content-Type": "application/json"})
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
+
+
+@router.api_route("/sync/{path:path}", methods=["GET", "POST"])
+async def jarvis_sync_proxy(request: Request, path: str):
+    """Proxy sync operations to jarvis-server."""
+    import httpx
+
+    settings = get_settings()
+    jarvis_url = settings.jarvis_server_url
+    if not jarvis_url:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+
+    try:
+        body = await request.body() if request.method == "POST" else None
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            target_url = f"{jarvis_url}/sync/{path}"
+            if request.query_params:
+                target_url += f"?{request.query_params}"
+
+            if request.method == "POST":
+                resp = await client.post(target_url, content=body, headers={"Content-Type": "application/json"})
+            else:
+                resp = await client.get(target_url)
+
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
