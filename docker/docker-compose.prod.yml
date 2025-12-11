@@ -81,19 +81,13 @@ services:
           memory: 512M
           cpus: '0.25'
 
-  # Jarvis Web UI (Chat interface)
+  # Jarvis Web UI (Chat interface) - Production build with nginx
   jarvis-web:
     build:
       context: .
-      dockerfile: apps/jarvis/apps/web/Dockerfile
+      dockerfile: apps/jarvis/apps/web/Dockerfile.prod
+      target: production
     restart: unless-stopped
-    environment:
-      DOCKER: "1"
-      VITE_ZERG_API_URL: ${API_BASE_URL:-https://api.swarmlet.com}
-      VITE_JARVIS_DEVICE_SECRET: ${JARVIS_DEVICE_SECRET}
-      VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
-      VITE_VOICE_CONTEXT: "personal"
-      VITE_JARVIS_ENABLE_REALTIME_BRIDGE: "true"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
       interval: 30s
@@ -103,6 +97,12 @@ services:
     networks:
       - zerg-network
     logging: *default-logging
+    # Security: read-only root filesystem
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:noexec,nosuid,size=50m
+      - /var/log/nginx:noexec,nosuid,size=10m
+      - /var/run:noexec,nosuid,size=10m
 
   # Jarvis Server (OpenAI Realtime bridge)
   jarvis-server:

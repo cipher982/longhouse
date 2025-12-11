@@ -89,16 +89,27 @@ export class SessionHandler {
 
     logger.info(`🤖 Created agent: ${options.context.name} with ${options.tools?.length || 0} tools`);
 
-    // Create WebRTC transport with configuration to prevent local network scanning
+    // Create WebRTC transport with hook to prevent local network scanning
     const transport = new OpenAIRealtimeWebRTC({
       mediaStream: options.mediaStream,
       audioElement: options.audioElement,
-      rtcConfiguration: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ],
-        iceTransportPolicy: 'relay',  // Block local network scanning
-        iceCandidatePoolSize: 0
+      // Hook to replace RTCPeerConnection with one that blocks local network scanning
+      // This prevents Chrome's "local network access" permission prompt
+      changePeerConnection: (pc: RTCPeerConnection) => {
+        // Get the SDK's config and add relay-only policy
+        const config = pc.getConfiguration();
+        const newConfig: RTCConfiguration = {
+          ...config,
+          iceTransportPolicy: 'relay',  // Block local network scanning
+        };
+
+        // Close the original connection
+        pc.close();
+
+        // Create new connection with relay policy
+        const newPc = new RTCPeerConnection(newConfig);
+        logger.info('WebRTC peer connection created with relay-only policy');
+        return newPc;
       }
     });
 

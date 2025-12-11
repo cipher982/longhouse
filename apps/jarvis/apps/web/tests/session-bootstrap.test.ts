@@ -86,7 +86,30 @@ describe('Session Bootstrap (SSOT)', () => {
   }
 
   const mockOptions: BootstrapOptions = {
-    context: { name: 'Test Agent', instructions: 'Be helpful' },
+    context: {
+      name: 'Test Agent',
+      description: 'Test agent description',
+      instructions: 'Be helpful',
+      theme: {
+        primaryColor: '#000',
+        secondaryColor: '#111',
+        backgroundColor: '#222',
+        textColor: '#fff',
+        accentColor: '#333',
+        borderColor: '#444',
+      },
+      branding: { title: 'Test' },
+      tools: [],
+      apiEndpoints: { tokenMinting: '/session', toolExecution: '/tool' },
+      settings: {
+        maxHistoryTurns: 50,
+        realtimeHistoryTurns: 8,
+        enableRAG: false,
+        enableMCP: false,
+        voiceModel: 'gpt-4o-realtime-preview',
+        defaultPrompts: [],
+      },
+    },
     sessionManager: mockSessionManager as any,
     onTokenRequest: vi.fn().mockResolvedValue('mock-token'),
     realtimeHistoryTurns: 8,

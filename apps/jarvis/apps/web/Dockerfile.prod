@@ -1,0 +1,69 @@
+# syntax=docker/dockerfile:1.4
+# Production Dockerfile for Jarvis Web UI
+# Multi-stage build: Bun builds static files, nginx serves them
+
+# ============================================
+# Stage 1: Builder - Install deps and build
+# ============================================
+FROM oven/bun:alpine AS builder
+
+WORKDIR /app
+
+# Copy jarvis workspace root
+COPY apps/jarvis/package.json ./package.json
+COPY apps/jarvis/bun.lock* ./
+
+# Copy monorepo config (models.json required by @swarm/config)
+COPY config ./config
+
+# Copy @swarm/config package (from root packages/)
+COPY packages/config/package.json ./swarm-packages/config/package.json
+COPY packages/config/src ./swarm-packages/config/src
+# Symlink models.json so @swarm/config can import it
+RUN ln -s /app/config/models.json /app/swarm-packages/config/models.json
+
+# Copy jarvis workspace package.json files
+COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
+COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
+COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
+COPY apps/jarvis/apps/server/package.json ./apps/server/package.json
+COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
+
+# Install dependencies
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install
+
+# Copy jarvis source code
+COPY apps/jarvis/packages ./packages
+COPY apps/jarvis/configs ./configs
+COPY apps/jarvis/apps/web ./apps/web
+
+# Verify config exists
+RUN test -f /app/config/models.json || (echo "FATAL: models.json not found" && exit 1)
+
+# Build for production
+WORKDIR /app/apps/web
+RUN bun run build
+
+# Verify build output
+RUN test -f /app/apps/web/dist/index.html || (echo "FATAL: Build failed - no index.html" && exit 1)
+
+# ============================================
+# Stage 2: Production - nginx serves static files
+# ============================================
+FROM nginx:alpine AS production
+
+# Copy custom nginx configuration
+COPY apps/jarvis/apps/web/nginx.prod.conf /etc/nginx/nginx.conf
+
+# Copy built static files
+# Jarvis uses base: '/chat/' so files go to /usr/share/nginx/html/chat/
+COPY --from=builder /app/apps/web/dist/ /usr/share/nginx/html/
+
+# Verify critical files exist
+RUN test -f /usr/share/nginx/html/index.html || (echo "FATAL: index.html missing" && exit 1)
+
+EXPOSE 8080
+
+# Run nginx in foreground
+CMD ["nginx", "-g", "daemon off;"]
