@@ -61,9 +61,10 @@ COPY apps/jarvis/apps/web/nginx.prod.conf /etc/nginx/nginx.conf
 # The reverse proxy routes /chat/* to this container
 COPY --from=builder /app/apps/web/dist/ /usr/share/nginx/html/chat/
 
-# Copy runtime context manifest (fetched at runtime, not bundled by Vite)
-# The config.ts is bundled via dynamic import, but manifest.json is fetched via fetch()
+# Copy runtime context files (fetched at runtime, not bundled by Vite)
+# The config.ts is bundled via dynamic import, but manifest.json and theme.css are fetched
 COPY --from=builder /app/apps/web/contexts/personal/manifest.json /usr/share/nginx/html/chat/contexts/personal/manifest.json
+COPY --from=builder /app/apps/web/contexts/personal/theme.css /usr/share/nginx/html/chat/contexts/personal/theme.css
 
 # Verify critical files exist
 RUN test -f /usr/share/nginx/html/chat/index.html || (echo "FATAL: index.html missing" && exit 1)
