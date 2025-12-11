@@ -65,6 +65,55 @@ class TestBootstrapEndpoint:
         assert "enabled_tools" in data
         assert len(data["enabled_tools"]) > 0
 
+    def test_bootstrap_filters_disabled_tools(self, client, test_user, db_session):
+        """Bootstrap respects user tool configuration."""
+        test_user.context = {
+            "display_name": "David",
+            "tools": {
+                "location": True,
+                "whoop": False,  # Disabled
+                "obsidian": False,  # Disabled
+                "supervisor": True,
+            },
+        }
+        db_session.add(test_user)
+        db_session.commit()
+
+        response = client.get("/api/jarvis/bootstrap")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check only enabled tools are returned
+        tool_names = [t["name"] for t in data["enabled_tools"]]
+        assert "get_current_location" in tool_names
+        assert "route_to_supervisor" in tool_names
+        assert "get_whoop_data" not in tool_names
+        assert "search_notes" not in tool_names
+        assert len(data["enabled_tools"]) == 2
+
+    def test_bootstrap_defaults_to_all_tools_enabled(self, client, test_user, db_session):
+        """Bootstrap enables all tools by default if not configured."""
+        test_user.context = {
+            "display_name": "David",
+            # No tools key - should default all enabled
+        }
+        db_session.add(test_user)
+        db_session.commit()
+
+        response = client.get("/api/jarvis/bootstrap")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have all 4 tools
+        tool_names = [t["name"] for t in data["enabled_tools"]]
+        assert "get_current_location" in tool_names
+        assert "get_whoop_data" in tool_names
+        assert "search_notes" in tool_names
+        assert "route_to_supervisor" in tool_names
+        assert len(data["enabled_tools"]) == 4
+
 
 class TestSessionProxy:
     """Tests for POST /api/jarvis/session proxy."""

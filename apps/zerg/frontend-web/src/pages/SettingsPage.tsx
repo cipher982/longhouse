@@ -28,6 +28,12 @@ export default function SettingsPage() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [servers, setServers] = useState<Server[]>([]);
   const [integrations, setIntegrations] = useState<Record<string, string>>({});
+  const [tools, setTools] = useState({
+    location: true,
+    whoop: true,
+    obsidian: true,
+    supervisor: true,
+  });
 
   // Track if we need to show the "add integration" form
   const [newIntegrationKey, setNewIntegrationKey] = useState("");
@@ -44,6 +50,12 @@ export default function SettingsPage() {
       setCustomInstructions(ctx.custom_instructions || "");
       setServers(ctx.servers || []);
       setIntegrations(ctx.integrations || {});
+      setTools({
+        location: ctx.tools?.location ?? true,
+        whoop: ctx.tools?.whoop ?? true,
+        obsidian: ctx.tools?.obsidian ?? true,
+        supervisor: ctx.tools?.supervisor ?? true,
+      });
     }
   }, [data]);
 
@@ -70,6 +82,7 @@ export default function SettingsPage() {
       servers: servers.length > 0 ? servers : undefined,
       integrations: Object.keys(integrations).length > 0 ? integrations : undefined,
       custom_instructions: customInstructions || undefined,
+      tools: tools,
     };
 
     updateMutation.mutate(context);
@@ -85,6 +98,12 @@ export default function SettingsPage() {
       setCustomInstructions(ctx.custom_instructions || "");
       setServers(ctx.servers || []);
       setIntegrations(ctx.integrations || {});
+      setTools({
+        location: ctx.tools?.location ?? true,
+        whoop: ctx.tools?.whoop ?? true,
+        obsidian: ctx.tools?.obsidian ?? true,
+        supervisor: ctx.tools?.supervisor ?? true,
+      });
     }
   };
 
@@ -363,6 +382,76 @@ export default function SettingsPage() {
               >
                 Add Integration
               </button>
+            </div>
+          </div>
+
+          {/* Jarvis Tools */}
+          <div className="form-section">
+            <h3>Jarvis Tools</h3>
+            <p className="section-description">
+              Enable or disable tools that Jarvis can use to help you
+            </p>
+
+            <div className="tools-list">
+              <div className="tool-toggle">
+                <label className="tool-label">
+                  <input
+                    type="checkbox"
+                    checked={tools.location}
+                    onChange={(e) => setTools({ ...tools, location: e.target.checked })}
+                    className="tool-checkbox"
+                  />
+                  <div className="tool-info">
+                    <span className="tool-name">Location</span>
+                    <span className="tool-description">Get current GPS location via Traccar</span>
+                  </div>
+                </label>
+              </div>
+
+              <div className="tool-toggle">
+                <label className="tool-label">
+                  <input
+                    type="checkbox"
+                    checked={tools.whoop}
+                    onChange={(e) => setTools({ ...tools, whoop: e.target.checked })}
+                    className="tool-checkbox"
+                  />
+                  <div className="tool-info">
+                    <span className="tool-name">WHOOP Health Data</span>
+                    <span className="tool-description">Get WHOOP health metrics and recovery data</span>
+                  </div>
+                </label>
+              </div>
+
+              <div className="tool-toggle">
+                <label className="tool-label">
+                  <input
+                    type="checkbox"
+                    checked={tools.obsidian}
+                    onChange={(e) => setTools({ ...tools, obsidian: e.target.checked })}
+                    className="tool-checkbox"
+                  />
+                  <div className="tool-info">
+                    <span className="tool-name">Obsidian Notes</span>
+                    <span className="tool-description">Search and read notes from your Obsidian vault</span>
+                  </div>
+                </label>
+              </div>
+
+              <div className="tool-toggle">
+                <label className="tool-label">
+                  <input
+                    type="checkbox"
+                    checked={tools.supervisor}
+                    onChange={(e) => setTools({ ...tools, supervisor: e.target.checked })}
+                    className="tool-checkbox"
+                  />
+                  <div className="tool-info">
+                    <span className="tool-name">Supervisor Agent</span>
+                    <span className="tool-description">Delegate complex multi-step tasks to supervisor</span>
+                  </div>
+                </label>
+              </div>
             </div>
           </div>
 

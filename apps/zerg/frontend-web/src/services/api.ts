@@ -655,6 +655,12 @@ export interface UserContext {
   }>;
   integrations?: Record<string, string>;
   custom_instructions?: string;
+  tools?: {
+    location?: boolean;
+    whoop?: boolean;
+    obsidian?: boolean;
+    supervisor?: boolean;
+  };
 }
 
 export interface UserContextResponse {

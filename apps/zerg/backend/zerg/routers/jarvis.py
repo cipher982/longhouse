@@ -1018,16 +1018,27 @@ def jarvis_bootstrap(
     """
     from zerg.prompts.composer import build_jarvis_prompt
 
-    enabled_tools = [
-        {"name": "get_current_location", "description": "Get current GPS location via Traccar"},
-        {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
-        {"name": "search_notes", "description": "Search notes via Obsidian"},
-        {"name": "route_to_supervisor", "description": "Delegate complex tasks to supervisor agent"},
-    ]
+    # Define all available tools
+    AVAILABLE_TOOLS = {
+        "location": {"name": "get_current_location", "description": "Get current GPS location via Traccar"},
+        "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
+        "obsidian": {"name": "search_notes", "description": "Search notes via Obsidian"},
+        "supervisor": {"name": "route_to_supervisor", "description": "Delegate complex tasks to supervisor agent"},
+    }
+
+    # Get tool configuration from user context (default all enabled)
+    ctx = current_user.context or {}
+    tool_config = ctx.get("tools", {})
+
+    # Build enabled tools list based on user configuration
+    enabled_tools = []
+    for tool_key, tool_def in AVAILABLE_TOOLS.items():
+        # Default to enabled if not explicitly configured
+        if tool_config.get(tool_key, True):
+            enabled_tools.append(tool_def)
 
     prompt = build_jarvis_prompt(current_user, enabled_tools)
 
-    ctx = current_user.context or {}
     user_context = {
         "display_name": ctx.get("display_name"),
         "role": ctx.get("role"),
