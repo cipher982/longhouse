@@ -58,10 +58,11 @@ COPY apps/jarvis/apps/web/nginx.prod.conf /etc/nginx/nginx.conf
 
 # Copy built static files
 # Jarvis uses base: '/chat/' so files go to /usr/share/nginx/html/chat/
-COPY --from=builder /app/apps/web/dist/ /usr/share/nginx/html/
+# The reverse proxy routes /chat/* to this container
+COPY --from=builder /app/apps/web/dist/ /usr/share/nginx/html/chat/
 
 # Verify critical files exist
-RUN test -f /usr/share/nginx/html/index.html || (echo "FATAL: index.html missing" && exit 1)
+RUN test -f /usr/share/nginx/html/chat/index.html || (echo "FATAL: index.html missing" && exit 1)
 
 EXPOSE 8080
 
