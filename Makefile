@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -117,6 +117,12 @@ stop: ## Stop all Docker services
 	@$(COMPOSE_DEV) --profile zerg down 2>/dev/null || true
 	@$(COMPOSE_DEV) --profile prod down 2>/dev/null || true
 	@echo "✅ All services stopped"
+
+dev-clean: ## Stop/remove zerg dev containers (keeps DB volume)
+	@echo "🧹 Cleaning zerg dev containers (keeping volumes)..."
+	@$(COMPOSE_DEV) --profile full down --remove-orphans 2>/dev/null || true
+	@$(COMPOSE_DEV) --profile zerg down --remove-orphans 2>/dev/null || true
+	@echo "✅ Cleaned zerg containers (volumes preserved)"
 
 logs: ## View logs from running services
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
