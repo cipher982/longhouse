@@ -93,9 +93,9 @@ dev: env-check ## ⭐ Start full platform (Docker + Nginx, isolated ports)
 
 zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "🚀 Starting Zerg platform..."
-	docker compose -f docker/docker-compose.dev.yml --profile zerg up -d --build
+	docker compose --env-file .env -f docker/docker-compose.dev.yml --profile zerg up -d --build
 	@sleep 3
-	@docker compose -f docker/docker-compose.dev.yml --profile zerg ps
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml --profile zerg ps
 	@echo ""
 	@echo "✅ Backend:  http://localhost:$${BACKEND_PORT:-47300}"
 	@echo "✅ Frontend: http://localhost:$${FRONTEND_PORT:-47200}"
@@ -110,14 +110,14 @@ jarvis-stop: ## Stop native Jarvis processes (for 'make jarvis')
 
 stop: ## Stop all Docker services
 	@echo "🛑 Stopping all services..."
-	@docker compose -f docker/docker-compose.dev.yml --profile full down 2>/dev/null || true
-	@docker compose -f docker/docker-compose.dev.yml --profile zerg down 2>/dev/null || true
-	@docker compose -f docker/docker-compose.dev.yml --profile prod down 2>/dev/null || true
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml --profile full down 2>/dev/null || true
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml --profile zerg down 2>/dev/null || true
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml --profile prod down 2>/dev/null || true
 	@echo "✅ All services stopped"
 
 logs: ## View logs from running services
-	@if docker compose -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
-		docker compose -f docker/docker-compose.dev.yml logs -f; \
+	@if docker compose --env-file .env -f docker/docker-compose.dev.yml ps -q 2>/dev/null | grep -q .; then \
+		docker compose --env-file .env -f docker/docker-compose.dev.yml logs -f; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
@@ -125,8 +125,8 @@ logs: ## View logs from running services
 
 reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
-	@docker compose -f docker/docker-compose.dev.yml down -v 2>/dev/null || true
-	@docker compose -f docker/docker-compose.dev.yml --profile zerg up -d
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml down -v 2>/dev/null || true
+	@docker compose --env-file .env -f docker/docker-compose.dev.yml --profile zerg up -d
 	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------
