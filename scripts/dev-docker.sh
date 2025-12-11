@@ -97,6 +97,18 @@ if [ "$missing" = "1" ]; then
     exit 1
 fi
 
+# Warn if a different Postgres container is already running.
+# This avoids confusing "why am I connected to the wrong DB?" moments.
+OTHER_POSTGRES_CONTAINERS=$(docker ps --format '{{.Names}}\t{{.Image}}\t{{.Labels}}' \
+    | awk '$2 ~ /^postgres:/ {print $0}' \
+    | grep -v "com.docker.compose.project=${COMPOSE_PROJECT_NAME}" || true)
+if [ -n "$OTHER_POSTGRES_CONTAINERS" ]; then
+    echo -e "${YELLOW}⚠️  Detected other running Postgres containers (outside compose project: ${COMPOSE_PROJECT_NAME})${NC}"
+    echo "$OTHER_POSTGRES_CONTAINERS" | sed 's/^/   - /'
+    echo -e "${YELLOW}   This can cause confusing DB behavior; consider stopping them.${NC}"
+    echo ""
+fi
+
 # Start in background
 echo -e "${BLUE}📦 Starting containers (profile: $COMPOSE_PROFILE)...${NC}"
 compose_cmd up -d --build
