@@ -14,7 +14,7 @@ from fastapi import File
 from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi import status
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
@@ -26,6 +26,7 @@ from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
+from zerg.schemas.user_context import UserContext
 
 # Avatar helper
 from zerg.services.avatar_service import store_avatar_for_user
@@ -144,7 +145,19 @@ async def update_user_context(
     To replace the entire context, use PUT instead.
 
     Size limit: 64KB (65536 bytes) enforced.
+
+    The context is validated against the UserContext schema to catch common
+    errors early, but extra fields are allowed for flexibility.
     """
+    # Validate against schema (with extra fields allowed)
+    try:
+        UserContext.model_validate(update.context)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Context validation failed: {str(e)}",
+        )
+
     # Validate size limit (64KB)
     context_json = json.dumps(update.context)
     if len(context_json.encode('utf-8')) > 65536:
@@ -177,7 +190,19 @@ async def replace_user_context(
     To merge with existing context, use PATCH instead.
 
     Size limit: 64KB (65536 bytes) enforced.
+
+    The context is validated against the UserContext schema to catch common
+    errors early, but extra fields are allowed for flexibility.
     """
+    # Validate against schema (with extra fields allowed)
+    try:
+        UserContext.model_validate(update.context)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Context validation failed: {str(e)}",
+        )
+
     # Validate size limit (64KB)
     context_json = json.dumps(update.context)
     if len(context_json.encode('utf-8')) > 65536:

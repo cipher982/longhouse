@@ -360,6 +360,158 @@ class TestContextValidation:
 
         assert response.status_code == 422
 
+    def test_patch_invalid_server_config(self, client: TestClient):
+        """Test that server config without required 'name' field is rejected."""
+        context = {
+            "context": {
+                "servers": [
+                    {"ip": "10.0.0.1", "purpose": "Missing name"}  # Missing required 'name'
+                ]
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=context)
+
+        assert response.status_code == 422
+        assert "validation failed" in response.json()["detail"].lower()
+
+    def test_patch_invalid_tools_config(self, client: TestClient):
+        """Test that tools config with wrong types is rejected."""
+        context = {
+            "context": {
+                "tools": {
+                    "location": "not-a-boolean",  # Should be boolean, not string
+                }
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=context)
+
+        assert response.status_code == 422
+        assert "validation failed" in response.json()["detail"].lower()
+
+    def test_patch_valid_server_config(self, client: TestClient):
+        """Test that valid server config is accepted."""
+        context = {
+            "context": {
+                "servers": [
+                    {
+                        "name": "clifford",
+                        "ip": "REDACTED_IP",
+                        "purpose": "Production VPS",
+                        "platform": "Ubuntu",
+                        "notes": "Hetzner server",
+                    }
+                ]
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=context)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["context"]["servers"]) == 1
+        assert data["context"]["servers"][0]["name"] == "clifford"
+
+    def test_patch_valid_tools_config(self, client: TestClient):
+        """Test that valid tools config is accepted."""
+        context = {
+            "context": {
+                "tools": {
+                    "location": True,
+                    "whoop": False,
+                    "obsidian": True,
+                    "supervisor": False,
+                }
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=context)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["context"]["tools"]["location"] is True
+        assert data["context"]["tools"]["whoop"] is False
+
+    def test_patch_extra_fields_allowed(self, client: TestClient):
+        """Test that extra fields beyond schema are allowed."""
+        context = {
+            "context": {
+                "display_name": "Test User",
+                "custom_field": "custom value",
+                "nested_custom": {"key": "value"},
+                "servers": [
+                    {
+                        "name": "test-server",
+                        "custom_server_field": "allowed",
+                    }
+                ],
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=context)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["context"]["custom_field"] == "custom value"
+        assert data["context"]["nested_custom"]["key"] == "value"
+        assert data["context"]["servers"][0]["custom_server_field"] == "allowed"
+
+    def test_put_invalid_server_config(self, client: TestClient):
+        """Test that PUT also validates server config."""
+        context = {
+            "context": {
+                "servers": [
+                    {"ip": "10.0.0.1"}  # Missing required 'name'
+                ]
+            }
+        }
+
+        response = client.put("/api/users/me/context", json=context)
+
+        assert response.status_code == 422
+        assert "validation failed" in response.json()["detail"].lower()
+
+    def test_put_valid_complete_context(self, client: TestClient):
+        """Test that PUT accepts valid complete context."""
+        context = {
+            "context": {
+                "display_name": "David",
+                "role": "Software Engineer",
+                "location": "San Francisco",
+                "description": "Full-stack developer",
+                "servers": [
+                    {
+                        "name": "clifford",
+                        "ip": "REDACTED_IP",
+                        "purpose": "Production VPS",
+                        "platform": "Ubuntu",
+                    }
+                ],
+                "integrations": {
+                    "github": "david-rose",
+                    "email": "hello@drose.io",
+                },
+                "tools": {
+                    "location": True,
+                    "whoop": True,
+                    "obsidian": True,
+                    "supervisor": True,
+                },
+                "custom_instructions": "Prefer TypeScript",
+            }
+        }
+
+        response = client.put("/api/users/me/context", json=context)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["context"]["display_name"] == "David"
+        assert data["context"]["role"] == "Software Engineer"
+        assert len(data["context"]["servers"]) == 1
+        assert data["context"]["integrations"]["github"] == "david-rose"
+        assert data["context"]["tools"]["location"] is True
+
     def test_put_invalid_json(self, client: TestClient):
         """Test that invalid JSON returns 422."""
         response = client.put(
