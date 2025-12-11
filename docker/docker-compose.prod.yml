@@ -1,7 +1,7 @@
 # Production Docker Compose - Optimized for production deployment
 # Use: docker-compose -f docker/docker-compose.prod.yml up
 
-# Docker Compose for Zerg AI Agent Platform - Production Mode
+# Docker Compose for Swarmlet - Production Mode
 
 # Production-specific logging settings
 x-logging: &default-logging
@@ -134,7 +134,7 @@ services:
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'AI Agent Platform'"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'Swarmlet'"]
       interval: 30s
       timeout: 10s
       retries: 3
