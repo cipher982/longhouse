@@ -3,23 +3,46 @@
  * This represents your personal AI assistant setup
  */
 
-import type { VoiceAgentConfig } from '../types';
+import type { VoiceAgentConfig, ToolConfig } from '../types';
 import { getRealtimeModel } from '@jarvis/core';
 
-export const personalConfig: VoiceAgentConfig = {
-  name: 'Jarvis',
-  description: 'Your personal AI assistant with access to health data, location, notes, and smart home',
+/**
+ * Generate dynamic instructions based on which tools are actually enabled.
+ * This prevents the AI from claiming capabilities it doesn't have.
+ */
+function generateInstructions(tools: ToolConfig[]): string {
+  const enabledTools = tools.filter(t => t.enabled);
 
-  instructions: `You are Jarvis, a helpful personal AI assistant. You have access to personal data and can help with:
+  // Build capability list from actual tools
+  const capabilities: string[] = [];
 
-- Health and fitness tracking (WHOOP data, workout analysis)
-- Location services (GPS coordinates, travel assistance)
-- Personal productivity (calendar, notes, reminders)
-- Smart home control and automation
-- Personal knowledge base and memory
-- Complex tasks via the Supervisor (checking servers, debugging, research)
+  for (const tool of enabledTools) {
+    switch (tool.name) {
+      case 'get_current_location':
+        capabilities.push('Location services (GPS coordinates, address lookup)');
+        break;
+      case 'get_whoop_data':
+        capabilities.push('Health and fitness tracking (WHOOP recovery, sleep, strain data)');
+        break;
+      case 'search_notes':
+        capabilities.push('Personal notes search (Obsidian vault)');
+        break;
+    }
+  }
 
-Be conversational, helpful, and respect privacy. Use available tools to provide accurate, real-time information about the user's personal life and environment.
+  // Supervisor is always available
+  capabilities.push('Complex tasks via the Supervisor (checking servers, running commands, debugging, research)');
+
+  const capabilityList = capabilities.map(c => `- ${c}`).join('\n');
+
+  return `You are Jarvis, a helpful personal AI assistant.
+
+Your available capabilities:
+${capabilityList}
+
+IMPORTANT: Only offer help with the capabilities listed above. Do not claim to have features you don't have (like calendar management, reminders, or smart home control unless those tools are listed).
+
+Be conversational, helpful, and respect privacy. Use your available tools to provide accurate, real-time information.
 
 IMPORTANT - Tool Calling Behavior:
 When you need to use a tool, ALWAYS respond with a brief acknowledgment first, then call the tool. Never stay silent while a tool runs.
@@ -34,7 +57,39 @@ Examples:
 
 This ensures the user knows their request was received and you're working on it.
 
-Keep responses concise but informative. When using tools, briefly acknowledge the request before calling the tool.`,
+Keep responses concise but informative.`;
+}
+
+// Define tools first so we can use them in instruction generation
+const toolsConfig: ToolConfig[] = [
+  {
+    name: 'get_current_location',
+    description: 'Get current GPS location with coordinates and address',
+    enabled: true,
+    mcpServer: 'traccar-mcp',
+    mcpFunction: 'location.get_current'
+  },
+  {
+    name: 'get_whoop_data',
+    description: 'Get WHOOP health metrics (recovery, sleep, strain)',
+    enabled: true,
+    mcpServer: 'whoop-mcp',
+    mcpFunction: 'whoop.get_health_status'
+  },
+  {
+    name: 'search_notes',
+    description: 'Search personal notes and knowledge base',
+    enabled: true,
+    mcpServer: 'obsidian-mcp',
+    mcpFunction: 'obsidian.search_vault_smart'
+  }
+];
+
+export const personalConfig: VoiceAgentConfig = {
+  name: 'Jarvis',
+  description: 'Your personal AI assistant',
+
+  instructions: generateInstructions(toolsConfig),
 
   theme: {
     primaryColor: '#0891b2',      // Cyan-600
@@ -51,29 +106,7 @@ Keep responses concise but informative. When using tools, briefly acknowledge th
     favicon: '/icon-192.png'
   },
 
-  tools: [
-    {
-      name: 'get_current_location',
-      description: 'Get current GPS location with coordinates and address',
-      enabled: true,
-      mcpServer: 'traccar-mcp',
-      mcpFunction: 'location.get_current'
-    },
-    {
-      name: 'get_whoop_data',
-      description: 'Get WHOOP health metrics (recovery, sleep, strain)',
-      enabled: true,
-      mcpServer: 'whoop-mcp',
-      mcpFunction: 'whoop.get_health_status'
-    },
-    {
-      name: 'search_notes',
-      description: 'Search personal notes and knowledge base',
-      enabled: true,
-      mcpServer: 'obsidian-mcp',
-      mcpFunction: 'obsidian.search_vault_smart'
-    }
-  ],
+  tools: toolsConfig,
 
   apiEndpoints: {
     tokenMinting: '/session',
