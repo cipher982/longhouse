@@ -5,10 +5,14 @@
 
 import type { VoiceAgentConfig, ToolConfig } from '../types';
 import { getRealtimeModel } from '@jarvis/core';
+import { stateManager } from '../../lib/state-manager';
 
 /**
  * Generate dynamic instructions based on which tools are actually enabled.
  * This prevents the AI from claiming capabilities it doesn't have.
+ *
+ * NOTE: This is a fallback for when server bootstrap fails. The server-provided
+ * prompt from /api/jarvis/bootstrap is preferred as it includes user context.
  */
 function generateInstructions(tools: ToolConfig[]): string {
   const enabledTools = tools.filter(t => t.enabled);
@@ -83,6 +87,19 @@ Be honest about limitations. You cannot:
 If asked about something you can't do, say so clearly.`;
 }
 
+/**
+ * Get instructions - prefers server-provided prompt from bootstrap,
+ * falls back to client-side generation if bootstrap unavailable.
+ */
+function getInstructions(): string {
+  const bootstrap = stateManager.getBootstrap();
+  if (bootstrap?.prompt) {
+    return bootstrap.prompt;
+  }
+  // Fallback to client-side generation
+  return generateInstructions(toolsConfig);
+}
+
 // Define tools first so we can use them in instruction generation
 const toolsConfig: ToolConfig[] = [
   {
@@ -112,7 +129,10 @@ export const personalConfig: VoiceAgentConfig = {
   name: 'Jarvis',
   description: 'Your personal AI assistant',
 
-  instructions: generateInstructions(toolsConfig),
+  // Use getter to allow dynamic lookup of server-provided prompt
+  get instructions() {
+    return getInstructions();
+  },
 
   theme: {
     primaryColor: '#0891b2',      // Cyan-600

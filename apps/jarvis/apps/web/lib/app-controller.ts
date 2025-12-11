@@ -46,13 +46,16 @@ export class AppController {
     // 1. Initialize JarvisClient for Zerg backend communication
     await this.initializeJarvisClient();
 
-    // 2. Load context (required for voice/text sessions)
+    // 2. Fetch bootstrap configuration from server
+    await this.fetchBootstrap();
+
+    // 3. Load context (required for voice/text sessions)
     await this.initializeContext();
 
-    // 3. Setup Event Listeners
+    // 4. Setup Event Listeners
     this.setupVoiceListeners();
 
-    // 4. Initialize Text Channel Controller
+    // 5. Initialize Text Channel Controller
     this.textChannelController = new TextChannelController({
       autoConnect: true,
       maxRetries: 3
@@ -60,7 +63,7 @@ export class AppController {
     this.textChannelController.setVoiceController(voiceController);
     this.textChannelController.setConnectCallback(this.connect);
 
-    // 5. Async initialization
+    // 6. Async initialization
     await this.textChannelController.initialize();
 
     this.initialized = true;
@@ -96,6 +99,30 @@ export class AppController {
     } catch (error) {
       logger.error('❌ Failed to initialize JarvisClient:', error);
       // Non-fatal - supervisor features will be unavailable but voice still works
+    }
+  }
+
+  /**
+   * Fetch bootstrap configuration from server
+   */
+  private async fetchBootstrap(): Promise<void> {
+    try {
+      logger.info('🔄 Fetching bootstrap configuration from server...');
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`);
+
+      if (!response.ok) {
+        throw new Error(`Bootstrap fetch failed: ${response.status} ${response.statusText}`);
+      }
+
+      const bootstrap = await response.json();
+      stateManager.setBootstrap(bootstrap);
+
+      logger.info('✅ Bootstrap configuration loaded from server');
+      logger.debug('Bootstrap prompt length:', bootstrap.prompt?.length);
+      logger.debug('Bootstrap tools:', bootstrap.enabled_tools?.map((t: any) => t.name));
+    } catch (error) {
+      logger.error('❌ Failed to fetch bootstrap configuration:', error);
+      // Non-fatal - will fall back to client-side generated instructions
     }
   }
 

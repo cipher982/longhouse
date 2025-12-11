@@ -13,6 +13,20 @@ import type { VoiceAgentConfig } from '../contexts/types';
 export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error';
 
 /**
+ * Bootstrap data from server
+ */
+export interface BootstrapData {
+  prompt: string;
+  enabled_tools: Array<{ name: string; description: string }>;
+  user_context: {
+    display_name?: string;
+    role?: string;
+    location?: string;
+    servers?: Array<{ name: string; purpose: string }>;
+  };
+}
+
+/**
  * Global application state
  */
 export interface AppState {
@@ -29,6 +43,7 @@ export interface AppState {
   // Jarvis-Zerg integration
   jarvisClient: any; // Type from @jarvis/core
   cachedAgents: any[];
+  bootstrap: BootstrapData | null;
 
   // UI state
   statusActive: boolean;
@@ -87,6 +102,7 @@ export class StateManager {
       // Jarvis-Zerg integration
       jarvisClient: null,
       cachedAgents: [],
+      bootstrap: null,
 
       // UI state
       statusActive: false,
@@ -239,6 +255,20 @@ export class StateManager {
    */
   setSharedMicStream(stream: MediaStream | null): void {
     this.state.sharedMicStream = stream;
+  }
+
+  /**
+   * Update bootstrap data
+   */
+  setBootstrap(data: BootstrapData | null): void {
+    this.state.bootstrap = data;
+  }
+
+  /**
+   * Get bootstrap data
+   */
+  getBootstrap(): BootstrapData | null {
+    return this.state.bootstrap;
   }
 
   /**
