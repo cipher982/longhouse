@@ -12,6 +12,18 @@ import httpx
 class TestBootstrapEndpoint:
     """Tests for GET /api/jarvis/bootstrap."""
 
+    def test_bootstrap_requires_auth_when_auth_enabled(self, client):
+        """Bootstrap returns 401 when AUTH_DISABLED=0 and no token is provided."""
+        import zerg.dependencies.auth as auth
+
+        prev = auth.AUTH_DISABLED
+        auth.AUTH_DISABLED = False
+        try:
+            response = client.get("/api/jarvis/bootstrap")
+            assert response.status_code == 401
+        finally:
+            auth.AUTH_DISABLED = prev
+
     def test_bootstrap_returns_prompt_and_tools(self, client, test_user, db_session):
         """Bootstrap endpoint returns prompt, tools, and user context."""
         # Set up user context
@@ -116,10 +128,10 @@ class TestBootstrapEndpoint:
 
 
 class TestSessionProxy:
-    """Tests for POST /api/jarvis/session proxy."""
+    """Tests for /api/jarvis/session proxy."""
 
     def test_session_proxy_forwards_request(self, client):
-        """Session proxy forwards request to jarvis-server."""
+        """Session proxy forwards request to jarvis-server (GET)."""
         mock_response = MagicMock()
         mock_response.content = b'{"client_secret": {"value": "test-token"}}'
         mock_response.status_code = 200
@@ -127,39 +139,39 @@ class TestSessionProxy:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.get = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            response = client.post("/api/jarvis/session")
+            response = client.get("/api/jarvis/session")
 
         assert response.status_code == 200
 
     def test_session_proxy_handles_server_unavailable(self, client):
-        """Session proxy returns 503 when jarvis-server is unavailable."""
+        """Session proxy returns 503 when jarvis-server is unavailable (GET)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            response = client.post("/api/jarvis/session")
+            response = client.get("/api/jarvis/session")
 
         assert response.status_code == 503
         assert "unavailable" in response.json()["detail"].lower()
 
     def test_session_proxy_handles_timeout(self, client):
-        """Session proxy returns 504 on timeout."""
+        """Session proxy returns 504 on timeout (GET)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+            mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            response = client.post("/api/jarvis/session")
+            response = client.get("/api/jarvis/session")
 
         assert response.status_code == 504
         assert "timeout" in response.json()["detail"].lower()

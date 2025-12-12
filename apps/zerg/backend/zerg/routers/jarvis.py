@@ -12,13 +12,13 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
@@ -39,7 +39,6 @@ from zerg.services.supervisor_context import get_next_seq, reset_seq
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jarvis", tags=["jarvis"])
-JARVIS_SESSION_COOKIE = "jarvis_session"
 
 # Track running supervisor tasks so we can cancel them on demand
 _supervisor_tasks: Dict[int, asyncio.Task] = {}
@@ -183,93 +182,14 @@ def jarvis_auth(
     response: Response,
     db: Session = Depends(get_db),
 ) -> JarvisAuthResponse:
-    """Authenticate Jarvis device and establish an authenticated session.
+    """Deprecated: Jarvis now uses standard SaaS user authentication.
 
-    Validates the device secret against environment configuration and issues
-    a short-lived session cookie that Jarvis can use for subsequent API calls.
-
-    Args:
-        request: Contains device_secret for authentication
-        db: Database session
-
-    Returns:
-        JarvisAuthResponse with session metadata
-
-    Raises:
-        401: Invalid device secret
+    Jarvis is treated as a normal client (like the dashboard). It authenticates
+    using the same JWT bearer token as other frontend clients.
     """
-    settings = get_settings()
-
-    # Validate device secret from environment
-    expected_secret = getattr(settings, "jarvis_device_secret", None)
-    if not expected_secret:
-        logger.error("JARVIS_DEVICE_SECRET not configured in environment")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Jarvis authentication not configured",
-        )
-
-    if request.device_secret != expected_secret:
-        logger.warning("Invalid Jarvis device secret attempt")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid device secret",
-        )
-
-    jarvis_email = "jarvis@swarm.local"
-    jarvis_user = crud.get_user_by_email(db, jarvis_email)
-    if jarvis_user is None:
-        jarvis_user = crud.create_user(
-            db,
-            email=jarvis_email,
-            provider="jarvis",
-            role="ADMIN",
-        )
-        jarvis_user.display_name = "Jarvis Assistant"
-        db.add(jarvis_user)
-        db.commit()
-        db.refresh(jarvis_user)
-    elif jarvis_user.display_name != "Jarvis Assistant":
-        jarvis_user.display_name = "Jarvis Assistant"
-        db.add(jarvis_user)
-        db.commit()
-        db.refresh(jarvis_user)
-
-    # Issue JWT token for Jarvis (longer expiry for device auth)
-    # Import the token issuing function from auth router
-    from zerg.routers.auth import _issue_access_token
-
-    # Create token with jarvis scope - expires in 7 days for device auth
-    token_expiry_seconds = 60 * 60 * 24 * 7  # 7 days
-    token = _issue_access_token(
-        user_id=jarvis_user.id,
-        email=jarvis_user.email,
-        display_name="Jarvis",
-        expires_delta=timedelta(seconds=token_expiry_seconds),
-    )
-
-    logger.info("Issued JWT token for Jarvis device")
-
-    cookie_secure = False
-    environment_value = (settings.environment or "").strip().lower()
-    if environment_value and environment_value not in {"development", "dev", "local"} and not settings.testing:
-        cookie_secure = True
-
-    cookie_expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_expiry_seconds)
-    response.set_cookie(
-        key=JARVIS_SESSION_COOKIE,
-        value=token,
-        httponly=True,
-        secure=cookie_secure,
-        samesite="lax",
-        max_age=token_expiry_seconds,
-        expires=cookie_expires_at,
-        path="/api/jarvis",
-    )
-
-    return JarvisAuthResponse(
-        session_expires_in=token_expiry_seconds,
-        session_cookie_name=JARVIS_SESSION_COOKIE,
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Deprecated: Jarvis uses standard user login (JWT bearer token).",
     )
 
 
@@ -281,30 +201,42 @@ def jarvis_auth(
 def get_current_jarvis_user(
     request: Request,
     db: Session = Depends(get_db),
+    token: str | None = Query(
+        None,
+        description="Optional JWT token (used by EventSource/SSE which can't send Authorization headers).",
+    ),
 ):
-    """Resolve the Jarvis session from HttpOnly session cookie.
+    """Resolve the authenticated user for Jarvis endpoints.
 
-    This is the unified authentication path for all Jarvis endpoints.
-    Clients must call /api/jarvis/auth to receive the session cookie.
+    SaaS model: Jarvis is just another client UI and uses standard auth.
+
+    - For normal fetch/XHR: use `Authorization: Bearer <token>`
+    - For SSE/EventSource: pass `token=<jwt>` as a query param
     """
-    from zerg.dependencies.auth import AUTH_DISABLED
     from zerg.dependencies.auth import _get_strategy
 
-    # Cookie-based authentication - the unified production path
-    cookie_token = request.cookies.get(JARVIS_SESSION_COOKIE)
-    if cookie_token:
-        user = _get_strategy().validate_ws_token(cookie_token, db)
+    if token:
+        user = _get_strategy().validate_ws_token(token, db)
         if user is not None:
             return user
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    # Dev-only bypass (global auth system fallback)
-    if AUTH_DISABLED:
-        return _get_strategy().get_current_user(request, db)
+    return _get_strategy().get_current_user(request, db)
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Not authenticated - session cookie required",
-    )
+
+def _is_tool_enabled(ctx: dict, tool_key: str) -> bool:
+    tool_config = (ctx or {}).get("tools", {}) or {}
+    return bool(tool_config.get(tool_key, True))
+
+
+def _tool_key_from_mcp_call(name: str) -> str | None:
+    if name.startswith("location."):
+        return "location"
+    if name.startswith("whoop."):
+        return "whoop"
+    if name.startswith("obsidian."):
+        return "obsidian"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +261,8 @@ def list_jarvis_agents(
     Returns:
         List of agent summaries
     """
-    # Get all agents (Jarvis has admin access, sees all agents)
-    agents = crud.get_agents(db)
+    # Multi-tenant SaaS: Jarvis shows only the logged-in user's agents.
+    agents = crud.get_agents(db, owner_id=current_user.id)
 
     summaries = []
     for agent in agents:
@@ -385,7 +317,8 @@ def list_jarvis_runs(
     # TODO: Add crud method for filtering by agent_id and ordering by created_at
     # For now, get all runs and filter/sort in memory
 
-    query = db.query(AgentRun)
+    # Multi-tenant SaaS: Jarvis shows only the logged-in user's runs.
+    query = db.query(AgentRun).join(Agent, Agent.id == AgentRun.agent_id).filter(Agent.owner_id == current_user.id)
 
     if agent_id:
         query = query.filter(AgentRun.agent_id == agent_id)
@@ -452,6 +385,10 @@ async def jarvis_dispatch(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent {request.agent_id} not found",
         )
+    # Authorization: only owner or admin may dispatch an agent's task
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
 
     # Optionally override task instructions
     original_task = agent.task_instructions
@@ -552,6 +489,13 @@ async def jarvis_supervisor(
     from zerg.services.supervisor_service import SupervisorService
 
     supervisor_service = SupervisorService(db)
+
+    # Server-side enforcement: respect user tool configuration.
+    if not _is_tool_enabled(current_user.context or {}, "supervisor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tool disabled: supervisor",
+        )
 
     # Get or create supervisor components (idempotent)
     agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
@@ -973,7 +917,8 @@ async def jarvis_events(
     stream to update the Task Inbox UI without polling.
 
     Authentication:
-    - HttpOnly session cookie set by `/api/jarvis/auth`
+    - Standard SaaS auth: `Authorization: Bearer <jwt>`
+    - SSE fallback: `?token=<jwt>` query parameter (EventSource cannot send headers)
     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
 
     Event types:
@@ -1034,7 +979,7 @@ def jarvis_bootstrap(
     enabled_tools = []
     for tool_key, tool_def in AVAILABLE_TOOLS.items():
         # Default to enabled if not explicitly configured
-        if tool_config.get(tool_key, True):
+        if _is_tool_enabled(ctx, tool_key):
             enabled_tools.append(tool_def)
 
     prompt = build_jarvis_prompt(current_user, enabled_tools)
@@ -1049,9 +994,11 @@ def jarvis_bootstrap(
     return JarvisBootstrapResponse(prompt=prompt, enabled_tools=enabled_tools, user_context=user_context)
 
 
-@router.post("/session")
-async def jarvis_session_proxy(request: Request):
-    """Proxy OpenAI Realtime session token minting to jarvis-server."""
+async def _jarvis_session_proxy_impl(request: Request) -> Response:
+    """Proxy OpenAI Realtime session token minting to jarvis-server.
+
+    Note: jarvis-server implements GET /session; we always forward as GET.
+    """
     import httpx
 
     settings = get_settings()
@@ -1060,20 +1007,45 @@ async def jarvis_session_proxy(request: Request):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
 
     try:
-        body = await request.body()
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{jarvis_url}/session", content=body, headers={"Content-Type": "application/json"})
-            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+            resp = await client.get(f"{jarvis_url}/session")
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "application/json"),
+            )
     except httpx.TimeoutException:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
     except httpx.ConnectError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
 
 
+@router.get("/session")
+async def jarvis_session_proxy_get(
+    request: Request,
+    current_user=Depends(get_current_jarvis_user),
+) -> Response:
+    return await _jarvis_session_proxy_impl(request)
+
+
+@router.post("/session")
+async def jarvis_session_proxy_post(
+    request: Request,
+    current_user=Depends(get_current_jarvis_user),
+) -> Response:
+    # Backwards compatibility: some clients may still POST; jarvis-server is GET-only.
+    logger.debug("Jarvis session proxy: received POST /session; forwarding as GET /session")
+    return await _jarvis_session_proxy_impl(request)
+
+
 @router.post("/tool")
-async def jarvis_tool_proxy(request: Request):
-    """Proxy tool execution to jarvis-server."""
+async def jarvis_tool_proxy(
+    request: Request,
+    current_user=Depends(get_current_jarvis_user),
+):
+    """Proxy tool execution to jarvis-server with server-side tool enforcement."""
     import httpx
+    import json
 
     settings = get_settings()
     jarvis_url = settings.jarvis_server_url
@@ -1082,6 +1054,33 @@ async def jarvis_tool_proxy(request: Request):
 
     try:
         body = await request.body()
+
+        # Enforce tool enablement based on user context (defense in depth).
+        payload = None
+        if body:
+            try:
+                payload = json.loads(body)
+            except Exception:  # noqa: BLE001
+                payload = None
+
+        tool_name = None
+        if isinstance(payload, dict):
+            tool_name = payload.get("name")
+
+        if isinstance(tool_name, str):
+            tool_key = _tool_key_from_mcp_call(tool_name)
+            if tool_key is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown tool call: {tool_name}",
+                )
+
+            if not _is_tool_enabled(current_user.context or {}, tool_key):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Tool disabled: {tool_key}",
+                )
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(f"{jarvis_url}/tool", content=body, headers={"Content-Type": "application/json"})
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))

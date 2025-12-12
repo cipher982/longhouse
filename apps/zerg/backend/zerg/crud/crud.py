@@ -895,9 +895,15 @@ def mark_failed(
     return row
 
 
-def list_runs(db: Session, agent_id: int, *, limit: int = 20):
-    """Return the most recent runs for *agent_id* ordered DESC by id."""
-    return db.query(AgentRun).filter(AgentRun.agent_id == agent_id).order_by(AgentRun.id.desc()).limit(limit).all()
+def list_runs(db: Session, agent_id: int, *, limit: int = 20, owner_id: Optional[int] = None):
+    """Return the most recent runs for *agent_id* ordered DESC by id.
+
+    If *owner_id* is provided, the agent must be owned by that user.
+    """
+    query = db.query(AgentRun).filter(AgentRun.agent_id == agent_id)
+    if owner_id is not None:
+        query = query.join(Agent, Agent.id == AgentRun.agent_id).filter(Agent.owner_id == owner_id)
+    return query.order_by(AgentRun.id.desc()).limit(limit).all()
 
 
 # ---------------------------------------------------------------------------
