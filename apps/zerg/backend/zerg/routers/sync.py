@@ -97,6 +97,9 @@ def push_sync_operations(
     acked = []
 
     for op in request.ops:
+        # Use a savepoint for each operation so rollback doesn't affect
+        # previously inserted operations in this batch
+        savepoint = db.begin_nested()
         try:
             # Parse timestamp from ISO string
             try:
@@ -116,18 +119,21 @@ def push_sync_operations(
             )
             db.add(sync_op)
             db.flush()  # Flush to catch integrity errors
+            savepoint.commit()  # Commit the savepoint
 
             acked.append(op.opId)
 
         except IntegrityError:
             # Duplicate op_id - this is expected for retries, just acknowledge it
-            db.rollback()
+            # Rollback only this savepoint, not the entire transaction
+            savepoint.rollback()
             acked.append(op.opId)
             logger.debug(f"Duplicate op_id {op.opId} from user {current_user.id}, acknowledging")
 
         except Exception as e:
             # Unexpected error - log and continue with next operation
-            db.rollback()
+            # Rollback only this savepoint
+            savepoint.rollback()
             logger.error(f"Failed to store sync operation {op.opId}: {e}")
             # Don't add to acked list - client will retry
 

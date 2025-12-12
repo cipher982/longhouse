@@ -660,6 +660,8 @@ export interface UserContext {
     whoop?: boolean;
     obsidian?: boolean;
     supervisor?: boolean;
+    // Index signature allows additional custom tool keys for forward compatibility
+    [key: string]: boolean | undefined;
   };
 }
 
