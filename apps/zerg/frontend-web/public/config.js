@@ -9,10 +9,9 @@ if (LOCAL_HOSTS.has(window.location.hostname)) {
   const port = window.location.port || "80";
   window.API_BASE_URL = "http://127.0.0.1:" + port + "/api";
   window.WS_BASE_URL = "ws://127.0.0.1:" + port;
-} else if (window.location.hostname === 'swarmlet.com') {
-  window.API_BASE_URL = "https://api.swarmlet.com/api";
-  window.WS_BASE_URL = "wss://api.swarmlet.com";
 } else {
+  // Production (swarmlet.com) and other environments: same-origin paths
+  // This enables HttpOnly cookie auth without cross-origin complexity
   window.API_BASE_URL = "/api";
   window.WS_BASE_URL = window.location.origin.replace("http", "ws");
 }
