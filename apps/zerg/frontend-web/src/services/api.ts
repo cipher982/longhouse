@@ -244,10 +244,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("zerg_jwt") : null;
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  // Auth is handled via HttpOnly cookie (swarmlet_session)
+  // No need to set Authorization header - cookies are sent automatically with credentials: 'include'
 
   const testWorkerHeader = typeof window !== "undefined" ? window.__TEST_WORKER_ID__ : undefined;
   if (testWorkerHeader !== undefined) {
@@ -257,6 +255,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
     headers,
+    credentials: 'include', // Required for cookie auth
   });
 
   const hasBody = response.status !== 204 && response.status !== 205;
