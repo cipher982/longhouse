@@ -27,40 +27,29 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// JWT token storage
-const TOKEN_STORAGE_KEY = 'zerg_jwt';
+// Legacy localStorage key - kept for migration/cleanup only
+const LEGACY_TOKEN_STORAGE_KEY = 'zerg_jwt';
 
-function getStoredToken(): string | null {
+/**
+ * Clean up legacy localStorage token if present.
+ * Called on app init to migrate from localStorage to cookie auth.
+ */
+function cleanupLegacyToken(): void {
   try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setStoredToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    localStorage.removeItem(LEGACY_TOKEN_STORAGE_KEY);
   } catch {
     // Ignore storage errors
   }
 }
 
-function removeStoredToken(): void {
-  try {
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {
-    // Ignore storage errors
-  }
-}
-
-// API functions
+// API functions - all use credentials: 'include' for cookie auth
 async function loginWithGoogle(idToken: string): Promise<{ access_token: string; expires_in: number }> {
   const response = await fetch(`${config.apiBaseUrl}/auth/google`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
+    credentials: 'include', // Required for cookie to be set
     body: JSON.stringify({ id_token: idToken }),
   });
 
@@ -73,26 +62,29 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
 }
 
 async function getCurrentUser(): Promise<User> {
-  const token = getStoredToken();
-  if (!token) {
-    throw new Error('No auth token');
-  }
-
   const response = await fetch(`${config.apiBaseUrl}/users/me`, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-    },
+    credentials: 'include', // Use cookie for auth
   });
 
   if (!response.ok) {
     if (response.status === 401) {
-      removeStoredToken();
       throw new Error('Authentication expired');
     }
     throw new Error('Failed to get user profile');
   }
 
   return response.json();
+}
+
+async function logoutFromServer(): Promise<void> {
+  try {
+    await fetch(`${config.apiBaseUrl}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include', // Required to clear the cookie
+    });
+  } catch {
+    // Ignore logout errors - user is logged out client-side anyway
+  }
 }
 
 interface AuthProviderProps {
@@ -102,22 +94,27 @@ interface AuthProviderProps {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [hasCheckedAuth, setHasCheckedAuth] = useState(false);
   const queryClient = useQueryClient();
 
-  // Check if we have a stored token on mount
+  // Clean up any legacy localStorage token on mount
+  useEffect(() => {
+    cleanupLegacyToken();
+  }, []);
+
+  // Check auth status via cookie on mount (always enabled - cookie determines auth)
   const { data: userData, isLoading, error, refetch } = useQuery<User>({
     queryKey: ['current-user'],
     queryFn: getCurrentUser,
-    enabled: !!getStoredToken(),
+    enabled: true, // Always try - cookie auth is checked server-side
     retry: false,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
   const loginMutation = useMutation({
     mutationFn: loginWithGoogle,
-    onSuccess: (data) => {
-      setStoredToken(data.access_token);
-      // Refetch user data after successful login
+    onSuccess: () => {
+      // Cookie is set by server; refetch user data
       refetch();
     },
     onError: (error: Error) => {
@@ -129,10 +126,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (userData) {
       setUser(userData);
       setIsAuthenticated(true);
+      setHasCheckedAuth(true);
     } else if (error) {
       setUser(null);
       setIsAuthenticated(false);
-      removeStoredToken();
+      setHasCheckedAuth(true);
     }
   }, [userData, error]);
 
@@ -140,15 +138,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await loginMutation.mutateAsync(idToken);
   };
 
-  const logout = () => {
-    removeStoredToken();
+  const logout = async () => {
+    await logoutFromServer(); // Clear server-side cookie
     setUser(null);
     setIsAuthenticated(false);
     queryClient.clear();
   };
 
   const getToken = () => {
-    return getStoredToken();
+    // Deprecated: tokens are now in HttpOnly cookies (not JS-accessible)
+    // Kept for API compatibility but always returns null
+    return null;
   };
 
   const value: AuthContextType = {
@@ -255,6 +255,7 @@ async function loginWithDevAccount(): Promise<{ access_token: string; expires_in
     headers: {
       'Content-Type': 'application/json',
     },
+    credentials: 'include', // Required for cookie to be set
   });
 
   if (!response.ok) {
@@ -285,9 +286,9 @@ export function LoginOverlay({ clientId }: LoginOverlayProps) {
   const handleDevLogin = async () => {
     setIsDevLoginLoading(true);
     try {
-      const data = await loginWithDevAccount();
-      setStoredToken(data.access_token);
-      window.location.reload(); // Reload to trigger auth state update
+      await loginWithDevAccount();
+      // Cookie is set by server; reload to trigger auth state update
+      window.location.reload();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Dev login failed');
     } finally {
