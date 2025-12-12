@@ -6,6 +6,8 @@ vi.mock('../lib/state-manager', () => ({
   stateManager: {
     setStreamingText: vi.fn(),
     finalizeMessage: vi.fn(),
+    setConversationId: vi.fn(),
+    setConversations: vi.fn(),
   }
 }));
 
@@ -78,6 +80,24 @@ describe('ConversationController', () => {
         })
       );
     });
+
+    it('should update conversation ID + sidebar when first turn auto-creates conversation', async () => {
+      mockSessionManager.getConversationManager = vi.fn().mockReturnValue({
+        getCurrentConversationId: vi.fn().mockResolvedValue('auto-conv-1'),
+      })
+      mockSessionManager.getAllConversations = vi.fn().mockResolvedValue([
+        { id: 'auto-conv-1', name: 'Conversation 1', createdAt: new Date(), updatedAt: new Date() },
+      ])
+
+      await controller.addUserTurn('Hello')
+
+      expect(stateManager.setConversationId).toHaveBeenCalledWith('auto-conv-1')
+      expect(stateManager.setConversations).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'auto-conv-1', active: true }),
+        ])
+      )
+    })
   });
 
   describe('Streaming Management', () => {

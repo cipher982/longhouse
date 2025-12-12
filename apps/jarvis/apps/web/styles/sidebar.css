@@ -48,6 +48,12 @@
   animation: slide-in-left 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
 }
 
+.conversation-item.empty {
+  cursor: default;
+  pointer-events: none;
+  animation: none;
+}
+
 /* Stagger delays for up to 10 items */
 .conversation-item:nth-child(1) {
   animation-delay: 0.1s;
@@ -84,6 +90,11 @@
 .conversation-item:hover {
   background: rgb(255 255 255 / 3%);
   border-color: rgb(255 255 255 / 10%);
+}
+
+.conversation-item.empty:hover {
+  background: transparent;
+  border-color: transparent;
 }
 
 /* Active State: Neon marker */

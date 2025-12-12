@@ -12,6 +12,7 @@ import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 import { conversationController } from '../lib/conversation-controller'
 import { stateManager } from '../lib/state-manager'
+import { toSidebarConversations } from '../lib/conversation-list'
 
 console.info('[Jarvis] Starting React application with realtime session integration')
 
@@ -66,6 +67,14 @@ export default function App() {
     const newId = await sessionManager.createNewConversation()
     console.log('[App] New conversation created:', newId)
 
+    // Update sidebar conversation list
+    try {
+      const allConversations = await sessionManager.getAllConversations()
+      dispatch({ type: 'SET_CONVERSATIONS', conversations: toSidebarConversations(allConversations, newId) })
+    } catch (error) {
+      console.warn('[App] Failed to refresh conversation list:', error)
+    }
+
     // 2. Update all controllers with the new ID
     conversationController.setConversationId(newId)
     stateManager.setConversationId(newId)
@@ -102,6 +111,9 @@ export default function App() {
     textChannel.clearMessages()
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
+    dispatch({ type: 'SET_CONVERSATION_ID', id: null })
+    stateManager.setConversationId(null)
+    conversationController.setConversationId(null)
 
     // Only reset Realtime context if the user is already connected.
     if (realtimeSession.isConnected()) {
@@ -131,6 +143,14 @@ export default function App() {
       await sessionManager.switchToConversation(id)
       conversationController.setConversationId(id)
       stateManager.setConversationId(id)
+
+      // Update sidebar active state + metadata
+      try {
+        const allConversations = await sessionManager.getAllConversations()
+        dispatch({ type: 'SET_CONVERSATIONS', conversations: toSidebarConversations(allConversations, id) })
+      } catch (error) {
+        console.warn('[App] Failed to refresh conversation list:', error)
+      }
 
       // 2. Update React state with conversation ID
       dispatch({ type: 'SET_CONVERSATION_ID', id })

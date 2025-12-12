@@ -121,6 +121,14 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           dispatch({ type: 'SET_STREAMING_CONTENT', content: event.text })
           break
 
+        case 'CONVERSATION_ID_CHANGED':
+          dispatch({ type: 'SET_CONVERSATION_ID', id: event.id })
+          break
+
+        case 'CONVERSATIONS_CHANGED':
+          dispatch({ type: 'SET_CONVERSATIONS', conversations: event.conversations })
+          break
+
         case 'VOICE_STATUS_CHANGED':
           dispatch({ type: 'SET_VOICE_STATUS', status: event.status })
           break

@@ -39,6 +39,7 @@ export interface AppState {
   currentStreamingText: string;
   currentConversationId: string | null;
   currentContext: any | null;
+  conversations: Array<{ id: string; name: string; meta: string; active?: boolean }>;
 
   // Jarvis-Zerg integration
   jarvisClient: any; // Type from @jarvis/core
@@ -63,6 +64,7 @@ export type StateChangeEvent =
   | { type: 'STATUS_CHANGED'; active: boolean }
   | { type: 'STREAMING_TEXT_CHANGED'; text: string }
   | { type: 'CONVERSATION_ID_CHANGED'; id: string | null }
+  | { type: 'CONVERSATIONS_CHANGED'; conversations: Array<{ id: string; name: string; meta: string; active?: boolean }> }
   | { type: 'VOICE_STATUS_CHANGED'; status: VoiceStatus }
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
@@ -98,6 +100,7 @@ export class StateManager {
       currentStreamingText: '',
       currentConversationId: null,
       currentContext: null,
+      conversations: [],
 
       // Jarvis-Zerg integration
       jarvisClient: null,
@@ -227,6 +230,14 @@ export class StateManager {
   setConversationId(id: string | null): void {
     this.state.currentConversationId = id;
     this.notifyListeners({ type: 'CONVERSATION_ID_CHANGED', id });
+  }
+
+  /**
+   * Update conversation list (for sidebar UI)
+   */
+  setConversations(conversations: Array<{ id: string; name: string; meta: string; active?: boolean }>): void {
+    this.state.conversations = conversations;
+    this.notifyListeners({ type: 'CONVERSATIONS_CHANGED', conversations });
   }
 
   /**

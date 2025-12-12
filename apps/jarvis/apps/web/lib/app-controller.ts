@@ -22,6 +22,7 @@ import { CONFIG, buildConversationManagerOptions } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { createContextTools } from './tool-factory';
 import { contextLoader } from '../contexts/context-loader';
+import { toSidebarConversations } from './conversation-list';
 
 export class AppController {
   private initialized = false;
@@ -147,6 +148,14 @@ export class AppController {
       const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
       stateManager.setConversationId(initialConversationId);
       conversationController.setConversationId(initialConversationId);
+
+      // Load conversations for sidebar UI
+      try {
+        const allConversations = await sessionManager.getAllConversations();
+        stateManager.setConversations(toSidebarConversations(allConversations, initialConversationId));
+      } catch (error) {
+        logger.warn('Failed to load conversations for sidebar', error);
+      }
 
       // Load history immediately for UI (don't wait for Realtime connection)
       const history = await sessionManager.getConversationHistory();

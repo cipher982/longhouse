@@ -15,6 +15,7 @@
 import { logger, type SessionManager } from '@jarvis/core';
 import type { ConversationTurn } from '@jarvis/data-local';
 import { stateManager } from './state-manager';
+import { toSidebarConversations } from './conversation-list';
 
 export interface ConversationState {
   conversationId: string | null;
@@ -140,6 +141,22 @@ export class ConversationController {
 
       await this.sessionManager.addConversationTurn(turn);
       logger.debug('Recorded conversation turn', `${type}: ${content.substring(0, 50)}...`);
+
+      // ConversationManager may auto-create a conversation on first turn.
+      // Sync the resulting conversation ID + sidebar list back to the UI.
+      try {
+        const activeId = await this.sessionManager.getConversationManager().getCurrentConversationId();
+        if (activeId && activeId !== this.state.conversationId) {
+          this.setConversationId(activeId);
+          stateManager.setConversationId(activeId);
+        }
+
+        const allConversations = await this.sessionManager.getAllConversations();
+        stateManager.setConversations(toSidebarConversations(allConversations, activeId ?? this.state.conversationId));
+      } catch (e) {
+        logger.debug('Conversation list refresh skipped/failed', e);
+      }
+
       return true;
     } catch (error) {
       console.error('Failed to record conversation turn:', error);
