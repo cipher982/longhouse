@@ -62,6 +62,11 @@ async def websocket_endpoint(
         websocket: The WebSocket connection
         initial_topics: Optional comma-separated list of topics to subscribe to
             immediately upon connection (e.g., "agent:123,thread:45")
+        token: Optional JWT from query param (for non-browser clients)
+
+    Auth order:
+    1. Query param token (for API clients)
+    2. swarmlet_session cookie (for browser auth)
     """
     client_id = str(uuid.uuid4())
     logger.info(f"New WebSocket connection attempt from client {client_id}")
@@ -71,8 +76,14 @@ async def websocket_endpoint(
     # we close with code 4401 and return early (Stage-8 hardening).
     # ------------------------------------------------------------------
 
+    # Extract token: prefer query param, fall back to cookie
+    auth_token = token
+    if not auth_token:
+        # Try to get token from session cookie (browser auth)
+        auth_token = websocket.cookies.get("swarmlet_session")
+
     with db_session() as db_for_auth:
-        user = validate_ws_jwt(token, db_for_auth)
+        user = validate_ws_jwt(auth_token, db_for_auth)
         # Extract user ID while still in session context to avoid DetachedInstanceError
         user_id = getattr(user, "id", None) if user is not None else None
 
