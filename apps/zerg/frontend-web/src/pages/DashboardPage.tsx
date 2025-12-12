@@ -596,9 +596,9 @@ export default function DashboardPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("zerg_jwt")}`,
           "Idempotency-Key": key,
         },
+        credentials: 'include', // Cookie auth
         body: JSON.stringify({
           system_instructions: "You are a helpful AI assistant.",
           task_instructions: "Complete the given task.",
@@ -624,9 +624,7 @@ export default function DashboardPage() {
     mutationFn: async (agentId: number) => {
       const response = await fetch(buildUrl(`/agents/${agentId}`), {
         method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("zerg_jwt")}`,
-        },
+        credentials: 'include', // Cookie auth
       });
       if (!response.ok) throw new Error("Delete failed");
       return response;

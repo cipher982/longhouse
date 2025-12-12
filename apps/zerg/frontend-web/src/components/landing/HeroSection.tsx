@@ -35,10 +35,11 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
       const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // Cookie auth
       });
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem('zerg_jwt', data.access_token);
+        // Cookie is set by server; no localStorage storage needed
 
         // Track signup completed and stitch visitor to user
         if (window.SwarmletFunnel) {
@@ -49,6 +50,7 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
           fetch(`${config.apiBaseUrl}/funnel/stitch-visitor`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({
               visitor_id: visitorId,
               user_id: data.user_id || 'dev_user'
