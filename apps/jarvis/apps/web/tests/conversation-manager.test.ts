@@ -30,6 +30,15 @@ describe('ConversationManager', () => {
     expect(conversations[0].name).toBe('Test Conversation')
   })
 
+  it('should rename a conversation', async () => {
+    const conversationId = await manager.createNewConversation('Old Name')
+    await manager.renameConversation(conversationId, 'New Name')
+
+    const conversation = await manager.getConversation(conversationId)
+    expect(conversation).toBeDefined()
+    expect(conversation?.name).toBe('New Name')
+  })
+
   it('should add and retrieve conversation turns', async () => {
     const conversationId = await manager.createNewConversation()
 

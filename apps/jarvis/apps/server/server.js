@@ -37,6 +37,154 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+function extractOutputText(responseJson) {
+  if (!responseJson || typeof responseJson !== 'object') return null;
+  if (typeof responseJson.output_text === 'string' && responseJson.output_text.trim()) {
+    return responseJson.output_text.trim();
+  }
+  const output = responseJson.output;
+  if (!Array.isArray(output)) return null;
+  for (const item of output) {
+    const content = item?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const text = part?.text;
+      if (typeof text === 'string' && text.trim()) return text.trim();
+    }
+  }
+  return null;
+}
+
+function safeParseJsonObject(text) {
+  if (typeof text !== 'string') return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Try to recover a JSON object substring.
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function normalizeTitleMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  const cleaned = [];
+  for (const m of messages) {
+    const role = m?.role;
+    const content = typeof m?.content === 'string' ? m.content.trim() : '';
+    if ((role !== 'user' && role !== 'assistant') || !content) continue;
+    // Hard cap per message to keep requests small and predictable.
+    cleaned.push({ role, content: content.slice(0, 800) });
+    if (cleaned.length >= 12) break;
+  }
+  return cleaned;
+}
+
+// Generate a short conversation title (user + assistant)
+app.post("/conversation/title", async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: "missing_openai_api_key" });
+    }
+
+    const messages = normalizeTitleMessages(req.body?.messages);
+    if (messages.length < 2) {
+      return res.status(400).json({ error: "messages_required" });
+    }
+    const hasUser = messages.some(m => m.role === 'user');
+    const hasAssistant = messages.some(m => m.role === 'assistant');
+    if (!hasUser || !hasAssistant) {
+      return res.status(400).json({ error: "need_user_and_assistant_messages" });
+    }
+
+    const model = process.env.JARVIS_TITLE_MODEL || "gpt-5-mini";
+    const reasoningEffort = process.env.JARVIS_TITLE_REASONING_EFFORT || "minimal";
+    const system = [
+      "Generate a short, helpful conversation title based on the transcript.",
+      "Use Title Case, 3–8 words.",
+      "No quotes, no trailing punctuation, no dates/times.",
+      "Avoid generic titles like \"Conversation\" or \"Chat\"."
+    ].join(" ");
+
+    const transcript = messages
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join("\n");
+
+    const payload = {
+      model,
+      reasoning: { effort: reasoningEffort },
+      input: [
+        { role: "system", content: [{ type: "input_text", text: system }] },
+        { role: "user", content: [{ type: "input_text", text: transcript }] },
+      ],
+      max_output_tokens: 200,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "conversation_title",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" }
+            },
+            required: ["title"]
+          }
+        }
+      }
+    };
+
+    async function callOpenAI(p) {
+      const r = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(p)
+      });
+      const js = await r.json();
+      return { r, js };
+    }
+
+    let { r, js } = await callOpenAI(payload);
+    if (!r.ok) {
+      console.error("Title generation error:", js);
+      return res.status(500).json({ error: "title_generation_failed", details: js });
+    }
+
+    let outputText = extractOutputText(js);
+    // GPT-5 family may spend output budget on reasoning; retry once with a higher cap.
+    if (!outputText && js?.status === "incomplete" && js?.incomplete_details?.reason === "max_output_tokens") {
+      const retryPayload = { ...payload, max_output_tokens: 400 };
+      ({ r, js } = await callOpenAI(retryPayload));
+      if (r.ok) outputText = extractOutputText(js);
+    }
+
+    const parsed = safeParseJsonObject(outputText);
+    const title = typeof parsed?.title === "string" ? parsed.title.trim() : null;
+    if (!title) {
+      console.warn("Title generation returned unexpected output:", { outputText });
+      return res.status(500).json({ error: "bad_title_output", outputText });
+    }
+
+    return res.json({ title });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "title_failed" });
+  }
+});
+
 // MCP client connections
 const mcpClients = new Map();
 

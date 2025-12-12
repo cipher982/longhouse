@@ -179,6 +179,31 @@ export class ConversationManager {
     return id
   }
 
+  async getConversation(conversationId: string): Promise<{id: string, name: string, createdAt: Date, updatedAt: Date} | null> {
+    if (!this.db) throw new Error('ConversationManager not initialized')
+    const conversation = await this.db.get('conversations', conversationId)
+    if (!conversation) return null
+    return {
+      id: conversation.id,
+      name: conversation.name,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt
+    }
+  }
+
+  async renameConversation(conversationId: string, name: string): Promise<void> {
+    if (!this.db) throw new Error('ConversationManager not initialized')
+    const trimmed = name.trim()
+    if (!trimmed) throw new Error('Conversation name cannot be empty')
+
+    const conversation = await this.db.get('conversations', conversationId)
+    if (!conversation) throw new Error('Conversation not found')
+
+    conversation.name = trimmed
+    conversation.updatedAt = new Date()
+    await this.db.put('conversations', conversation)
+  }
+
   async addTurn(turn: ConversationTurn): Promise<void> {
     if (!this.db) throw new Error('ConversationManager not initialized')
     if (!this.currentConversationId) {

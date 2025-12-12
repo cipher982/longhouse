@@ -237,6 +237,18 @@ export class SessionManager {
   }
 
   /**
+   * Rename a conversation (updates updatedAt)
+   */
+  async renameConversation(conversationId: string, name: string): Promise<void> {
+    if (!this.sessionActive) {
+      throw new Error('Session not active');
+    }
+    await (this.writeChain = this.writeChain.then(async () => {
+      await this.conversationManager.renameConversation(conversationId, name);
+    }));
+  }
+
+  /**
    * Get session statistics
    */
   getSessionStats(): {

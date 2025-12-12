@@ -16,6 +16,8 @@ import { logger, type SessionManager } from '@jarvis/core';
 import type { ConversationTurn } from '@jarvis/data-local';
 import { stateManager } from './state-manager';
 import { toSidebarConversations } from './conversation-list';
+import { CONFIG } from './config';
+import { isTestMode } from './test-helpers';
 
 export interface ConversationState {
   conversationId: string | null;
@@ -41,6 +43,7 @@ export class ConversationController {
 
   private sessionManager: SessionManager | null = null;
   private listeners: Set<ConversationListener> = new Set();
+  private autoTitleInFlight: Set<string> = new Set();
 
   constructor() {}
 
@@ -153,6 +156,12 @@ export class ConversationController {
 
         const allConversations = await this.sessionManager.getAllConversations();
         stateManager.setConversations(toSidebarConversations(allConversations, activeId ?? this.state.conversationId));
+
+        if (type === 'assistant') {
+          void this.maybeAutoTitleConversation(activeId ?? this.state.conversationId).catch((e) => {
+            logger.debug('Auto-title skipped/failed', e);
+          });
+        }
       } catch (e) {
         logger.debug('Conversation list refresh skipped/failed', e);
       }
@@ -161,6 +170,70 @@ export class ConversationController {
     } catch (error) {
       console.error('Failed to record conversation turn:', error);
       return false;
+    }
+  }
+
+  private buildJsonHeaders(): HeadersInit {
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
+    return token
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+      : { 'Content-Type': 'application/json' };
+  }
+
+  private isDefaultConversationName(name: string): boolean {
+    return name.trim().startsWith('Conversation ');
+  }
+
+  private async maybeAutoTitleConversation(conversationId: string | null | undefined): Promise<void> {
+    if (!this.sessionManager) return;
+    if (!conversationId) return;
+    if (typeof window !== 'undefined' && isTestMode()) return;
+    if (this.autoTitleInFlight.has(conversationId)) return;
+
+    const conversationManager = this.sessionManager.getConversationManager();
+    const titledKey = `conversation_title_generated:${conversationId}`;
+    this.autoTitleInFlight.add(conversationId);
+    try {
+      const alreadyTitled = await conversationManager.getKV<boolean>(titledKey);
+      if (alreadyTitled) return;
+
+      const conversation = await conversationManager.getConversation(conversationId);
+      if (!conversation) return;
+      if (!this.isDefaultConversationName(conversation.name)) return;
+
+      const recent = await this.sessionManager.getRecentConversationContext(8);
+      const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      for (const t of recent) {
+        const user = typeof t.userTranscript === 'string' ? t.userTranscript.trim() : '';
+        const assistant = typeof (t.assistantResponse || t.assistantText) === 'string'
+          ? String(t.assistantResponse || t.assistantText).trim()
+          : '';
+        if (user) messages.push({ role: 'user', content: user });
+        if (assistant) messages.push({ role: 'assistant', content: assistant });
+      }
+
+      const hasUser = messages.some(m => m.role === 'user');
+      const hasAssistant = messages.some(m => m.role === 'assistant');
+      if (!hasUser || !hasAssistant) return;
+
+      // Call Jarvis BFF → jarvis-server to generate a short title.
+      const resp = await fetch(`${CONFIG.JARVIS_API_BASE}/conversation/title`, {
+        method: 'POST',
+        headers: this.buildJsonHeaders(),
+        body: JSON.stringify({ messages }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const title = typeof data?.title === 'string' ? data.title.trim() : '';
+      if (!title) return;
+
+      await this.sessionManager.renameConversation(conversationId, title);
+      await conversationManager.setKV(titledKey, true);
+
+      const allConversations = await this.sessionManager.getAllConversations();
+      stateManager.setConversations(toSidebarConversations(allConversations, conversationId));
+    } finally {
+      this.autoTitleInFlight.delete(conversationId);
     }
   }
 
