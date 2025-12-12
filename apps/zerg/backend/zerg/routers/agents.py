@@ -257,10 +257,13 @@ async def create_agent(
 
 
 @router.get("/{agent_id}", response_model=Agent)
-def read_agent(agent_id: int, db: Session = Depends(get_db)):
+def read_agent(agent_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = crud.get_agent(db, agent_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and row.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
     return row
 
 
@@ -271,13 +274,21 @@ async def update_agent(
     agent: AgentUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
-):
+    ):
     if agent.model is not None:
         _validate_model_or_400(agent.model)
         # Enforce role-based allowlist for non-admin users when updating model
         agent_model_validated = _enforce_model_allowlist_or_422(agent.model, current_user)
     else:
         agent_model_validated = None
+
+    # Authorization: only owner or admin may update an agent
+    existing = crud.get_agent(db, agent_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and existing.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
 
     try:
         row = crud.update_agent(
@@ -311,10 +322,14 @@ def read_agent_details(
     agent_id: int,
     include: Optional[str] = None,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     row = crud.get_agent(db, agent_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and row.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
 
     include_set: set[str] = set(p.strip().lower() for p in include.split(",")) if include else set()
     payload: dict[str, Any] = {"agent": row}
@@ -333,10 +348,13 @@ def read_agent_details(
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
+async def delete_agent(agent_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = crud.get_agent(db, agent_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and row.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
 
     if not crud.delete_agent(db, agent_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -348,16 +366,35 @@ async def delete_agent(agent_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{agent_id}/messages", response_model=List[MessageResponse])
-def read_agent_messages(agent_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    if not crud.get_agent(db, agent_id):
+def read_agent_messages(
+    agent_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    agent = crud.get_agent(db, agent_id)
+    if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
     return crud.get_agent_messages(db, agent_id=agent_id, skip=skip, limit=limit) or []
 
 
 @router.post("/{agent_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
-def create_agent_message(agent_id: int, message: MessageCreate, db: Session = Depends(get_db)):
-    if not crud.get_agent(db, agent_id):
+def create_agent_message(
+    agent_id: int,
+    message: MessageCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    agent = crud.get_agent(db, agent_id)
+    if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not agent owner")
     return crud.create_agent_message(db=db, agent_id=agent_id, role=message.role, content=message.content)
 
 

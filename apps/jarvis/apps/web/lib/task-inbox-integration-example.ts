@@ -19,18 +19,13 @@ async function initializeTaskInbox() {
 
   // Get configuration from environment
   const zergApiURL = '/api';  // Same-origin API calls through nginx proxy
-  const deviceSecret = import.meta.env?.VITE_JARVIS_DEVICE_SECRET || '';
-
-  if (!deviceSecret) {
-    console.error('VITE_JARVIS_DEVICE_SECRET not configured');
-    return;
-  }
+  // SaaS model: Task Inbox uses the logged-in user's JWT (localStorage.zerg_jwt).
+  // If not logged in, the API will return 401 and surface via onError.
 
   try {
     // Create and initialize task inbox
     const inbox = await createTaskInbox(container, {
       apiURL: zergApiURL,
-      deviceSecret: deviceSecret,
       onError: (error) => {
         console.error('Task Inbox error:', error);
         // Show error notification to user

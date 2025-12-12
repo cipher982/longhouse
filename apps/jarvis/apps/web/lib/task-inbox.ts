@@ -9,7 +9,6 @@ import { getJarvisClient, JarvisRunSummary, JarvisEventData } from '@jarvis/core
 
 export interface TaskInboxOptions {
   apiURL: string;
-  deviceSecret: string;
   onError?: (error: Error) => void;
   onRunUpdate?: (run: JarvisRunSummary) => void;
 }
@@ -29,10 +28,8 @@ export class TaskInbox {
    */
   async initialize(): Promise<void> {
     try {
-      // Authenticate if not already
-      if (!this.client.isAuthenticated()) {
-        await this.client.authenticate(this.options.deviceSecret);
-      }
+      // SaaS model: Jarvis uses the same login as the dashboard (zerg_jwt bearer token).
+      // If not logged in, API calls will return 401 and surface via onError.
 
       // Load initial run history
       const recentRuns = await this.client.listRuns({ limit: 20 });

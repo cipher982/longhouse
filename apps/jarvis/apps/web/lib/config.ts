@@ -118,10 +118,15 @@ export function createSyncTransport(headers?: Record<string, string>): SyncTrans
       throw new Error('Fetch is not available for sync transport');
     }
 
-    const mergedHeaders = {
-      ...(headers ?? {}),
-      ...(init.headers ?? {})
-    };
+    const mergedHeaders = new Headers(headers ?? {});
+    const initHeaders = new Headers(init.headers ?? {});
+    initHeaders.forEach((value, key) => mergedHeaders.set(key, value));
+
+    // SaaS auth: include dashboard JWT if present.
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
+    if (token && !mergedHeaders.get('Authorization')) {
+      mergedHeaders.set('Authorization', `Bearer ${token}`);
+    }
 
     return fetch(input, { ...init, headers: mergedHeaders });
   };

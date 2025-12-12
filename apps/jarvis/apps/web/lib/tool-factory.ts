@@ -14,6 +14,13 @@ import { eventBus } from './event-bus';
 // Standard Tools
 // ---------------------------------------------------------------------------
 
+function buildJsonHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
+  return token
+    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    : { 'Content-Type': 'application/json' };
+}
+
 const locationTool = tool({
   name: 'get_current_location',
   description: 'Get current GPS location with coordinates and address. Call this whenever the user asks about their location.',
@@ -23,7 +30,7 @@ const locationTool = tool({
     try {
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildJsonHeaders(),
         body: JSON.stringify({
           name: 'location.get_current',
           args: { include_address: true }
@@ -57,7 +64,7 @@ const whoopTool = tool({
     try {
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildJsonHeaders(),
         body: JSON.stringify({
           name: 'whoop.get_daily',
           args: { date }
@@ -90,7 +97,7 @@ const searchNotesTool = tool({
     try {
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildJsonHeaders(),
         body: JSON.stringify({
           name: 'obsidian.search_vault_smart',
           args: { query, limit: limit ?? 5 }
@@ -414,14 +421,30 @@ function createRAGTool(toolConfig: any, sessionManager: SessionManager | null): 
 export function createContextTools(config: any, sessionManager: SessionManager | null): any[] {
   const tools: any[] = [];
 
-  // Always include the supervisor tool for complex task delegation
-  // This enables Jarvis to route complex requests to the Zerg Supervisor
-  tools.push(routeToSupervisorTool);
-  console.log('🔧 Added route_to_supervisor tool');
+  // If bootstrap is available, treat it as the SSOT for enabled tools.
+  // This prevents the client from registering tools the server considers disabled.
+  const maybeGetBootstrap = (stateManager as any)?.getBootstrap;
+  const bootstrap = typeof maybeGetBootstrap === 'function' ? maybeGetBootstrap.call(stateManager) : null;
+  const enabledToolNames = bootstrap?.enabled_tools?.length
+    ? new Set<string>(bootstrap.enabled_tools.map((t: any) => t?.name).filter(Boolean))
+    : null;
+
+  // Supervisor tool is optional and must be enabled by server bootstrap when present.
+  if (!enabledToolNames || enabledToolNames.has('route_to_supervisor')) {
+    tools.push(routeToSupervisorTool);
+    console.log('🔧 Added route_to_supervisor tool');
+  } else {
+    console.log('🔧 Skipping route_to_supervisor (disabled by server)');
+  }
 
   // Add context-specific tools from config
   for (const toolConfig of config.tools) {
     if (!toolConfig.enabled) continue;
+
+    if (enabledToolNames && !enabledToolNames.has(toolConfig.name)) {
+      console.log(`🔧 Skipping ${toolConfig.name} (disabled by server)`);
+      continue;
+    }
 
     let t = null;
     if (toolConfig.mcpServer && toolConfig.mcpFunction) {

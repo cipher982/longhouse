@@ -81,20 +81,12 @@ export class AppController {
       const jarvisClient = getJarvisClient(zergApiUrl);
       stateManager.setJarvisClient(jarvisClient);
 
-      // Check if already authenticated (from stored session)
+      // SaaS model: Jarvis uses the same auth as the dashboard (JWT bearer token in localStorage).
+      // If not logged in, supervisor features will fail with 401 when invoked.
       if (jarvisClient.isAuthenticated()) {
-        logger.info('✅ JarvisClient already authenticated');
-        return;
-      }
-
-      // Attempt authentication with device secret from environment
-      const deviceSecret = import.meta.env?.VITE_JARVIS_DEVICE_SECRET;
-      if (deviceSecret) {
-        logger.info('🔐 Authenticating JarvisClient...');
-        await jarvisClient.authenticate(deviceSecret);
-        logger.info('✅ JarvisClient authenticated');
+        logger.info('✅ JarvisClient token detected (zerg_jwt)');
       } else {
-        logger.warn('⚠️ VITE_JARVIS_DEVICE_SECRET not set - supervisor features will be unavailable');
+        logger.warn('⚠️ No zerg_jwt token detected - log in to enable supervisor features');
       }
     } catch (error) {
       logger.error('❌ Failed to initialize JarvisClient:', error);
@@ -108,7 +100,12 @@ export class AppController {
   private async fetchBootstrap(): Promise<void> {
     try {
       logger.info('🔄 Fetching bootstrap configuration from server...');
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`);
+      const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`, { headers });
 
       if (!response.ok) {
         throw new Error(`Bootstrap fetch failed: ${response.status} ${response.statusText}`);
@@ -456,7 +453,12 @@ export class AppController {
   }
 
   private async getSessionToken(): Promise<string> {
-    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`);
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`, { headers });
     if (!r.ok) throw new Error('Failed to get session token');
     const js = await r.json();
     return js.value || js.client_secret?.value;

@@ -120,3 +120,39 @@ async def test_non_owner_cannot_run_agent_task(client, db_session):
     finally:
         with contextlib.suppress(Exception):
             del app.dependency_overrides[get_current_user]
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_read_agents_or_runs(client, db_session):
+    owner = _mk_user(db_session, "owner5@local", "USER")
+    other = _mk_user(db_session, "other5@local", "USER")
+    agent, thread = _mk_agent_thread(db_session, owner.id)
+    run = crud.create_run(db_session, agent_id=agent.id, thread_id=thread.id, trigger="manual", status="queued")
+
+    from zerg.dependencies.auth import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: other
+    try:
+        resp = client.get(f"/api/agents/{agent.id}")
+        assert resp.status_code == 403, resp.text
+
+        resp = client.get(f"/api/agents/{agent.id}/details?include=runs")
+        assert resp.status_code == 403, resp.text
+
+        resp = client.get(f"/api/agents/{agent.id}/messages")
+        assert resp.status_code == 403, resp.text
+
+        resp = client.post(
+            f"/api/agents/{agent.id}/messages",
+            json={"role": "user", "content": "hi"},
+        )
+        assert resp.status_code == 403, resp.text
+
+        resp = client.get(f"/api/agents/{agent.id}/runs")
+        assert resp.status_code == 403, resp.text
+
+        resp = client.get(f"/api/runs/{run.id}")
+        assert resp.status_code == 403, resp.text
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
