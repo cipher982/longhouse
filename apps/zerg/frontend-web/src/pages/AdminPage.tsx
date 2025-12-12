@@ -45,13 +45,8 @@ interface OpsTopAgent {
 
 // API functions (top agents are included in summary)
 async function fetchOpsSummary(): Promise<OpsSummary> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
   const response = await fetch(`${config.apiBaseUrl}/ops/summary`, {
-    headers: { "Authorization": `Bearer ${token}` },
+    credentials: 'include', // Cookie auth
   });
 
   if (!response.ok) {
@@ -76,13 +71,8 @@ interface SuperAdminStatusResponse {
 }
 
 async function fetchSuperAdminStatus(): Promise<SuperAdminStatusResponse> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
   const response = await fetch(`${config.apiBaseUrl}/admin/super-admin-status`, {
-    headers: { "Authorization": `Bearer ${token}` },
+    credentials: 'include', // Cookie auth
   });
 
   if (!response.ok) {
@@ -93,17 +83,12 @@ async function fetchSuperAdminStatus(): Promise<SuperAdminStatusResponse> {
 }
 
 async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
   const response = await fetch(`${config.apiBaseUrl}/admin/reset-database`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    credentials: 'include', // Cookie auth
     body: JSON.stringify(request),
   });
 

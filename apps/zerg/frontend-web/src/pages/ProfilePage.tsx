@@ -11,17 +11,12 @@ interface UserUpdatePayload {
 
 // API function for updating user profile
 async function updateUserProfile(data: UserUpdatePayload): Promise<{ id: number; email: string; display_name?: string; avatar_url?: string }> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
   const response = await fetch("/api/users/me", {
     method: "PUT",
     headers: {
-      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    credentials: 'include', // Cookie auth
     body: JSON.stringify(data),
   });
 
@@ -35,19 +30,12 @@ async function updateUserProfile(data: UserUpdatePayload): Promise<{ id: number;
 
 // API function for uploading avatar
 async function uploadAvatar(file: File): Promise<{ id: number; email: string; display_name?: string; avatar_url?: string }> {
-  const token = localStorage.getItem("zerg_jwt");
-  if (!token) {
-    throw new Error("No auth token");
-  }
-
   const formData = new FormData();
   formData.append("file", file);
 
   const response = await fetch("/api/users/me/avatar", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-    },
+    credentials: 'include', // Cookie auth
     body: formData,
   });
 
