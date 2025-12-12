@@ -26,12 +26,20 @@ if [ "$QUIET" = "0" ]; then
   echo "🛑 Stopping all services..."
 fi
 
-# `down` stops/removes all containers in the project regardless of profile.
-if [ "$QUIET" = "1" ]; then
-  compose_cmd down --remove-orphans >/dev/null 2>&1 || true
-else
-  compose_cmd down --remove-orphans 2>/dev/null || true
-fi
+# Important: this repo uses Compose profiles. Without `--profile`, `down`/`stop`
+# only act on the default (unprofiled) services (e.g. `postgres`) and will NOT
+# stop the full stack.
+compose_down() {
+  if [ "$QUIET" = "1" ]; then
+    compose_cmd --profile "$1" down --remove-orphans >/dev/null 2>&1 || true
+  else
+    compose_cmd --profile "$1" down --remove-orphans 2>/dev/null || true
+  fi
+}
+
+# Tear down both common dev profiles.
+compose_down full
+compose_down zerg
 
 if [ "$QUIET" = "0" ]; then
   echo "✅ All services stopped"

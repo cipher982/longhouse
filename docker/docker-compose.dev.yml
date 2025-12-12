@@ -43,7 +43,7 @@ services:
   # Prod: Override with bind mount to /var/lib/docker/data/swarm/postgres
   postgres:
     image: postgres:16-alpine
-    restart: unless-stopped
+    restart: "no"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -71,7 +71,7 @@ services:
       target: development
       args:
         BUILD_ENV: development
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
@@ -122,7 +122,7 @@ services:
       target: development
       args:
         BUILD_ENV: development
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,7 +173,7 @@ services:
       context: ../apps/zerg/frontend-web
       dockerfile: Dockerfile
       target: development
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       - zerg-backend
     environment:
@@ -201,7 +201,7 @@ services:
       context: ../apps/zerg/frontend-web
       dockerfile: Dockerfile
       target: development
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       - zerg-backend-exposed
     environment:
@@ -232,7 +232,7 @@ services:
     build:
       context: ..
       dockerfile: apps/jarvis/apps/web/Dockerfile
-    restart: unless-stopped
+    restart: "no"
     environment:
       DOCKER: "1"
       VITE_ZERG_API_URL: /api
@@ -271,7 +271,7 @@ services:
     build:
       context: ..
       dockerfile: apps/jarvis/apps/server/Dockerfile
-    restart: unless-stopped
+    restart: "no"
     environment:
       PORT: ${JARVIS_SERVER_PORT:-8787}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -304,7 +304,7 @@ services:
   reverse-proxy:
     profiles: [full]
     image: nginx:alpine
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 1s
     environment:
       JARVIS_WEB_PORT: ${JARVIS_WEB_PORT:-8080}
