@@ -35,6 +35,9 @@ from zerg.crud import crud
 from zerg.utils.time import utc_now
 from zerg.utils.time import utc_now_naive
 
+# Cookie name for browser-based auth (must match routers/auth.py)
+SESSION_COOKIE_NAME = "swarmlet_session"
+
 # ---------------------------------------------------------------------------
 # Minimal HS256 JWT decoding fallback (keeps CI lightweight)
 # ---------------------------------------------------------------------------
@@ -185,16 +188,35 @@ class JWTAuthStrategy(AuthStrategy):
         except ModuleNotFoundError:
             return _decode_jwt_fallback(token, self._secret)
 
+    # Internal ----------------------------------------------------------
+
+    def _extract_token(self, request: Request) -> str | None:
+        """Extract JWT from request: prefer bearer header, fall back to cookie.
+
+        Order:
+        1. Authorization: Bearer <token> header (for API clients)
+        2. swarmlet_session cookie (for browser auth)
+        """
+        # 1. Check Authorization header first
+        auth_header: str | None = request.headers.get("Authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+            if token:
+                return token
+
+        # 2. Fall back to session cookie (browser auth)
+        cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+        if cookie_token:
+            return cookie_token
+
+        return None
+
     # Public API --------------------------------------------------------
 
     def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
-        auth_header: str | None = request.headers.get("Authorization")
-        if not auth_header or not auth_header.lower().startswith("bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-
-        token = auth_header[7:].strip()
+        token = self._extract_token(request)
         if not token:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token or session cookie")
 
         try:
             payload = self._decode(token)
