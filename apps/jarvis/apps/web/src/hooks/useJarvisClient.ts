@@ -54,8 +54,9 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
       clientRef.current = client
       dispatch({ type: 'SET_JARVIS_CLIENT', client })
 
-      // Check if already authenticated
-      if (client.isAuthenticated()) {
+      // Check if already authenticated (async since it calls /api/auth/verify)
+      const isAuthed = await client.isAuthenticated()
+      if (isAuthed) {
         console.log('[useJarvisClient] Already authenticated')
         dispatch({ type: 'SET_CONNECTED', connected: true })
         options.onConnected?.()
