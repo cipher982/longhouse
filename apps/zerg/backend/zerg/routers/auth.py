@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
+from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -49,6 +51,42 @@ JWT_SECRET = _settings.jwt_secret
 # existing development setups.
 
 GOOGLE_CLIENT_SECRET = _settings.google_client_secret
+
+# Cookie configuration for browser auth
+SESSION_COOKIE_NAME = "swarmlet_session"
+SESSION_COOKIE_PATH = "/"
+# Secure=True only in production (HTTPS); False in dev for http://localhost
+SESSION_COOKIE_SECURE = not _settings.auth_disabled and not _settings.testing
+
+
+def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
+    """Set the session cookie with proper security flags.
+
+    Args:
+        response: FastAPI Response object to set cookie on
+        token: JWT access token to store in cookie
+        max_age: Cookie lifetime in seconds
+    """
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=max_age,
+        path=SESSION_COOKIE_PATH,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    """Clear the session cookie."""
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path=SESSION_COOKIE_PATH,
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE,
+        samesite="lax",
+    )
 
 
 def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
@@ -216,11 +254,12 @@ def _exchange_google_auth_code(auth_code: str, *, redirect_uri: Optional[str] = 
 
 
 @router.post("/dev-login", response_model=TokenOut)
-def dev_login(db: Session = Depends(get_db)) -> TokenOut:
+def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
     """Development-only login endpoint that bypasses Google OAuth.
 
     Only works when AUTH_DISABLED=1 is set in environment.
     Creates/returns a token for dev@local admin user.
+    Also sets swarmlet_session cookie for browser auth.
     """
     if not _settings.auth_disabled:
         raise HTTPException(
@@ -233,6 +272,7 @@ def dev_login(db: Session = Depends(get_db)) -> TokenOut:
         user = crud.create_user(db, email="dev@local", provider="dev", provider_user_id="dev-user-1", role="ADMIN")
 
     # Issue platform JWT
+    expires_in = 30 * 60  # 30 minutes
     access_token = _issue_access_token(
         user.id,
         user.email,
@@ -240,14 +280,18 @@ def dev_login(db: Session = Depends(get_db)) -> TokenOut:
         avatar_url=user.avatar_url,
     )
 
-    return TokenOut(access_token=access_token, expires_in=30 * 60)
+    # Set session cookie for browser auth
+    _set_session_cookie(response, access_token, expires_in)
+
+    return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
 @router.post("/google", response_model=TokenOut)
-def google_sign_in(body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:  # noqa: D401 – simple name
+def google_sign_in(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:  # noqa: D401 – simple name
     """Exchange a Google ID token for a platform access token.
 
     Expected JSON body: `{ "id_token": "<JWT from Google>" }`.
+    Also sets swarmlet_session cookie for browser auth.
     """
 
     raw_token = body.get("id_token")
@@ -303,6 +347,7 @@ def google_sign_in(body: dict[str, str], db: Session = Depends(get_db)) -> Token
                 pass
 
     # 3. Issue platform JWT
+    expires_in = 30 * 60  # 30 minutes
     access_token = _issue_access_token(
         user.id,
         user.email,
@@ -310,8 +355,56 @@ def google_sign_in(body: dict[str, str], db: Session = Depends(get_db)) -> Token
         avatar_url=user.avatar_url,
     )
 
-    # 4. Return response
-    return TokenOut(access_token=access_token, expires_in=30 * 60)
+    # 4. Set session cookie for browser auth
+    _set_session_cookie(response, access_token, expires_in)
+
+    # 5. Return response (JSON for backwards compatibility; browsers use cookie)
+    return TokenOut(access_token=access_token, expires_in=expires_in)
+
+
+@router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def verify_session(request: Request):
+    """Fast auth check for nginx auth_request.
+
+    Validates the session from cookie (preferred) or Authorization header.
+    Returns 204 if valid, 401 if missing/invalid/expired.
+
+    This endpoint is designed to be called by nginx auth_request to gate
+    protected routes like /dashboard and /chat.
+    """
+    from zerg.auth.strategy import _decode_jwt_fallback
+
+    # Try to extract token: prefer cookie, fall back to bearer
+    token: str | None = None
+
+    # 1. Check cookie first (browser auth)
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+
+    # 2. Fall back to Authorization header (API clients)
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No session")
+
+    # Validate the token (checks signature and expiry)
+    try:
+        _decode_jwt_fallback(token, JWT_SECRET)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+    # Valid token - 204 response handled by status_code
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def logout(response: Response):
+    """Clear the session cookie.
+
+    Returns 204 on success. Safe to call even if not logged in.
+    """
+    _clear_session_cookie(response)
 
 
 # ---------------------------------------------------------------------------
