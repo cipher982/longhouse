@@ -75,9 +75,17 @@ def _get_strategy():  # noqa: D401 – internal helper
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
-    """Return the authenticated *User* row or raise **401**."""
+    """Return the authenticated *User* row or raise **401**.
 
-    if "Authorization" not in request.headers and not AUTH_DISABLED:
+    Accepts auth from:
+    1. Authorization: Bearer <token> header
+    2. swarmlet_session cookie (browser auth)
+    """
+    # Check for either bearer token or session cookie
+    has_bearer = "Authorization" in request.headers
+    has_cookie = "swarmlet_session" in request.cookies
+
+    if not has_bearer and not has_cookie and not AUTH_DISABLED:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
