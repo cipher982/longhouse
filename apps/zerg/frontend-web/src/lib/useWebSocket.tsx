@@ -133,13 +133,9 @@ export function useWebSocket(
     const base = resolveWsBase();
     const url = new URL("/api/ws", base);
 
-    // Add JWT token if authentication is enabled
-    if (includeAuth) {
-      const token = localStorage.getItem("zerg_jwt");
-      if (token) {
-        url.searchParams.set("token", token);
-      }
-    }
+    // Auth is handled via HttpOnly cookie (swarmlet_session)
+    // Cookies are automatically sent on WebSocket connections to same-origin
+    // No need to pass token as query param anymore
 
     // Add test worker ID for E2E testing
     const workerId = (window as typeof window & { __TEST_WORKER_ID__?: string }).__TEST_WORKER_ID__;
@@ -148,7 +144,7 @@ export function useWebSocket(
     }
 
     return url.toString();
-  }, [includeAuth]);
+  }, []);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     let message: WebSocketMessage;
