@@ -1088,3 +1088,35 @@ async def jarvis_tool_proxy(
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
     except httpx.ConnectError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
+
+
+@router.post("/conversation/title")
+async def jarvis_conversation_title_proxy(
+    request: Request,
+    current_user=Depends(get_current_jarvis_user),
+) -> Response:
+    """Proxy conversation title generation to jarvis-server."""
+    import httpx
+
+    settings = get_settings()
+    jarvis_url = settings.jarvis_server_url
+    if not jarvis_url:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+
+    try:
+        body = await request.body()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{jarvis_url}/conversation/title",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "application/json"),
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
+    except httpx.ConnectError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
