@@ -6,6 +6,7 @@ dependency to supply the active user.
 """
 
 import json
+from copy import deepcopy
 from typing import Any, Dict
 
 from fastapi import APIRouter
@@ -32,6 +33,38 @@ from zerg.schemas.user_context import UserContext
 from zerg.services.avatar_service import store_avatar_for_user
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
+
+
+# ---------------------------------------------------------------------------
+# Deep Merge Helper
+# ---------------------------------------------------------------------------
+
+
+def deep_merge(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep merge two dictionaries, preserving nested keys.
+
+    For nested dicts: recursively merge
+    For other values: update replaces base
+    Returns a new dict (does not modify inputs).
+
+    Example:
+        base = {"tools": {"location": true, "custom_tool": true}}
+        update = {"tools": {"location": false}}
+        result = {"tools": {"location": false, "custom_tool": true}}
+    """
+    result = deepcopy(base)
+    for key, value in update.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            # Recursively merge nested dicts
+            result[key] = deep_merge(result[key], value)
+        else:
+            # Replace value
+            result[key] = deepcopy(value)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -139,37 +172,40 @@ async def update_user_context(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Update (merge) the authenticated user's context.
+    """Update (deep merge) the authenticated user's context.
 
-    This endpoint merges the provided context with the existing context.
-    To replace the entire context, use PUT instead.
+    This endpoint deep-merges the provided context with the existing context.
+    Nested objects (like 'tools') are merged recursively, preserving keys not
+    present in the update. To replace the entire context, use PUT instead.
 
-    Size limit: 64KB (65536 bytes) enforced.
+    Size limit: 64KB (65536 bytes) enforced on the merged result.
 
-    The context is validated against the UserContext schema to catch common
-    errors early, but extra fields are allowed for flexibility.
+    The merged context is validated against the UserContext schema to catch
+    common errors, but extra fields are allowed for flexibility.
     """
-    # Validate against schema (with extra fields allowed)
+    # Deep merge with existing context (preserves nested keys)
+    existing = current_user.context or {}
+    merged = deep_merge(existing, update.context)
+
+    # Validate merged result against schema (with extra fields allowed)
     try:
-        UserContext.model_validate(update.context)
+        UserContext.model_validate(merged)
     except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Context validation failed: {str(e)}",
+            detail=f"Merged context validation failed: {str(e)}",
         )
 
-    # Validate size limit (64KB)
-    context_json = json.dumps(update.context)
+    # Validate size limit on merged result (64KB)
+    context_json = json.dumps(merged)
     if len(context_json.encode('utf-8')) > 65536:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Context too large (max 64KB)",
+            detail="Merged context too large (max 64KB)",
         )
 
-    # Merge with existing context
-    existing = current_user.context or {}
-    existing.update(update.context)
-    current_user.context = existing
+    # Apply merged context
+    current_user.context = merged
 
     db.commit()
     db.refresh(current_user)

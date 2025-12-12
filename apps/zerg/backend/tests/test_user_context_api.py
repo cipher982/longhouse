@@ -145,8 +145,8 @@ class TestPatchUserContext:
         assert data["context"]["display_name"] == "New Name"
         assert data["context"]["role"] == "user"  # preserved
 
-    def test_patch_context_nested_merge(self, client: TestClient, test_user, db_session):
-        """Test that nested objects are replaced, not deep merged."""
+    def test_patch_context_array_replacement(self, client: TestClient, test_user, db_session):
+        """Test that arrays are replaced, not merged (arrays aren't dict-like)."""
         # Set initial servers
         test_user.context = {
             "servers": [{"name": "server1", "ip": "10.0.0.1"}]
@@ -167,9 +167,86 @@ class TestPatchUserContext:
 
         assert response.status_code == 200
         data = response.json()
-        # Should replace entire servers array
+        # Should replace entire servers array (arrays aren't deep merged)
         assert len(data["context"]["servers"]) == 2
         assert data["context"]["servers"][0]["name"] == "server2"
+
+    def test_patch_context_deep_merge_nested_dict(self, client: TestClient, test_user, db_session):
+        """Test that nested dicts are deep merged, preserving keys not in update."""
+        # Set initial tools with a custom tool
+        test_user.context = {
+            "tools": {
+                "location": True,
+                "whoop": True,
+                "custom_integration": True,  # Custom tool to be preserved
+            }
+        }
+        db_session.commit()
+
+        # Update only one tool - custom_integration should survive
+        update = {
+            "context": {
+                "tools": {
+                    "location": False,  # Change this
+                    "obsidian": True,  # Add this
+                }
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=update)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Changed field
+        assert data["context"]["tools"]["location"] is False
+        # New field
+        assert data["context"]["tools"]["obsidian"] is True
+        # Preserved existing fields
+        assert data["context"]["tools"]["whoop"] is True
+        # CRITICAL: Custom tool must survive the deep merge
+        assert data["context"]["tools"]["custom_integration"] is True
+
+    def test_patch_context_deep_merge_multiple_levels(self, client: TestClient, test_user, db_session):
+        """Test that deep merge works across multiple nesting levels."""
+        # Set initial nested context
+        test_user.context = {
+            "settings": {
+                "notifications": {
+                    "email": True,
+                    "sms": False,
+                    "push": True,
+                },
+                "privacy": {
+                    "share_location": True,
+                }
+            }
+        }
+        db_session.commit()
+
+        # Update nested path: settings.notifications.email
+        update = {
+            "context": {
+                "settings": {
+                    "notifications": {
+                        "email": False,  # Change this
+                    }
+                }
+            }
+        }
+
+        response = client.patch("/api/users/me/context", json=update)
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Changed field
+        assert data["context"]["settings"]["notifications"]["email"] is False
+        # Preserved sibling fields
+        assert data["context"]["settings"]["notifications"]["sms"] is False
+        assert data["context"]["settings"]["notifications"]["push"] is True
+        # Preserved parent sibling fields
+        assert data["context"]["settings"]["privacy"]["share_location"] is True
 
 
 # ---------------------------------------------------------------------------

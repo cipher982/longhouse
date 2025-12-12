@@ -28,7 +28,9 @@ export default function SettingsPage() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [servers, setServers] = useState<Server[]>([]);
   const [integrations, setIntegrations] = useState<Record<string, string>>({});
-  const [tools, setTools] = useState({
+  // Tools state preserves unknown keys for forward compatibility
+  // Known keys have UI toggles; unknown keys are preserved on save
+  const [tools, setTools] = useState<Record<string, boolean>>({
     location: true,
     whoop: true,
     obsidian: true,
@@ -50,7 +52,12 @@ export default function SettingsPage() {
       setCustomInstructions(ctx.custom_instructions || "");
       setServers(ctx.servers || []);
       setIntegrations(ctx.integrations || {});
+      // Preserve ALL tool keys from context, applying defaults only for known tools
+      // This ensures custom/future tools are not lost on save
       setTools({
+        // Start with any existing tools from the context
+        ...(ctx.tools || {}),
+        // Apply defaults for known tools (only if not already set)
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,
@@ -98,7 +105,9 @@ export default function SettingsPage() {
       setCustomInstructions(ctx.custom_instructions || "");
       setServers(ctx.servers || []);
       setIntegrations(ctx.integrations || {});
+      // Preserve ALL tool keys (same logic as initial load)
       setTools({
+        ...(ctx.tools || {}),
         location: ctx.tools?.location ?? true,
         whoop: ctx.tools?.whoop ?? true,
         obsidian: ctx.tools?.obsidian ?? true,

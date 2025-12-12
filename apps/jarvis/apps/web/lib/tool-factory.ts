@@ -48,7 +48,7 @@ const locationTool = tool({
 });
 
 const whoopTool = tool({
-  name: 'get_whoop_recovery',
+  name: 'get_whoop_data',
   description: 'Get current WHOOP recovery score and health data',
   parameters: z.object({
     date: z.string().describe('Date in YYYY-MM-DD format, defaults to today').optional().nullable()
@@ -74,6 +74,52 @@ const whoopTool = tool({
       return result;
     } catch (error) {
       return `Sorry, couldn't get your WHOOP data: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+  }
+});
+
+const searchNotesTool = tool({
+  name: 'search_notes',
+  description: 'Search personal notes and knowledge base in Obsidian vault',
+  parameters: z.object({
+    query: z.string().describe('Search query for notes'),
+    limit: z.number().optional().nullable().describe('Maximum number of results to return')
+  }),
+  async execute({ query, limit }) {
+    console.log('📝 Calling search_notes tool:', query);
+    try {
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'obsidian.search_vault_smart',
+          args: { query, limit: limit ?? 5 }
+        })
+      });
+
+      if (!response.ok) throw new Error(`Notes search failed: ${response.status}`);
+
+      const data = await response.json();
+
+      // Detect echo fallback - means obsidian MCP is not configured
+      if (data.echo) {
+        console.warn('⚠️ Obsidian MCP not configured - received echo fallback');
+        return 'Obsidian notes search is not configured. Please set up the Obsidian MCP server to enable this feature.';
+      }
+
+      if (data.error) return `Search error: ${data.error}`;
+      if (!data.results || data.results.length === 0) {
+        return `No notes found matching "${query}"`;
+      }
+
+      let result = `Found ${data.results.length} notes:\n`;
+      for (const note of data.results) {
+        result += `\n- ${note.title || note.path}`;
+        if (note.excerpt) result += `\n  ${note.excerpt}`;
+      }
+      return result;
+    } catch (error) {
+      return `Failed to search notes: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
 });
@@ -276,8 +322,11 @@ function createMCPTool(toolConfig: any): any {
     return locationTool;
   } else if (toolConfig.name === 'get_whoop_data') {
     return whoopTool;
+  } else if (toolConfig.name === 'search_notes') {
+    return searchNotesTool;
   }
   // Add more MCP tools mappings here
+  console.warn(`Unknown MCP tool: ${toolConfig.name}`);
   return null;
 }
 

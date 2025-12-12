@@ -103,13 +103,17 @@ export default function App() {
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
 
-    // Reconnect session to clear the model's context (history was already injected)
-    console.log('[App] Clear all conversations - reconnecting session to clear model context...')
-    try {
-      await realtimeSession.reconnect()
-      console.log('[App] Clear all conversations - session reconnected with fresh context')
-    } catch (error) {
-      console.warn('[App] Clear all conversations - reconnect failed:', error)
+    // Only reset Realtime context if the user is already connected.
+    if (realtimeSession.isConnected()) {
+      console.log('[App] Clear all conversations - realtime connected; reconnecting to clear model context...')
+      try {
+        await realtimeSession.reconnect()
+        console.log('[App] Clear all conversations - session reconnected with fresh context')
+      } catch (error) {
+        console.warn('[App] Clear all conversations - reconnect failed:', error)
+      }
+    } else {
+      console.log('[App] Clear all conversations - realtime not connected; skipping reconnect')
     }
     console.log('[App] Clear all conversations - complete')
   }, [dispatch, textChannel, realtimeSession])

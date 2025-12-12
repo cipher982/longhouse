@@ -18,6 +18,14 @@ import App from '../src/App'
 
 describe('Jarvis E2E', () => {
   beforeEach(() => {
+    // Ensure MediaStream exists in the test environment (jsdom/node)
+    if (!(globalThis as any).MediaStream) {
+      ;(globalThis as any).MediaStream = class MockMediaStream {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        constructor(_tracks?: any[]) {}
+      }
+    }
+
     // Mock navigator.mediaDevices for voice tests
     if (!navigator.mediaDevices) {
       Object.defineProperty(navigator, 'mediaDevices', {
@@ -42,7 +50,7 @@ describe('Jarvis E2E', () => {
     }
   })
 
-  it('should connect to realtime session on mount', async () => {
+  it('should NOT connect to realtime session on mount', async () => {
     render(
       <AppProvider>
         <App />
@@ -51,30 +59,10 @@ describe('Jarvis E2E', () => {
 
     const voiceButton = document.getElementById('pttBtn') as HTMLButtonElement
 
-    // Should transition from connecting to ready/error
-    await waitFor(
-      () => {
-        const className = voiceButton.className
-        expect(className).not.toContain('connecting')
-      },
-      { timeout: 5000 }
-    )
-
-    // Should either be ready (success) or error (connection failed)
-    const className = voiceButton.className
-    const isReady = className.includes('ready')
-    const isError = className.includes('error')
-
-    expect(isReady || isError).toBe(true)
-
-    if (isError) {
-      console.log(
-        '[E2E] Connection failed (expected if jarvis-server not running or no API key). ' +
-          'This is OK for CI - the test verified connection attempt was made.'
-      )
-    } else {
-      console.log('[E2E] Successfully connected to realtime session')
-    }
+    // Realtime is manual-connect; initial status should remain idle.
+    await waitFor(() => {
+      expect(voiceButton.className).toContain('idle')
+    })
   }, 10000)
 
   it('should send text message through appController', async () => {
@@ -129,51 +117,14 @@ describe('Jarvis E2E', () => {
 
     const voiceButton = document.getElementById('pttBtn') as HTMLButtonElement
 
-    // Wait for connection attempt to complete
-    await waitFor(
-      () => {
-        const className = voiceButton.className
-        expect(className).not.toContain('connecting')
-      },
-      { timeout: 5000 }
-    )
+    // With manual-connect, PTT press should be ignored while idle.
+    await waitFor(() => {
+      expect(voiceButton.className).toContain('idle')
+    })
 
-    const isConnected = voiceButton.className.includes('ready')
-
-    if (!isConnected) {
-      console.log('[E2E] Not connected - testing guard behavior')
-
-      // PTT should be guarded when not connected
-      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fireEvent.mouseDown(voiceButton)
-
-      // Should warn about not being connected
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('PTT press ignored - not connected')
-      )
-
-      consoleWarnSpy.mockRestore()
-    } else {
-      console.log('[E2E] Connected - testing PTT interaction')
-
-      // Press PTT button
-      fireEvent.mouseDown(voiceButton)
-
-      // Should transition to listening/speaking state
-      await waitFor(() => {
-        const className = voiceButton.className
-        expect(className.includes('listening') || className.includes('speaking')).toBe(true)
-      })
-
-      // Release PTT button
-      fireEvent.mouseUp(voiceButton)
-
-      // Should return to ready state
-      await waitFor(() => {
-        expect(voiceButton.className).toContain('ready')
-      })
-    }
+    fireEvent.mouseDown(voiceButton)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(voiceButton.className).not.toContain('listening')
   }, 10000)
 
   it('should allow reconnect after connection failure', async () => {

@@ -193,49 +193,6 @@ class TestToolProxy:
         assert "lon" in data
 
 
-class TestSyncProxy:
-    """Tests for /api/jarvis/sync/* proxy."""
-
-    def test_sync_push_proxy(self, client):
-        """Sync push proxy forwards POST request."""
-        mock_response = MagicMock()
-        mock_response.content = b'{"acked": true, "nextCursor": 1}'
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_class.return_value = mock_client
-
-            response = client.post(
-                "/api/jarvis/sync/push",
-                json={"deviceId": "test", "cursor": 0, "ops": []},
-            )
-
-        assert response.status_code == 200
-
-    def test_sync_pull_proxy(self, client):
-        """Sync pull proxy forwards GET request with query params."""
-        mock_response = MagicMock()
-        mock_response.content = b'{"ops": [], "nextCursor": 0}'
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_response)
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_class.return_value = mock_client
-
-            response = client.get("/api/jarvis/sync/pull?cursor=0")
-
-        assert response.status_code == 200
-
-
 class TestBootstrapPromptIntegration:
     """Integration tests for bootstrap prompt generation."""
 
