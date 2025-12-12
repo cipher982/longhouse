@@ -15,10 +15,9 @@ import { eventBus } from './event-bus';
 // ---------------------------------------------------------------------------
 
 function buildJsonHeaders(): HeadersInit {
-  const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
-  return token
-    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
-    : { 'Content-Type': 'application/json' };
+  // Cookie-based auth - no Authorization header needed
+  // Cookies are sent automatically with credentials: 'include' on fetch calls
+  return { 'Content-Type': 'application/json' };
 }
 
 const locationTool = tool({
@@ -31,6 +30,7 @@ const locationTool = tool({
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
         headers: buildJsonHeaders(),
+        credentials: 'include', // Cookie auth
         body: JSON.stringify({
           name: 'location.get_current',
           args: { include_address: true }
@@ -65,6 +65,7 @@ const whoopTool = tool({
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
         headers: buildJsonHeaders(),
+        credentials: 'include', // Cookie auth
         body: JSON.stringify({
           name: 'whoop.get_daily',
           args: { date }
@@ -98,6 +99,7 @@ const searchNotesTool = tool({
       const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
         method: 'POST',
         headers: buildJsonHeaders(),
+        credentials: 'include', // Cookie auth
         body: JSON.stringify({
           name: 'obsidian.search_vault_smart',
           args: { query, limit: limit ?? 5 }

@@ -19,7 +19,7 @@ async function initializeTaskInbox() {
 
   // Get configuration from environment
   const zergApiURL = '/api';  // Same-origin API calls through nginx proxy
-  // SaaS model: Task Inbox uses the logged-in user's JWT (localStorage.zerg_jwt).
+  // SaaS model: Task Inbox uses the logged-in user's HttpOnly session cookie.
   // If not logged in, the API will return 401 and surface via onError.
 
   try {

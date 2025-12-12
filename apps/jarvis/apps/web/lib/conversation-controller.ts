@@ -174,10 +174,9 @@ export class ConversationController {
   }
 
   private buildJsonHeaders(): HeadersInit {
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
-    return token
-      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
-      : { 'Content-Type': 'application/json' };
+    // Cookie-based auth - no Authorization header needed
+    // Cookies are sent automatically with credentials: 'include' on fetch calls
+    return { 'Content-Type': 'application/json' };
   }
 
   private isDefaultConversationName(name: string): boolean {
@@ -220,6 +219,7 @@ export class ConversationController {
       const resp = await fetch(`${CONFIG.JARVIS_API_BASE}/conversation/title`, {
         method: 'POST',
         headers: this.buildJsonHeaders(),
+        credentials: 'include', // Cookie auth
         body: JSON.stringify({ messages }),
       });
       if (!resp.ok) return;

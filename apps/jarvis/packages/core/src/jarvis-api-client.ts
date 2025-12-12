@@ -2,7 +2,7 @@
  * Jarvis API Client for Zerg Backend Integration
  *
  * Provides typed client for Jarvis-specific endpoints:
- * - Authentication (standard SaaS user JWT bearer token)
+ * - Authentication (HttpOnly cookie via swarmlet_session)
  * - Agent listing
  * - Run history
  * - Task dispatch
@@ -97,25 +97,16 @@ export interface JarvisEventData {
   timestamp: string;
 }
 
-const ZERG_JWT_STORAGE_KEY = 'zerg_jwt';
+// Session cookie name (for reference only - cookie is HttpOnly and managed by server)
+const SESSION_COOKIE_NAME = 'swarmlet_session';
 
-function getStoredJwt(): string | null {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return null;
-    return window.localStorage.getItem(ZERG_JWT_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function withBearerAuth(init: RequestInit = {}): RequestInit {
-  const token = getStoredJwt();
-
+/**
+ * Prepare fetch options for cookie-based auth.
+ * Auth is now handled via HttpOnly swarmlet_session cookie.
+ */
+function withCookieAuth(init: RequestInit = {}): RequestInit {
   const headers = new Headers(init.headers ?? {});
-  if (token && !headers.get('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
+  // No Authorization header needed - cookie is sent automatically
   return { ...init, credentials: 'include', headers };
 }
 
@@ -135,24 +126,34 @@ export class JarvisAPIClient {
   }
 
   /**
-   * Deprecated: Jarvis now uses standard SaaS user authentication.
+   * Deprecated: Jarvis now uses HttpOnly cookie-based auth.
+   * Login is handled by the main Swarmlet dashboard.
    */
   async authenticate(): Promise<never> {
-    throw new Error('Deprecated: Jarvis uses standard user login (zerg_jwt bearer token).');
+    throw new Error('Deprecated: Jarvis uses HttpOnly cookie auth via Swarmlet dashboard login.');
   }
 
   /**
-   * Check if a user token is present.
+   * Check if the user is likely authenticated.
    *
-   * Note: in dev mode (AUTH_DISABLED=1) the backend may accept requests
-   * without a token, so this is only a hint.
+   * Note: With HttpOnly cookies, we can't directly check auth status from JS.
+   * This method attempts to verify by making a lightweight API call.
+   * In dev mode (AUTH_DISABLED=1) the backend may accept requests without auth.
    */
-  isAuthenticated(): boolean {
-    return Boolean(getStoredJwt());
+  async isAuthenticated(): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this._baseURL}/api/auth/verify`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      return resp.status === 204;
+    } catch {
+      return false;
+    }
   }
 
   private async authenticatedFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
-    const options = withBearerAuth(init);
+    const options = withCookieAuth(init);
     const response = await fetch(input, options);
     if (response.status === 401) {
       throw new Error('Not authenticated');
@@ -277,9 +278,8 @@ export class JarvisAPIClient {
     // Close existing supervisor connection if any
     this.disconnectSupervisorEventStream();
 
-    const token = getStoredJwt();
-    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-    const url = `${this._baseURL}/api/jarvis/supervisor/events?run_id=${runId}${tokenParam}`;
+    // Cookie-based auth - withCredentials: true sends HttpOnly session cookie
+    const url = `${this._baseURL}/api/jarvis/supervisor/events?run_id=${runId}`;
     this.supervisorEventSource = new EventSource(url, { withCredentials: true });
 
     this.supervisorEventSource.addEventListener('connected', (e: MessageEvent) => {
@@ -521,9 +521,8 @@ export class JarvisAPIClient {
     // Close existing connection if any
     this.disconnectEventStream();
 
-    const token = getStoredJwt();
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    const url = `${this._baseURL}/api/jarvis/events${tokenParam}`;
+    // Cookie-based auth - withCredentials: true sends HttpOnly session cookie
+    const url = `${this._baseURL}/api/jarvis/events`;
     this.eventSource = new EventSource(url, { withCredentials: true });
 
     this.eventSource.addEventListener('connected', () => {
@@ -583,9 +582,8 @@ export class JarvisAPIClient {
   }
 
   /**
-   * Logout (no-op beyond disconnecting streams).
-   *
-   * The canonical auth token is managed by the main app (zerg_jwt in localStorage).
+   * Logout (disconnects streams).
+   * Cookie-based auth is managed by the server via /api/auth/logout.
    */
   logout(): void {
     this.disconnectEventStream();

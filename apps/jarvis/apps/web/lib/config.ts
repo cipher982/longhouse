@@ -122,13 +122,10 @@ export function createSyncTransport(headers?: Record<string, string>): SyncTrans
     const initHeaders = new Headers(init.headers ?? {});
     initHeaders.forEach((value, key) => mergedHeaders.set(key, value));
 
-    // SaaS auth: include dashboard JWT if present.
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
-    if (token && !mergedHeaders.get('Authorization')) {
-      mergedHeaders.set('Authorization', `Bearer ${token}`);
-    }
+    // SaaS auth: cookie-based auth (swarmlet_session HttpOnly cookie)
+    // No need to add Authorization header - cookies are sent automatically with credentials: 'include'
 
-    return fetch(input, { ...init, headers: mergedHeaders });
+    return fetch(input, { ...init, headers: mergedHeaders, credentials: 'include' });
   };
 }
 

@@ -82,12 +82,13 @@ export class AppController {
       const jarvisClient = getJarvisClient(zergApiUrl);
       stateManager.setJarvisClient(jarvisClient);
 
-      // SaaS model: Jarvis uses the same auth as the dashboard (JWT bearer token in localStorage).
+      // SaaS model: Jarvis uses the same auth as the dashboard (HttpOnly cookie).
       // If not logged in, supervisor features will fail with 401 when invoked.
-      if (jarvisClient.isAuthenticated()) {
-        logger.info('✅ JarvisClient token detected (zerg_jwt)');
+      const isAuthed = await jarvisClient.isAuthenticated();
+      if (isAuthed) {
+        logger.info('✅ JarvisClient authenticated (cookie auth)');
       } else {
-        logger.warn('⚠️ No zerg_jwt token detected - log in to enable supervisor features');
+        logger.warn('⚠️ Not authenticated - log in to enable supervisor features');
       }
     } catch (error) {
       logger.error('❌ Failed to initialize JarvisClient:', error);
@@ -101,12 +102,10 @@ export class AppController {
   private async fetchBootstrap(): Promise<void> {
     try {
       logger.info('🔄 Fetching bootstrap configuration from server...');
-      const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`, { headers });
+      // Cookie-based auth - credentials: 'include' sends HttpOnly session cookie
+      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`, {
+        credentials: 'include',
+      });
 
       if (!response.ok) {
         throw new Error(`Bootstrap fetch failed: ${response.status} ${response.statusText}`);
@@ -462,12 +461,10 @@ export class AppController {
   }
 
   private async getSessionToken(): Promise<string> {
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('zerg_jwt') : null;
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`, { headers });
+    // Cookie-based auth - credentials: 'include' sends HttpOnly session cookie
+    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`, {
+      credentials: 'include',
+    });
     if (!r.ok) throw new Error('Failed to get session token');
     const js = await r.json();
     return js.value || js.client_secret?.value;

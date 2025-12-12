@@ -28,7 +28,7 @@ export class TaskInbox {
    */
   async initialize(): Promise<void> {
     try {
-      // SaaS model: Jarvis uses the same login as the dashboard (zerg_jwt bearer token).
+      // SaaS model: Jarvis uses the same login as the dashboard (HttpOnly cookie).
       // If not logged in, API calls will return 401 and surface via onError.
 
       // Load initial run history
