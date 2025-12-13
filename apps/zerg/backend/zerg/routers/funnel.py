@@ -299,7 +299,14 @@ def _is_valid_origin(request: Request) -> bool:
     from urllib.parse import urlparse
 
     # Exact matches for production
-    allowed_hosts = {"swarmlet.ai", "www.swarmlet.ai", "localhost", "127.0.0.1"}
+    allowed_hosts = {
+        "swarmlet.com",
+        "www.swarmlet.com",
+        "swarmlet.ai",
+        "www.swarmlet.ai",
+        "localhost",
+        "127.0.0.1",
+    }
 
     def _host_allowed(hostname: str | None) -> bool:
         if not hostname:
@@ -307,7 +314,7 @@ def _is_valid_origin(request: Request) -> bool:
         if hostname in allowed_hosts:
             return True
         # Allow subdomains
-        if hostname.endswith(".swarmlet.ai"):
+        if hostname.endswith(".swarmlet.com") or hostname.endswith(".swarmlet.ai"):
             return True
         return False
 
