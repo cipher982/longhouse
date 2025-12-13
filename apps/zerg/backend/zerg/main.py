@@ -170,19 +170,55 @@ async def lifespan(app: FastAPI):
 
         # Start core background services
         if not _settings.testing:
-            await scheduler_service.start()
-            ops_events_bridge.start()
+            started: list[str] = []
+            failed: list[str] = []
 
-            # Start watch renewal service for Gmail connectors
-            from zerg.services.watch_renewal_service import watch_renewal_service
+            # Scheduler
+            try:
+                await scheduler_service.start()
+                started.append("scheduler")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"scheduler ({e})")
+                logger.exception("Failed to start scheduler_service")
 
-            await watch_renewal_service.start()
+            # Ops events bridge (SSE/WebSocket bridge)
+            try:
+                ops_events_bridge.start()
+                started.append("ops_events_bridge")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"ops_events_bridge ({e})")
+                logger.exception("Failed to start ops_events_bridge")
 
-            # Start worker job processor (uses singleton)
-            from zerg.services.worker_job_processor import worker_job_processor
-            await worker_job_processor.start()
+            # Watch renewal service for Gmail connectors
+            try:
+                from zerg.services.watch_renewal_service import watch_renewal_service
 
-        logger.info("Background services initialised (scheduler + email triggers + watch renewal + websocket)")
+                await watch_renewal_service.start()
+                started.append("watch_renewal")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"watch_renewal ({e})")
+                logger.exception("Failed to start watch_renewal_service")
+
+            # Worker job processor (critical for supervisor workers)
+            try:
+                from zerg.services.worker_job_processor import worker_job_processor
+
+                await worker_job_processor.start()
+                started.append("worker_job_processor")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"worker_job_processor ({e})")
+                logger.exception("Failed to start worker_job_processor")
+
+            if failed:
+                logger.warning(
+                    "Background services partial startup: started=%s failed=%s",
+                    started,
+                    failed,
+                )
+            else:
+                logger.info("Background services started: %s", started)
+
+        logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
 
@@ -192,17 +228,30 @@ async def lifespan(app: FastAPI):
     try:
         # Stop background services
         if not _settings.testing:
-            await scheduler_service.stop()
-            ops_events_bridge.stop()
+            # Stop each service independently so one failure doesn't block others.
+            try:
+                await scheduler_service.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop scheduler_service")
 
-            # Stop watch renewal service
-            from zerg.services.watch_renewal_service import watch_renewal_service
+            try:
+                ops_events_bridge.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop ops_events_bridge")
 
-            await watch_renewal_service.stop()
+            try:
+                from zerg.services.watch_renewal_service import watch_renewal_service
 
-            # Stop worker job processor (uses singleton)
-            from zerg.services.worker_job_processor import worker_job_processor
-            await worker_job_processor.stop()
+                await watch_renewal_service.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop watch_renewal_service")
+
+            try:
+                from zerg.services.worker_job_processor import worker_job_processor
+
+                await worker_job_processor.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop worker_job_processor")
 
         # Stop shared async runner
         from zerg.utils.async_runner import get_shared_runner
