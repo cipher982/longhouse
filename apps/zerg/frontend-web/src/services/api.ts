@@ -525,7 +525,8 @@ export interface ModelConfig {
 }
 
 export async function fetchModels(): Promise<ModelConfig[]> {
-  return request<ModelConfig[]>(`/models`);
+  // Avoid FastAPI's trailing-slash redirect (which can miscompute scheme behind proxies)
+  return request<ModelConfig[]>(`/models/`);
 }
 
 // ---------------------------------------------------------------------------
