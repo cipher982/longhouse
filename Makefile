@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -314,3 +314,9 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 	    echo "✅ Makefile validation passed"; \
 	fi; \
 	exit $$failed
+
+# ---------------------------------------------------------------------------
+# Production Smoke Tests
+# ---------------------------------------------------------------------------
+smoke-prod: ## Run production smoke tests (validates deployed instance)
+	@./scripts/smoke-prod.sh
