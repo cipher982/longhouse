@@ -162,6 +162,7 @@ class WorkerRunner:
                     EventType.WORKER_STARTED,
                     {
                         "event_type": EventType.WORKER_STARTED,
+                        "job_id": job_id,
                         "worker_id": worker_id,
                         "owner_id": owner_for_events,
                         "run_id": event_ctx.get("run_id"),
@@ -238,14 +239,15 @@ class WorkerRunner:
                 )
 
                 if event_context is not None:
-                    await self._emit_event(
-                        EventType.WORKER_COMPLETE,
-                        {
-                            "event_type": EventType.WORKER_COMPLETE,
-                            "worker_id": worker_id,
-                            "status": "failed",
-                            "error": worker_context.critical_error_message,
-                            "duration_ms": duration_ms,
+                await self._emit_event(
+                    EventType.WORKER_COMPLETE,
+                    {
+                        "event_type": EventType.WORKER_COMPLETE,
+                        "job_id": job_id,
+                        "worker_id": worker_id,
+                        "status": "failed",
+                        "error": worker_context.critical_error_message,
+                        "duration_ms": duration_ms,
                             "owner_id": owner_for_events,
                             "run_id": event_ctx.get("run_id"),
                         },
@@ -282,6 +284,7 @@ class WorkerRunner:
                     EventType.WORKER_COMPLETE,
                     {
                         "event_type": EventType.WORKER_COMPLETE,
+                        "job_id": job_id,
                         "worker_id": worker_id,
                         "status": "success",
                         "duration_ms": duration_ms,
@@ -295,6 +298,7 @@ class WorkerRunner:
                         EventType.WORKER_SUMMARY_READY,
                         {
                             "event_type": EventType.WORKER_SUMMARY_READY,
+                            "job_id": job_id,
                             "worker_id": worker_id,
                             "summary": summary,
                             "owner_id": owner_for_events,
@@ -342,6 +346,7 @@ class WorkerRunner:
                     EventType.WORKER_COMPLETE,
                     {
                         "event_type": EventType.WORKER_COMPLETE,
+                        "job_id": job_id,
                         "worker_id": worker_id,
                         "status": "failed",
                         "error": error_msg,

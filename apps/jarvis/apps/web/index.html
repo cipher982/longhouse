@@ -33,8 +33,7 @@
     <!-- Analytics (Umami) -->
     <script defer src="https://analytics.drose.io/script.js" data-website-id="486eaa80-2916-41ee-a2a2-f55209495028"></script>
 
-    <!-- Auth: reuse Swarmlet dashboard login (HttpOnly cookie via swarmlet_session) -->
-    <script src="https://swarmlet.com/assets/index.js"></script>
+    <!-- Auth is enforced server-side (nginx auth_request + HttpOnly cookie). -->
 
     <!-- CSS as blocking resource in head (Vite HMR works fine with link tags) -->
     <link rel="stylesheet" href="./styles/index.css">

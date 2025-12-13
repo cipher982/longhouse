@@ -187,6 +187,21 @@ class TestSshExecExecution:
         assert result["data"]["stderr"] == "grep: no matches found"
 
     @patch("subprocess.run")
+    def test_exit_code_255_is_treated_as_connection_error(self, mock_run):
+        """Test that SSH connection failures (exit code 255) return error envelope."""
+        mock_run.return_value = MagicMock(
+            returncode=255,
+            stdout="",
+            stderr="Failed to add the host to the list of known hosts.",
+        )
+
+        result = ssh_exec(host="cube", command="df -h")
+
+        assert result["ok"] is False
+        assert result["error_type"] == "execution_error"
+        assert "SSH connection failed" in result["user_message"]
+
+    @patch("subprocess.run")
     def test_command_with_stderr_output(self, mock_run):
         """Test command with stderr output."""
         mock_run.return_value = MagicMock(
@@ -247,6 +262,8 @@ class TestSshExecExecution:
         assert "-o" in call_args
         assert "StrictHostKeyChecking=no" in call_args
         assert "ConnectTimeout=5" in call_args
+        assert "UserKnownHostsFile=/tmp/zerg_known_hosts" in call_args
+        assert "GlobalKnownHostsFile=/dev/null" in call_args
         assert "-p" in call_args
         assert "2222" in call_args  # cube uses port 2222
         assert "drose@100.104.187.47" in call_args

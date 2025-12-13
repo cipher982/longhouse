@@ -180,6 +180,7 @@ def ssh_exec(
         # Construct SSH command
         # -o StrictHostKeyChecking=no: Don't prompt for host key verification
         # -o ConnectTimeout=5: Fail fast if connection hangs
+        # -o UserKnownHostsFile=/tmp/...: container root is read-only in prod; avoid ~/.ssh writes
         ssh_cmd = [
             "ssh",
             "-F",
@@ -188,6 +189,12 @@ def ssh_exec(
             "StrictHostKeyChecking=no",
             "-o",
             "ConnectTimeout=5",
+            "-o",
+            "UserKnownHostsFile=/tmp/zerg_known_hosts",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
             "-p",
             port,
         ]
@@ -222,8 +229,17 @@ def ssh_exec(
         if len(stderr) > MAX_OUTPUT_SIZE:
             stderr = stderr[:MAX_OUTPUT_SIZE] + "\n... [stderr truncated]"
 
+        # SSH uses exit code 255 for connection-level failures. Treat these as errors so
+        # workers can fail-fast and report actionable setup issues (keys, host reachability, etc).
+        if result.returncode == 255:
+            detail = (stderr or stdout or "").strip()
+            msg = f"SSH connection failed to {host}"
+            if detail:
+                msg = f"{msg}: {detail}"
+            return tool_error(ErrorType.EXECUTION_ERROR, msg)
+
         # Return success envelope even for non-zero exit codes
-        # (non-zero exit code means command ran but failed, not an error)
+        # (non-zero exit code means command ran but failed, not a connection error)
         return tool_success({
             "host": host,
             "command": command,
