@@ -68,19 +68,27 @@ export class SupervisorProgressUI {
     if (!this.container) {
       this.container = document.createElement('div');
       this.container.id = containerId;
-      this.container.className = 'supervisor-progress';
+      document.body.appendChild(this.container);
+    }
 
-      if (mode === 'floating') {
-        // Floating mode: append to body, always visible regardless of scroll
-        this.container.classList.add('supervisor-progress--floating');
+    // Normalize container classes so CSS + JS display toggles work.
+    // React app may pre-render a placeholder div (sometimes with `hidden`).
+    this.container.classList.remove('hidden');
+    this.container.classList.add('supervisor-progress');
+
+    if (mode === 'floating') {
+      // Floating mode: ensure it's attached to <body> so it stays visible even if chat scrolls.
+      this.container.classList.add('supervisor-progress--floating');
+      if (this.container.parentElement !== document.body) {
         document.body.appendChild(this.container);
-      } else {
-        // Inline mode: insert before transcript in chat container
-        const chatContainer = document.querySelector('.chat-container');
-        const transcript = document.getElementById('transcript');
-        if (chatContainer && transcript) {
-          chatContainer.insertBefore(this.container, transcript);
-        }
+      }
+    } else {
+      // Inline mode: remove floating class and place inside chat container.
+      this.container.classList.remove('supervisor-progress--floating');
+      const chatContainer = document.querySelector('.chat-container');
+      const transcript = document.getElementById('transcript');
+      if (chatContainer && transcript && transcript.parentElement === chatContainer) {
+        chatContainer.insertBefore(this.container, transcript);
       }
     }
     this.render();

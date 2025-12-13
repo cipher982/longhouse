@@ -6,19 +6,25 @@
  * and React hooks subscribe to those events and update React state.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
 import { conversationController } from '../lib/conversation-controller'
 import { stateManager } from '../lib/state-manager'
 import { toSidebarConversations } from '../lib/conversation-list'
+import { supervisorProgress } from '../lib/supervisor-progress'
 
 console.info('[Jarvis] Starting React application with realtime session integration')
 
 export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
+
+  // Initialize supervisor progress UI (floating, always visible)
+  useEffect(() => {
+    supervisorProgress.initialize('supervisor-progress', 'floating')
+  }, [])
 
   // NOTE: History loading is now handled via SSOT in useRealtimeSession
   // appController.connect() calls bootstrapSession() which loads history ONCE
@@ -246,8 +252,8 @@ export default function App() {
         />
       </div>
 
-      {/* Supervisor Progress Panel (hidden by default) */}
-      <div id="supervisor-progress" className="supervisor-progress-panel hidden"></div>
+      {/* Supervisor progress container (SupervisorProgressUI will normalize/relocate as needed) */}
+      <div id="supervisor-progress"></div>
 
       {/* Hidden audio element for remote playback */}
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>
