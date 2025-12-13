@@ -363,14 +363,20 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
 
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def verify_session(request: Request):
+def verify_session(request: Request, db: Session = Depends(get_db)):
     """Fast auth check for nginx auth_request.
 
     Validates the session from cookie (preferred) or Authorization header.
-    Returns 204 if valid, 401 if missing/invalid/expired.
+    Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
 
     This endpoint is designed to be called by nginx auth_request to gate
     protected routes like /dashboard and /chat.
+
+    Security: Performs full validation including:
+    - JWT signature verification
+    - Token expiry check
+    - User existence in database
+    - User is_active status
     """
     from zerg.auth.strategy import _decode_jwt_fallback
 
@@ -391,11 +397,21 @@ def verify_session(request: Request):
 
     # Validate the token (checks signature and expiry)
     try:
-        _decode_jwt_fallback(token, JWT_SECRET)
+        payload = _decode_jwt_fallback(token, JWT_SECRET)
     except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
 
-    # Valid token - 204 response handled by status_code
+    # Extract user_id and verify user exists and is active
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+    user = crud.get_user(db, user_id)
+    if user is None or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+
+    # Valid token and user - 204 response handled by status_code
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

@@ -165,8 +165,10 @@ AUTH_DISABLED="0"
 #### Jarvis Frontend
 
 ```bash
-# Zerg Backend URL
-VITE_ZERG_API_URL="https://api.swarmlet.com"
+# API URL - use same-origin (preferred) or explicit URL for non-standard setups
+# The frontend uses /api by default (same-origin via nginx proxy)
+# Only set VITE_API_BASE_URL if you need a different origin
+# VITE_API_BASE_URL="/api"  # Default, usually not needed
 
 # Device Secret (must match backend)
 VITE_JARVIS_DEVICE_SECRET="<same-as-backend-secret>"
@@ -341,17 +343,23 @@ server {
 }
 ```
 
-### Zerg API (Optional - direct access)
+### Zerg API (DEPRECATED - use same-origin)
 
-Create `/etc/nginx/sites-available/zerg-api`:
+> **Note**: As of December 2025, the frontend uses same-origin `/api` proxying
+> (via nginx on the main domain). A separate `api.swarmlet.com` subdomain is
+> no longer needed and should be retired. The configuration below is kept
+> for reference only.
+
+If you still need a separate API subdomain for non-browser clients:
 
 ```nginx
+# DEPRECATED - prefer same-origin /api/ via main domain nginx
 server {
     listen 443 ssl http2;
-    server_name api.swarmlet.com;
+    server_name api.yourdomain.com;
 
-    ssl_certificate /etc/letsencrypt/live/api.swarmlet.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.swarmlet.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
 
     location / {
         proxy_pass http://localhost:47300;
@@ -370,7 +378,8 @@ server {
 ### Backend Health
 
 ```bash
-curl https://api.swarmlet.com/api/health
+# Via same-origin (preferred)
+curl https://swarmlet.com/api/health
 
 # Expected response:
 # {"status": "healthy", "version": "1.0.0"}
@@ -379,7 +388,7 @@ curl https://api.swarmlet.com/api/health
 ### Database Connectivity
 
 ```bash
-curl https://api.swarmlet.com/api/health/db
+curl https://swarmlet.com/api/health/db
 
 # Expected response:
 # {"status": "healthy", "database": "connected"}
@@ -389,17 +398,40 @@ curl https://api.swarmlet.com/api/health/db
 
 ```bash
 # Authenticate (stores HttpOnly session cookie)
-curl -s -X POST https://api.swarmlet.com/api/jarvis/auth \
+curl -s -X POST https://swarmlet.com/api/jarvis/auth \
   -H "Content-Type: application/json" \
   -d '{"device_secret":"<device-secret>"}' \
   -c cookies.txt -b cookies.txt
 
 # Stream events using the stored session
-curl -N https://api.swarmlet.com/api/jarvis/events \
+curl -N https://swarmlet.com/api/jarvis/events \
   -b cookies.txt
 
 # Should receive connected event immediately
 ```
+
+### Production Smoke Tests
+
+After deployment, run the smoke test script to validate all critical endpoints:
+
+```bash
+# Test production
+./scripts/smoke-prod.sh
+
+# Wait 90s after deploy, then test
+./scripts/smoke-prod.sh --wait
+
+# Test custom URL
+BASE_URL=https://staging.swarmlet.com ./scripts/smoke-prod.sh
+```
+
+The smoke test validates:
+
+- Landing page (GET /)
+- Health endpoint (GET /health)
+- Dashboard auth redirect (GET /dashboard)
+- Funnel batch endpoint (POST /api/funnel/batch)
+- Auth verify returns 401 without session (GET /api/auth/verify)
 
 ## Monitoring
 
@@ -577,12 +609,12 @@ uv run python -m zerg.services.email_trigger_service
 Add health check endpoints to your monitoring service:
 
 ```bash
-# Backend health
-GET https://api.swarmlet.com/api/health
+# Backend health (same-origin)
+GET https://swarmlet.com/api/health
 # Expected: 200 OK
 
 # Database health
-GET https://api.swarmlet.com/api/health/db
+GET https://swarmlet.com/api/health/db
 # Expected: 200 OK
 ```
 
@@ -690,7 +722,7 @@ sudo systemctl restart zerg-backend
 sudo systemctl restart jarvis-server  # if applicable
 
 # 6. Verify health
-curl https://api.swarmlet.com/api/health
+curl https://swarmlet.com/api/health
 ```
 
 ### Database Maintenance
@@ -779,7 +811,7 @@ git reset --hard <previous-commit>
 sudo systemctl start zerg-backend
 
 # 5. Verify
-curl https://api.swarmlet.com/api/health
+curl https://swarmlet.com/api/health
 ```
 
 ## Performance Tuning
