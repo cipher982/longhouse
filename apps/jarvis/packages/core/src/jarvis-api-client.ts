@@ -359,6 +359,11 @@ export class JarvisAPIClient {
     });
 
     this.supervisorEventSource.addEventListener('error', (e: MessageEvent) => {
+      // NOTE: This handler is for *server-sent* "error" events, not transport errors.
+      // Transport errors fire `EventSource.onerror` where `e.data` is undefined.
+      if (!e?.data || e.data === 'undefined') {
+        return;
+      }
       try {
         const event: SupervisorEvent = JSON.parse(e.data);
         handlers.onError?.(event);

@@ -344,6 +344,15 @@ class SupervisorService:
 
         # Get or create supervisor components
         agent = self.get_or_create_supervisor_agent(owner_id)
+
+        # Always refresh supervisor prompt from current templates + user context.
+        # The supervisor agent is long-lived; without this, prompt updates (and user profile changes)
+        # won't take effect until the agent row is recreated.
+        user = crud.get_user(self.db, owner_id)
+        if not user:
+            raise ValueError(f"User {owner_id} not found")
+        agent.system_instructions = build_supervisor_prompt(user)
+        self.db.commit()
         thread = self.get_or_create_supervisor_thread(owner_id, agent)
 
         # Use existing run or create new one

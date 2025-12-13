@@ -185,9 +185,19 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
       // Track run_id for UI so "complete" can reference the correct run.
       let uiRunId = 0;
 
+      // Ensure the supervisor actually performs work. The tool payload is authored by the realtime model
+      // and may omit the user's original "call a worker" intent; include an explicit directive here.
+      const delegatedTask = [
+        task,
+        '',
+        'IMPORTANT:',
+        '- You MUST use spawn_worker(...) to run commands (e.g. ssh_exec) when the task involves checking a server.',
+        '- Only skip spawning a new worker if you can cite a very recent worker result that fully answers the question (include job_id/worker_id).',
+      ].join('\n');
+
       // Execute the supervisor task and wait for completion
       // The executeSupervisorTask method handles SSE subscription internally
-      const result = await jarvisClient.executeSupervisorTask(task, {
+      const result = await jarvisClient.executeSupervisorTask(delegatedTask, {
         timeout: 120000, // 2 minute timeout for complex tasks
         onProgress: (event: SupervisorEvent) => {
           // Log progress events for debugging
