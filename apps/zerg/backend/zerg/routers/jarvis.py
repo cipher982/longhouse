@@ -537,7 +537,7 @@ async def jarvis_supervisor(
                     owner_id=owner_id,
                     task=task,
                     run_id=run_id,  # Use the run created in the endpoint
-                    timeout=60,
+                    timeout=120,
                 )
         except Exception as e:
             logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
