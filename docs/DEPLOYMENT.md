@@ -430,8 +430,9 @@ The smoke test validates:
 - Landing page (GET /)
 - Health endpoint (GET /health)
 - Dashboard auth redirect (GET /dashboard)
-- Funnel batch endpoint (POST /api/funnel/batch)
+- Funnel batch origin check (POST /api/funnel/batch → 403 without Origin header)
 - Auth verify returns 401 without session (GET /api/auth/verify)
+- API proxy works (GET /api/users/me → 401)
 
 ## Monitoring
 
