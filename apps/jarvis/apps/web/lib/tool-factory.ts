@@ -182,12 +182,8 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
 
       console.log('🚀 Dispatching task to supervisor...');
 
-      // Emit started event for UI
-      eventBus.emit('supervisor:started', {
-        runId: 0, // Will be updated when we get the actual run_id
-        task,
-        timestamp: Date.now(),
-      });
+      // Track run_id for UI so "complete" can reference the correct run.
+      let uiRunId = 0;
 
       // Execute the supervisor task and wait for completion
       // The executeSupervisorTask method handles SSE subscription internally
@@ -201,6 +197,9 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
           const timestamp = Date.now();
           switch (event.type) {
             case 'supervisor_started':
+              if (typeof event.payload?.run_id === 'number') {
+                uiRunId = event.payload.run_id;
+              }
               eventBus.emit('supervisor:started', {
                 runId: event.payload?.run_id || 0,
                 task: event.payload?.task || task,
@@ -280,7 +279,7 @@ The supervisor will spawn workers as needed and synthesize a final answer.`,
 
       // Emit completion event
       eventBus.emit('supervisor:complete', {
-        runId: 0,
+        runId: uiRunId,
         result,
         status: 'success',
         timestamp: Date.now(),

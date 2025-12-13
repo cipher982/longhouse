@@ -403,6 +403,15 @@ export class JarvisAPIClient {
     // Dispatch the task
     const response = await this.dispatchSupervisor({ task });
 
+    // Emit a synthetic supervisor_started immediately so the UI has a real run_id
+    // even if the SSE subscription misses the earliest events due to race conditions.
+    options?.onProgress?.({
+      type: 'supervisor_started',
+      payload: { run_id: response.run_id, task },
+      seq: 0,
+      timestamp: new Date().toISOString(),
+    });
+
     return new Promise((resolve, reject) => {
       let resolved = false;
       let pendingWorkers = 0;
