@@ -21,9 +21,9 @@ export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
 
-  // Initialize supervisor progress UI (floating, always visible)
+  // Initialize supervisor progress UI (sticky, stays at top of chat area)
   useEffect(() => {
-    supervisorProgress.initialize('supervisor-progress', 'floating')
+    supervisorProgress.initialize('supervisor-progress', 'sticky')
   }, [])
 
   // NOTE: History loading is now handled via SSOT in useRealtimeSession

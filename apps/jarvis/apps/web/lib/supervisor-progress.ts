@@ -35,10 +35,11 @@ interface WorkerState {
 
 /**
  * Display mode for supervisor progress UI
- * - 'floating': Fixed position toast at bottom-right (default, always visible)
+ * - 'floating': Fixed position toast at bottom-right (always visible)
  * - 'inline': Embedded in chat flow (original behavior, can scroll out of view)
+ * - 'sticky': Sticky position at top of chat area (default, stays visible while scrolling)
  */
-type DisplayMode = 'floating' | 'inline';
+type DisplayMode = 'floating' | 'inline' | 'sticky';
 
 export class SupervisorProgressUI {
   private container: HTMLElement | null = null;
@@ -59,9 +60,9 @@ export class SupervisorProgressUI {
    * Initialize with container element
    *
    * @param containerId - DOM id for the container element
-   * @param mode - Display mode: 'floating' (default) or 'inline'
+   * @param mode - Display mode: 'sticky' (default), 'floating', or 'inline'
    */
-  initialize(containerId: string = 'supervisor-progress', mode: DisplayMode = 'floating'): void {
+  initialize(containerId: string = 'supervisor-progress', mode: DisplayMode = 'sticky'): void {
     this.displayMode = mode;
     this.container = document.getElementById(containerId);
 
@@ -75,6 +76,7 @@ export class SupervisorProgressUI {
     // React app may pre-render a placeholder div (sometimes with `hidden`).
     this.container.classList.remove('hidden');
     this.container.classList.add('supervisor-progress');
+    this.container.classList.remove('supervisor-progress--floating', 'supervisor-progress--sticky');
 
     if (mode === 'floating') {
       // Floating mode: ensure it's attached to <body> so it stays visible even if chat scrolls.
@@ -82,9 +84,15 @@ export class SupervisorProgressUI {
       if (this.container.parentElement !== document.body) {
         document.body.appendChild(this.container);
       }
+    } else if (mode === 'sticky') {
+      // Sticky mode: place inside .transcript as first child, sticks to top while scrolling.
+      this.container.classList.add('supervisor-progress--sticky');
+      const transcript = document.querySelector('.transcript');
+      if (transcript && this.container.parentElement !== transcript) {
+        transcript.insertBefore(this.container, transcript.firstChild);
+      }
     } else {
-      // Inline mode: remove floating class and place inside chat container.
-      this.container.classList.remove('supervisor-progress--floating');
+      // Inline mode: place inside chat container above transcript.
       const chatContainer = document.querySelector('.chat-container');
       const transcript = document.getElementById('transcript');
       if (chatContainer && transcript && transcript.parentElement === chatContainer) {
