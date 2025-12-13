@@ -64,10 +64,13 @@ COPY --from=builder --chown=zerg:zerg /config /config
 
 # Create required directories with proper permissions
 RUN mkdir -p /app/static/avatars \
+    && mkdir -p /data \
     && chown zerg:zerg /app/static \
     && chown zerg:zerg /app/static/avatars \
+    && chown zerg:zerg /data \
     && chmod 755 /app/static \
-    && chmod 755 /app/static/avatars
+    && chmod 755 /app/static/avatars \
+    && chmod 755 /data
 
 # Switch to non-root user
 USER zerg
