@@ -202,11 +202,44 @@ def update_agent(
 
 
 def delete_agent(db: Session, agent_id: int):
-    """Delete an agent and all its messages"""
-    db_agent = db.query(Agent).filter(Agent.id == agent_id).first()
-    if db_agent is None:
+    """Delete an agent and all dependent rows.
+
+    NOTE: In production (Postgres), an Agent can be referenced by:
+    - agent_threads / thread_messages
+    - agent_runs (and worker_jobs.supervisor_run_id)
+    - agent_messages (legacy)
+    - triggers
+    Deleting the Agent row directly can violate FK constraints, especially for
+    temporary worker agents that create threads/messages during execution.
+    """
+    exists = db.query(Agent.id).filter(Agent.id == agent_id).first()
+    if exists is None:
         return False
-    db.delete(db_agent)
+
+    # Triggers are linked via backref and do not cascade by default.
+    db.query(Trigger).filter(Trigger.agent_id == agent_id).delete(synchronize_session=False)
+
+    # Runs must be deleted before threads (AgentRun.thread_id FK).
+    run_ids = [row[0] for row in db.query(AgentRun.id).filter(AgentRun.agent_id == agent_id).all()]
+    if run_ids:
+        # Worker jobs may reference supervisor runs; preserve jobs but remove correlation.
+        db.query(WorkerJob).filter(WorkerJob.supervisor_run_id.in_(run_ids)).update(
+            {WorkerJob.supervisor_run_id: None},
+            synchronize_session="fetch",
+        )
+        db.query(AgentRun).filter(AgentRun.id.in_(run_ids)).delete(synchronize_session=False)
+
+    # Delete thread messages + threads for this agent.
+    thread_ids = [row[0] for row in db.query(Thread.id).filter(Thread.agent_id == agent_id).all()]
+    if thread_ids:
+        db.query(ThreadMessage).filter(ThreadMessage.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+        db.query(Thread).filter(Thread.id.in_(thread_ids)).delete(synchronize_session=False)
+
+    # Legacy agent_messages table.
+    db.query(AgentMessage).filter(AgentMessage.agent_id == agent_id).delete(synchronize_session=False)
+
+    # Finally delete the agent itself.
+    db.query(Agent).filter(Agent.id == agent_id).delete(synchronize_session=False)
     db.commit()
     return True
 

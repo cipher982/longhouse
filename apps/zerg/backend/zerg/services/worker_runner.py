@@ -304,9 +304,17 @@ class WorkerRunner:
 
             # Clean up temporary agent if created
             if temp_agent:
-                crud.delete_agent(db, agent.id)
-                db.commit()
-                temp_agent = False  # Prevent cleanup in finally
+                # Cleanup is best-effort and should not flip a successful worker run into a failure.
+                try:
+                    crud.delete_agent(db, agent.id)
+                    temp_agent = False  # Prevent cleanup in finally
+                except Exception:
+                    db.rollback()
+                    logger.warning(
+                        "Failed to clean up temporary agent %s after worker success",
+                        getattr(agent, "id", None),
+                        exc_info=True,
+                    )
 
             logger.info(f"Worker {worker_id} completed successfully in {duration_ms}ms")
 
@@ -358,8 +366,8 @@ class WorkerRunner:
             if temp_agent and agent:
                 try:
                     crud.delete_agent(db, agent.id)
-                    db.commit()
                 except Exception:
+                    db.rollback()
                     logger.warning("Failed to clean up temporary agent after failure", exc_info=True)
 
     async def _emit_event(self, event_type: EventType, payload: dict[str, Any]) -> None:

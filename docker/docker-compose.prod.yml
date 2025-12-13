@@ -60,6 +60,8 @@ services:
       - backend_static:/app/static
       # Writable data directory (container root is read-only)
       - backend_data:/data
+      # SSH key access for worker infrastructure tools (ssh_exec)
+      - ${HOME}/.ssh:/home/zerg/.ssh:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
