@@ -96,9 +96,6 @@ class WsTokenCallback(AsyncCallbackHandler):
     def ignore_custom_event(self) -> bool:  # noqa: D401
         return True
 
-    def __init__(self) -> None:  # noqa: D401 – keep signature minimal
-        super().__init__()
-
     # ------------------------------------------------------------------
     # LLM token hook
     # ------------------------------------------------------------------
