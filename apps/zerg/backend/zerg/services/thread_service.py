@@ -62,8 +62,9 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
 
     # Prepend timestamp to content for user and assistant messages
     # System and tool messages don't need timestamps (system is static, tools are immediate)
-    content = msg_row.content
-    if role in ("user", "assistant"):
+    # IMPORTANT: Only prepend timestamp if content is non-empty to avoid masking empty responses
+    content = msg_row.content or ""
+    if role in ("user", "assistant") and content.strip():
         content = f"{timestamp_prefix}{content}"
 
     if role == "system":
