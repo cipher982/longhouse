@@ -394,3 +394,211 @@ async def test_temporary_agent_has_infrastructure_tools(
         # Clean up the test agent
         crud.delete_agent(db_session, temp_agent.id)
         db_session.commit()
+
+
+class TestSynthesizeFromToolOutputs:
+    """Tests for _synthesize_from_tool_outputs fallback method."""
+
+    def test_synthesize_with_tool_outputs(self, temp_store):
+        """Test synthesizing result when tool outputs exist but final message is empty."""
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        runner = WorkerRunner(artifact_store=temp_store)
+        messages = [
+            AIMessage(content="", tool_calls=[{"id": "call_1", "name": "ssh_exec", "args": {}}]),
+            ToolMessage(content="disk usage: 50GB used, 100GB total", tool_call_id="call_1", name="ssh_exec"),
+            AIMessage(content=""),  # Empty final message
+        ]
+
+        result = runner._synthesize_from_tool_outputs(messages, "check disk space")
+
+        assert result is not None
+        assert "ssh_exec" in result
+        assert "50GB" in result
+        assert "Worker completed task but produced no final summary" in result
+
+    def test_synthesize_no_tool_outputs(self, temp_store):
+        """Test that synthesis returns None when no tool outputs exist."""
+        from langchain_core.messages import AIMessage
+
+        runner = WorkerRunner(artifact_store=temp_store)
+        messages = [
+            AIMessage(content=""),  # Empty message, no tools
+        ]
+
+        result = runner._synthesize_from_tool_outputs(messages, "some task")
+
+        assert result is None
+
+    def test_synthesize_limits_to_three_tools(self, temp_store):
+        """Test that synthesis limits to 3 most recent tool outputs."""
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        runner = WorkerRunner(artifact_store=temp_store)
+        messages = [
+            AIMessage(content="", tool_calls=[
+                {"id": "call_1", "name": "tool1", "args": {}},
+                {"id": "call_2", "name": "tool2", "args": {}},
+                {"id": "call_3", "name": "tool3", "args": {}},
+                {"id": "call_4", "name": "tool4", "args": {}},
+            ]),
+            ToolMessage(content="output1", tool_call_id="call_1", name="tool1"),
+            ToolMessage(content="output2", tool_call_id="call_2", name="tool2"),
+            ToolMessage(content="output3", tool_call_id="call_3", name="tool3"),
+            ToolMessage(content="output4", tool_call_id="call_4", name="tool4"),
+            AIMessage(content=""),
+        ]
+
+        result = runner._synthesize_from_tool_outputs(messages, "multi-tool task")
+
+        # Should contain the 3 most recent (tool2, tool3, tool4)
+        assert result is not None
+        assert "tool2" in result
+        assert "tool3" in result
+        assert "tool4" in result
+        # tool1 should NOT be in result (oldest, excluded)
+        assert "tool1" not in result
+
+    def test_synthesize_truncates_long_output(self, temp_store):
+        """Test that very long tool outputs are truncated."""
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        runner = WorkerRunner(artifact_store=temp_store)
+        long_output = "x" * 3000  # Longer than 2000 char limit
+        messages = [
+            AIMessage(content="", tool_calls=[{"id": "call_1", "name": "ssh_exec", "args": {}}]),
+            ToolMessage(content=long_output, tool_call_id="call_1", name="ssh_exec"),
+            AIMessage(content=""),
+        ]
+
+        result = runner._synthesize_from_tool_outputs(messages, "long output task")
+
+        assert result is not None
+        # Output should be truncated to 2000 chars
+        assert len(result) < 3000 + 200  # 200 for header text
+
+
+class TestTimestampFix:
+    """Tests for the timestamp prefix fix in _db_to_langchain."""
+
+    def test_empty_assistant_content_no_timestamp(self, db_session, test_user):
+        """Test that empty assistant content doesn't get masked by timestamp."""
+        from zerg.services.thread_service import _db_to_langchain
+        from zerg.crud import crud
+
+        # Create a thread message with empty content
+        agent = crud.create_agent(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Agent",
+            model="gpt-4o-mini",
+            system_instructions="test",
+            task_instructions="",
+        )
+        thread = crud.create_thread(
+            db=db_session,
+            agent_id=agent.id,
+            title="Test Thread",
+            active=True,
+            agent_state={},
+            memory_strategy="buffer",
+            thread_type="chat",
+        )
+
+        # Create assistant message with empty content
+        msg = crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="",  # Empty content
+            processed=True,
+        )
+        db_session.commit()
+        db_session.refresh(msg)
+
+        # Convert to LangChain message
+        lc_msg = _db_to_langchain(msg)
+
+        # Content should still be empty, NOT just a timestamp
+        assert lc_msg.content == ""
+
+    def test_non_empty_assistant_gets_timestamp(self, db_session, test_user):
+        """Test that non-empty assistant content does get timestamp."""
+        from zerg.services.thread_service import _db_to_langchain
+        from zerg.crud import crud
+
+        agent = crud.create_agent(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Agent",
+            model="gpt-4o-mini",
+            system_instructions="test",
+            task_instructions="",
+        )
+        thread = crud.create_thread(
+            db=db_session,
+            agent_id=agent.id,
+            title="Test Thread",
+            active=True,
+            agent_state={},
+            memory_strategy="buffer",
+            thread_type="chat",
+        )
+
+        # Create assistant message with content
+        msg = crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="Hello world",
+            processed=True,
+        )
+        db_session.commit()
+        db_session.refresh(msg)
+
+        lc_msg = _db_to_langchain(msg)
+
+        # Content should have timestamp prefix
+        assert "Hello world" in lc_msg.content
+        # If sent_at is set, should have timestamp
+        if msg.sent_at:
+            assert lc_msg.content.startswith("[")
+
+    def test_whitespace_only_assistant_no_timestamp(self, db_session, test_user):
+        """Test that whitespace-only content doesn't get timestamp."""
+        from zerg.services.thread_service import _db_to_langchain
+        from zerg.crud import crud
+
+        agent = crud.create_agent(
+            db=db_session,
+            owner_id=test_user.id,
+            name="Test Agent",
+            model="gpt-4o-mini",
+            system_instructions="test",
+            task_instructions="",
+        )
+        thread = crud.create_thread(
+            db=db_session,
+            agent_id=agent.id,
+            title="Test Thread",
+            active=True,
+            agent_state={},
+            memory_strategy="buffer",
+            thread_type="chat",
+        )
+
+        # Create assistant message with whitespace only
+        msg = crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="   ",  # Whitespace only
+            processed=True,
+        )
+        db_session.commit()
+        db_session.refresh(msg)
+
+        lc_msg = _db_to_langchain(msg)
+
+        # Content should still be whitespace, NOT timestamp + whitespace
+        assert lc_msg.content == "   "
