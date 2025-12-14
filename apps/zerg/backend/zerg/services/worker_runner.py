@@ -220,6 +220,13 @@ class WorkerRunner:
             # Extract final result (last assistant message)
             result_text = self._extract_result(langchain_messages)
 
+            # Fallback: if no final assistant message, synthesize from tool outputs
+            # This handles cases where the LLM produced tool calls but no final summary
+            if not result_text:
+                result_text = self._synthesize_from_tool_outputs(langchain_messages, task)
+                if result_text:
+                    logger.info(f"Worker {worker_id}: synthesized result from tool outputs (no final assistant message)")
+
             # Phase 6: Check for critical errors
             # If a critical error occurred during execution, mark as failed
             if worker_context.has_critical_error:
@@ -239,15 +246,15 @@ class WorkerRunner:
                 )
 
                 if event_context is not None:
-                await self._emit_event(
-                    EventType.WORKER_COMPLETE,
-                    {
-                        "event_type": EventType.WORKER_COMPLETE,
-                        "job_id": job_id,
-                        "worker_id": worker_id,
-                        "status": "failed",
-                        "error": worker_context.critical_error_message,
-                        "duration_ms": duration_ms,
+                    await self._emit_event(
+                        EventType.WORKER_COMPLETE,
+                        {
+                            "event_type": EventType.WORKER_COMPLETE,
+                            "job_id": job_id,
+                            "worker_id": worker_id,
+                            "status": "failed",
+                            "error": worker_context.critical_error_message,
+                            "duration_ms": duration_ms,
                             "owner_id": owner_for_events,
                             "run_id": event_ctx.get("run_id"),
                         },
@@ -552,6 +559,48 @@ class WorkerRunner:
 
         return None
 
+    def _synthesize_from_tool_outputs(self, messages: list[BaseMessage], task: str) -> str | None:
+        """Synthesize a result from tool outputs when assistant message is empty.
+
+        This is a fallback mechanism when the LLM produces an empty final message
+        but tool calls were successfully executed. We extract the last few tool
+        outputs and create a minimal summary.
+
+        Parameters
+        ----------
+        messages
+            List of LangChain messages
+        task
+            Original task for context
+
+        Returns
+        -------
+        str | None
+            Synthesized result from tool outputs, or None if no useful tools found
+        """
+        # Collect tool outputs (most recent first, up to 3)
+        tool_outputs: list[tuple[str, str]] = []
+        for msg in reversed(messages):
+            if isinstance(msg, ToolMessage):
+                tool_name = getattr(msg, "name", "tool")
+                content = msg.content
+                if isinstance(content, str) and content.strip():
+                    # Truncate very long outputs
+                    truncated = content[:2000] if len(content) > 2000 else content
+                    tool_outputs.append((tool_name, truncated))
+                    if len(tool_outputs) >= 3:
+                        break
+
+        if not tool_outputs:
+            return None
+
+        # Build synthesized result
+        parts = ["[Worker completed task but produced no final summary. Tool outputs below:]"]
+        for tool_name, output in reversed(tool_outputs):  # Chronological order
+            parts.append(f"\n--- {tool_name} ---\n{output}")
+
+        return "\n".join(parts)
+
     async def _extract_summary(
         self, task: str, result: str
     ) -> tuple[str, dict[str, Any]]:
@@ -590,7 +639,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 client.chat.completions.create(
                     model=DEFAULT_WORKER_MODEL_ID,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=50,
+                    max_completion_tokens=50,
                 ),
                 timeout=5.0,
             )
