@@ -331,7 +331,7 @@ async def call_llm_decider(
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=8,  # We only need one word
+                max_completion_tokens=8,  # We only need one word (GPT-5 compatible)
                 temperature=0,
             ),
             timeout=timeout_seconds,
