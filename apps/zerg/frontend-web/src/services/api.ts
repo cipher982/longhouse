@@ -686,3 +686,42 @@ export async function replaceUserContext(context: UserContext): Promise<UserCont
     body: JSON.stringify({ context }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Runners API
+// ---------------------------------------------------------------------------
+
+export type Runner = Schemas["RunnerResponse"];
+export type EnrollTokenResponse = Schemas["EnrollTokenResponse"];
+export type RunnerRegisterRequest = Schemas["RunnerRegisterRequest"];
+export type RunnerRegisterResponse = Schemas["RunnerRegisterResponse"];
+export type RunnerUpdate = Schemas["RunnerUpdate"];
+export type RunnerListResponse = Schemas["RunnerListResponse"];
+
+export async function createEnrollToken(): Promise<EnrollTokenResponse> {
+  return request<EnrollTokenResponse>(`/runners/enroll-token`, {
+    method: "POST",
+  });
+}
+
+export async function fetchRunners(): Promise<Runner[]> {
+  const response = await request<RunnerListResponse>(`/runners/`);
+  return response.runners;
+}
+
+export async function fetchRunner(runnerId: number): Promise<Runner> {
+  return request<Runner>(`/runners/${runnerId}`);
+}
+
+export async function updateRunner(runnerId: number, payload: RunnerUpdate): Promise<Runner> {
+  return request<Runner>(`/runners/${runnerId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function revokeRunner(runnerId: number): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/runners/${runnerId}/revoke`, {
+    method: "POST",
+  });
+}
