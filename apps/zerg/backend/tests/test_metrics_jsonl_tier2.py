@@ -1,17 +1,16 @@
 """Test to verify Tier 2 (Progressive Disclosure) - metrics.jsonl functionality."""
 import json
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
 
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.worker_metrics import (
-    MetricsCollector,
-    get_metrics_collector,
-    reset_metrics_collector,
-    set_metrics_collector,
-)
+from zerg.worker_metrics import MetricsCollector
+from zerg.worker_metrics import get_metrics_collector
+from zerg.worker_metrics import reset_metrics_collector
+from zerg.worker_metrics import set_metrics_collector
 
 
 @pytest.fixture

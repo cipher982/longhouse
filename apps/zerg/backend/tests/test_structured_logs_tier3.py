@@ -1,12 +1,16 @@
 """Test to verify Tier 3 (Dev Telemetry) - structured logging functionality."""
 import logging
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from datetime import datetime
+from datetime import timezone
 
 import pytest
 
-from zerg.context import WorkerContext, reset_worker_context, set_worker_context
-from zerg.worker_metrics import MetricsCollector, reset_metrics_collector, set_metrics_collector
+from zerg.context import WorkerContext
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
+from zerg.worker_metrics import MetricsCollector
+from zerg.worker_metrics import reset_metrics_collector
+from zerg.worker_metrics import set_metrics_collector
 
 
 @pytest.fixture
@@ -18,7 +22,6 @@ def capture_logs(caplog):
 
 def test_llm_call_structured_logging(capture_logs):
     """Verify that LLM calls emit structured logs for grep-ability."""
-    from zerg.services.worker_artifact_store import WorkerArtifactStore
 
     # Set up worker context
     ctx = WorkerContext(
@@ -87,7 +90,9 @@ def test_llm_call_structured_logging(capture_logs):
 
 def test_tool_call_structured_logging(capture_logs):
     """Verify that tool calls emit structured logs for grep-ability."""
-    from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+    from zerg.context import WorkerContext
+    from zerg.context import reset_worker_context
+    from zerg.context import set_worker_context
 
     # Set up worker context
     ctx = WorkerContext(
