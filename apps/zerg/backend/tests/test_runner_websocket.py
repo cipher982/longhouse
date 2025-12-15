@@ -276,9 +276,36 @@ class TestConnectionManager:
         assert manager.is_online(1, 100)
 
         # Unregister
-        manager.unregister(1, 100)
+        was_unregistered = manager.unregister(1, 100, mock_ws)
+        assert was_unregistered is True
         assert not manager.is_online(1, 100)
         assert manager.get_connection(1, 100) is None
+
+    def test_unregister_only_if_same_connection(self):
+        """Test that unregister only removes the connection if it matches."""
+        from unittest.mock import Mock
+
+        manager = get_runner_connection_manager()
+
+        # Register first connection
+        ws1 = Mock()
+        manager.register(1, 100, ws1)
+        assert manager.is_online(1, 100)
+
+        # Replace with second connection
+        ws2 = Mock()
+        manager.register(1, 100, ws2)
+        assert manager.is_online(1, 100)
+
+        # Try to unregister old connection - should not unregister
+        was_unregistered = manager.unregister(1, 100, ws1)
+        assert was_unregistered is False
+        assert manager.is_online(1, 100)  # Still online with ws2
+
+        # Unregister current connection - should work
+        was_unregistered = manager.unregister(1, 100, ws2)
+        assert was_unregistered is True
+        assert not manager.is_online(1, 100)
 
     def test_get_online_count(self):
         """Test counting online runners."""
