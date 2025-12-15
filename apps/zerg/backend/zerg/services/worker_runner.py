@@ -689,7 +689,6 @@ Example: "Backup completed 157GB in 17s, no errors found"
                     from zerg.context import get_worker_context
                     ctx = get_worker_context()
                     log_extra = {
-                        "event": "llm_call_complete",
                         "phase": "summary",
                         "model": DEFAULT_WORKER_MODEL_ID,
                         "duration_ms": duration_ms,
