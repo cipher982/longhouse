@@ -50,7 +50,6 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 from datetime import datetime
-from datetime import timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -194,6 +193,8 @@ class MetricsCollector:
             for event in self.events:
                 artifact_store.save_metric(self.worker_id, event)
             logger.debug(f"Flushed {len(self.events)} metrics for worker {self.worker_id}")
+            # Clear events after successful flush to prevent duplicates if called again
+            self.events.clear()
         except Exception as e:
             # Metrics collection is best-effort - don't fail the worker
             logger.warning(f"Failed to flush metrics for worker {self.worker_id}: {e}")

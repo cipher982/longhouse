@@ -233,7 +233,6 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 from zerg.context import get_worker_context
                 ctx = get_worker_context()
                 log_extra = {
-                    "event": "llm_call_complete",
                     "phase": phase,
                     "model": agent_row.model,
                     "duration_ms": duration_ms,
@@ -486,7 +485,6 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
             try:
                 log_extra = {
-                    "event": "tool_call_complete",
                     "tool": tool_name,
                     "duration_ms": duration_ms,
                     "success": not is_error,
