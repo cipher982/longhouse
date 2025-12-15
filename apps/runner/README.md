@@ -7,7 +7,8 @@ Lightweight daemon that connects to the Swarmlet platform and executes commands 
 ### Using Bun (Development)
 
 ```bash
-# Install dependencies
+# Install dependencies (from repo root - using workspace)
+cd /path/to/repo/root
 bun install
 
 # Set environment variables
