@@ -41,6 +41,7 @@ from zerg.schemas.runner_schemas import RunnerResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,7 @@ async def runner_websocket(
     """
     await websocket.accept()
     connection_manager = get_runner_connection_manager()
+    job_dispatcher = get_runner_job_dispatcher()
 
     runner_id: int | None = None
     owner_id: int | None = None
@@ -396,33 +398,67 @@ async def runner_websocket(
                     logger.debug(f"Heartbeat from runner {runner_id}")
 
                 elif message_type == "exec_chunk":
-                    # Route to job handler (Phase 3)
+                    # Handle output streaming
                     job_id = message.get("job_id")
                     stream = message.get("stream")
                     data = message.get("data")
                     logger.debug(
                         f"Exec chunk from runner {runner_id}, job {job_id}, stream {stream}"
                     )
-                    # TODO: Route to job handler in Phase 3
+
+                    # Update job output in database
+                    if job_id and stream and data:
+                        runner_crud.update_job_output(db, job_id, stream, data)
 
                 elif message_type == "exec_done":
-                    # Route to job handler (Phase 3)
+                    # Handle job completion
                     job_id = message.get("job_id")
                     exit_code = message.get("exit_code")
                     duration_ms = message.get("duration_ms")
                     logger.info(
                         f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}"
                     )
-                    # TODO: Route to job handler in Phase 3
+
+                    # Update job status in database
+                    if job_id is not None and exit_code is not None:
+                        runner_crud.update_job_completed(db, job_id, exit_code, duration_ms or 0)
+
+                        # Get final job state to return
+                        job = runner_crud.get_job(db, job_id)
+                        if job:
+                            result = {
+                                "ok": True,
+                                "data": {
+                                    "job_id": job_id,
+                                    "exit_code": exit_code,
+                                    "stdout": job.stdout_trunc or "",
+                                    "stderr": job.stderr_trunc or "",
+                                    "duration_ms": duration_ms or 0,
+                                },
+                            }
+                            job_dispatcher.complete_job(job_id, result, runner_id)
 
                 elif message_type == "exec_error":
-                    # Route to job handler (Phase 3)
+                    # Handle job error
                     job_id = message.get("job_id")
                     error = message.get("error")
                     logger.error(
                         f"Exec error from runner {runner_id}, job {job_id}: {error}"
                     )
-                    # TODO: Route to job handler in Phase 3
+
+                    # Update job status in database
+                    if job_id and error:
+                        runner_crud.update_job_error(db, job_id, error)
+
+                        # Notify waiting dispatcher
+                        result = {
+                            "ok": False,
+                            "error": {
+                                "type": "execution_error",
+                                "message": error,
+                            },
+                        }
+                        job_dispatcher.complete_job(job_id, result, runner_id)
 
                 else:
                     logger.warning(
