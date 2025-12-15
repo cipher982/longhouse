@@ -11,6 +11,7 @@ export interface RunnerConfig {
   heartbeatIntervalMs: number;
   reconnectDelayMs: number;
   maxReconnectDelayMs: number;
+  capabilities: string[];
 }
 
 export function loadConfig(): RunnerConfig {
@@ -26,6 +27,10 @@ export function loadConfig(): RunnerConfig {
     throw new Error('RUNNER_SECRET environment variable is required');
   }
 
+  // Parse capabilities from comma-separated list (default: exec.readonly)
+  const capabilitiesStr = process.env.RUNNER_CAPABILITIES || 'exec.readonly';
+  const capabilities = capabilitiesStr.split(',').map((s) => s.trim()).filter((s) => s);
+
   return {
     swarmletUrl,
     runnerId,
@@ -33,5 +38,6 @@ export function loadConfig(): RunnerConfig {
     heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '30000', 10),
     reconnectDelayMs: parseInt(process.env.RECONNECT_DELAY_MS || '5000', 10),
     maxReconnectDelayMs: parseInt(process.env.MAX_RECONNECT_DELAY_MS || '60000', 10),
+    capabilities,
   };
 }

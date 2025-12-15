@@ -487,3 +487,146 @@ class TestJobDispatcher:
 
         # Job should be removed from pending
         assert job_id not in dispatcher._pending_jobs
+
+
+class TestCapabilityEnforcement:
+    """Tests for capability-based command validation."""
+
+    def test_runner_exec_readonly_allows_safe_commands(self, worker_context, test_runner: tuple[Runner, str]):
+        """Test that readonly runner allows safe commands."""
+        runner, _ = test_runner
+
+        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": "test output",
+                    "stderr": "",
+                    "duration_ms": 100,
+                },
+            })
+
+            # Safe command should work
+            result = runner_exec("test-laptop", "df -h")
+            assert result["ok"] is True
+
+    def test_runner_exec_readonly_blocks_dangerous_commands(self, worker_context, test_runner: tuple[Runner, str]):
+        """Test that readonly runner blocks dangerous commands."""
+        runner, _ = test_runner
+
+        # Dangerous command should be blocked
+        result = runner_exec("test-laptop", "rm -rf /tmp/test")
+        assert result["ok"] is False
+        assert "not allowed" in result["user_message"].lower()
+
+    def test_runner_exec_readonly_blocks_shell_metacharacters(self, worker_context, test_runner: tuple[Runner, str]):
+        """Test that readonly runner blocks shell metacharacters."""
+        runner, _ = test_runner
+
+        # Pipe should be blocked
+        result = runner_exec("test-laptop", "ps aux | grep python")
+        assert result["ok"] is False
+        assert "not allowed" in result["user_message"].lower()
+        assert "metacharacters" in result["user_message"].lower()
+
+    def test_runner_exec_readonly_blocks_redirects(self, worker_context, test_runner: tuple[Runner, str]):
+        """Test that readonly runner blocks redirects."""
+        runner, _ = test_runner
+
+        # Redirect should be blocked
+        result = runner_exec("test-laptop", "echo foo > /tmp/test.txt")
+        assert result["ok"] is False
+        assert "not allowed" in result["user_message"].lower()
+
+    def test_runner_exec_readonly_blocks_docker_without_capability(self, worker_context, test_runner: tuple[Runner, str]):
+        """Test that docker requires explicit capability."""
+        runner, _ = test_runner
+
+        # Docker without capability should be blocked
+        result = runner_exec("test-laptop", "docker ps")
+        assert result["ok"] is False
+        assert "docker" in result["user_message"].lower()
+        assert "capability" in result["user_message"].lower()
+
+    def test_runner_exec_full_allows_dangerous_commands(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+        """Test that exec.full runner allows dangerous commands."""
+        runner, _ = test_runner
+
+        # Upgrade to exec.full
+        runner.capabilities = ["exec.full"]
+        db.commit()
+
+        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "duration_ms": 100,
+                },
+            })
+
+            # Dangerous command should work with exec.full
+            result = runner_exec("test-laptop", "rm -rf /tmp/test")
+            assert result["ok"] is True
+
+    def test_runner_exec_full_allows_pipes(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+        """Test that exec.full runner allows pipes."""
+        runner, _ = test_runner
+
+        # Upgrade to exec.full
+        runner.capabilities = ["exec.full"]
+        db.commit()
+
+        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": "filtered output",
+                    "stderr": "",
+                    "duration_ms": 100,
+                },
+            })
+
+            # Pipe should work with exec.full
+            result = runner_exec("test-laptop", "ps aux | grep python")
+            assert result["ok"] is True
+
+    def test_runner_exec_docker_capability(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+        """Test that docker capability enables docker commands."""
+        runner, _ = test_runner
+
+        # Add docker capability
+        runner.capabilities = ["exec.readonly", "docker"]
+        db.commit()
+
+        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
+                "ok": True,
+                "data": {
+                    "exit_code": 0,
+                    "stdout": "CONTAINER ID   IMAGE   ...",
+                    "stderr": "",
+                    "duration_ms": 100,
+                },
+            })
+
+            # Docker ps should work with docker capability
+            result = runner_exec("test-laptop", "docker ps")
+            assert result["ok"] is True
+
+    def test_runner_exec_docker_readonly_blocks_destructive(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+        """Test that docker capability only allows readonly docker commands."""
+        runner, _ = test_runner
+
+        # Add docker capability
+        runner.capabilities = ["exec.readonly", "docker"]
+        db.commit()
+
+        # Docker run should be blocked even with docker capability
+        result = runner_exec("test-laptop", "docker run ubuntu echo hello")
+        assert result["ok"] is False
+        assert "not allowed" in result["user_message"].lower()
