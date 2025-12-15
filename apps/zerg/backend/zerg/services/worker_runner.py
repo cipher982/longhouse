@@ -17,23 +17,25 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import ToolMessage
+from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
-from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+from zerg.context import WorkerContext
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
 from zerg.crud import crud
-from zerg.events import EventType, event_bus
+from zerg.events import EventType
+from zerg.events import event_bus
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.models import Agent as AgentModel
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.prompts import build_worker_prompt
 from zerg.services.thread_service import ThreadService
 from zerg.services.thread_service import _db_to_langchain
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.prompts import build_worker_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +156,9 @@ class WorkerRunner:
         context_token = set_worker_context(worker_context)
 
         # Set up metrics collector for performance tracking
-        from zerg.worker_metrics import MetricsCollector, set_metrics_collector, reset_metrics_collector
+        from zerg.worker_metrics import MetricsCollector
+        from zerg.worker_metrics import reset_metrics_collector
+        from zerg.worker_metrics import set_metrics_collector
         metrics_collector = MetricsCollector(worker_id)
         set_metrics_collector(metrics_collector)
 
@@ -184,7 +188,6 @@ class WorkerRunner:
                 temp_agent = False
 
             # Create fresh thread for this worker
-            timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             title = f"Worker: {task[:50]}"
             thread = ThreadService.create_thread_with_system_message(
                 db,
@@ -230,7 +233,10 @@ class WorkerRunner:
             if not result_text:
                 result_text = self._synthesize_from_tool_outputs(langchain_messages, task)
                 if result_text:
-                    logger.info(f"Worker {worker_id}: synthesized result from tool outputs (no final assistant message)")
+                    logger.info(
+                        f"Worker {worker_id}: synthesized result from tool outputs "
+                        "(no final assistant message)"
+                    )
 
             # Phase 6: Check for critical errors
             # If a critical error occurred during execution, mark as failed
@@ -430,6 +436,7 @@ class WorkerRunner:
             # Query for any user - this is a fallback for tests
             # In production, owner_id should always be provided
             from sqlalchemy import select
+
             from zerg.models.models import User
 
             result = db.execute(select(User).limit(1))
