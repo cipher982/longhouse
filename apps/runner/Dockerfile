@@ -1,19 +1,18 @@
 FROM oven/bun:1
 
-# This Dockerfile expects to be built with the *repo root* as the build context:
-#   docker build -f apps/runner/Dockerfile -t swarmlet/runner:latest .
-WORKDIR /repo
+# Build from apps/runner directory:
+#   docker build -t swarmlet/runner:latest apps/runner
+# Or from repo root:
+#   docker build -f apps/runner/Dockerfile -t swarmlet/runner:latest apps/runner
+WORKDIR /app
 
-# Copy workspace manifests (single root lockfile policy)
-COPY package.json bun.lock ./
-COPY apps/runner/package.json apps/runner/package.json
+# Copy package files and install deps
+COPY package.json ./
+RUN bun install
 
-# Install deps using the workspace lockfile
-RUN bun install --frozen-lockfile
+# Copy source
+COPY src ./src
+COPY tsconfig.json ./
 
-# Copy runner source
-COPY apps/runner/src apps/runner/src
-COPY apps/runner/tsconfig.json apps/runner/tsconfig.json
-
-# Run the daemon from the workspace
-CMD ["bun", "run", "--filter", "@swarmlet/runner", "start"]
+# Run the daemon
+CMD ["bun", "run", "src/index.ts"]
