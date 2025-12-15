@@ -645,6 +645,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runners/enroll-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Enroll Token
+         * @description Create a new enrollment token for registering a runner.
+         *
+         *     Returns a one-time token and setup instructions including a complete
+         *     docker run command for easy deployment.
+         */
+        post: operations["create_enroll_token_api_runners_enroll_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Runner
+         * @description Register a new runner using an enrollment token.
+         *
+         *     This endpoint is called by the runner daemon during initial setup.
+         *     The enrollment token is consumed and cannot be reused.
+         *
+         *     Token consumption is committed BEFORE runner creation to prevent
+         *     token reuse even if runner creation fails.
+         */
+        post: operations["register_runner_api_runners_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runners
+         * @description List all runners for the authenticated user.
+         */
+        get: operations["list_runners_api_runners__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/{runner_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Runner
+         * @description Get details of a specific runner.
+         */
+        get: operations["get_runner_api_runners__runner_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Runner
+         * @description Update a runner's configuration (name, labels, capabilities).
+         */
+        patch: operations["update_runner_api_runners__runner_id__patch"];
+        trace?: never;
+    };
+    "/api/runners/{runner_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Runner
+         * @description Revoke a runner (mark as revoked, prevent reconnection).
+         *
+         *     The runner will be disconnected and cannot reconnect. Jobs will no longer
+         *     be routed to this runner.
+         */
+        post: operations["revoke_runner_api_runners__runner_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/validate": {
         parameters: {
             query?: never;
@@ -1058,6 +1174,7 @@ export interface paths {
          *
          *     Only works when AUTH_DISABLED=1 is set in environment.
          *     Creates/returns a token for dev@local admin user.
+         *     Also sets swarmlet_session cookie for browser auth.
          */
         post: operations["dev_login_api_auth_dev_login_post"];
         delete?: never;
@@ -1080,8 +1197,63 @@ export interface paths {
          * @description Exchange a Google ID token for a platform access token.
          *
          *     Expected JSON body: `{ "id_token": "<JWT from Google>" }`.
+         *     Also sets swarmlet_session cookie for browser auth.
          */
         post: operations["google_sign_in_api_auth_google_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Session
+         * @description Fast auth check for nginx auth_request.
+         *
+         *     Validates the session from cookie (preferred) or Authorization header.
+         *     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
+         *
+         *     This endpoint is designed to be called by nginx auth_request to gate
+         *     protected routes like /dashboard and /chat.
+         *
+         *     Security: Performs full validation including:
+         *     - JWT signature verification
+         *     - Token expiry check
+         *     - User existence in database
+         *     - User is_active status
+         */
+        get: operations["verify_session_api_auth_verify_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description Clear the session cookie.
+         *
+         *     Returns 204 on success. Safe to call even if not logged in.
+         */
+        post: operations["logout_api_auth_logout_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1108,6 +1280,54 @@ export interface paths {
          *     - Returns the ``connector_id``.
          */
         post: operations["connect_gmail_api_auth_google_gmail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oauth/github/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Authorize
+         * @description Initiate GitHub OAuth flow.
+         *
+         *     Redirects user to GitHub's authorization page. After approval,
+         *     GitHub redirects back to /oauth/github/callback with an authorization code.
+         */
+        get: operations["github_authorize_api_oauth_github_authorize_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/oauth/github/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Github Callback
+         * @description Handle GitHub OAuth callback.
+         *
+         *     GitHub redirects here with an authorization code. We exchange it for
+         *     an access token and store it encrypted in the database.
+         *
+         *     Returns an HTML page that closes the popup and notifies the parent window.
+         */
+        get: operations["github_callback_api_oauth_github_callback_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1156,6 +1376,55 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/users/me/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Context
+         * @description Get the authenticated user's context configuration.
+         *
+         *     Returns the user's context JSONB field which contains servers,
+         *     integrations, preferences, and other user-specific data used
+         *     for prompt composition.
+         */
+        get: operations["get_user_context_api_users_me_context_get"];
+        /**
+         * Replace User Context
+         * @description Replace the authenticated user's entire context.
+         *
+         *     This endpoint replaces the entire context with the provided value.
+         *     To merge with existing context, use PATCH instead.
+         *
+         *     Size limit: 64KB (65536 bytes) enforced.
+         *
+         *     The context is validated against the UserContext schema to catch common
+         *     errors early, but extra fields are allowed for flexibility.
+         */
+        put: operations["replace_user_context_api_users_me_context_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update User Context
+         * @description Update (deep merge) the authenticated user's context.
+         *
+         *     This endpoint deep-merges the provided context with the existing context.
+         *     Nested objects (like 'tools') are merged recursively, preserving keys not
+         *     present in the update. To replace the entire context, use PUT instead.
+         *
+         *     Size limit: 64KB (65536 bytes) enforced on the merged result.
+         *
+         *     The merged context is validated against the UserContext schema to catch
+         *     common errors, but extra fields are allowed for flexibility.
+         */
+        patch: operations["update_user_context_api_users_me_context_patch"];
         trace?: never;
     };
     "/api/templates/": {
@@ -1278,20 +1547,10 @@ export interface paths {
         put?: never;
         /**
          * Jarvis Auth
-         * @description Authenticate Jarvis device and establish an authenticated session.
+         * @description Deprecated: Jarvis now uses standard SaaS user authentication.
          *
-         *     Validates the device secret against environment configuration and issues
-         *     a short-lived session cookie that Jarvis can use for subsequent API calls.
-         *
-         *     Args:
-         *         request: Contains device_secret for authentication
-         *         db: Database session
-         *
-         *     Returns:
-         *         JarvisAuthResponse with session metadata
-         *
-         *     Raises:
-         *         401: Invalid device secret
+         *     Jarvis is treated as a normal client (like the dashboard). It authenticates
+         *     using the same JWT bearer token as other frontend clients.
          */
         post: operations["jarvis_auth_api_jarvis_auth_post"];
         delete?: never;
@@ -1398,6 +1657,135 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jarvis/supervisor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Supervisor
+         * @description Dispatch a task to the supervisor agent.
+         *
+         *     The supervisor is the "one brain" that coordinates workers and maintains
+         *     long-term context. Each user has a single supervisor thread that persists
+         *     across sessions.
+         *
+         *     This endpoint:
+         *     1. Finds or creates the user's supervisor thread (idempotent)
+         *     2. Creates a new run attached to that thread
+         *     3. Kicks off supervisor execution in the background
+         *     4. Returns immediately with run_id and stream_url
+         *
+         *     Args:
+         *         request: Task and optional context/preferences
+         *         background_tasks: FastAPI background tasks
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         JarvisSupervisorResponse with run_id, thread_id, and stream_url
+         *
+         *     Example:
+         *         POST /api/jarvis/supervisor
+         *         {"task": "Check my server health"}
+         *
+         *         Response:
+         *         {
+         *             "run_id": 456,
+         *             "thread_id": 789,
+         *             "status": "running",
+         *             "stream_url": "/api/jarvis/supervisor/events?run_id=456"
+         *         }
+         */
+        post: operations["jarvis_supervisor_api_jarvis_supervisor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/supervisor/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jarvis Supervisor Events
+         * @description SSE stream for supervisor run progress.
+         *
+         *     Provides real-time updates for a specific supervisor run including:
+         *     - supervisor_started: Run has begun
+         *     - supervisor_thinking: Supervisor is analyzing
+         *     - worker_spawned: Worker job queued
+         *     - worker_started: Worker execution began
+         *     - worker_complete: Worker finished (success/failed)
+         *     - worker_summary_ready: Worker summary extracted
+         *     - supervisor_complete: Final result ready
+         *     - error: Something went wrong
+         *     - heartbeat: Keep-alive (every 30s)
+         *
+         *     The stream automatically closes when the supervisor completes or errors.
+         *
+         *     Args:
+         *         run_id: The supervisor run ID to track
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         EventSourceResponse streaming supervisor events
+         *
+         *     Raises:
+         *         HTTPException 404: If run not found or doesn't belong to user
+         */
+        get: operations["jarvis_supervisor_events_api_jarvis_supervisor_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/supervisor/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Supervisor Cancel
+         * @description Cancel a running supervisor investigation.
+         *
+         *     Marks the run as cancelled and emits a cancellation event to SSE subscribers.
+         *     If the run is already complete, returns the current status without error.
+         *
+         *     Args:
+         *         run_id: The supervisor run ID to cancel
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         JarvisCancelResponse with run status
+         *
+         *     Raises:
+         *         HTTPException 404: If run not found or doesn't belong to user
+         */
+        post: operations["jarvis_supervisor_cancel_api_jarvis_supervisor__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/events": {
         parameters: {
             query?: never;
@@ -1413,7 +1801,8 @@ export interface paths {
          *     stream to update the Task Inbox UI without polling.
          *
          *     Authentication:
-         *     - HttpOnly session cookie set by `/api/jarvis/auth`
+         *     - Standard SaaS auth: `Authorization: Bearer <jwt>`
+         *     - SSE fallback: `?token=<jwt>` query parameter (EventSource cannot send headers)
          *     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
          *
          *     Event types:
@@ -1430,6 +1819,153 @@ export interface paths {
          *         EventSourceResponse streaming SSE events
          */
         get: operations["jarvis_events_api_jarvis_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jarvis Bootstrap
+         * @description Get Jarvis bootstrap configuration.
+         *
+         *     Returns the complete system prompt (built from user context),
+         *     list of enabled tools, and a safe subset of user context for display.
+         *
+         *     This is the single source of truth for Jarvis configuration.
+         */
+        get: operations["jarvis_bootstrap_api_jarvis_bootstrap_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jarvis Session Proxy Get */
+        get: operations["jarvis_session_proxy_get_api_jarvis_session_get"];
+        put?: never;
+        /** Jarvis Session Proxy Post */
+        post: operations["jarvis_session_proxy_post_api_jarvis_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/tool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Tool Proxy
+         * @description Proxy tool execution to jarvis-server with server-side tool enforcement.
+         */
+        post: operations["jarvis_tool_proxy_api_jarvis_tool_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/conversation/title": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Conversation Title Proxy
+         * @description Proxy conversation title generation to jarvis-server.
+         */
+        post: operations["jarvis_conversation_title_proxy_api_jarvis_conversation_title_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/sync/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Push Sync Operations
+         * @description Push sync operations from client.
+         *
+         *     Implements idempotent push semantics - operations with duplicate opId
+         *     values are acknowledged without error. This allows clients to safely
+         *     retry without creating duplicates.
+         *
+         *     Args:
+         *         request: Push request with operations
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         PushResponse with acknowledged operation IDs and next cursor
+         */
+        post: operations["push_sync_operations_api_jarvis_sync_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/sync/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pull Sync Operations
+         * @description Pull sync operations from server.
+         *
+         *     Returns all operations for the current user created after the given
+         *     cursor position. Cursor is a simple offset - clients should store the
+         *     nextCursor value and use it for the next pull request.
+         *
+         *     Args:
+         *         cursor: Starting cursor position (offset)
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         PullResponse with operations and next cursor
+         */
+        get: operations["pull_sync_operations_api_jarvis_sync_pull_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1473,6 +2009,26 @@ export interface paths {
          *     minimal to avoid impacting test performance.
          */
         get: operations["health_api_system_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ops/errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Frontend Errors
+         * @description Admin-only: view recent frontend errors captured via beacon.
+         */
+        get: operations["get_frontend_errors_api_ops_errors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1555,6 +2111,295 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/connectors/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Agent Connectors
+         * @description List all connector types and their configuration status for an agent.
+         *
+         *     Returns all available connector types with:
+         *     - Metadata (name, description, required fields)
+         *     - Whether credentials are configured for this agent
+         *     - Test status and metadata from last test
+         */
+        get: operations["list_agent_connectors_api_agents__agent_id__connectors__get"];
+        put?: never;
+        /**
+         * Configure Connector
+         * @description Configure (create or update) connector credentials for an agent.
+         *
+         *     If credentials already exist for this connector type, they are updated.
+         *     Otherwise, new credentials are created.
+         *
+         *     Test status is reset to 'untested' when credentials are updated.
+         */
+        post: operations["configure_connector_api_agents__agent_id__connectors__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/connectors/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Credentials Before Save
+         * @description Test credentials before saving them.
+         *
+         *     This endpoint allows testing credentials without persisting them.
+         *     Useful for validating credentials in the UI before committing.
+         */
+        post: operations["test_credentials_before_save_api_agents__agent_id__connectors_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/connectors/{connector_type}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Configured Connector
+         * @description Test already-configured connector credentials.
+         *
+         *     Tests the stored credentials and updates the test_status and metadata.
+         */
+        post: operations["test_configured_connector_api_agents__agent_id__connectors__connector_type__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/connectors/{connector_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Connector
+         * @description Remove connector credentials from an agent.
+         *
+         *     This deletes the stored credentials permanently.
+         */
+        delete: operations["delete_connector_api_agents__agent_id__connectors__connector_type__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/connectors/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Account Connectors
+         * @description List all connector types and their configuration status for the user's account.
+         *
+         *     Returns all available connector types with:
+         *     - Metadata (name, description, required fields)
+         *     - Whether credentials are configured at account level
+         *     - Test status and metadata from last test
+         */
+        get: operations["list_account_connectors_api_account_connectors__get"];
+        put?: never;
+        /**
+         * Configure Account Connector
+         * @description Configure (create or update) account-level connector credentials.
+         *
+         *     If credentials already exist for this connector type, they are updated.
+         *     Otherwise, new credentials are created.
+         *
+         *     Test status is reset to 'untested' when credentials are updated.
+         */
+        post: operations["configure_account_connector_api_account_connectors__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/connectors/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Credentials Before Save
+         * @description Test credentials before saving them.
+         *
+         *     This endpoint allows testing credentials without persisting them.
+         *     Useful for validating credentials in the UI before committing.
+         */
+        post: operations["test_credentials_before_save_api_account_connectors_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/connectors/{connector_type}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Configured Connector
+         * @description Test already-configured account-level connector credentials.
+         *
+         *     Tests the stored credentials and updates the test_status and metadata.
+         */
+        post: operations["test_configured_connector_api_account_connectors__connector_type__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/account/connectors/{connector_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Account Connector
+         * @description Remove account-level connector credentials.
+         *
+         *     This deletes the stored credentials permanently.
+         *     Note: Any agents with per-agent overrides will still work.
+         */
+        delete: operations["delete_account_connector_api_account_connectors__connector_type__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/funnel/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Track Batch
+         * @description Track multiple events in one request (reduces network calls).
+         */
+        post: operations["track_batch_api_funnel_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/funnel/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stats
+         * @description Get funnel statistics.
+         *
+         *     Args:
+         *         hours: Time period in hours (default 24)
+         */
+        get: operations["get_stats_api_funnel_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/funnel/stitch-visitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stitch Visitor
+         * @description Link anonymous visitor to authenticated user.
+         */
+        post: operations["stitch_visitor_api_funnel_stitch_visitor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/funnel/attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Attribution
+         * @description Get attribution breakdown by UTM source and campaign.
+         *
+         *     Args:
+         *         hours: Time period in hours (default 72 = 3 days)
+         */
+        get: operations["get_attribution_api_funnel_attribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/reset-database": {
         parameters: {
             query?: never;
@@ -1616,6 +2461,76 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccountConnectorStatusResponse
+         * @description Status of a connector type at account level.
+         *
+         *     Similar to ConnectorStatusResponse but for account-level credentials
+         *     that are shared across all agents owned by the user.
+         */
+        AccountConnectorStatusResponse: {
+            /**
+             * Type
+             * @description Connector type identifier (e.g., 'slack', 'github')
+             */
+            type: string;
+            /**
+             * Name
+             * @description Human-readable name
+             */
+            name: string;
+            /**
+             * Description
+             * @description Short description of the connector
+             */
+            description: string;
+            /**
+             * Category
+             * @description Category: 'notifications' or 'project_management'
+             */
+            category: string;
+            /**
+             * Icon
+             * @description Icon identifier for UI
+             */
+            icon: string;
+            /**
+             * Docs Url
+             * @description URL to setup documentation
+             */
+            docs_url: string;
+            /**
+             * Fields
+             * @description Required credential fields
+             */
+            fields: components["schemas"]["CredentialFieldSchema"][];
+            /**
+             * Configured
+             * @description Whether credentials are configured at account level
+             */
+            configured: boolean;
+            /**
+             * Display Name
+             * @description User-provided display name
+             */
+            display_name?: string | null;
+            /**
+             * Test Status
+             * @description Test status: 'untested', 'success', 'failed'
+             * @default untested
+             */
+            test_status: string;
+            /**
+             * Last Tested At
+             * @description When credentials were last tested
+             */
+            last_tested_at?: string | null;
+            /**
+             * Metadata
+             * @description Metadata from last successful test
+             */
+            metadata?: Record<string, never> | null;
+        };
         /** Agent */
         Agent: {
             /** Name */
@@ -1805,6 +2720,149 @@ export interface components {
             canvas: components["schemas"]["WorkflowData-Input"];
         };
         /**
+         * ConnectorConfigureRequest
+         * @description Request to configure (create or update) connector credentials.
+         */
+        ConnectorConfigureRequest: {
+            /**
+             * Connector Type
+             * @description Connector type to configure (e.g., 'slack', 'github')
+             */
+            connector_type: string;
+            /**
+             * Credentials
+             * @description Credential values keyed by field name (e.g., {'webhook_url': 'https://...'})
+             */
+            credentials: {
+                [key: string]: string;
+            };
+            /**
+             * Display Name
+             * @description Optional user-friendly label
+             */
+            display_name?: string | null;
+        };
+        /**
+         * ConnectorStatusResponse
+         * @description Status of a connector type for an agent.
+         *
+         *     Used in the list endpoint to show all available connectors
+         *     and their configuration status.
+         */
+        ConnectorStatusResponse: {
+            /**
+             * Type
+             * @description Connector type identifier (e.g., 'slack', 'github')
+             */
+            type: string;
+            /**
+             * Name
+             * @description Human-readable name
+             */
+            name: string;
+            /**
+             * Description
+             * @description Short description of the connector
+             */
+            description: string;
+            /**
+             * Category
+             * @description Category: 'notifications' or 'project_management'
+             */
+            category: string;
+            /**
+             * Icon
+             * @description Icon identifier for UI
+             */
+            icon: string;
+            /**
+             * Docs Url
+             * @description URL to setup documentation
+             */
+            docs_url: string;
+            /**
+             * Fields
+             * @description Required credential fields
+             */
+            fields: components["schemas"]["CredentialFieldSchema"][];
+            /**
+             * Configured
+             * @description Whether credentials are configured
+             */
+            configured: boolean;
+            /**
+             * Display Name
+             * @description User-provided display name
+             */
+            display_name?: string | null;
+            /**
+             * Test Status
+             * @description Test status: 'untested', 'success', 'failed'
+             * @default untested
+             */
+            test_status: string;
+            /**
+             * Last Tested At
+             * @description When credentials were last tested
+             */
+            last_tested_at?: string | null;
+            /**
+             * Metadata
+             * @description Metadata from last successful test
+             */
+            metadata?: Record<string, never> | null;
+        };
+        /**
+         * ConnectorSuccessResponse
+         * @description Generic success response for configure/delete operations.
+         */
+        ConnectorSuccessResponse: {
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
+        };
+        /**
+         * ConnectorTestRequest
+         * @description Request to test credentials before saving.
+         */
+        ConnectorTestRequest: {
+            /**
+             * Connector Type
+             * @description Connector type to test
+             */
+            connector_type: string;
+            /**
+             * Credentials
+             * @description Credential values to test
+             */
+            credentials: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * ConnectorTestResponse
+         * @description Response from testing a connector's credentials.
+         */
+        ConnectorTestResponse: {
+            /**
+             * Success
+             * @description Whether the test succeeded
+             */
+            success: boolean;
+            /**
+             * Message
+             * @description Human-readable result message
+             */
+            message: string;
+            /**
+             * Metadata
+             * @description Discovered metadata (e.g., username, scopes)
+             */
+            metadata?: Record<string, never> | null;
+        };
+        /**
          * ContainerPolicyResponse
          * @description Response model describing container execution policy.
          */
@@ -1825,6 +2883,53 @@ export interface components {
             timeout_secs: number;
             /** Seccomp Profile */
             seccomp_profile: string | null;
+        };
+        /**
+         * ContextResponse
+         * @description Response model for context endpoints.
+         */
+        ContextResponse: {
+            /** Context */
+            context: Record<string, never>;
+        };
+        /**
+         * ContextUpdate
+         * @description Request model for updating context.
+         */
+        ContextUpdate: {
+            /** Context */
+            context: Record<string, never>;
+        };
+        /**
+         * CredentialFieldSchema
+         * @description Schema for a single credential field definition.
+         */
+        CredentialFieldSchema: {
+            /**
+             * Key
+             * @description Field key used in storage
+             */
+            key: string;
+            /**
+             * Label
+             * @description Human-readable label
+             */
+            label: string;
+            /**
+             * Type
+             * @description Input type: 'text', 'password', 'url'
+             */
+            type: string;
+            /**
+             * Placeholder
+             * @description Placeholder text
+             */
+            placeholder: string;
+            /**
+             * Required
+             * @description Whether the field is required
+             */
+            required: boolean;
         };
         /** DashboardSnapshot */
         DashboardSnapshot: {
@@ -1851,6 +2956,33 @@ export interface components {
             confirmation_password?: string | null;
             /** @default clear_data */
             reset_type: components["schemas"]["ResetType"];
+        };
+        /**
+         * EnrollTokenResponse
+         * @description Response containing enrollment token and setup instructions.
+         */
+        EnrollTokenResponse: {
+            /**
+             * Enroll Token
+             * @description One-time enrollment token
+             */
+            enroll_token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Token expiration timestamp
+             */
+            expires_at: string;
+            /**
+             * Swarmlet Url
+             * @description Swarmlet API URL for runner connection
+             */
+            swarmlet_url: string;
+            /**
+             * Docker Command
+             * @description Complete docker run command for easy setup
+             */
+            docker_command: string;
         };
         /**
          * ExecutionLogsResponse
@@ -1923,6 +3055,48 @@ export interface components {
             session_cookie_name: string;
         };
         /**
+         * JarvisBootstrapResponse
+         * @description Bootstrap response with prompt, tools, and user context.
+         */
+        JarvisBootstrapResponse: {
+            /**
+             * Prompt
+             * @description Complete Jarvis system prompt
+             */
+            prompt: string;
+            /**
+             * Enabled Tools
+             * @description List of available tools
+             */
+            enabled_tools: Record<string, never>[];
+            /**
+             * User Context
+             * @description User context summary (safe subset)
+             */
+            user_context: Record<string, never>;
+        };
+        /**
+         * JarvisCancelResponse
+         * @description Response from supervisor cancellation.
+         */
+        JarvisCancelResponse: {
+            /**
+             * Run Id
+             * @description The cancelled run ID
+             */
+            run_id: number;
+            /**
+             * Status
+             * @description Run status after cancellation
+             */
+            status: string;
+            /**
+             * Message
+             * @description Human-readable status message
+             */
+            message: string;
+        };
+        /**
          * JarvisDispatchRequest
          * @description Jarvis dispatch request to trigger agent execution.
          */
@@ -1991,6 +3165,53 @@ export interface components {
             updated_at: string;
             /** Completed At */
             completed_at?: string | null;
+        };
+        /**
+         * JarvisSupervisorRequest
+         * @description Request to dispatch a task to the supervisor agent.
+         */
+        JarvisSupervisorRequest: {
+            /**
+             * Task
+             * @description Natural language task for the supervisor
+             */
+            task: string;
+            /**
+             * Context
+             * @description Optional context including conversation_id and previous_messages
+             */
+            context?: Record<string, never> | null;
+            /**
+             * Preferences
+             * @description Optional preferences like verbosity and notify_on_complete
+             */
+            preferences?: Record<string, never> | null;
+        };
+        /**
+         * JarvisSupervisorResponse
+         * @description Response from supervisor dispatch.
+         */
+        JarvisSupervisorResponse: {
+            /**
+             * Run Id
+             * @description Supervisor run ID for tracking
+             */
+            run_id: number;
+            /**
+             * Thread Id
+             * @description Supervisor thread ID (long-lived)
+             */
+            thread_id: number;
+            /**
+             * Status
+             * @description Initial run status
+             */
+            status: string;
+            /**
+             * Stream Url
+             * @description SSE stream URL for progress updates
+             */
+            stream_url: string;
         };
         /**
          * LatencyStats
@@ -2167,6 +3388,59 @@ export interface components {
             y: number;
         };
         /**
+         * PullResponse
+         * @description Response from pull operation.
+         */
+        PullResponse: {
+            /**
+             * Ops
+             * @description Operations since cursor
+             */
+            ops: Record<string, never>[];
+            /**
+             * Nextcursor
+             * @description Updated cursor position
+             */
+            nextCursor: number;
+        };
+        /**
+         * PushRequest
+         * @description Push sync operations to server.
+         */
+        PushRequest: {
+            /**
+             * Deviceid
+             * @description Device identifier
+             */
+            deviceId: string;
+            /**
+             * Cursor
+             * @description Client's current cursor position
+             */
+            cursor: number;
+            /**
+             * Ops
+             * @description Operations to push
+             */
+            ops: components["schemas"]["SyncOp"][];
+        };
+        /**
+         * PushResponse
+         * @description Response from push operation.
+         */
+        PushResponse: {
+            /**
+             * Acked
+             * @description List of acknowledged operation IDs
+             */
+            acked: string[];
+            /**
+             * Nextcursor
+             * @description Updated cursor position
+             */
+            nextCursor: number;
+        };
+        /**
          * ResetType
          * @description Database reset operation types.
          * @enum {string}
@@ -2176,12 +3450,142 @@ export interface components {
          * RunStatus
          * @enum {string}
          */
-        RunStatus: "queued" | "running" | "success" | "failed";
+        RunStatus: "queued" | "running" | "success" | "failed" | "cancelled";
         /**
          * RunTrigger
          * @enum {string}
          */
         RunTrigger: "manual" | "schedule" | "chat" | "webhook" | "api";
+        /**
+         * RunnerListResponse
+         * @description Response for listing runners.
+         */
+        RunnerListResponse: {
+            /**
+             * Runners
+             * @description List of runners
+             */
+            runners: components["schemas"]["RunnerResponse"][];
+        };
+        /**
+         * RunnerRegisterRequest
+         * @description Request to register a new runner using an enrollment token.
+         */
+        RunnerRegisterRequest: {
+            /**
+             * Enroll Token
+             * @description One-time enrollment token
+             */
+            enroll_token: string;
+            /**
+             * Name
+             * @description Optional runner name (auto-generated if not provided)
+             */
+            name?: string | null;
+            /**
+             * Labels
+             * @description Optional labels for runner targeting
+             */
+            labels?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Metadata
+             * @description Runner metadata (hostname, os, arch, etc.)
+             */
+            metadata?: Record<string, never> | null;
+        };
+        /**
+         * RunnerRegisterResponse
+         * @description Response after successful runner registration.
+         */
+        RunnerRegisterResponse: {
+            /**
+             * Runner Id
+             * @description Unique runner ID
+             */
+            runner_id: number;
+            /**
+             * Runner Secret
+             * @description Long-lived secret for runner authentication (store securely!)
+             */
+            runner_secret: string;
+            /**
+             * Name
+             * @description Runner name
+             */
+            name: string;
+        };
+        /**
+         * RunnerResponse
+         * @description Response model for a single runner.
+         */
+        RunnerResponse: {
+            /** Id */
+            id: number;
+            /** Owner Id */
+            owner_id: number;
+            /** Name */
+            name: string;
+            /** Labels */
+            labels?: {
+                [key: string]: string;
+            } | null;
+            /** Capabilities */
+            capabilities?: string[];
+            /** Status */
+            status: string;
+            /** Last Seen At */
+            last_seen_at?: string | null;
+            /** Runner Metadata */
+            runner_metadata?: Record<string, never> | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * RunnerSuccessResponse
+         * @description Generic success response for runner operations.
+         */
+        RunnerSuccessResponse: {
+            /**
+             * Success
+             * @default true
+             */
+            success: boolean;
+            /** Message */
+            message?: string | null;
+        };
+        /**
+         * RunnerUpdate
+         * @description Request to update a runner's configuration.
+         */
+        RunnerUpdate: {
+            /**
+             * Name
+             * @description New runner name
+             */
+            name?: string | null;
+            /**
+             * Labels
+             * @description New labels
+             */
+            labels?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Capabilities
+             * @description New capabilities
+             */
+            capabilities?: string[] | null;
+        };
         /** ScheduleWorkflowPayload */
         ScheduleWorkflowPayload: {
             /** Cron Expression */
@@ -2198,6 +3602,37 @@ export interface components {
             is_super_admin: boolean;
             /** Requires Password */
             requires_password: boolean;
+        };
+        /**
+         * SyncOp
+         * @description A single sync operation.
+         */
+        SyncOp: {
+            /**
+             * Opid
+             * @description Client-generated unique operation ID
+             */
+            opId: string;
+            /**
+             * Type
+             * @description Operation type (e.g., message, conversation)
+             */
+            type: string;
+            /**
+             * Body
+             * @description Operation payload
+             */
+            body: Record<string, never>;
+            /**
+             * Lamport
+             * @description Lamport timestamp for ordering
+             */
+            lamport: number;
+            /**
+             * Ts
+             * @description Client timestamp (ISO format)
+             */
+            ts: string;
         };
         /** TemplateDeployRequest */
         TemplateDeployRequest: {
@@ -4049,6 +5484,206 @@ export interface operations {
             };
         };
     };
+    create_enroll_token_api_runners_enroll_token_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_runner_api_runners_register_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerRegisterResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runners_api_runners__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runner_api_runners__runner_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_runner_api_runners__runner_id__patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_runner_api_runners__runner_id__revoke_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     validate_workflow_api_workflows_validate_post: {
         parameters: {
             query?: {
@@ -4889,6 +6524,53 @@ export interface operations {
             };
         };
     };
+    verify_session_api_auth_verify_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     connect_gmail_api_auth_google_gmail_post: {
         parameters: {
             query?: {
@@ -4915,6 +6597,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: string | number;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_authorize_api_oauth_github_authorize_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_callback_api_oauth_github_callback_get: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+                error?: string | null;
+                error_description?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -5016,6 +6764,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_context_api_users_me_context_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_user_context_api_users_me_context_put: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_user_context_api_users_me_context_patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5303,6 +7152,8 @@ export interface operations {
         parameters: {
             query?: {
                 session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
             };
             header?: never;
             path?: never;
@@ -5336,6 +7187,8 @@ export interface operations {
                 limit?: number;
                 agent_id?: number | null;
                 session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
             };
             header?: never;
             path?: never;
@@ -5367,6 +7220,8 @@ export interface operations {
         parameters: {
             query?: {
                 session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
             };
             header?: never;
             path?: never;
@@ -5398,9 +7253,117 @@ export interface operations {
             };
         };
     };
+    jarvis_supervisor_api_jarvis_supervisor_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisSupervisorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisSupervisorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_supervisor_events_api_jarvis_supervisor_events_get: {
+        parameters: {
+            query: {
+                run_id: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_supervisor_cancel_api_jarvis_supervisor__run_id__cancel_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisCancelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     jarvis_events_api_jarvis_events_get: {
         parameters: {
             query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
                 session_factory?: unknown;
             };
             header?: never;
@@ -5416,6 +7379,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_bootstrap_api_jarvis_bootstrap_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_session_proxy_get_api_jarvis_session_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_session_proxy_post_api_jarvis_session_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_tool_proxy_api_jarvis_tool_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_conversation_title_proxy_api_jarvis_conversation_title_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    push_sync_operations_api_jarvis_sync_push_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pull_sync_operations_api_jarvis_sync_pull_get: {
+        parameters: {
+            query?: {
+                /** @description Cursor position to pull from */
+                cursor?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5465,6 +7665,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    get_frontend_errors_api_ops_errors_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5585,6 +7816,446 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContainerPolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_connectors_api_agents__agent_id__connectors__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                agent_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorStatusResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    configure_connector_api_agents__agent_id__connectors__post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                agent_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorConfigureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_credentials_before_save_api_agents__agent_id__connectors_test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                agent_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_configured_connector_api_agents__agent_id__connectors__connector_type__test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                connector_type: string;
+                agent_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_connector_api_agents__agent_id__connectors__connector_type__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                connector_type: string;
+                agent_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_account_connectors_api_account_connectors__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountConnectorStatusResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    configure_account_connector_api_account_connectors__post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorConfigureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorSuccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_credentials_before_save_api_account_connectors_test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_configured_connector_api_account_connectors__connector_type__test_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                connector_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_account_connector_api_account_connectors__connector_type__delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                connector_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    track_batch_api_funnel_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_stats_api_funnel_stats_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stitch_visitor_api_funnel_stitch_visitor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_attribution_api_funnel_attribution_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

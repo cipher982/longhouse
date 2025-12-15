@@ -12,6 +12,8 @@ import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
 import AdminPage from "../pages/AdminPage";
+import RunnersPage from "../pages/RunnersPage";
+import RunnerDetailPage from "../pages/RunnerDetailPage";
 import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
@@ -169,6 +171,22 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <AdminPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/runners",
+          element: (
+            <ErrorBoundary>
+              <RunnersPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/runners/:id",
+          element: (
+            <ErrorBoundary>
+              <RunnerDetailPage />
             </ErrorBoundary>
           )
         },
