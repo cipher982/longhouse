@@ -1,0 +1,287 @@
+"""CRUD operations for Runners.
+
+Provides database access functions for managing runners, enrollment tokens,
+and runner jobs.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import secrets
+from datetime import datetime
+from datetime import timedelta
+from typing import Any
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from zerg.models.models import Runner
+from zerg.models.models import RunnerEnrollToken
+from zerg.models.models import RunnerJob
+from zerg.utils.time import utc_now_naive
+
+
+# ---------------------------------------------------------------------------
+# Token/Secret Helpers
+# ---------------------------------------------------------------------------
+
+
+def generate_token() -> str:
+    """Generate a secure random token."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """Hash a token using SHA256."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Enrollment Tokens
+# ---------------------------------------------------------------------------
+
+
+def create_enroll_token(
+    db: Session,
+    owner_id: int,
+    ttl_minutes: int = 10,
+) -> tuple[RunnerEnrollToken, str]:
+    """Create a new enrollment token.
+
+    Args:
+        db: Database session
+        owner_id: ID of the user creating the token
+        ttl_minutes: Token TTL in minutes (default 10)
+
+    Returns:
+        Tuple of (token_record, plaintext_token)
+    """
+    token = generate_token()
+    token_hash = hash_token(token)
+
+    db_token = RunnerEnrollToken(
+        owner_id=owner_id,
+        token_hash=token_hash,
+        expires_at=utc_now_naive() + timedelta(minutes=ttl_minutes),
+    )
+
+    db.add(db_token)
+    db.commit()
+    db.refresh(db_token)
+
+    return db_token, token
+
+
+def get_enroll_token_by_hash(db: Session, token_hash: str) -> Optional[RunnerEnrollToken]:
+    """Get an enrollment token by its hash."""
+    return db.query(RunnerEnrollToken).filter(RunnerEnrollToken.token_hash == token_hash).first()
+
+
+def validate_and_consume_enroll_token(
+    db: Session,
+    token: str,
+) -> Optional[RunnerEnrollToken]:
+    """Validate and consume an enrollment token.
+
+    Returns the token record if valid and unused, None otherwise.
+    Marks the token as used.
+    """
+    token_hash = hash_token(token)
+    db_token = get_enroll_token_by_hash(db, token_hash)
+
+    if not db_token:
+        return None
+
+    # Check expiry
+    if db_token.expires_at < utc_now_naive():
+        return None
+
+    # Check if already used
+    if db_token.used_at is not None:
+        return None
+
+    # Mark as used
+    db_token.used_at = utc_now_naive()
+    db.commit()
+    db.refresh(db_token)
+
+    return db_token
+
+
+# ---------------------------------------------------------------------------
+# Runners
+# ---------------------------------------------------------------------------
+
+
+def create_runner(
+    db: Session,
+    owner_id: int,
+    name: str,
+    auth_secret: str,
+    labels: Optional[dict[str, str]] = None,
+    capabilities: Optional[list[str]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Runner:
+    """Create a new runner.
+
+    Args:
+        db: Database session
+        owner_id: ID of the user owning the runner
+        name: Runner name (must be unique per owner)
+        auth_secret: Plaintext secret (will be hashed)
+        labels: Optional labels for targeting
+        capabilities: Optional capabilities list (defaults to ["exec.readonly"])
+        metadata: Optional metadata from runner
+
+    Returns:
+        Created runner record
+    """
+    secret_hash = hash_token(auth_secret)
+
+    db_runner = Runner(
+        owner_id=owner_id,
+        name=name,
+        auth_secret_hash=secret_hash,
+        labels=labels,
+        capabilities=capabilities or ["exec.readonly"],
+        runner_metadata=metadata,
+        status="offline",
+    )
+
+    db.add(db_runner)
+    db.commit()
+    db.refresh(db_runner)
+
+    return db_runner
+
+
+def get_runner(db: Session, runner_id: int) -> Optional[Runner]:
+    """Get a runner by ID."""
+    return db.query(Runner).filter(Runner.id == runner_id).first()
+
+
+def get_runner_by_name(db: Session, owner_id: int, name: str) -> Optional[Runner]:
+    """Get a runner by owner and name."""
+    return db.query(Runner).filter(Runner.owner_id == owner_id, Runner.name == name).first()
+
+
+def get_runners(
+    db: Session,
+    owner_id: int,
+    skip: int = 0,
+    limit: int = 100,
+) -> list[Runner]:
+    """Get all runners for a user.
+
+    Args:
+        db: Database session
+        owner_id: ID of the user
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+
+    Returns:
+        List of runners
+    """
+    return db.query(Runner).filter(Runner.owner_id == owner_id).offset(skip).limit(limit).all()
+
+
+def update_runner(
+    db: Session,
+    runner_id: int,
+    name: Optional[str] = None,
+    labels: Optional[dict[str, str]] = None,
+    capabilities: Optional[list[str]] = None,
+) -> Optional[Runner]:
+    """Update a runner's configuration.
+
+    Args:
+        db: Database session
+        runner_id: ID of the runner to update
+        name: New name (optional)
+        labels: New labels (optional)
+        capabilities: New capabilities (optional)
+
+    Returns:
+        Updated runner or None if not found
+    """
+    db_runner = get_runner(db, runner_id)
+    if not db_runner:
+        return None
+
+    if name is not None:
+        db_runner.name = name
+    if labels is not None:
+        db_runner.labels = labels
+    if capabilities is not None:
+        db_runner.capabilities = capabilities
+
+    db.commit()
+    db.refresh(db_runner)
+
+    return db_runner
+
+
+def revoke_runner(db: Session, runner_id: int) -> Optional[Runner]:
+    """Revoke a runner (mark as revoked, cannot reconnect).
+
+    Args:
+        db: Database session
+        runner_id: ID of the runner to revoke
+
+    Returns:
+        Revoked runner or None if not found
+    """
+    db_runner = get_runner(db, runner_id)
+    if not db_runner:
+        return None
+
+    db_runner.status = "revoked"
+    db.commit()
+    db.refresh(db_runner)
+
+    return db_runner
+
+
+def delete_runner(db: Session, runner_id: int) -> bool:
+    """Delete a runner permanently.
+
+    Args:
+        db: Database session
+        runner_id: ID of the runner to delete
+
+    Returns:
+        True if deleted, False if not found
+    """
+    db_runner = get_runner(db, runner_id)
+    if not db_runner:
+        return False
+
+    db.delete(db_runner)
+    db.commit()
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Runner Jobs (for future use)
+# ---------------------------------------------------------------------------
+
+
+def get_runner_jobs(
+    db: Session,
+    runner_id: int,
+    skip: int = 0,
+    limit: int = 100,
+) -> list[RunnerJob]:
+    """Get jobs for a specific runner.
+
+    Args:
+        db: Database session
+        runner_id: ID of the runner
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+
+    Returns:
+        List of runner jobs
+    """
+    return db.query(RunnerJob).filter(RunnerJob.runner_id == runner_id).offset(skip).limit(limit).all()
