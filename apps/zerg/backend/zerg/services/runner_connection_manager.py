@@ -6,7 +6,6 @@ for routing messages to runners.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from typing import Dict
@@ -123,7 +122,7 @@ class RunnerConnectionManager:
                 f"Failed to send message to runner {runner_id} (owner {owner_id}): {e}"
             )
             # Connection is broken, unregister it
-            self.unregister(owner_id, runner_id)
+            self.unregister(owner_id, runner_id, ws)
             return False
 
     def get_online_count(self, owner_id: Optional[int] = None) -> int:
