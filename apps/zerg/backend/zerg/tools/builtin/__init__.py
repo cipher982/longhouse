@@ -16,6 +16,7 @@ from zerg.tools.builtin.jira_tools import TOOLS as JIRA_TOOLS
 from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
+from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
@@ -36,6 +37,7 @@ BUILTIN_TOOLS = (
     + LINEAR_TOOLS
     + MATH_TOOLS
     + NOTION_TOOLS
+    + RUNNER_TOOLS
     + SLACK_TOOLS
     + SMS_TOOLS
     + SSH_TOOLS

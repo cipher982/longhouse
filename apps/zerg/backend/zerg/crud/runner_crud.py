@@ -264,8 +264,231 @@ def delete_runner(db: Session, runner_id: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Runner Jobs (for future use)
+# Runner Jobs
 # ---------------------------------------------------------------------------
+
+
+def create_runner_job(
+    db: Session,
+    owner_id: int,
+    runner_id: int,
+    command: str,
+    timeout_secs: int,
+    worker_id: str | None = None,
+    run_id: str | None = None,
+) -> RunnerJob:
+    """Create a new runner job record.
+
+    Args:
+        db: Database session
+        owner_id: ID of the user owning the job
+        runner_id: ID of the runner to execute the job
+        command: Shell command to execute
+        timeout_secs: Maximum execution time in seconds
+        worker_id: Optional worker ID for correlation
+        run_id: Optional run ID for correlation
+
+    Returns:
+        Created job record with status='queued'
+    """
+    import uuid
+
+    job = RunnerJob(
+        id=str(uuid.uuid4()),
+        owner_id=owner_id,
+        runner_id=runner_id,
+        command=command,
+        timeout_secs=timeout_secs,
+        worker_id=worker_id,
+        run_id=run_id,
+        status="queued",
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+def get_job(db: Session, job_id: str) -> Optional[RunnerJob]:
+    """Get a job by ID.
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+
+    Returns:
+        Job record or None if not found
+    """
+    return db.query(RunnerJob).filter(RunnerJob.id == job_id).first()
+
+
+def update_job_started(db: Session, job_id: str) -> Optional[RunnerJob]:
+    """Mark a job as running and set started_at.
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+
+    Returns:
+        Updated job record or None if not found
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    job.status = "running"
+    job.started_at = utc_now_naive()
+
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+def update_job_output(
+    db: Session,
+    job_id: str,
+    stream: str,
+    data: str,
+) -> Optional[RunnerJob]:
+    """Append output data to job stdout or stderr.
+
+    Implements truncation at 50KB combined output to prevent
+    unbounded database growth.
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+        stream: "stdout" or "stderr"
+        data: Output data to append
+
+    Returns:
+        Updated job record or None if not found
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    # Append to the appropriate stream
+    if stream == "stdout":
+        current = job.stdout_trunc or ""
+        job.stdout_trunc = current + data
+    elif stream == "stderr":
+        current = job.stderr_trunc or ""
+        job.stderr_trunc = current + data
+
+    # Truncate combined output at 50KB
+    MAX_COMBINED_OUTPUT = 50 * 1024
+    stdout_len = len(job.stdout_trunc or "")
+    stderr_len = len(job.stderr_trunc or "")
+    combined_len = stdout_len + stderr_len
+
+    if combined_len > MAX_COMBINED_OUTPUT:
+        # Truncate the stream that was just updated
+        if stream == "stdout" and job.stdout_trunc:
+            # Keep as much stderr as possible, truncate stdout
+            max_stdout = MAX_COMBINED_OUTPUT - stderr_len
+            if max_stdout > 0:
+                job.stdout_trunc = job.stdout_trunc[:max_stdout] + "\n[truncated]"
+            else:
+                job.stdout_trunc = "[truncated]"
+        elif stream == "stderr" and job.stderr_trunc:
+            # Keep as much stdout as possible, truncate stderr
+            max_stderr = MAX_COMBINED_OUTPUT - stdout_len
+            if max_stderr > 0:
+                job.stderr_trunc = job.stderr_trunc[:max_stderr] + "\n[truncated]"
+            else:
+                job.stderr_trunc = "[truncated]"
+
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+def update_job_completed(
+    db: Session,
+    job_id: str,
+    exit_code: int,
+    duration_ms: int,
+) -> Optional[RunnerJob]:
+    """Mark a job as completed (success or failed based on exit_code).
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+        exit_code: Command exit code (0 = success, non-zero = failed)
+        duration_ms: Execution duration in milliseconds
+
+    Returns:
+        Updated job record or None if not found
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    job.status = "success" if exit_code == 0 else "failed"
+    job.exit_code = exit_code
+    job.finished_at = utc_now_naive()
+
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+def update_job_error(
+    db: Session,
+    job_id: str,
+    error: str,
+) -> Optional[RunnerJob]:
+    """Mark a job as failed with an error message.
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+        error: Error message
+
+    Returns:
+        Updated job record or None if not found
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    job.status = "failed"
+    job.error = error
+    job.finished_at = utc_now_naive()
+
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+def update_job_timeout(db: Session, job_id: str) -> Optional[RunnerJob]:
+    """Mark a job as timed out.
+
+    Args:
+        db: Database session
+        job_id: Job UUID as string
+
+    Returns:
+        Updated job record or None if not found
+    """
+    job = get_job(db, job_id)
+    if not job:
+        return None
+
+    job.status = "timeout"
+    job.finished_at = utc_now_naive()
+
+    db.commit()
+    db.refresh(job)
+
+    return job
 
 
 def get_runner_jobs(
