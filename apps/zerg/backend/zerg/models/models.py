@@ -759,7 +759,7 @@ class Runner(Base):
     name = Column(String, nullable=False)  # User-editable, unique per owner
     labels = Column(MutableDict.as_mutable(JSON), nullable=True)  # e.g. {"role": "laptop", "env": "prod"}
     capabilities = Column(
-        MutableList.as_mutable(JSON), nullable=False, default=["exec.readonly"]
+        MutableList.as_mutable(JSON), nullable=False, default=lambda: ["exec.readonly"]
     )  # e.g. ["exec.readonly"], ["exec.full", "docker"]
 
     # Connection state

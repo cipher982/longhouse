@@ -3,6 +3,7 @@
 Tests enrollment, registration, and management of runners.
 """
 
+import threading
 from datetime import datetime
 from datetime import timedelta
 
@@ -88,7 +89,9 @@ def test_register_runner_auto_name(client: TestClient, db_session: Session, test
     assert response.status_code == 200
 
     data = response.json()
-    assert data["name"] == "runner-1"  # First runner
+    # Auto-generated name should start with "runner-" and have random suffix
+    assert data["name"].startswith("runner-")
+    assert len(data["name"]) > len("runner-")  # Has suffix
 
 
 def test_register_runner_with_expired_token(client: TestClient, db_session: Session, test_user: User):
@@ -420,3 +423,55 @@ def test_token_reuse_prevented(client: TestClient, db_session: Session, test_use
     )
     assert response2.status_code == 400
     assert "Invalid or expired" in response2.json()["detail"]
+
+
+def test_concurrent_token_consumption(client: TestClient, db_session: Session, test_user: User):
+    """Test that concurrent registration attempts with the same token only succeed once.
+
+    This verifies the atomic UPDATE...RETURNING implementation prevents race conditions.
+    """
+    token_record, plaintext_token = runner_crud.create_enroll_token(
+        db=db_session,
+        owner_id=test_user.id,
+        ttl_minutes=10,
+    )
+
+    results = []
+    errors = []
+
+    def register_runner(name: str):
+        """Thread worker to attempt registration."""
+        try:
+            response = client.post(
+                "/api/runners/register",
+                json={"enroll_token": plaintext_token, "name": name},
+            )
+            results.append((name, response.status_code, response.json()))
+        except Exception as e:
+            errors.append((name, str(e)))
+
+    # Launch 5 concurrent registration attempts
+    threads = []
+    for i in range(5):
+        t = threading.Thread(target=register_runner, args=(f"runner-{i}",))
+        threads.append(t)
+        t.start()
+
+    # Wait for all threads
+    for t in threads:
+        t.join()
+
+    # Verify no exceptions occurred
+    assert len(errors) == 0, f"Unexpected errors: {errors}"
+
+    # Verify exactly one success (200) and four failures (400)
+    success_count = sum(1 for _, status, _ in results if status == 200)
+    failure_count = sum(1 for _, status, _ in results if status == 400)
+
+    assert success_count == 1, f"Expected exactly 1 success, got {success_count}"
+    assert failure_count == 4, f"Expected 4 failures, got {failure_count}"
+
+    # Verify the failure responses have correct error message
+    for name, status, data in results:
+        if status == 400:
+            assert "Invalid or expired" in data["detail"]
