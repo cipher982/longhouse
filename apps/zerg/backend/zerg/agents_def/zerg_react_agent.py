@@ -199,6 +199,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             result = await asyncio.to_thread(_call_model_sync, messages, False)
 
         end_time = datetime.now(timezone.utc)
+        duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
         # Record metrics if collector is available
         from zerg.worker_metrics import get_metrics_collector
@@ -225,6 +226,31 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
             )
+
+            # Tier 3 telemetry: Structured logging for dev visibility (opaque to LLMs)
+            # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
+            try:
+                from zerg.context import get_worker_context
+                ctx = get_worker_context()
+                log_extra = {
+                    "event": "llm_call_complete",
+                    "phase": phase,
+                    "model": agent_row.model,
+                    "duration_ms": duration_ms,
+                }
+                if ctx:
+                    log_extra["worker_id"] = ctx.worker_id
+                if prompt_tokens is not None:
+                    log_extra["prompt_tokens"] = prompt_tokens
+                if completion_tokens is not None:
+                    log_extra["completion_tokens"] = completion_tokens
+                if total_tokens is not None:
+                    log_extra["total_tokens"] = total_tokens
+
+                logger.info("llm_call_complete", extra=log_extra)
+            except Exception:
+                # Telemetry logging is best-effort - don't fail the worker
+                pass
 
         return result
 
@@ -455,6 +481,25 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 success=not is_error,
                 error=error_msg if is_error else None,
             )
+
+            # Tier 3 telemetry: Structured logging for dev visibility (opaque to LLMs)
+            # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
+            try:
+                log_extra = {
+                    "event": "tool_call_complete",
+                    "tool": tool_name,
+                    "duration_ms": duration_ms,
+                    "success": not is_error,
+                }
+                if ctx:
+                    log_extra["worker_id"] = ctx.worker_id
+                if is_error and error_msg:
+                    log_extra["error"] = error_msg[:200]  # Truncate for log safety
+
+                logger.info("tool_call_complete", extra=log_extra)
+            except Exception:
+                # Telemetry logging is best-effort - don't fail the worker
+                pass
 
         # Emit appropriate event if in worker context
         if ctx and tool_record:
