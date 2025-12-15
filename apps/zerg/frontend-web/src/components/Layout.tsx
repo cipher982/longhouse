@@ -133,6 +133,7 @@ export default function Layout({ children }: PropsWithChildren) {
   const isIntegrationsRoute = location.pathname.startsWith("/settings/integrations");
   const isAdminRoute = location.pathname.startsWith("/admin");
   const isChatRoute = location.pathname.startsWith("/chat");
+  const isRunnersRoute = location.pathname.startsWith("/runners");
 
   // Check if user has admin access using authoritative role field
   const isAdmin = user?.role === 'ADMIN';
@@ -179,6 +180,15 @@ export default function Layout({ children }: PropsWithChildren) {
           onClick={() => handleTabClick("/settings/integrations")}
         >
           Integrations
+        </button>
+        <button
+          id="global-runners-tab"
+          type="button"
+          data-testid="global-runners-tab"
+          className={clsx("tab-button", { active: isRunnersRoute })}
+          onClick={() => handleTabClick("/runners")}
+        >
+          Runners
         </button>
         {isAdmin && (
           <button
