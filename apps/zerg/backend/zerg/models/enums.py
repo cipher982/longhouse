@@ -74,6 +74,25 @@ class FailureKind(str, Enum):
     UNKNOWN = "unknown"  # unclassified failure
 
 
+class RunnerStatus(str, Enum):
+    """Runner connection status"""
+
+    ONLINE = "online"
+    OFFLINE = "offline"
+    REVOKED = "revoked"
+
+
+class RunnerJobStatus(str, Enum):
+    """Runner job execution status"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    CANCELED = "canceled"
+
+
 __all__ = [
     "UserRole",
     "AgentStatus",
@@ -83,4 +102,6 @@ __all__ = [
     "Phase",
     "Result",
     "FailureKind",
+    "RunnerStatus",
+    "RunnerJobStatus",
 ]

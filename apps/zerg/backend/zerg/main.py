@@ -61,6 +61,7 @@ from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
+from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
@@ -477,6 +478,7 @@ app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
 app.include_router(triggers_router, prefix=f"{API_PREFIX}")
 app.include_router(runs_router, prefix=f"{API_PREFIX}")
+app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
 app.include_router(workflows_router, prefix=f"{API_PREFIX}")
 app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
 app.include_router(auth_router, prefix=f"{API_PREFIX}")

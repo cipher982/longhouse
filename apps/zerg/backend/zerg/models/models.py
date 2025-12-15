@@ -728,3 +728,125 @@ class WorkerJob(Base):
 
     # Relationships
     owner = relationship("User", backref="worker_jobs")
+
+
+# ---------------------------------------------------------------------------
+# Runners – User-owned execution infrastructure (Runners v1)
+# ---------------------------------------------------------------------------
+
+
+class Runner(Base):
+    """User-owned runner daemon for executing commands.
+
+    Runners connect outbound to the Swarmlet platform and execute jobs
+    on behalf of workers. This enables secure execution without backend
+    access to user SSH keys.
+    """
+
+    __tablename__ = "runners"
+    __table_args__ = (
+        # Ensure unique runner names per owner
+        UniqueConstraint("owner_id", "name", name="uix_runner_owner_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref="runners")
+
+    # Identity and configuration
+    name = Column(String, nullable=False)  # User-editable, unique per owner
+    labels = Column(MutableDict.as_mutable(JSON), nullable=True)  # e.g. {"role": "laptop", "env": "prod"}
+    capabilities = Column(
+        MutableList.as_mutable(JSON), nullable=False, default=["exec.readonly"]
+    )  # e.g. ["exec.readonly"], ["exec.full", "docker"]
+
+    # Connection state
+    status = Column(String, nullable=False, default="offline")  # online|offline|revoked
+    last_seen_at = Column(DateTime, nullable=True)
+
+    # Authentication
+    auth_secret_hash = Column(String, nullable=False)  # SHA256 hash of runner secret
+
+    # Metadata from runner (hostname, os, arch, version, docker_available, etc.)
+    runner_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    jobs = relationship("RunnerJob", back_populates="runner", cascade="all, delete-orphan")
+
+
+class RunnerEnrollToken(Base):
+    """One-time enrollment token for registering a new runner.
+
+    Tokens are created by the API and consumed during runner registration.
+    They expire after a short TTL (e.g. 10 minutes) for security.
+    """
+
+    __tablename__ = "runner_enroll_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref="runner_enroll_tokens")
+
+    # Token data
+    token_hash = Column(String, nullable=False, unique=True, index=True)  # SHA256 hash
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)  # Set when token is consumed
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class RunnerJob(Base):
+    """Execution job for a runner.
+
+    Represents a single command execution request sent to a runner.
+    Includes audit trail and output truncation for safety.
+    """
+
+    __tablename__ = "runner_jobs"
+
+    id = Column(String, primary_key=True)  # UUID as string
+
+    # Ownership and correlation
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref="runner_jobs")
+
+    worker_id = Column(String, nullable=True, index=True)  # Link to WorkerArtifactStore
+    run_id = Column(String, nullable=True)  # Link to run context
+
+    # Runner assignment
+    runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)
+    runner = relationship("Runner", back_populates="jobs")
+
+    # Job specification
+    command = Column(Text, nullable=False)
+    timeout_secs = Column(Integer, nullable=False)
+
+    # Execution state
+    status = Column(String, nullable=False, default="queued")  # queued|running|success|failed|timeout|canceled
+    exit_code = Column(Integer, nullable=True)
+
+    # Timing
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    # Output (truncated/capped for safety)
+    stdout_trunc = Column(Text, nullable=True)
+    stderr_trunc = Column(Text, nullable=True)
+
+    # Error handling
+    error = Column(Text, nullable=True)
+
+    # Future: file upload support
+    artifacts = Column(MutableDict.as_mutable(JSON), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
