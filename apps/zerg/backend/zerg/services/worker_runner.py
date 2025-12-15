@@ -153,6 +153,11 @@ class WorkerRunner:
         )
         context_token = set_worker_context(worker_context)
 
+        # Set up metrics collector for performance tracking
+        from zerg.worker_metrics import MetricsCollector, set_metrics_collector, reset_metrics_collector
+        metrics_collector = MetricsCollector(worker_id)
+        set_metrics_collector(metrics_collector)
+
         temp_agent = False  # Track temporary agent for cleanup on failure
         try:
             # Start worker (marks as running)
@@ -371,6 +376,14 @@ class WorkerRunner:
                 duration_ms=duration_ms,
             )
         finally:
+            # Flush metrics to disk (best-effort)
+            try:
+                metrics_collector.flush(self.artifact_store)
+            except Exception:
+                logger.warning("Failed to flush metrics for worker %s", worker_id, exc_info=True)
+            finally:
+                reset_metrics_collector()
+
             # Always reset worker context to prevent leaking to other calls
             reset_worker_context(context_token)
 
@@ -634,6 +647,9 @@ Be factual and concise. Do NOT add status judgments.
 
 Example: "Backup completed 157GB in 17s, no errors found"
 """
+            # Track timing for metrics
+            start_time = datetime.now(timezone.utc)
+
             client = AsyncOpenAI()
             response = await asyncio.wait_for(
                 client.chat.completions.create(
@@ -643,6 +659,24 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 ),
                 timeout=5.0,
             )
+
+            end_time = datetime.now(timezone.utc)
+
+            # Record metrics if collector is available
+            from zerg.worker_metrics import get_metrics_collector
+            collector = get_metrics_collector()
+            if collector:
+                # Extract token usage from OpenAI response
+                usage = response.usage
+                collector.record_llm_call(
+                    phase="summary",
+                    model=DEFAULT_WORKER_MODEL_ID,
+                    start_ts=start_time,
+                    end_ts=end_time,
+                    prompt_tokens=usage.prompt_tokens if usage else None,
+                    completion_tokens=usage.completion_tokens if usage else None,
+                    total_tokens=usage.total_tokens if usage else None,
+                )
 
             summary = response.choices[0].message.content.strip()
             if len(summary) > MAX_CHARS:

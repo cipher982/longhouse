@@ -724,5 +724,25 @@ class WorkerArtifactStore:
             # Summary update failure is non-fatal - log and continue
             logger.warning(f"Failed to update summary for worker {worker_id}: {e}")
 
+    def save_metric(self, worker_id: str, metric: dict[str, Any]) -> None:
+        """Append a metric event to metrics.jsonl.
+
+        This is the lowest-level append operation. For structured metrics
+        logging, consider using MetricsCollector context manager instead.
+
+        Parameters
+        ----------
+        worker_id
+            Unique worker identifier
+        metric
+            Metric dict (event, timestamps, duration, etc.)
+        """
+        worker_dir = self._get_worker_dir(worker_id)
+        metrics_path = worker_dir / "metrics.jsonl"
+
+        # Append metric as JSON line
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps(metric) + "\n")
+
 
 __all__ = ["WorkerArtifactStore"]

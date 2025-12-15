@@ -163,10 +163,25 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         llm_with_tools = _make_llm(agent_row, tools)
         return llm_with_tools.invoke(messages)
 
-    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False):
-        """Run the LLM call with optional token streaming via callbacks."""
+    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"):
+        """Run the LLM call with optional token streaming via callbacks.
+
+        Parameters
+        ----------
+        messages
+            Message history to send to the LLM
+        enable_token_stream
+            Whether to enable token streaming
+        phase
+            Phase name for metrics tracking (e.g., "reasoning", "synthesis")
+        """
+        from datetime import datetime, timezone
+
         # Create LLM dynamically with current enable_token_stream flag
         llm_with_tools = _make_llm(agent_row, tools)
+
+        # Track timing for metrics
+        start_time = datetime.now(timezone.utc)
 
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
@@ -178,11 +193,40 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 messages,
                 config={"callbacks": [callback]}
             )
-            return result
         else:
             # For non-streaming, use sync invoke wrapped in thread
             import asyncio
-            return await asyncio.to_thread(_call_model_sync, messages, False)
+            result = await asyncio.to_thread(_call_model_sync, messages, False)
+
+        end_time = datetime.now(timezone.utc)
+
+        # Record metrics if collector is available
+        from zerg.worker_metrics import get_metrics_collector
+        collector = get_metrics_collector()
+        if collector:
+            # Extract token usage from result
+            prompt_tokens = None
+            completion_tokens = None
+            total_tokens = None
+
+            if isinstance(result, AIMessage):
+                meta = getattr(result, "response_metadata", None) or {}
+                usage = meta.get("token_usage") or meta.get("usage") or {}
+                prompt_tokens = usage.get("prompt_tokens")
+                completion_tokens = usage.get("completion_tokens")
+                total_tokens = usage.get("total_tokens")
+
+            collector.record_llm_call(
+                phase=phase,
+                model=agent_row.model,
+                start_ts=start_time,
+                end_ts=end_time,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
+
+        return result
 
     #
     # NOTE ON CONCURRENCY
@@ -393,11 +437,24 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Execute tool in thread (unchanged behavior)
         result = await asyncio.to_thread(_call_tool_sync, tool_call)
-        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+        end_time = datetime.now(timezone.utc)
+        duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
         # Check if tool execution failed
         result_content = str(result.content) if hasattr(result, "content") else str(result)
         is_error, error_msg = check_tool_error(result_content)
+
+        # Record metrics if collector is available
+        from zerg.worker_metrics import get_metrics_collector
+        metrics_collector = get_metrics_collector()
+        if metrics_collector:
+            metrics_collector.record_tool_call(
+                tool_name=tool_name,
+                start_ts=start_time,
+                end_ts=end_time,
+                success=not is_error,
+                error=error_msg if is_error else None,
+            )
 
         # Emit appropriate event if in worker context
         if ctx and tool_record:
@@ -485,7 +542,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         current_messages = messages or previous or []
 
         # Start by calling the model with the current context
-        llm_response = await _call_model_async(current_messages, enable_token_stream)
+        llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
 
         # Until the model stops calling tools, continue the loop
         import asyncio
@@ -521,7 +578,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 return final_messages
 
             # Call model again with updated messages
-            llm_response = await _call_model_async(current_messages, enable_token_stream)
+            llm_response = await _call_model_async(current_messages, enable_token_stream, phase="tool_iteration")
 
         # Add the final response to history
         final_messages = add_messages(current_messages, [llm_response])
