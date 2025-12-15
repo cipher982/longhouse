@@ -71,8 +71,19 @@ Before spawning a new worker, check if we already have the answer:
   - "metadata.json" - Status, timing, config
   - "thread.jsonl" - Full conversation history
   - "tool_calls/*.txt" - Individual tool outputs
+  - "metrics.jsonl" - Performance breakdown (see below)
 
 This avoids redundant work. If the user asked about something recently, just read that result.
+
+## Performance Investigation
+
+When workers take unexpectedly long (e.g., >30s for simple tasks):
+- Worker results always include "Execution time: Xms" for reference
+- Detailed breakdown available in: `read_worker_file(job_id, "metrics.jsonl")`
+- Metrics show: LLM call timing, tool execution time, token counts per phase
+- Format: One JSON event per line with `event` type ("llm_call" or "tool_call")
+
+Only investigate metrics when performance seems anomalous. For normal executions, the summary timing is sufficient.
 
 ## Your Tools
 
