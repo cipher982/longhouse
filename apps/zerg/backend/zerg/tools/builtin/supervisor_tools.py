@@ -7,21 +7,18 @@ The supervisor/worker pattern enables complex delegation scenarios where a super
 can spawn multiple workers for parallel execution or break down complex tasks.
 """
 
-import asyncio
-import json
 import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from typing import Any
 from typing import List
 
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
-from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.llm_decider import DecisionMode
+from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +60,11 @@ async def spawn_worker_async(
         spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
         spawn_worker("Complex task", wait=True, decision_mode="hybrid")  # LLM-assisted decisions
     """
-    from zerg.crud import crud
-    from zerg.events import EventType, event_bus
+    from zerg.events import EventType
+    from zerg.events import event_bus
     from zerg.models.models import WorkerJob
-    from zerg.services.roundabout_monitor import RoundaboutMonitor, format_roundabout_result
+    from zerg.services.roundabout_monitor import RoundaboutMonitor
+    from zerg.services.roundabout_monitor import format_roundabout_result
     from zerg.services.supervisor_context import get_supervisor_run_id
 
     # Get database session from credential resolver context
@@ -249,6 +247,26 @@ def list_workers(
     return run_async_safely(list_workers_async(limit, status, since_hours))
 
 
+def format_duration(duration_ms: int) -> str:
+    """Format duration for human readability.
+
+    Args:
+        duration_ms: Duration in milliseconds
+
+    Returns:
+        Formatted string: "123ms" for <1s, "1.2s" for 1s+, "2m 15s" for 1min+
+    """
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    elif duration_ms < 60000:
+        seconds = duration_ms / 1000
+        return f"{seconds:.1f}s"
+    else:
+        minutes = duration_ms // 60000
+        remaining_seconds = (duration_ms % 60000) // 1000
+        return f"{minutes}m {remaining_seconds}s"
+
+
 async def read_worker_result_async(job_id: str) -> str:
     """Read the final result from a completed worker job.
 
@@ -293,7 +311,7 @@ async def read_worker_result_async(job_id: str) -> str:
 
         # Extract duration_ms from metadata
         duration_ms = metadata.get("duration_ms")
-        duration_info = f"\n\nExecution time: {duration_ms}ms" if duration_ms is not None else ""
+        duration_info = f"\n\nExecution time: {format_duration(duration_ms)}" if duration_ms is not None else ""
 
         return f"Result from worker job {job_id} (worker {job.worker_id}):{duration_info}\n\n{result}"
 
@@ -508,7 +526,7 @@ async def get_worker_metadata_async(job_id: str) -> str:
             f"Status: {job.status}",
             f"Task: {job.task}",
             f"Model: {job.model}",
-            f"\nTimestamps:",
+            "\nTimestamps:",
             f"  Created: {job.created_at.isoformat() if job.created_at else 'N/A'}",
             f"  Started: {job.started_at.isoformat() if job.started_at else 'N/A'}",
             f"  Finished: {job.finished_at.isoformat() if job.finished_at else 'N/A'}",
