@@ -294,3 +294,75 @@ async def test_tools_registered_in_builtin(db_session):
     # Verify tool descriptions
     spawn_tool = registry.get("spawn_worker")
     assert "delegate" in spawn_tool.description.lower() or "spawn" in spawn_tool.description.lower()
+
+
+@pytest.mark.asyncio
+async def test_read_worker_result_includes_duration(
+    supervisor_agent, db_session, test_user, temp_artifact_path
+):
+    """Test that read_worker_result returns duration_ms from completed workers (Tier 1 visibility)."""
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_runner import WorkerRunner
+    from zerg.tools.builtin.supervisor_tools import read_worker_result
+    from zerg.connectors.context import set_credential_resolver
+    from zerg.connectors.resolver import CredentialResolver
+    from datetime import datetime, timezone
+
+    # Create and run a worker directly via WorkerRunner
+    # Set up credential resolver context FIRST (needed for worker execution)
+    resolver = CredentialResolver(
+        agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id
+    )
+    set_credential_resolver(resolver)
+
+    try:
+        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
+        runner = WorkerRunner(artifact_store=artifact_store)
+
+        result = await runner.run_worker(
+            db=db_session,
+            task="Calculate 7 * 6",
+            agent=None,
+            agent_config={"model": TEST_WORKER_MODEL, "owner_id": test_user.id},
+        )
+
+        worker_id = result.worker_id
+
+        # Create a WorkerJob record linking to this worker
+        worker_job = WorkerJob(
+            owner_id=test_user.id,
+            task="Calculate 7 * 6",
+            model=TEST_WORKER_MODEL,
+            status="success",
+            worker_id=worker_id,
+            created_at=datetime.now(timezone.utc),
+            started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+        )
+        db_session.add(worker_job)
+        db_session.commit()
+        db_session.refresh(worker_job)
+
+        job_id = worker_job.id
+
+        # Call read_worker_result_async directly (to preserve context in same async loop)
+        from zerg.tools.builtin.supervisor_tools import read_worker_result_async
+        result_text = await read_worker_result_async(str(job_id))
+
+        # Verify the result includes duration_ms
+        assert "Execution time:" in result_text, f"Result should include execution time. Got: {result_text}"
+        assert "ms" in result_text, "Result should include milliseconds unit"
+
+        # Verify the duration_ms is actually a number
+        # Extract the duration using a simple pattern
+        import re
+        duration_match = re.search(r"Execution time: (\d+)ms", result_text)
+        assert duration_match is not None, "Should find duration in result"
+        duration_value = int(duration_match.group(1))
+        assert duration_value > 0, "Duration should be greater than 0ms"
+
+        # Verify we still get the actual result text
+        assert "42" in result_text or "result" in result_text.lower(), "Result should include actual worker output"
+
+    finally:
+        set_credential_resolver(None)
