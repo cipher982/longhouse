@@ -13,6 +13,7 @@ from datetime import timedelta
 from typing import Any
 from typing import Optional
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from zerg.models.models import Runner
@@ -81,30 +82,30 @@ def validate_and_consume_enroll_token(
     db: Session,
     token: str,
 ) -> Optional[RunnerEnrollToken]:
-    """Validate and consume an enrollment token.
+    """Validate and consume an enrollment token atomically.
 
     Returns the token record if valid and unused, None otherwise.
-    Marks the token as used.
+    Uses atomic UPDATE...WHERE...RETURNING to prevent race conditions.
     """
     token_hash = hash_token(token)
-    db_token = get_enroll_token_by_hash(db, token_hash)
+    now = utc_now_naive()
 
-    if not db_token:
-        return None
+    # Atomic update: only consume if unused and not expired
+    stmt = (
+        update(RunnerEnrollToken)
+        .where(
+            RunnerEnrollToken.token_hash == token_hash,
+            RunnerEnrollToken.used_at.is_(None),
+            RunnerEnrollToken.expires_at > now,
+        )
+        .values(used_at=now)
+        .returning(RunnerEnrollToken)
+    )
 
-    # Check expiry
-    if db_token.expires_at < utc_now_naive():
-        return None
+    result = db.execute(stmt)
+    db.flush()  # Flush changes but let caller handle commit
 
-    # Check if already used
-    if db_token.used_at is not None:
-        return None
-
-    # Mark as used
-    db_token.used_at = utc_now_naive()
-    db.commit()
-    db.refresh(db_token)
-
+    db_token = result.scalar_one_or_none()
     return db_token
 
 

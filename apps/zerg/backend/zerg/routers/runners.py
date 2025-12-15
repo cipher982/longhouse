@@ -20,7 +20,9 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Path
+from fastapi import Response
 from fastapi import status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
@@ -51,6 +53,7 @@ router = APIRouter(
 
 @router.post("/enroll-token", response_model=EnrollTokenResponse)
 def create_enroll_token(
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> EnrollTokenResponse:
@@ -59,6 +62,9 @@ def create_enroll_token(
     Returns a one-time token and setup instructions including a complete
     docker run command for easy deployment.
     """
+    # Prevent caching of sensitive tokens
+    response.headers["Cache-Control"] = "no-store"
+
     # Create token with 10 minute TTL
     token_record, plaintext_token = runner_crud.create_enroll_token(
         db=db,
@@ -109,9 +115,9 @@ def register_runner(
 
     # Generate runner name if not provided
     if not request.name:
-        # Count existing runners to generate unique name
-        existing_count = len(runner_crud.get_runners(db, owner_id=token_record.owner_id))
-        request.name = f"runner-{existing_count + 1}"
+        # Use random suffix to avoid race conditions
+        import secrets
+        request.name = f"runner-{secrets.token_hex(4)}"
 
     # Check for name conflicts
     existing = runner_crud.get_runner_by_name(
@@ -129,14 +135,22 @@ def register_runner(
     auth_secret = runner_crud.generate_token()
 
     # Create runner
-    runner = runner_crud.create_runner(
-        db=db,
-        owner_id=token_record.owner_id,
-        name=request.name,
-        auth_secret=auth_secret,
-        labels=request.labels,
-        metadata=request.metadata,
-    )
+    try:
+        runner = runner_crud.create_runner(
+            db=db,
+            owner_id=token_record.owner_id,
+            name=request.name,
+            auth_secret=auth_secret,
+            labels=request.labels,
+            metadata=request.metadata,
+        )
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"IntegrityError during runner creation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Runner with name '{request.name}' already exists",
+        )
 
     return RunnerRegisterResponse(
         runner_id=runner.id,
@@ -211,13 +225,21 @@ def update_runner(
             )
 
     # Update runner
-    updated_runner = runner_crud.update_runner(
-        db=db,
-        runner_id=runner_id,
-        name=update.name,
-        labels=update.labels,
-        capabilities=update.capabilities,
-    )
+    try:
+        updated_runner = runner_crud.update_runner(
+            db=db,
+            runner_id=runner_id,
+            name=update.name,
+            labels=update.labels,
+            capabilities=update.capabilities,
+        )
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"IntegrityError during runner update: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Runner with name '{update.name}' already exists",
+        )
 
     if not updated_runner:
         raise HTTPException(
