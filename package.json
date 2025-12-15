@@ -10,6 +10,7 @@
     "apps/jarvis/packages/data/*",
     "apps/zerg/frontend-web",
     "apps/zerg/e2e",
+    "apps/runner",
     "packages/*"
   ],
   "scripts": {

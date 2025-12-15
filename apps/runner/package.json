@@ -1,0 +1,15 @@
+{
+  "name": "@swarmlet/runner",
+  "version": "0.1.0",
+  "description": "Swarmlet runner daemon for executing commands on user infrastructure",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

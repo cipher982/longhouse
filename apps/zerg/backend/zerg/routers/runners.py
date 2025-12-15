@@ -22,6 +22,8 @@ from fastapi import HTTPException
 from fastapi import Path
 from fastapi import Response
 from fastapi import status
+from fastapi import WebSocket
+from fastapi import WebSocketDisconnect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,6 +39,8 @@ from zerg.schemas.runner_schemas import RunnerRegisterResponse
 from zerg.schemas.runner_schemas import RunnerResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
+from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +104,11 @@ def register_runner(
 
     This endpoint is called by the runner daemon during initial setup.
     The enrollment token is consumed and cannot be reused.
+
+    Token consumption is committed BEFORE runner creation to prevent
+    token reuse even if runner creation fails.
     """
-    # Validate and consume token
+    # Validate and consume token (commit immediately)
     token_record = runner_crud.validate_and_consume_enroll_token(
         db=db,
         token=request.enroll_token,
@@ -112,6 +119,9 @@ def register_runner(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired enrollment token",
         )
+
+    # Commit token consumption immediately (separate transaction)
+    db.commit()
 
     # Generate runner name if not provided
     if not request.name:
@@ -134,7 +144,7 @@ def register_runner(
     # Generate auth secret
     auth_secret = runner_crud.generate_token()
 
-    # Create runner
+    # Create runner (if this fails, token is already consumed - that's intentional)
     try:
         runner = runner_crud.create_runner(
             db=db,
@@ -281,3 +291,161 @@ def revoke_runner(
         success=True,
         message=f"Runner '{runner.name}' has been revoked",
     )
+
+
+# ---------------------------------------------------------------------------
+# Runner WebSocket Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.websocket("/ws")
+async def runner_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db),
+) -> None:
+    """WebSocket endpoint for runner connections.
+
+    Protocol:
+    1. Runner connects and sends hello message with runner_id + secret
+    2. Server validates credentials and marks runner as online
+    3. Runner sends periodic heartbeats
+    4. Server can send exec_request messages
+    5. Runner sends exec_chunk/exec_done/exec_error messages
+    6. On disconnect, runner is marked offline
+    """
+    await websocket.accept()
+    connection_manager = get_runner_connection_manager()
+
+    runner_id: int | None = None
+    owner_id: int | None = None
+
+    try:
+        # Wait for hello message
+        try:
+            hello_data = await websocket.receive_json()
+        except Exception as e:
+            logger.error(f"Failed to receive hello message: {e}")
+            await websocket.close(code=1008, reason="Invalid hello message")
+            return
+
+        # Validate hello message
+        if hello_data.get("type") != "hello":
+            logger.warning(f"Expected hello message, got: {hello_data.get('type')}")
+            await websocket.close(code=1008, reason="Expected hello message")
+            return
+
+        runner_id = hello_data.get("runner_id")
+        secret = hello_data.get("secret")
+        metadata = hello_data.get("metadata", {})
+
+        if not runner_id or not secret:
+            logger.warning("Hello message missing runner_id or secret")
+            await websocket.close(code=1008, reason="Missing runner_id or secret")
+            return
+
+        # Validate credentials
+        runner = runner_crud.get_runner(db, runner_id)
+        if not runner:
+            logger.warning(f"Runner not found: {runner_id}")
+            await websocket.close(code=1008, reason="Invalid runner_id")
+            return
+
+        # Check secret
+        secret_hash = runner_crud.hash_token(secret)
+        if secret_hash != runner.auth_secret_hash:
+            logger.warning(f"Invalid secret for runner {runner_id}")
+            await websocket.close(code=1008, reason="Invalid secret")
+            return
+
+        # Check if runner is revoked
+        if runner.status == "revoked":
+            logger.warning(f"Revoked runner attempted to connect: {runner_id}")
+            await websocket.close(code=1008, reason="Runner has been revoked")
+            return
+
+        owner_id = runner.owner_id
+
+        # Register connection
+        connection_manager.register(owner_id, runner_id, websocket)
+
+        # Update runner status to online
+        runner.status = "online"
+        runner.last_seen_at = utc_now_naive()
+        if metadata:
+            runner.runner_metadata = metadata
+        db.commit()
+
+        logger.info(f"Runner {runner_id} (owner {owner_id}) connected")
+
+        # Enter message loop
+        while True:
+            try:
+                message = await websocket.receive_json()
+                message_type = message.get("type")
+
+                if message_type == "heartbeat":
+                    # Update last_seen_at
+                    runner.last_seen_at = utc_now_naive()
+                    db.commit()
+                    logger.debug(f"Heartbeat from runner {runner_id}")
+
+                elif message_type == "exec_chunk":
+                    # Route to job handler (Phase 3)
+                    job_id = message.get("job_id")
+                    stream = message.get("stream")
+                    data = message.get("data")
+                    logger.debug(
+                        f"Exec chunk from runner {runner_id}, job {job_id}, stream {stream}"
+                    )
+                    # TODO: Route to job handler in Phase 3
+
+                elif message_type == "exec_done":
+                    # Route to job handler (Phase 3)
+                    job_id = message.get("job_id")
+                    exit_code = message.get("exit_code")
+                    duration_ms = message.get("duration_ms")
+                    logger.info(
+                        f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}"
+                    )
+                    # TODO: Route to job handler in Phase 3
+
+                elif message_type == "exec_error":
+                    # Route to job handler (Phase 3)
+                    job_id = message.get("job_id")
+                    error = message.get("error")
+                    logger.error(
+                        f"Exec error from runner {runner_id}, job {job_id}: {error}"
+                    )
+                    # TODO: Route to job handler in Phase 3
+
+                else:
+                    logger.warning(
+                        f"Unknown message type from runner {runner_id}: {message_type}"
+                    )
+
+            except WebSocketDisconnect:
+                logger.info(f"Runner {runner_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error processing message from runner {runner_id}: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"Error in runner websocket handler: {e}")
+
+    finally:
+        # Cleanup: unregister connection and mark runner offline
+        if runner_id and owner_id:
+            connection_manager.unregister(owner_id, runner_id)
+
+            # Mark runner offline
+            runner = runner_crud.get_runner(db, runner_id)
+            if runner:
+                runner.status = "offline"
+                db.commit()
+                logger.info(f"Runner {runner_id} marked offline")
+
+        try:
+            await websocket.close()
+        except Exception:
+            pass  # Already closed
