@@ -256,7 +256,7 @@ async def read_worker_result_async(job_id: str) -> str:
         job_id: The worker job ID (integer as string)
 
     Returns:
-        The worker's natural language result
+        The worker's natural language result with duration information
     """
     from zerg.crud import crud
 
@@ -286,10 +286,16 @@ async def read_worker_result_async(job_id: str) -> str:
         if job.status not in ["success", "failed"]:
             return f"Error: Worker job {job_id} is not complete (status: {job.status})"
 
-        # Get result from artifacts
+        # Get result and metadata from artifacts
         artifact_store = WorkerArtifactStore()
         result = artifact_store.get_worker_result(job.worker_id)
-        return f"Result from worker job {job_id} (worker {job.worker_id}):\n\n{result}"
+        metadata = artifact_store.get_worker_metadata(job.worker_id, owner_id=resolver.owner_id)
+
+        # Extract duration_ms from metadata
+        duration_ms = metadata.get("duration_ms")
+        duration_info = f"\n\nExecution time: {duration_ms}ms" if duration_ms is not None else ""
+
+        return f"Result from worker job {job_id} (worker {job.worker_id}):{duration_info}\n\n{result}"
 
     except ValueError:
         return f"Error: Invalid job ID format: {job_id}"
