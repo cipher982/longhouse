@@ -94,7 +94,62 @@ except AttributeError:
     _log_level = logging.INFO
 else:
     pass
-logging.basicConfig(level=_log_level, format="%(levelname)s - %(message)s", handlers=[logging.StreamHandler()])
+
+
+# Custom formatter that displays structured fields from 'extra' dict
+class StructuredFormatter(logging.Formatter):
+    """Formatter that renders structured fields for grep-able telemetry logs.
+
+    For logs with 'extra' dict, formats as:
+        2025-12-15 03:19:33 INFO llm_call_complete worker_id=2025-12-15... phase=tool_decision duration_ms=19500
+    """
+
+    def format(self, record):
+        # Start with timestamp and level
+        parts = [
+            self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
+            record.levelname,
+            record.getMessage(),
+        ]
+
+        # Add structured fields if present (skip standard LogRecord attributes)
+        BUILTIN_ATTRS = {
+            "name", "msg", "args", "created", "filename", "funcName", "levelname",
+            "levelno", "lineno", "module", "msecs", "message", "pathname", "process",
+            "processName", "relativeCreated", "thread", "threadName", "exc_info",
+            "exc_text", "stack_info", "event",  # 'event' is message content, not separate field
+        }
+
+        # Collect extra fields for structured output
+        extra_fields = []
+        for key, value in record.__dict__.items():
+            if key not in BUILTIN_ATTRS and not key.startswith("_"):
+                # Format value concisely
+                if isinstance(value, str) and len(value) > 50:
+                    value_str = value[:47] + "..."
+                else:
+                    value_str = str(value)
+                extra_fields.append(f"{key}={value_str}")
+
+        if extra_fields:
+            parts.append(" ".join(extra_fields))
+
+        return " ".join(parts)
+
+
+# Configure logging with structured formatter
+# Must configure before any loggers are created
+_root_logger = logging.getLogger()
+_root_logger.setLevel(_log_level)
+
+# Remove any existing handlers to avoid duplicates
+for handler in _root_logger.handlers[:]:
+    _root_logger.removeHandler(handler)
+
+# Add our structured formatter handler
+_handler = logging.StreamHandler()
+_handler.setFormatter(StructuredFormatter())
+_root_logger.addHandler(_handler)
 
 # Suppress verbose INFO logs from known-noisy modules (e.g., websocket connects)
 for _noisy_mod in ("zerg.routers.websocket", "zerg.websocket.manager"):

@@ -8,6 +8,41 @@ Design goals:
 - Non-intrusive: Metrics collection should not slow down execution
 - Fail-safe: Errors in metrics collection must not crash the worker
 - Structured: Use consistent JSONL format for easy parsing
+
+Telemetry Tiers
+---------------
+Tier 1: Event bus (WebSocket) - Real-time UI updates for user visibility
+Tier 2: metrics.jsonl - Structured JSONL for offline analysis and graphing
+Tier 3: Structured logs - Real-time grep-able logs for dev monitoring/debugging
+
+This module handles Tier 2 (metrics.jsonl). Tier 3 (structured logging) is
+implemented alongside metrics collection in the same code paths, providing
+real-time visibility via logs while maintaining historical metrics in JSONL.
+
+Structured Logging (Tier 3)
+----------------------------
+Structured logs use Python's logging 'extra' dict to emit grep-able events:
+
+    logger.info("llm_call_complete", extra={
+        "phase": "tool_decision",
+        "model": "gpt-5-mini",
+        "duration_ms": 19500,
+        "worker_id": "...",
+        "prompt_tokens": 1234,
+        "completion_tokens": 89,
+        "total_tokens": 1323,
+    })
+
+These logs appear as:
+    2025-12-15 03:19:33 INFO llm_call_complete phase=tool_decision duration_ms=19500 prompt_tokens=1234
+
+This enables:
+- Real-time monitoring: `tail -f logs/backend/backend.log | grep llm_call_complete`
+- Performance analysis: `grep "duration_ms=" logs/backend/backend.log | sort -t= -k4 -n`
+- Model tracking: `grep "model=gpt-5" logs/backend/backend.log`
+- Worker tracking: `grep "worker_id=2025-12-15..." logs/backend/backend.log`
+
+Structured logs are dev-only (opaque to LLMs) and fail-safe (errors don't crash workers).
 """
 
 from __future__ import annotations

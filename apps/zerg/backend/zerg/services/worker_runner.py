@@ -668,15 +668,45 @@ Example: "Backup completed 157GB in 17s, no errors found"
             if collector:
                 # Extract token usage from OpenAI response
                 usage = response.usage
+                duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                prompt_tokens = usage.prompt_tokens if usage else None
+                completion_tokens = usage.completion_tokens if usage else None
+                total_tokens = usage.total_tokens if usage else None
+
                 collector.record_llm_call(
                     phase="summary",
                     model=DEFAULT_WORKER_MODEL_ID,
                     start_ts=start_time,
                     end_ts=end_time,
-                    prompt_tokens=usage.prompt_tokens if usage else None,
-                    completion_tokens=usage.completion_tokens if usage else None,
-                    total_tokens=usage.total_tokens if usage else None,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
                 )
+
+                # Tier 3 telemetry: Structured logging for dev visibility (opaque to LLMs)
+                # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
+                try:
+                    from zerg.context import get_worker_context
+                    ctx = get_worker_context()
+                    log_extra = {
+                        "event": "llm_call_complete",
+                        "phase": "summary",
+                        "model": DEFAULT_WORKER_MODEL_ID,
+                        "duration_ms": duration_ms,
+                    }
+                    if ctx:
+                        log_extra["worker_id"] = ctx.worker_id
+                    if prompt_tokens is not None:
+                        log_extra["prompt_tokens"] = prompt_tokens
+                    if completion_tokens is not None:
+                        log_extra["completion_tokens"] = completion_tokens
+                    if total_tokens is not None:
+                        log_extra["total_tokens"] = total_tokens
+
+                    logger.info("llm_call_complete", extra=log_extra)
+                except Exception:
+                    # Telemetry logging is best-effort - don't fail the worker
+                    pass
 
             summary = response.choices[0].message.content.strip()
             if len(summary) > MAX_CHARS:
