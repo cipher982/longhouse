@@ -17,22 +17,23 @@ export RUNNER_ID=123
 export RUNNER_SECRET=your_secret_here
 
 # Run the daemon
-bun run src/index.ts
+bun run --filter @swarmlet/runner start
 
 # Or use watch mode
-bun run dev
+bun run --filter @swarmlet/runner dev
 ```
 
 ### Using Docker
 
 ```bash
-docker build -t swarmlet-runner .
+cd /path/to/repo/root
+docker build -f apps/runner/Dockerfile -t swarmlet/runner:latest .
 
 docker run -d --name swarmlet-runner \
   -e SWARMLET_URL=ws://localhost:47300 \
   -e RUNNER_ID=123 \
   -e RUNNER_SECRET=your_secret_here \
-  swarmlet-runner
+  swarmlet/runner:latest
 ```
 
 ## Configuration
