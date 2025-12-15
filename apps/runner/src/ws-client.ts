@@ -29,7 +29,7 @@ export class RunnerWebSocketClient {
 
   constructor(config: RunnerConfig, getMetadata: typeof getRunnerMetadata) {
     this.config = config;
-    this.executor = new CommandExecutor();
+    this.executor = new CommandExecutor(config.capabilities);
     this.currentReconnectDelay = config.reconnectDelayMs;
     this.getMetadata = getMetadata;
   }
@@ -113,11 +113,15 @@ export class RunnerWebSocketClient {
     this.currentReconnectDelay = this.config.reconnectDelayMs; // Reset backoff
 
     // Send hello message
+    const metadata = this.getMetadata();
     const helloMsg: HelloMessage = {
       type: 'hello',
       runner_id: this.config.runnerId,
       secret: this.config.runnerSecret,
-      metadata: this.getMetadata(),
+      metadata: {
+        ...metadata,
+        capabilities: this.config.capabilities,
+      },
     };
 
     this.send(helloMsg);

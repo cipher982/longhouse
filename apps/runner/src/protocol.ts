@@ -66,6 +66,7 @@ export interface RunnerMetadata {
   arch: string;
   runner_version: string;
   docker_available?: boolean;
+  capabilities?: string[];
 }
 
 export function getRunnerMetadata(): RunnerMetadata {

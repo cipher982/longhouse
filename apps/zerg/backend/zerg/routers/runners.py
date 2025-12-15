@@ -381,6 +381,15 @@ async def runner_websocket(
         runner.last_seen_at = utc_now_naive()
         if metadata:
             runner.runner_metadata = metadata
+
+            # Validate runner capabilities match what's in the database
+            reported_caps = metadata.get("capabilities", [])
+            if reported_caps and set(reported_caps) != set(runner.capabilities):
+                logger.warning(
+                    f"Runner {runner_id} capability mismatch: "
+                    f"DB={runner.capabilities}, reported={reported_caps}"
+                )
+
         db.commit()
 
         logger.info(f"Runner {runner_id} (owner {owner_id}) connected")

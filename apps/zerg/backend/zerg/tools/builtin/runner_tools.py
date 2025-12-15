@@ -18,6 +18,7 @@ from langchain_core.tools import StructuredTool
 from zerg.context import get_worker_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
+from zerg.services.command_validator import CommandValidator
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
@@ -157,7 +158,7 @@ def runner_exec(
 
     runner_id, runner_name = resolved
 
-    # Check runner status
+    # Check runner status and get runner capabilities
     db = next(get_db())
     try:
         runner = runner_crud.get_runner(db, runner_id)
@@ -177,6 +178,15 @@ def runner_exec(
             return tool_error(
                 ErrorType.EXECUTION_ERROR,
                 f"Runner '{runner_name}' is offline",
+            )
+
+        # Validate command against runner capabilities
+        validator = CommandValidator()
+        allowed, reason = validator.validate(command, runner.capabilities)
+        if not allowed:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                f"Command not allowed: {reason}",
             )
 
         # Dispatch job and wait for completion

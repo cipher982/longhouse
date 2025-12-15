@@ -5,10 +5,12 @@
  * - Real-time stdout/stderr streaming
  * - Timeout enforcement
  * - Output size capping with truncation
+ * - Capability-based command validation
  */
 
 import { spawn } from 'child_process';
 import type { ExecChunkMessage, ExecDoneMessage, ExecErrorMessage } from './protocol';
+import { CommandValidator } from './validator';
 
 const MAX_OUTPUT_SIZE = 50 * 1024; // 50KB
 const TRUNCATION_MESSAGE = '\n... [output truncated due to size limit] ...\n';
@@ -30,6 +32,13 @@ export interface ExecutionCallbacks {
 
 export class CommandExecutor {
   private runningJobs: Map<string, any> = new Map();
+  private validator: CommandValidator;
+  private capabilities: string[];
+
+  constructor(capabilities: string[] = ['exec.readonly']) {
+    this.validator = new CommandValidator();
+    this.capabilities = capabilities;
+  }
 
   /**
    * Execute a command with streaming output.
@@ -45,6 +54,13 @@ export class CommandExecutor {
     timeoutSecs: number,
     callbacks: ExecutionCallbacks
   ): Promise<void> {
+    // Validate command against capabilities
+    const validationResult = this.validator.validate(command, this.capabilities);
+    if (!validationResult.allowed) {
+      console.error(`[executor] Job ${jobId} rejected: ${validationResult.reason}`);
+      callbacks.onError(validationResult.reason || 'Command not allowed');
+      return;
+    }
     const startTime = Date.now();
     let totalOutputSize = 0;
     let outputTruncated = false;
