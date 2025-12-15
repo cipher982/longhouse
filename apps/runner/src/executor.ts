@@ -46,8 +46,8 @@ export class CommandExecutor {
     callbacks: ExecutionCallbacks
   ): Promise<void> {
     const startTime = Date.now();
-    let stdoutSize = 0;
-    let stderrSize = 0;
+    let totalOutputSize = 0;
+    let outputTruncated = false;
     let timedOut = false;
 
     console.log(`[executor] Starting job ${jobId}: ${command}`);
@@ -69,25 +69,27 @@ export class CommandExecutor {
         timedOut = true;
         child.kill('SIGTERM');
 
-        // Force kill after 5 seconds if still running
+        // Force kill after 1 second if still running
         setTimeout(() => {
-          if (!child.killed) {
+          if (child.exitCode === null) {
             console.log(`[executor] Force killing job ${jobId}`);
             child.kill('SIGKILL');
           }
-        }, 5000);
+        }, 1000);
       }, timeoutSecs * 1000);
     }
 
     // Stream stdout
     child.stdout?.on('data', (data: Buffer) => {
       const chunk = data.toString();
-      stdoutSize += chunk.length;
+      totalOutputSize += chunk.length;
 
-      if (stdoutSize > MAX_OUTPUT_SIZE) {
+      if (totalOutputSize > MAX_OUTPUT_SIZE && !outputTruncated) {
         callbacks.onStdout(TRUNCATION_MESSAGE);
+        outputTruncated = true;
         child.stdout?.removeAllListeners('data');
-      } else {
+        child.stderr?.removeAllListeners('data');
+      } else if (!outputTruncated) {
         callbacks.onStdout(chunk);
       }
     });
@@ -95,12 +97,14 @@ export class CommandExecutor {
     // Stream stderr
     child.stderr?.on('data', (data: Buffer) => {
       const chunk = data.toString();
-      stderrSize += chunk.length;
+      totalOutputSize += chunk.length;
 
-      if (stderrSize > MAX_OUTPUT_SIZE) {
+      if (totalOutputSize > MAX_OUTPUT_SIZE && !outputTruncated) {
         callbacks.onStderr(TRUNCATION_MESSAGE);
+        outputTruncated = true;
+        child.stdout?.removeAllListeners('data');
         child.stderr?.removeAllListeners('data');
-      } else {
+      } else if (!outputTruncated) {
         callbacks.onStderr(chunk);
       }
     });

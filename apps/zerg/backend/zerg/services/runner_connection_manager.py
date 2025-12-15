@@ -49,17 +49,24 @@ class RunnerConnectionManager:
         self._connections[key] = ws
         logger.info(f"Registered runner {runner_id} (owner {owner_id})")
 
-    def unregister(self, owner_id: int, runner_id: int) -> None:
-        """Unregister a runner connection.
+    def unregister(self, owner_id: int, runner_id: int, ws: WebSocket) -> bool:
+        """Unregister a runner connection only if it matches the current connection.
 
         Args:
             owner_id: ID of the runner's owner
             runner_id: ID of the runner
+            ws: WebSocket connection to unregister
+
+        Returns:
+            True if the connection was unregistered (was the current connection),
+            False if not unregistered (different connection is registered)
         """
         key = (owner_id, runner_id)
-        if key in self._connections:
+        if key in self._connections and self._connections[key] is ws:
             del self._connections[key]
             logger.info(f"Unregistered runner {runner_id} (owner {owner_id})")
+            return True
+        return False
 
     def get_connection(self, owner_id: int, runner_id: int) -> Optional[WebSocket]:
         """Get the WebSocket connection for a runner.

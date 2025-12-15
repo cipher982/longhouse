@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from datetime import datetime
 from typing import Any
 
@@ -79,12 +80,18 @@ def create_enroll_token(
     # Get Swarmlet API URL from environment (default to localhost for dev)
     swarmlet_url = os.getenv("SWARMLET_API_URL", "http://localhost:47300")
 
-    # Generate docker command
+    # Generate two-step setup instructions
     docker_command = (
-        f"docker run -d --name swarmlet-runner "
-        f"-e SWARMLET_URL={swarmlet_url} "
-        f"-e ENROLL_TOKEN={plaintext_token} "
-        f"swarmlet/runner:latest"
+        f"# Step 1: Register runner (one-time)\n"
+        f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
+        f"  -H 'Content-Type: application/json' \\\n"
+        f"  -d '{{\"enroll_token\": \"{plaintext_token}\", \"name\": \"my-runner\"}}'\n\n"
+        f"# Step 2: Run with credentials from step 1\n"
+        f"docker run -d --name swarmlet-runner \\\n"
+        f"  -e SWARMLET_URL={swarmlet_url} \\\n"
+        f"  -e RUNNER_ID=<id_from_step_1> \\\n"
+        f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
+        f"  swarmlet/runner:latest"
     )
 
     return EnrollTokenResponse(
@@ -126,7 +133,6 @@ def register_runner(
     # Generate runner name if not provided
     if not request.name:
         # Use random suffix to avoid race conditions
-        import secrets
         request.name = f"runner-{secrets.token_hex(4)}"
 
     # Check for name conflicts
@@ -350,9 +356,9 @@ async def runner_websocket(
             await websocket.close(code=1008, reason="Invalid runner_id")
             return
 
-        # Check secret
-        secret_hash = runner_crud.hash_token(secret)
-        if secret_hash != runner.auth_secret_hash:
+        # Check secret using constant-time comparison
+        computed_hash = runner_crud.hash_token(secret)
+        if not secrets.compare_digest(computed_hash, runner.auth_secret_hash):
             logger.warning(f"Invalid secret for runner {runner_id}")
             await websocket.close(code=1008, reason="Invalid secret")
             return
@@ -434,16 +440,18 @@ async def runner_websocket(
         logger.error(f"Error in runner websocket handler: {e}")
 
     finally:
-        # Cleanup: unregister connection and mark runner offline
+        # Cleanup: only unregister and mark offline if this is still the registered connection
         if runner_id and owner_id:
-            connection_manager.unregister(owner_id, runner_id)
+            # Only unregister if this websocket is still the current connection
+            was_unregistered = connection_manager.unregister(owner_id, runner_id, websocket)
 
-            # Mark runner offline
-            runner = runner_crud.get_runner(db, runner_id)
-            if runner:
-                runner.status = "offline"
-                db.commit()
-                logger.info(f"Runner {runner_id} marked offline")
+            # Only mark runner offline if we actually unregistered it (wasn't replaced)
+            if was_unregistered:
+                runner = runner_crud.get_runner(db, runner_id)
+                if runner:
+                    runner.status = "offline"
+                    db.commit()
+                    logger.info(f"Runner {runner_id} marked offline")
 
         try:
             await websocket.close()
