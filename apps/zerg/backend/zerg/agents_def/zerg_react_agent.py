@@ -163,7 +163,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         llm_with_tools = _make_llm(agent_row, tools)
         return llm_with_tools.invoke(messages)
 
-    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"):
+    async def _call_model_async(
+        messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"
+    ):
         """Run the LLM call with optional token streaming via callbacks.
 
         Parameters
@@ -175,7 +177,8 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         phase
             Phase name for metrics tracking (e.g., "reasoning", "synthesis")
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
 
         # Create LLM dynamically with current enable_token_stream flag
         llm_with_tools = _make_llm(agent_row, tools)
@@ -381,8 +384,8 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         if "user_message" in error_content:
             # Parse error envelope
             try:
-                import json
                 import ast
+                import json
                 parsed = None
                 try:
                     parsed = json.loads(error_content)
@@ -615,7 +618,10 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 # Create final assistant message explaining the failure
                 from langchain_core.messages import AIMessage as FinalAIMessage
                 error_response = FinalAIMessage(
-                    content=f"I encountered a critical error that prevents me from completing this task:\n\n{ctx.critical_error_message}"
+                    content=(
+                        f"I encountered a critical error that prevents me from completing this task:\n\n"
+                        f"{ctx.critical_error_message}"
+                    )
                 )
                 final_messages = add_messages(current_messages, [error_response])
                 return final_messages
@@ -633,12 +639,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # Synchronous wrapper for libraries/tests that call ``.invoke``
     # ------------------------------------------------------------------
 
-    def _agent_executor_sync(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None, enable_token_stream: bool = False):
+    def _agent_executor_sync(
+        messages: List[BaseMessage],
+        *,
+        previous: Optional[List[BaseMessage]] = None,
+        enable_token_stream: bool = False,
+    ):
         """Blocking wrapper that delegates to the async implementation using shared runner."""
 
         from zerg.utils.async_runner import run_in_shared_loop
 
-        return run_in_shared_loop(_agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream))
+        return run_in_shared_loop(
+            _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
+        )
 
     # ------------------------------------------------------------------
     # Expose BOTH sync & async entrypoints to LangGraph
@@ -655,9 +668,13 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # callers can use ``.ainvoke`` while tests and legacy code continue to use
     # the blocking ``.invoke`` API.
 
-    async def _agent_executor_async_wrapper(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
+    async def _agent_executor_async_wrapper(
+        messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None
+    ):
         enable_token_stream = get_settings().llm_token_stream
-        return await _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
+        return await _agent_executor_async(
+            messages, previous=previous, enable_token_stream=enable_token_stream
+        )
 
     agent_executor.afunc = _agent_executor_async_wrapper  # type: ignore[attr-defined]
 
