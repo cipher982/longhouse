@@ -64,9 +64,9 @@ Before spawning a new worker, check if we already have the answer:
 
 - `list_workers(limit=10)` - Recent workers with summaries
 - `grep_workers("pattern")` - Search across all worker artifacts
-- `read_worker_result(worker_id)` - Full result from a specific worker
-- `get_worker_metadata(worker_id)` - Status, timing, config
-- `read_worker_file(worker_id, path)` - Drill into specific files:
+- `read_worker_result(job_id)` - Full result from a specific worker
+- `get_worker_metadata(job_id)` - Status, timing, config
+- `read_worker_file(job_id, path)` - Drill into specific files:
   - "result.txt" - Final result
   - "metadata.json" - Status, timing, config
   - "thread.jsonl" - Full conversation history
@@ -90,10 +90,10 @@ Only investigate metrics when performance seems anomalous. For normal executions
 **Delegation:**
 - `spawn_worker(task, model)` - Create a worker to investigate
 - `list_workers(limit, status)` - Query past workers
-- `read_worker_result(worker_id)` - Get worker findings
-- `read_worker_file(worker_id, path)` - Drill into artifacts
+- `read_worker_result(job_id)` - Get worker findings
+- `read_worker_file(job_id, path)` - Drill into artifacts
 - `grep_workers(pattern)` - Search across workers
-- `get_worker_metadata(worker_id)` - Worker details
+- `get_worker_metadata(job_id)` - Worker details
 
 **Direct:**
 - `get_current_time()` - Current timestamp
