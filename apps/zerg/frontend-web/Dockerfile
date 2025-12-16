@@ -13,6 +13,16 @@ RUN bun install
 # Copy source code
 COPY . .
 
+# Build args for Vite env vars (baked into JS bundle at build time)
+ARG VITE_UMAMI_WEBSITE_ID
+ARG VITE_UMAMI_SCRIPT_SRC
+ARG VITE_UMAMI_DOMAINS
+
+# Make args available as env vars during build
+ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
+ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
+ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
+
 # Build React app for production
 RUN bun run build
 
