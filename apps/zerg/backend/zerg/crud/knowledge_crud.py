@@ -213,7 +213,7 @@ def upsert_knowledge_document(
     path: str,
     content_text: str,
     title: Optional[str] = None,
-    metadata: Optional[dict] = None,
+    doc_metadata: Optional[dict] = None,
 ) -> KnowledgeDocument:
     """Create or update a knowledge document.
 
@@ -226,7 +226,7 @@ def upsert_knowledge_document(
         path: Document path/URL (unique per source)
         content_text: Text content of the document
         title: Optional document title
-        metadata: Optional metadata dict
+        doc_metadata: Optional metadata dict
 
     Returns:
         Created or updated KnowledgeDocument instance
@@ -251,7 +251,7 @@ def upsert_knowledge_document(
         existing.content_text = content_text
         existing.content_hash = content_hash
         existing.title = title
-        existing.metadata = metadata or {}
+        existing.doc_metadata = doc_metadata or {}
         existing.fetched_at = now
         db.commit()
         db.refresh(existing)
@@ -265,7 +265,7 @@ def upsert_knowledge_document(
             content_text=content_text,
             content_hash=content_hash,
             title=title,
-            metadata=metadata or {},
+            doc_metadata=doc_metadata or {},
             fetched_at=now,
         )
         db.add(doc)

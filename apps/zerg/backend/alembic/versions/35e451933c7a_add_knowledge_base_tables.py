@@ -53,7 +53,7 @@ def upgrade() -> None:
         sa.Column('title', sa.String(length=512), nullable=True),
         sa.Column('content_text', sa.Text(), nullable=False),
         sa.Column('content_hash', sa.String(length=64), nullable=False),
-        sa.Column('metadata', JSON, nullable=True),
+        sa.Column('doc_metadata', JSON, nullable=True),
         sa.Column('fetched_at', sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(['owner_id'], ['users.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['source_id'], ['knowledge_sources.id'], ondelete='CASCADE'),

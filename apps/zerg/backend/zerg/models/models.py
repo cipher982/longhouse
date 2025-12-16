@@ -930,7 +930,8 @@ class KnowledgeDocument(Base):
     content_hash = Column(String(64), nullable=False)
 
     # Additional metadata (mime type, size, etc.)
-    metadata = Column(MutableDict.as_mutable(JSON), nullable=True, default={})
+    # Note: Named "doc_metadata" to avoid conflict with SQLAlchemy's reserved "metadata"
+    doc_metadata = Column(MutableDict.as_mutable(JSON), nullable=True, default={})
 
     # When this document was last fetched
     fetched_at = Column(DateTime, nullable=False)

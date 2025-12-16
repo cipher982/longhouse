@@ -403,7 +403,7 @@ class KnowledgeDocumentBase(BaseModel):
     title: Optional[str] = None
     content_text: str
     content_hash: str
-    metadata: Optional[Dict[str, Any]] = None
+    doc_metadata: Optional[Dict[str, Any]] = None
 
 
 class KnowledgeDocument(KnowledgeDocumentBase):
