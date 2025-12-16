@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useRunner, useUpdateRunner, useRevokeRunner } from "../hooks/useRunners";
+import { useRunner, useUpdateRunner, useRevokeRunner, useRotateRunnerSecret } from "../hooks/useRunners";
 import "../styles/runner-detail.css";
 
 export default function RunnerDetailPage() {
@@ -11,9 +11,12 @@ export default function RunnerDetailPage() {
   const { data: runner, isLoading, error } = useRunner(runnerId);
   const updateRunnerMutation = useUpdateRunner();
   const revokeRunnerMutation = useRevokeRunner();
+  const rotateSecretMutation = useRotateRunnerSecret();
 
   const [isEditingCapabilities, setIsEditingCapabilities] = useState(false);
   const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
+  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
+  const [secretCopied, setSecretCopied] = useState(false);
 
   const allCapabilities = [
     { id: "exec.readonly", label: "Read-only execution", description: "Can run read-only commands" },
@@ -50,6 +53,39 @@ export default function RunnerDetailPage() {
     } catch (error) {
       console.error("Failed to revoke runner:", error);
       alert("Failed to revoke runner");
+    }
+  };
+
+  const handleRotateSecret = async () => {
+    if (!confirm(
+      `Rotate secret for runner "${runner?.name}"?\n\n` +
+      "This will:\n" +
+      "• Generate a new secret (old secret becomes invalid)\n" +
+      "• Disconnect the runner if connected\n\n" +
+      "You'll need to update the runner with the new secret."
+    )) {
+      return;
+    }
+
+    try {
+      const result = await rotateSecretMutation.mutateAsync(runnerId);
+      setRotatedSecret(result.runner_secret);
+      setSecretCopied(false);
+    } catch (error) {
+      console.error("Failed to rotate secret:", error);
+      alert("Failed to rotate secret");
+    }
+  };
+
+  const handleCopySecret = async () => {
+    if (rotatedSecret) {
+      try {
+        await navigator.clipboard.writeText(rotatedSecret);
+        setSecretCopied(true);
+        setTimeout(() => setSecretCopied(false), 2000);
+      } catch (error) {
+        console.error("Failed to copy:", error);
+      }
     }
   };
 
@@ -226,18 +262,70 @@ export default function RunnerDetailPage() {
           {runner.status !== "revoked" && (
             <section className="detail-section danger-section">
               <h2>Danger Zone</h2>
-              <div className="danger-actions">
-                <button
-                  type="button"
-                  className="revoke-button-large"
-                  onClick={handleRevoke}
-                  disabled={revokeRunnerMutation.isPending}
-                >
-                  {revokeRunnerMutation.isPending ? "Revoking..." : "Revoke Runner"}
-                </button>
-                <p className="danger-description">
-                  Revoked runners cannot reconnect. This action cannot be undone.
-                </p>
+
+              {/* Rotate Secret */}
+              <div className="danger-item">
+                <div className="danger-item-header">
+                  <div className="danger-item-info">
+                    <h3>Rotate Secret</h3>
+                    <p className="danger-description">
+                      Generate a new secret, invalidating the old one. The runner will be disconnected.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rotate-secret-button"
+                    onClick={handleRotateSecret}
+                    disabled={rotateSecretMutation.isPending}
+                  >
+                    {rotateSecretMutation.isPending ? "Rotating..." : "Rotate Secret"}
+                  </button>
+                </div>
+
+                {rotatedSecret && (
+                  <div className="rotated-secret-display">
+                    <p className="secret-warning">
+                      Save this secret now - it won't be shown again!
+                    </p>
+                    <div className="secret-value-container">
+                      <code className="secret-value">{rotatedSecret}</code>
+                      <button
+                        type="button"
+                        className="copy-secret-button"
+                        onClick={handleCopySecret}
+                      >
+                        {secretCopied ? "Copied!" : "Copy"}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="dismiss-secret-button"
+                      onClick={() => setRotatedSecret(null)}
+                    >
+                      I've saved the secret
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Revoke Runner */}
+              <div className="danger-item">
+                <div className="danger-item-header">
+                  <div className="danger-item-info">
+                    <h3>Revoke Runner</h3>
+                    <p className="danger-description">
+                      Revoked runners cannot reconnect. This action cannot be undone.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="revoke-button-large"
+                    onClick={handleRevoke}
+                    disabled={revokeRunnerMutation.isPending}
+                  >
+                    {revokeRunnerMutation.isPending ? "Revoking..." : "Revoke Runner"}
+                  </button>
+                </div>
               </div>
             </section>
           )}

@@ -475,3 +475,151 @@ def test_concurrent_token_consumption(client: TestClient, db_session: Session, t
     for name, status, data in results:
         if status == 400:
             assert "Invalid or expired" in data["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Rotate Secret Tests
+# ---------------------------------------------------------------------------
+
+
+def test_rotate_secret_success(client: TestClient, db_session: Session, test_user: User):
+    """Test rotating a runner's secret returns a new secret."""
+    # Create a runner
+    original_secret = runner_crud.generate_token()
+    runner = runner_crud.create_runner(
+        db=db_session,
+        owner_id=test_user.id,
+        name="test-runner",
+        auth_secret=original_secret,
+    )
+    original_hash = runner.auth_secret_hash
+
+    # Rotate secret
+    response = client.post(
+        f"/api/runners/{runner.id}/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["runner_id"] == runner.id
+    assert "runner_secret" in data
+    assert len(data["runner_secret"]) > 30  # Should be a long token
+    assert "rotated" in data["message"].lower()
+
+    # Verify the secret hash changed in database
+    db_session.refresh(runner)
+    assert runner.auth_secret_hash != original_hash
+
+    # Verify the new secret is different from the original
+    assert data["runner_secret"] != original_secret
+
+    # Verify the new secret hashes to the new stored hash
+    new_secret_hash = runner_crud.hash_token(data["runner_secret"])
+    assert new_secret_hash == runner.auth_secret_hash
+
+
+def test_rotate_secret_invalidates_old_secret(client: TestClient, db_session: Session, test_user: User):
+    """Test that the old secret becomes invalid after rotation."""
+    # Create a runner
+    original_secret = runner_crud.generate_token()
+    runner = runner_crud.create_runner(
+        db=db_session,
+        owner_id=test_user.id,
+        name="test-runner",
+        auth_secret=original_secret,
+    )
+
+    # Verify original secret validates
+    original_hash = runner_crud.hash_token(original_secret)
+    assert original_hash == runner.auth_secret_hash
+
+    # Rotate secret
+    response = client.post(
+        f"/api/runners/{runner.id}/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 200
+    new_secret = response.json()["runner_secret"]
+
+    # Verify old secret no longer validates
+    db_session.refresh(runner)
+    assert runner_crud.hash_token(original_secret) != runner.auth_secret_hash
+
+    # Verify new secret validates
+    assert runner_crud.hash_token(new_secret) == runner.auth_secret_hash
+
+
+def test_rotate_secret_not_found(client: TestClient, db_session: Session, test_user: User):
+    """Test rotating secret for non-existent runner returns 404."""
+    response = client.post(
+        "/api/runners/9999/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+def test_rotate_secret_not_owner(client: TestClient, db_session: Session, test_user: User):
+    """Test users cannot rotate other users' runner secrets."""
+    other_user = crud.create_user(db_session, email="other@example.com")
+    secret = runner_crud.generate_token()
+    runner = runner_crud.create_runner(
+        db=db_session,
+        owner_id=other_user.id,
+        name="other-runner",
+        auth_secret=secret,
+    )
+
+    response = client.post(
+        f"/api/runners/{runner.id}/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 404
+
+
+def test_rotate_secret_revoked_runner(client: TestClient, db_session: Session, test_user: User):
+    """Test rotating secret for a revoked runner fails."""
+    secret = runner_crud.generate_token()
+    runner = runner_crud.create_runner(
+        db=db_session,
+        owner_id=test_user.id,
+        name="test-runner",
+        auth_secret=secret,
+    )
+
+    # Revoke the runner
+    runner_crud.revoke_runner(db_session, runner.id)
+
+    response = client.post(
+        f"/api/runners/{runner.id}/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 400
+    assert "revoked" in response.json()["detail"].lower()
+
+
+def test_rotate_secret_marks_runner_offline(client: TestClient, db_session: Session, test_user: User):
+    """Test that rotating secret marks the runner as offline."""
+    secret = runner_crud.generate_token()
+    runner = runner_crud.create_runner(
+        db=db_session,
+        owner_id=test_user.id,
+        name="test-runner",
+        auth_secret=secret,
+    )
+
+    # Manually set runner to online for test
+    runner.status = "online"
+    db_session.commit()
+
+    # Rotate secret
+    response = client.post(
+        f"/api/runners/{runner.id}/rotate-secret",
+        headers={"X-User-ID": str(test_user.id)},
+    )
+    assert response.status_code == 200
+
+    # Verify runner is now offline
+    db_session.refresh(runner)
+    assert runner.status == "offline"
