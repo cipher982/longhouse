@@ -41,6 +41,16 @@ COPY apps/jarvis/apps/web ./apps/web
 # Verify config exists
 RUN test -f /app/config/models.json || (echo "FATAL: models.json not found" && exit 1)
 
+# Build args for Vite env vars (baked into JS bundle at build time)
+ARG VITE_UMAMI_WEBSITE_ID
+ARG VITE_UMAMI_SCRIPT_SRC
+ARG VITE_UMAMI_DOMAINS
+
+# Make args available as env vars during build
+ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
+ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
+ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
+
 # Build for production
 WORKDIR /app/apps/web
 RUN bun run build
