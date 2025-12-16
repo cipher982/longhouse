@@ -725,3 +725,15 @@ export async function revokeRunner(runnerId: number): Promise<{ success: boolean
     method: "POST",
   });
 }
+
+export type RotateSecretResponse = {
+  runner_id: number;
+  runner_secret: string;
+  message: string;
+};
+
+export async function rotateRunnerSecret(runnerId: number): Promise<RotateSecretResponse> {
+  return request<RotateSecretResponse>(`/runners/${runnerId}/rotate-secret`, {
+    method: "POST",
+  });
+}

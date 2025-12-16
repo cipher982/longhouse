@@ -116,6 +116,25 @@ class RunnerJobResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Secret Rotation
+# ---------------------------------------------------------------------------
+
+
+class RunnerRotateSecretResponse(BaseModel):
+    """Response after rotating a runner's secret."""
+
+    runner_id: int = Field(..., description="Runner ID")
+    runner_secret: str = Field(
+        ...,
+        description="New long-lived secret for runner authentication (store securely!)",
+    )
+    message: str = Field(
+        default="Secret rotated successfully. Update your runner configuration.",
+        description="Operation status message",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic Success Response
 # ---------------------------------------------------------------------------
 

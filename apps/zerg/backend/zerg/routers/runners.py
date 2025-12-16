@@ -39,6 +39,7 @@ from zerg.schemas.runner_schemas import RunnerListResponse
 from zerg.schemas.runner_schemas import RunnerRegisterRequest
 from zerg.schemas.runner_schemas import RunnerRegisterResponse
 from zerg.schemas.runner_schemas import RunnerResponse
+from zerg.schemas.runner_schemas import RunnerRotateSecretResponse
 from zerg.schemas.runner_schemas import RunnerSuccessResponse
 from zerg.schemas.runner_schemas import RunnerUpdate
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -304,6 +305,72 @@ def revoke_runner(
     return RunnerSuccessResponse(
         success=True,
         message=f"Runner '{runner.name}' has been revoked",
+    )
+
+
+@router.post("/{runner_id}/rotate-secret", response_model=RunnerRotateSecretResponse)
+async def rotate_runner_secret(
+    response: Response,
+    runner_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> RunnerRotateSecretResponse:
+    """Rotate a runner's authentication secret.
+
+    Generates a new secret, invalidating the old one immediately.
+    The runner will be disconnected and must reconnect with the new secret.
+
+    WARNING: The new secret is returned only once. Store it securely.
+    """
+    # Prevent caching of sensitive secrets
+    response.headers["Cache-Control"] = "no-store"
+
+    # Verify ownership
+    runner = runner_crud.get_runner(db=db, runner_id=runner_id)
+    if not runner or runner.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Runner not found",
+        )
+
+    # Cannot rotate secret for revoked runners
+    if runner.status == "revoked":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot rotate secret for a revoked runner",
+        )
+
+    # Rotate the secret
+    result = runner_crud.rotate_runner_secret(db=db, runner_id=runner_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to rotate runner secret",
+        )
+
+    updated_runner, new_secret = result
+
+    # Disconnect the runner if currently connected
+    # This forces it to reconnect with the new secret
+    connection_manager = get_runner_connection_manager()
+    ws = connection_manager.get_connection(current_user.id, runner_id)
+    if ws:
+        try:
+            await ws.close(code=1008, reason="Secret rotated")
+            logger.info(f"Disconnected runner {runner_id} after secret rotation")
+        except Exception as e:
+            logger.warning(f"Failed to close WebSocket for runner {runner_id}: {e}")
+        # Unregister the connection
+        connection_manager.unregister(current_user.id, runner_id, ws)
+
+    # Update runner status to offline since we disconnected it
+    runner.status = "offline"
+    db.commit()
+
+    return RunnerRotateSecretResponse(
+        runner_id=runner_id,
+        runner_secret=new_secret,
+        message=f"Secret rotated for runner '{updated_runner.name}'. Update your runner configuration and restart.",
     )
 
 

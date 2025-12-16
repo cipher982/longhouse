@@ -4,8 +4,10 @@ import {
   fetchRunner,
   fetchRunners,
   revokeRunner,
+  rotateRunnerSecret,
   updateRunner,
   type EnrollTokenResponse,
+  type RotateSecretResponse,
   type Runner,
   type RunnerUpdate,
 } from "../services/api";
@@ -51,6 +53,17 @@ export function useRevokeRunner() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => revokeRunner(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runners"] });
+    },
+  });
+}
+
+// Rotate runner secret
+export function useRotateRunnerSecret() {
+  const queryClient = useQueryClient();
+  return useMutation<RotateSecretResponse, Error, number>({
+    mutationFn: (id: number) => rotateRunnerSecret(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runners"] });
     },

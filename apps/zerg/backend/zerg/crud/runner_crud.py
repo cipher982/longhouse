@@ -263,6 +263,36 @@ def delete_runner(db: Session, runner_id: int) -> bool:
     return True
 
 
+def rotate_runner_secret(db: Session, runner_id: int) -> tuple[Runner, str] | None:
+    """Rotate a runner's authentication secret.
+
+    Generates a new secret, stores only its hash, and returns the plaintext
+    secret once. The old secret is immediately invalidated.
+
+    Args:
+        db: Database session
+        runner_id: ID of the runner to rotate secret for
+
+    Returns:
+        Tuple of (updated runner, plaintext_secret) or None if not found
+    """
+    db_runner = get_runner(db, runner_id)
+    if not db_runner:
+        return None
+
+    # Generate new secret
+    new_secret = generate_token()
+    new_secret_hash = hash_token(new_secret)
+
+    # Update the hash (old secret immediately invalidated)
+    db_runner.auth_secret_hash = new_secret_hash
+
+    db.commit()
+    db.refresh(db_runner)
+
+    return db_runner, new_secret
+
+
 # ---------------------------------------------------------------------------
 # Runner Jobs
 # ---------------------------------------------------------------------------
