@@ -11,6 +11,24 @@ import "./styles/settings.css";
 import "./styles/css/agent-settings.css";
 import App from "./routes/App";
 
+// Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)
+// Only loads on production domains (not localhost)
+const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+const umamiWebsiteId = import.meta.env.VITE_UMAMI_WEBSITE_ID;
+const umamiScriptSrc = import.meta.env.VITE_UMAMI_SCRIPT_SRC || "https://analytics.drose.io/script.js";
+const umamiDomains = import.meta.env.VITE_UMAMI_DOMAINS;
+
+if (!isLocalhost && umamiWebsiteId) {
+  const script = document.createElement("script");
+  script.defer = true;
+  script.src = umamiScriptSrc;
+  script.dataset.websiteId = umamiWebsiteId;
+  if (umamiDomains) {
+    script.dataset.domains = umamiDomains;
+  }
+  document.head.appendChild(script);
+}
+
 // Global error beacon - captures JS errors from all users (including anonymous)
 window.onerror = (msg, src, line, col, err) => {
   fetch("/api/ops/beacon", {
