@@ -269,31 +269,6 @@ sudo systemctl start zerg-backend
 sudo systemctl status zerg-backend
 ```
 
-### Jarvis Node Server (Optional)
-
-If using Jarvis with MCP bridge:
-
-Create `/etc/systemd/system/jarvis-server.service`:
-
-```ini
-[Unit]
-Description=Jarvis Node Server
-After=network.target
-
-[Service]
-Type=simple
-User=swarm
-Group=swarm
-WorkingDirectory=/opt/swarm/apps/jarvis/apps/server
-EnvironmentFile=/opt/swarm/.env
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
 ## Nginx Configuration
 
 ### Jarvis PWA
@@ -720,7 +695,6 @@ cd apps/zerg/backend && uv run alembic upgrade head
 
 # 5. Restart services
 sudo systemctl restart zerg-backend
-sudo systemctl restart jarvis-server  # if applicable
 
 # 6. Verify health
 curl https://swarmlet.com/api/health

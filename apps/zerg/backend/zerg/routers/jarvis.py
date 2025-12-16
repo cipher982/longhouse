@@ -994,129 +994,71 @@ def jarvis_bootstrap(
     return JarvisBootstrapResponse(prompt=prompt, enabled_tools=enabled_tools, user_context=user_context)
 
 
-async def _jarvis_session_proxy_impl(request: Request) -> Response:
-    """Proxy OpenAI Realtime session token minting to jarvis-server.
-
-    Note: jarvis-server implements GET /session; we always forward as GET.
-    """
-    import httpx
-
-    settings = get_settings()
-    jarvis_url = settings.jarvis_server_url
-    if not jarvis_url:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(f"{jarvis_url}/session")
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type", "application/json"),
-            )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
-
-
 @router.get("/session")
-async def jarvis_session_proxy_get(
-    request: Request,
-    current_user=Depends(get_current_jarvis_user),
-) -> Response:
-    return await _jarvis_session_proxy_impl(request)
-
-
-@router.post("/session")
-async def jarvis_session_proxy_post(
-    request: Request,
-    current_user=Depends(get_current_jarvis_user),
-) -> Response:
-    # Backwards compatibility: some clients may still POST; jarvis-server is GET-only.
-    logger.debug("Jarvis session proxy: received POST /session; forwarding as GET /session")
-    return await _jarvis_session_proxy_impl(request)
-
-
-@router.post("/tool")
-async def jarvis_tool_proxy(
+async def jarvis_session_get(
     request: Request,
     current_user=Depends(get_current_jarvis_user),
 ):
-    """Proxy tool execution to jarvis-server with server-side tool enforcement."""
-    import httpx
-    import json
+    """Mint an ephemeral OpenAI Realtime session token.
 
-    settings = get_settings()
-    jarvis_url = settings.jarvis_server_url
-    if not jarvis_url:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+    Directly calls OpenAI's API - no separate jarvis-server needed.
+    """
+    import httpx
+
+    from zerg.services.openai_realtime import mint_realtime_session_token
 
     try:
-        body = await request.body()
-
-        # Enforce tool enablement based on user context (defense in depth).
-        payload = None
-        if body:
-            try:
-                payload = json.loads(body)
-            except Exception:  # noqa: BLE001
-                payload = None
-
-        tool_name = None
-        if isinstance(payload, dict):
-            tool_name = payload.get("name")
-
-        if isinstance(tool_name, str):
-            tool_key = _tool_key_from_mcp_call(tool_name)
-            if tool_key is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Unknown tool call: {tool_name}",
-                )
-
-            if not _is_tool_enabled(current_user.context or {}, tool_key):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Tool disabled: {tool_key}",
-                )
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{jarvis_url}/tool", content=body, headers={"Content-Type": "application/json"})
-            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        result = await mint_realtime_session_token()
+        return result
     except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"OpenAI API error: {e.response.text}")
+
+
+@router.post("/session")
+async def jarvis_session_post(
+    request: Request,
+    current_user=Depends(get_current_jarvis_user),
+):
+    """Backwards compatibility: some clients may still POST."""
+    import httpx
+
+    from zerg.services.openai_realtime import mint_realtime_session_token
+
+    logger.debug("Jarvis session: received POST /session; handling directly")
+    try:
+        result = await mint_realtime_session_token()
+        return result
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"OpenAI API error: {e.response.text}")
 
 
 @router.post("/conversation/title")
-async def jarvis_conversation_title_proxy(
+async def jarvis_conversation_title(
     request: Request,
     current_user=Depends(get_current_jarvis_user),
-) -> Response:
-    """Proxy conversation title generation to jarvis-server."""
+):
+    """Generate a conversation title using OpenAI.
+
+    Directly calls OpenAI's API - no separate jarvis-server needed.
+    """
     import httpx
 
-    settings = get_settings()
-    jarvis_url = settings.jarvis_server_url
-    if not jarvis_url:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server not configured")
+    from zerg.services.title_generator import generate_conversation_title
 
     try:
-        body = await request.body()
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{jarvis_url}/conversation/title",
-                content=body,
-                headers={"Content-Type": "application/json"},
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                media_type=resp.headers.get("content-type", "application/json"),
-            )
+        body = await request.json()
+        messages = body.get("messages", [])
+
+        title = await generate_conversation_title(messages)
+        if title:
+            return {"title": title}
+        else:
+            return {"title": None, "error": "Could not generate title"}
     except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Jarvis server timeout")
-    except httpx.ConnectError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Jarvis server unavailable")
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="OpenAI API timeout")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"OpenAI API error: {e.response.text}")

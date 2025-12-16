@@ -127,19 +127,18 @@ class TestBootstrapEndpoint:
         assert len(data["enabled_tools"]) == 4
 
 
-class TestSessionProxy:
-    """Tests for /api/jarvis/session proxy."""
+class TestSessionEndpoint:
+    """Tests for /api/jarvis/session endpoint (direct OpenAI integration)."""
 
-    def test_session_proxy_forwards_request(self, client):
-        """Session proxy forwards request to jarvis-server (GET)."""
+    def test_session_returns_token(self, client):
+        """Session endpoint returns OpenAI Realtime token."""
         mock_response = MagicMock()
-        mock_response.content = b'{"client_secret": {"value": "test-token"}}'
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {"client_secret": {"value": "test-token"}}
+        mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("zerg.services.openai_realtime.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
@@ -147,26 +146,14 @@ class TestSessionProxy:
             response = client.get("/api/jarvis/session")
 
         assert response.status_code == 200
+        data = response.json()
+        assert "client_secret" in data
 
-    def test_session_proxy_handles_server_unavailable(self, client):
-        """Session proxy returns 503 when jarvis-server is unavailable (GET)."""
-        with patch("httpx.AsyncClient") as mock_client_class:
+    def test_session_handles_timeout(self, client):
+        """Session endpoint returns 504 on timeout."""
+        with patch("zerg.services.openai_realtime.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client_class.return_value = mock_client
-
-            response = client.get("/api/jarvis/session")
-
-        assert response.status_code == 503
-        assert "unavailable" in response.json()["detail"].lower()
-
-    def test_session_proxy_handles_timeout(self, client):
-        """Session proxy returns 504 on timeout (GET)."""
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+            mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
@@ -176,33 +163,27 @@ class TestSessionProxy:
         assert response.status_code == 504
         assert "timeout" in response.json()["detail"].lower()
 
-
-class TestToolProxy:
-    """Tests for POST /api/jarvis/tool proxy."""
-
-    def test_tool_proxy_forwards_request(self, client):
-        """Tool proxy forwards request to jarvis-server."""
+    def test_session_handles_openai_error(self, client):
+        """Session endpoint returns appropriate error on OpenAI API error."""
         mock_response = MagicMock()
-        mock_response.content = b'{"lat": 36.1627, "lon": -86.7816, "address": "Nashville, TN"}'
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("zerg.services.openai_realtime.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
+            error = httpx.HTTPStatusError("Unauthorized", request=MagicMock(), response=mock_response)
+            mock_client.post = AsyncMock(side_effect=error)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_class.return_value = mock_client
 
-            response = client.post(
-                "/api/jarvis/tool",
-                json={"name": "location.get_current", "args": {}},
-            )
+            response = client.get("/api/jarvis/session")
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "lat" in data
-        assert "lon" in data
+        assert response.status_code == 401
+
+
+# NOTE: /api/jarvis/tool endpoint was removed - MCP tools were disabled in production
+# and tool execution now goes through the supervisor/worker system.
 
 
 class TestBootstrapPromptIntegration:

@@ -85,7 +85,6 @@ set +a
 # Secrets/credentials must come from `.env` (validated below).
 export JARPXY_PORT="${JARPXY_PORT:-30080}"
 export JARVIS_WEB_PORT="${JARVIS_WEB_PORT:-8080}"
-export JARVIS_SERVER_PORT="${JARVIS_SERVER_PORT:-8787}"
 export ZERG_BACKEND_PORT="${ZERG_BACKEND_PORT:-8000}"
 export ZERG_FRONTEND_PORT="${ZERG_FRONTEND_PORT:-5173}"
 export AUTH_DISABLED="${AUTH_DISABLED:-1}"
@@ -140,7 +139,7 @@ echo ""
 # Follow logs in background so Ctrl+C hits our trap first.
 # Default: hide noisy Postgres logs (healthchecks, checkpoints) to keep dev output usable.
 # Set INCLUDE_DB_LOGS=1 to include Postgres.
-LOG_SERVICES=(reverse-proxy zerg-backend zerg-frontend jarvis-web jarvis-server)
+LOG_SERVICES=(reverse-proxy zerg-backend zerg-frontend jarvis-web)
 if [ "${INCLUDE_DB_LOGS:-0}" = "1" ]; then
     LOG_SERVICES+=(postgres)
 fi

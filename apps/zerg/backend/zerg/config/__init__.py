@@ -100,7 +100,6 @@ class Settings:  # noqa: D401 – simple data container
 
     # Jarvis integration ------------------------------------------------
     jarvis_device_secret: str | None
-    jarvis_server_url: str | None  # URL of jarvis-server for proxying
 
     # Container runner settings ----------------------------------------
     container_default_image: str | None
@@ -212,7 +211,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
-        jarvis_server_url=os.getenv("JARVIS_SERVER_URL", "http://jarvis-server:8787"),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
         container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),

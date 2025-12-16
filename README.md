@@ -19,7 +19,7 @@ User → http://localhost:30080 (nginx)
   /            → Zerg dashboard (React)
   /dashboard   → Zerg dashboard (alias)
   /chat        → Jarvis web (PWA)
-  /api/*       → Zerg FastAPI backend
+  /api/*       → Zerg FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
   /ws/*        → Zerg WS (SSE/WS)
 
 Backend: FastAPI + LangGraph supervisor/worker agents
@@ -27,7 +27,7 @@ Workers: disposable agents, artifacts under /data/workers
 Frontend: React (Zerg) + Vite PWA (Jarvis), served same-origin
 ```
 
-Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (backend), 8080 (jarvis web), 8787 (jarvis server) stay internal.
+Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (backend), 8080 (jarvis web) stay internal.
 
 ---
 
@@ -57,7 +57,7 @@ apps/
 │   ├── backend/        # FastAPI + LangGraph supervisor/worker
 │   ├── frontend-web/   # React dashboard
 │   └── e2e/            # Playwright unified tests
-└── jarvis/             # PWA UI + Node bridge
+└── jarvis/             # Voice/text PWA UI
 
 docker/                 # Compose files + nginx reverse-proxy configs
 docs/                   # Specs/PRDs (see below)
