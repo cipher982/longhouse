@@ -501,6 +501,9 @@ def test_rotate_secret_success(client: TestClient, db_session: Session, test_use
     )
     assert response.status_code == 200
 
+    # Verify Cache-Control header prevents caching of sensitive secret
+    assert response.headers.get("Cache-Control") == "no-store"
+
     data = response.json()
     assert data["runner_id"] == runner.id
     assert "runner_secret" in data
