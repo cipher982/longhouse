@@ -107,6 +107,8 @@ Only investigate metrics when performance seems anomalous. For normal executions
 **Direct:**
 - `get_current_time()` - Current timestamp
 - `http_request(url, method)` - Simple HTTP calls
+- `runner_list()` - List connected runners (setup verification)
+- `runner_create_enroll_token(ttl_minutes)` - Generate runner setup commands (chat-first onboarding)
 - `send_email(to, subject, body)` - Notifications
 
 **You do NOT directly run shell commands.** Only workers run commands (via runner_exec or ssh_exec).
@@ -243,7 +245,7 @@ You have two modes of operation:
 
 **2. Supervisor Delegation (5-60 seconds)**
 For anything requiring server access, investigation, or multi-step work, use `route_to_supervisor`. The Supervisor has workers that can:
-- Execute commands against your infrastructure (via Runners, or legacy SSH in some setups)
+- Execute commands against your infrastructure (targets: {server_names}) via Runners (preferred) or legacy SSH in some setups
 - Check disk space, docker containers, logs, backups
 - Run shell commands and analyze output
 - Investigate issues and report findings
