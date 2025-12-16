@@ -8,6 +8,7 @@ that the backend can delegate work to without needing SSH keys.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 from typing import Any
 from typing import Dict
@@ -25,6 +26,23 @@ from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
+
+
+def _run_coro_sync(coro: Any) -> Dict[str, Any]:
+    """Run an async coroutine from a sync context.
+
+    runner_exec is registered as a synchronous LangChain tool. In most cases it
+    runs without an active event loop. If called from within an event loop,
+    calling asyncio.run() would raise; instead we execute the coroutine in a
+    dedicated thread with its own event loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
 
 
 def _resolve_target(owner_id: int, target: str) -> tuple[int, str] | None:
@@ -192,41 +210,17 @@ def runner_exec(
         # Dispatch job and wait for completion
         dispatcher = get_runner_job_dispatcher()
 
-        # Run async dispatcher - try to get running loop or create new one
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop, use asyncio.run
-            result = asyncio.run(
-                dispatcher.dispatch_job(
-                    db=db,
-                    owner_id=owner_id,
-                    runner_id=runner_id,
-                    command=command,
-                    timeout_secs=timeout_secs,
-                    worker_id=worker_id,
-                    run_id=run_id,
-                )
+        result = _run_coro_sync(
+            dispatcher.dispatch_job(
+                db=db,
+                owner_id=owner_id,
+                runner_id=runner_id,
+                command=command,
+                timeout_secs=timeout_secs,
+                worker_id=worker_id,
+                run_id=run_id,
             )
-        else:
-            # Running in async context, await directly
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                result = loop.run_in_executor(
-                    pool,
-                    lambda: asyncio.run(
-                        dispatcher.dispatch_job(
-                            db=db,
-                            owner_id=owner_id,
-                            runner_id=runner_id,
-                            command=command,
-                            timeout_secs=timeout_secs,
-                            worker_id=worker_id,
-                            run_id=run_id,
-                        )
-                    ),
-                )
-                result = loop.run_until_complete(result)
+        )
 
         # Check if result is an error
         if not result.get("ok"):
