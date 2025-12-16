@@ -11,8 +11,7 @@ export const CONFIG = {
   // Use relative path for API - proxied through Nginx
   API_BASE: '/api',
 
-  // Jarvis-specific API endpoints (BFF layer through zerg-backend)
-  // These endpoints are proxied by zerg-backend to jarvis-server
+  // Jarvis-specific API endpoints (BFF layer in zerg-backend)
   JARVIS_API_BASE: '/api/jarvis',
 
   // Default Zerg API URL

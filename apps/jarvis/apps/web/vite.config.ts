@@ -10,7 +10,6 @@ export default defineConfig(({ mode }) => {
 
   // Detect if running in Docker (service names) or native (localhost)
   const isDocker = process.env.DOCKER === '1' || process.env.NODE_ENV === 'docker'
-  const JARVIS_SERVER = isDocker ? 'http://jarvis-server:8787' : 'http://localhost:8787'
   const ZERG_BACKEND = isDocker ? 'http://zerg-backend:8000' : 'http://localhost:47300'
   const ZERG_WS = isDocker ? 'ws://zerg-backend:8000' : 'ws://localhost:47300'
 
@@ -126,24 +125,7 @@ export default defineConfig(({ mode }) => {
         : 8080,
     },
     proxy: {
-      // Jarvis realtime bridge
-      '/api/session': {
-        target: JARVIS_SERVER,
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-      '/api/tool': {
-        target: JARVIS_SERVER,
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-      '/api/sync': {
-        target: JARVIS_SERVER,
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-
-      // Zerg backend (REST + SSE)
+      // Zerg backend (REST + SSE + Jarvis BFF)
       '/api/ws': {
         target: ZERG_WS,
         ws: true,

@@ -1,5 +1,9 @@
 # Jarvis Integration Architecture
 
+> **⚠️ DEPRECATED**: This document describes the original architecture.
+> As of December 2024, jarvis-server has been removed and all functionality moved to zerg-backend at `/api/jarvis/*`.
+> See `AGENTS.md` for current architecture.
+
 **Version**: 1.0
 **Date**: October 6, 2025
 **Status**: Backend Complete, UI Integration Pending

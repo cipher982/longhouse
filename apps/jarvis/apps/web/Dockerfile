@@ -26,7 +26,6 @@ RUN ln -s /app/config/models.json /app/swarm-packages/config/models.json
 COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
 COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
 COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
-COPY apps/jarvis/apps/server/package.json ./apps/server/package.json
 COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
 
 # Install only jarvis dependencies (much smaller than full monorepo)

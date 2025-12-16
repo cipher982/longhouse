@@ -54,16 +54,10 @@ else
     check_fail "apps/zerg/ missing"
 fi
 
-if [ -d "packages/contracts" ]; then
-    check_pass "packages/contracts/ exists"
+if [ -d "packages/config" ]; then
+    check_pass "packages/config/ exists"
 else
-    check_fail "packages/contracts/ missing"
-fi
-
-if [ -d "packages/tool-manifest" ]; then
-    check_pass "packages/tool-manifest/ exists"
-else
-    check_fail "packages/tool-manifest/ missing"
+    check_fail "packages/config/ missing"
 fi
 
 # 2. Check dependencies
@@ -164,9 +158,6 @@ KEY_FILES=(
     "apps/jarvis/packages/core/src/jarvis-api-client.ts"
     "apps/jarvis/apps/web/lib/task-inbox.ts"
     "apps/zerg/backend/scripts/seed_jarvis_agents.py"
-    "packages/tool-manifest/index.ts"
-    "packages/tool-manifest/tools.py"
-    "scripts/generate-tool-manifest.py"
     "scripts/test-jarvis-integration.sh"
     "docs/jarvis_integration.md"
     "docs/DEPLOYMENT.md"
@@ -218,18 +209,6 @@ fi
 
 MIGRATION_COUNT=$(ls apps/zerg/backend/alembic/versions/*.py 2>/dev/null | wc -l | tr -d ' ')
 check_info "Found $MIGRATION_COUNT migration files"
-
-# 7. Check generated files
-echo ""
-echo "7. Generated Files"
-echo "------------------"
-
-if [ -f "packages/tool-manifest/index.ts" ]; then
-    TOOL_COUNT=$(grep -c '"name":' packages/tool-manifest/index.ts || echo 0)
-    check_pass "Tool manifest generated ($TOOL_COUNT tools)"
-else
-    check_warn "Tool manifest not generated - run: make generate-tools"
-fi
 
 # Summary
 echo ""

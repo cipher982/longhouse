@@ -12,8 +12,8 @@ Test Run Lifecycle:
       ▼
   docker compose -f docker-compose.test.yml build && run --rm playwright
       │
-      ├── Builds jarvis-server, jarvis-web, playwright images
-      ├── Starts jarvis-server (waits for healthy)
+      ├── Builds zerg-backend, jarvis-web, playwright images
+      ├── Starts zerg-backend (waits for healthy)
       ├── Starts jarvis-web (waits for healthy)
       ├── Runs playwright container against http://jarvis-web:8080 (internal network)
       │
@@ -52,17 +52,17 @@ make test-clean
 
 ## Required Environment Variables
 
-- `OPENAI_API_KEY` - Required for the test server (must be set)
+- `OPENAI_API_KEY` - Required for zerg-backend API endpoints (must be set)
 
 ## Configuration
 
 ### Port Configuration
 
-| Variable           | Default | Description                   |
-| ------------------ | ------- | ----------------------------- |
-| `TEST_SERVER_PORT` | 8787    | Jarvis server port (internal) |
-| `TEST_WEB_PORT`    | 8080    | Jarvis web port (internal)    |
-| `SERVER_URL`       | auto    | API server URL for tests      |
+| Variable        | Default | Description                  |
+| --------------- | ------- | ---------------------------- |
+| `TEST_WEB_PORT` | 8080    | Jarvis web port (internal)   |
+| `BACKEND_PORT`  | 47300   | Zerg backend port (internal) |
+| `SERVER_URL`    | auto    | API server URL for tests     |
 
 ### Model Configuration
 
@@ -95,7 +95,7 @@ JARVIS_REALTIME_MODEL=gpt-4o-realtime-preview-2024-12-17 make test
 | Test File                           | Description                          |
 | ----------------------------------- | ------------------------------------ |
 | `history-hydration.e2e.spec.ts`     | History persistence and UI hydration |
-| `integration/api-endpoints.spec.js` | Server API endpoint tests            |
+| `integration/api-endpoints.spec.js` | Jarvis BFF API endpoint tests (zerg) |
 
 ### Skipped Tests (Require Real OpenAI/Hardware)
 
@@ -120,14 +120,14 @@ These tests are skipped in Docker CI because they require real WebRTC connection
 
 ```bash
 # Build and start services without running tests:
-docker compose -f docker-compose.test.yml up -d jarvis-server jarvis-web
+docker compose -f docker-compose.test.yml up -d zerg-backend jarvis-web
 
 # Check service health:
 docker compose -f docker-compose.test.yml ps
 
 # View logs:
 docker compose -f docker-compose.test.yml logs -f jarvis-web
-docker compose -f docker-compose.test.yml logs -f jarvis-server
+docker compose -f docker-compose.test.yml logs -f zerg-backend
 
 # Run tests interactively:
 docker compose -f docker-compose.test.yml run --rm playwright \

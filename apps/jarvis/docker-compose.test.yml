@@ -5,9 +5,8 @@
 #
 # All services communicate via internal 'test' network using service names:
 #   - reverse-proxy:80 (entry point for tests)
-#   - jarvis-server:8787
 #   - jarvis-web:8080
-#   - zerg-backend:8000
+#   - zerg-backend:8000 (includes /api/jarvis/* endpoints)
 #   - postgres:5432
 
 services:
@@ -47,37 +46,10 @@ services:
       TRIGGER_SIGNING_SECRET: test_trigger_secret
       AUTH_DISABLED: "1"  # Dev mode - auth tests are in backend unit tests
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY required for e2e tests}
-      JARVIS_SERVER_URL: http://jarvis-server:8787
       ALLOWED_CORS_ORIGINS: "*"
       LOG_LEVEL: WARNING
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 15s
-    networks:
-      - test
-
-  # ---------------------------------------------------------------------------
-  # Jarvis Server (OpenAI Realtime proxy, MCP tools)
-  # ---------------------------------------------------------------------------
-  jarvis-server:
-    build:
-      context: ../..
-      dockerfile: apps/jarvis/apps/server/Dockerfile
-    environment:
-      JARVIS_SERVER_PORT: 8787
-      NODE_ENV: test
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY required for e2e tests}
-      JARVIS_DEVICE_SECRET: test-device-secret
-      # Model configuration - use mini model for faster/cheaper tests
-      JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
-      JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
-      JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
-      JARVIS_VOICE: ${JARVIS_VOICE:-}
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8787/session"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -93,7 +65,7 @@ services:
       context: ../..
       dockerfile: apps/jarvis/apps/web/Dockerfile
     depends_on:
-      jarvis-server:
+      zerg-backend:
         condition: service_healthy
     environment:
       JARVIS_WEB_PORT: 8080
@@ -156,7 +128,6 @@ services:
     environment:
       # Tests go through nginx reverse proxy (same as production)
       BASE_URL: http://reverse-proxy
-      SERVER_URL: http://jarvis-server:8787
       ZERG_API_URL: http://zerg-backend:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CI: ${CI:-}
