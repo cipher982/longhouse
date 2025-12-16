@@ -850,3 +850,91 @@ class RunnerJob(Base):
 
     # Timestamps
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base – Sources and Documents (Phase 0)
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeSource(Base):
+    """User-owned knowledge source (URL, git repo, upload, etc.).
+
+    Each source syncs on a schedule and produces searchable documents.
+    Phase 0 only supports 'url' type.
+    """
+
+    __tablename__ = "knowledge_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership - every source belongs to one user
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner = relationship("User", backref="knowledge_sources")
+
+    # Source type: "url" (Phase 0), "git_repo", "upload", "manual_note" (Phase 1+)
+    source_type = Column(String(50), nullable=False)
+
+    # User-friendly label
+    name = Column(String(255), nullable=False)
+
+    # Type-specific configuration (e.g., {"url": "...", "auth_header": "..."})
+    config = Column(MutableDict.as_mutable(JSON), nullable=False)
+
+    # Optional cron expression for automatic sync (e.g., "0 * * * *" for hourly)
+    sync_schedule = Column(String(100), nullable=True)
+
+    # Sync state
+    last_synced_at = Column(DateTime, nullable=True)
+    sync_status = Column(String(50), default="pending", nullable=False)  # pending, success, failed
+    sync_error = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    documents = relationship("KnowledgeDocument", back_populates="source", cascade="all, delete-orphan")
+
+
+class KnowledgeDocument(Base):
+    """A single document fetched from a knowledge source.
+
+    Stores normalized text content for searching.
+    """
+
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (
+        # Ensure one document per (source, path) combination
+        UniqueConstraint("source_id", "path", name="uq_source_path"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Foreign key to source (CASCADE delete when source is removed)
+    source_id = Column(Integer, ForeignKey("knowledge_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Denormalized owner_id for efficient querying
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Original path/URL
+    path = Column(String(1024), nullable=False)
+
+    # Extracted or inferred title
+    title = Column(String(512), nullable=True)
+
+    # Normalized text content (searchable)
+    content_text = Column(Text, nullable=False)
+
+    # SHA-256 hash for change detection
+    content_hash = Column(String(64), nullable=False)
+
+    # Additional metadata (mime type, size, etc.)
+    metadata = Column(MutableDict.as_mutable(JSON), nullable=True, default={})
+
+    # When this document was last fetched
+    fetched_at = Column(DateTime, nullable=False)
+
+    # Relationships
+    source = relationship("KnowledgeSource", back_populates="documents")
+    owner = relationship("User", backref="knowledge_documents")
