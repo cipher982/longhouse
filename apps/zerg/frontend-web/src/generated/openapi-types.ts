@@ -761,6 +761,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runners/{runner_id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Runner Secret
+         * @description Rotate a runner's authentication secret.
+         *
+         *     Generates a new secret, invalidating the old one immediately.
+         *     The runner will be disconnected and must reconnect with the new secret.
+         *
+         *     WARNING: The new secret is returned only once. Store it securely.
+         */
+        post: operations["rotate_runner_secret_api_runners__runner_id__rotate_secret_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/validate": {
         parameters: {
             query?: never;
@@ -1859,31 +1884,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Jarvis Session Proxy Get */
-        get: operations["jarvis_session_proxy_get_api_jarvis_session_get"];
-        put?: never;
-        /** Jarvis Session Proxy Post */
-        post: operations["jarvis_session_proxy_post_api_jarvis_session_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jarvis/tool": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
+        /**
+         * Jarvis Session Get
+         * @description Mint an ephemeral OpenAI Realtime session token.
+         *
+         *     Directly calls OpenAI's API - no separate jarvis-server needed.
+         */
+        get: operations["jarvis_session_get_api_jarvis_session_get"];
         put?: never;
         /**
-         * Jarvis Tool Proxy
-         * @description Proxy tool execution to jarvis-server with server-side tool enforcement.
+         * Jarvis Session Post
+         * @description Backwards compatibility: some clients may still POST.
          */
-        post: operations["jarvis_tool_proxy_api_jarvis_tool_post"];
+        post: operations["jarvis_session_post_api_jarvis_session_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1900,10 +1913,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Jarvis Conversation Title Proxy
-         * @description Proxy conversation title generation to jarvis-server.
+         * Jarvis Conversation Title
+         * @description Generate a conversation title using OpenAI.
+         *
+         *     Directly calls OpenAI's API - no separate jarvis-server needed.
          */
-        post: operations["jarvis_conversation_title_proxy_api_jarvis_conversation_title_post"];
+        post: operations["jarvis_conversation_title_api_jarvis_conversation_title_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3549,6 +3564,28 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * RunnerRotateSecretResponse
+         * @description Response after rotating a runner's secret.
+         */
+        RunnerRotateSecretResponse: {
+            /**
+             * Runner Id
+             * @description Runner ID
+             */
+            runner_id: number;
+            /**
+             * Runner Secret
+             * @description New long-lived secret for runner authentication (store securely!)
+             */
+            runner_secret: string;
+            /**
+             * Message
+             * @description Operation status message
+             * @default Secret rotated successfully. Update your runner configuration.
+             */
+            message: string;
         };
         /**
          * RunnerSuccessResponse
@@ -5684,6 +5721,39 @@ export interface operations {
             };
         };
     };
+    rotate_runner_secret_api_runners__runner_id__rotate_secret_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerRotateSecretResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     validate_workflow_api_workflows_validate_post: {
         parameters: {
             query?: {
@@ -7425,7 +7495,7 @@ export interface operations {
             };
         };
     };
-    jarvis_session_proxy_get_api_jarvis_session_get: {
+    jarvis_session_get_api_jarvis_session_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -7458,7 +7528,7 @@ export interface operations {
             };
         };
     };
-    jarvis_session_proxy_post_api_jarvis_session_post: {
+    jarvis_session_post_api_jarvis_session_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -7491,40 +7561,7 @@ export interface operations {
             };
         };
     };
-    jarvis_tool_proxy_api_jarvis_tool_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    jarvis_conversation_title_proxy_api_jarvis_conversation_title_post: {
+    jarvis_conversation_title_api_jarvis_conversation_title_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */

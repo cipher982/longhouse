@@ -17,9 +17,7 @@
     "test:mobile": "bun run web:test -- --project=mobile",
     "web:dev": "bun run --filter @jarvis/web dev",
     "web:test": "bun run --filter @jarvis/web test",
-    "server:dev": "bun run --filter @jarvis/server dev",
-    "native:dev": "bun run --filter @jarvis/native dev",
-    "start:test": "concurrently \"bun run server:dev\" \"bun run web:dev\" --kill-others --success first"
+    "native:dev": "bun run --filter @jarvis/native dev"
   },
   "dependencies": {
     "idb": "^8.0.0"

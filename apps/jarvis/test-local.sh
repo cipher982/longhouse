@@ -26,19 +26,20 @@ case "$1" in
 
   "e2e")
     echo "🧪 Running E2E tests locally (visible browser)..."
-    echo "⚠️  Make sure jarvis-server and jarvis-web are running!"
+    echo "⚠️  Make sure zerg-backend and jarvis-web are running!"
+    echo "   Start with: make zerg (from repo root)"
     echo ""
 
     # Check if services are running
-    if ! curl -sf http://localhost:8787/session > /dev/null 2>&1; then
-      echo "❌ jarvis-server not running on port 8787"
-      echo "   Start with: cd apps/server && npm run dev"
+    if ! curl -sf http://localhost:47300/api/jarvis/session > /dev/null 2>&1; then
+      echo "❌ zerg-backend not running (or /api/jarvis/session not responding)"
+      echo "   Start with: make zerg (from repo root)"
       exit 1
     fi
 
     if ! curl -sf http://localhost:8080 > /dev/null 2>&1; then
       echo "❌ jarvis-web not running on port 8080"
-      echo "   Start with: cd apps/web && npm run dev"
+      echo "   Start with: cd apps/jarvis/apps/web && bun run dev"
       exit 1
     fi
 

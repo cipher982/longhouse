@@ -8,7 +8,7 @@ Status summary
 - Shared packages: Extracted voice engine and local data layers into packages/core and packages/data/local for cross-surface reuse.
 - Sync: Added sync scaffolding.
   - Client: outbox ops (append_turn) are queued; syncNow() pushes to server then pulls remote ops.
-  - Server: added minimal /sync/push and /sync/pull endpoints with an in-memory durable log for development.
+  - Server: sync endpoints not yet implemented on zerg-backend (TODO).
 - Privacy: No E2E yet; token logging removed from client.
 - Native: Electron shell loads PWA; no Keychain/E2E yet.
 
@@ -20,12 +20,13 @@ Data model (client)
 - kv(key, value)
 - outbox(opId, deviceId, type, body, lamport, ts)
 
-API (server)
+API (zerg-backend at /api/jarvis/\*)
 
-- POST /session – unchanged (OpenAI client secret minting)
-- POST /tool – unchanged (location/whoop mocks)
-- POST /sync/push – new; idempotent by opId; returns { acked, nextCursor }
-- GET /sync/pull?cursor – new; returns { ops, nextCursor }
+- GET /session – OpenAI Realtime session token minting (implemented)
+- POST /session – Same as GET (implemented)
+- POST /conversation/title – Generate conversation title from messages (implemented)
+- POST /sync/push – not yet implemented; idempotent by opId; returns { acked, nextCursor }
+- GET /sync/pull?cursor – not yet implemented; returns { ops, nextCursor }
 
 What’s implemented vs. the proposal
 

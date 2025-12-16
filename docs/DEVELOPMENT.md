@@ -59,8 +59,7 @@ cd apps/jarvis && make status
 # Check what's running
 docker ps
 lsof -i :8080  # Jarvis UI
-lsof -i :8787  # Jarvis voice server
-lsof -i :47300 # Zerg backend
+lsof -i :47300 # Zerg backend (includes Jarvis BFF)
 ```
 
 ### Debugging
@@ -92,11 +91,11 @@ make stop
 make dev
 ```
 
-### "Cannot connect to voice server"
+### "Cannot connect to backend"
 
-The Jarvis voice server (port 8787) isn't running or the proxy isn't working:
+The zerg-backend isn't running or the proxy isn't working:
 
-1. Check if it started: `lsof -i :8787`
+1. Check if it started: `lsof -i :47300` or `docker ps | grep backend`
 2. Check Vite config has proxy: `cat apps/jarvis/apps/web/vite.config.ts`
 3. Restart: Ctrl+C, then `make dev`
 
@@ -154,12 +153,12 @@ Ctrl+C
 - Edit files in `apps/jarvis/apps/web/`
 - Browser auto-refreshes (Vite HMR)
 
-**Backend changes** (Jarvis voice server):
+**Backend changes** (Zerg backend includes Jarvis BFF):
 
-- Edit files in `apps/jarvis/apps/server/`
-- Must restart: Ctrl+C, then `make dev`
+- Edit files in `apps/zerg/backend/`
+- Hot-reloads in dev mode (RELOAD=true)
 
-**Zerg changes** (Docker):
+**Frontend changes** (Zerg or Jarvis):
 
 - Edit files in `apps/zerg/backend/` or `apps/zerg/frontend-web/`
 - Typically hot-reloads; if you need a clean rebuild: `make dev-clean && make dev`
@@ -169,36 +168,34 @@ Ctrl+C
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│         Your Browser (8080)             │
-│                                         │
-│  ┌─────────────────────────────────┐   │
-│  │   Jarvis UI (React + Vite)      │   │
-│  │   - Voice interface             │   │
-│  │   - Task inbox                  │   │
-│  │   - Chat transcripts            │   │
-│  └──────────┬──────────────────────┘   │
-│             │ /api/* → 8787            │
-└─────────────┼─────────────────────────┘
-              │
-        Vite Proxy
-              │
-┌─────────────▼──────────────────────────┐
-│   Jarvis Voice Server (8787, Node)     │
-│   - OpenAI Realtime API sessions       │
-│   - MCP tool integration               │
-│   - Audio streaming                    │
-└─────────────┬──────────────────────────┘
-              │
-              │ HTTP API calls
-              │
-┌─────────────▼──────────────────────────┐
-│   Zerg Backend (47300, Docker)         │
-│   - FastAPI                            │
-│   - Agent orchestration                │
-│   - LangGraph workflows                │
-│   - PostgreSQL                         │
-└────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│         Nginx Reverse Proxy (30080)             │
+│                                                 │
+│  /chat/*      → Jarvis UI (8080)                │
+│  /dashboard/* → Zerg Dashboard (5173)           │
+│  /api/*       → Zerg Backend (8000)             │
+└─────────────────────────────────────────────────┘
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ Jarvis UI   │  │   Zerg      │  │   Zerg      │
+│ (React PWA) │  │ Dashboard   │  │  Backend    │
+│             │  │ (React)     │  │  (FastAPI)  │
+│ - Voice UI  │  │             │  │             │
+│ - Chat UI   │  │ - Agents    │  │ - Jarvis    │
+│             │  │ - Runs      │  │   BFF       │
+└─────────────┘  └─────────────┘  │ - OpenAI    │
+                                  │   Realtime  │
+                                  │ - Agents    │
+                                  │ - Workers   │
+                                  └──────┬──────┘
+                                         │
+                                         ▼
+                                  ┌─────────────┐
+                                  │  Postgres   │
+                                  └─────────────┘
 ```
 
 ---
@@ -208,19 +205,27 @@ Ctrl+C
 ```
 zerg/
 ├── apps/
-│   ├── jarvis/              # Voice agent
+│   ├── jarvis/              # Voice UI
 │   │   ├── apps/
-│   │   │   ├── server/      # Node server (8787)
 │   │   │   └── web/         # Vite frontend (8080)
+│   │   ├── packages/
+│   │   │   ├── core/        # Shared models/config
+│   │   │   └── data/        # IndexedDB persistence
 │   │   └── Makefile
 │   └── zerg/                # Agent platform
-│       ├── backend/         # FastAPI (47300)
-│       ├── frontend-web/    # React (47200)
+│       ├── backend/         # FastAPI (8000)
+│       │   └── routers/
+│       │       └── jarvis.py  # Jarvis BFF endpoints
+│       ├── frontend-web/    # React (5173)
 │       └── e2e/            # Playwright tests
+├── docker/
+│   ├── docker-compose.dev.yml  # Dev profiles
+│   └── nginx/                  # Reverse proxy configs
 ├── scripts/
-│   └── dev.sh              # Unified dev script
-├── Makefile                # Main commands
-└── DEVELOPMENT.md          # This file
+│   └── dev-docker.sh          # Unified dev script
+├── Makefile                   # Main commands
+└── docs/
+    └── DEVELOPMENT.md         # This file
 ```
 
 ---
@@ -230,16 +235,21 @@ zerg/
 Key variables in `.env`:
 
 ```bash
-# Jarvis
-JARVIS_SERVER_PORT=8787
-JARVIS_WEB_PORT=8080
-OPENAI_API_KEY=sk-...
+# Proxy & Services
+JARPXY_PORT=30080           # Nginx entry point
+JARVIS_WEB_PORT=8080        # Jarvis UI (internal)
+BACKEND_PORT=47300          # Zerg backend (internal)
+FRONTEND_PORT=47200         # Zerg frontend (internal)
 
-# Zerg
-BACKEND_PORT=47300
-FRONTEND_PORT=47200
-DATABASE_URL=postgresql://...
+# OpenAI & Auth
+OPENAI_API_KEY=sk-...
 JWT_SECRET=...
+FERNET_SECRET=...
+
+# Database
+POSTGRES_USER=...
+POSTGRES_PASSWORD=...
+POSTGRES_DB=...
 ```
 
 Copy from `.env.example` if missing.
@@ -249,9 +259,9 @@ Copy from `.env.example` if missing.
 ## Troubleshooting Checklist
 
 - [ ] Is Docker running? (`docker ps`)
-- [ ] Is port 8080 free? (`lsof -i :8080`)
-- [ ] Is port 8787 free? (`lsof -i :8787`)
-- [ ] Is port 47300 free? (`lsof -i :47300`)
+- [ ] Is port 30080 free? (`lsof -i :30080`) - nginx proxy
+- [ ] Is port 8080 free? (`lsof -i :8080`) - Jarvis UI
+- [ ] Is port 47300 free? (`lsof -i :47300`) - Zerg backend
 - [ ] Do you have `.env` configured? (`cat .env`)
 - [ ] Are node_modules installed? (`bun install` from repo root)
 - [ ] Is Vite proxy configured? (`cat apps/jarvis/apps/web/vite.config.ts`)

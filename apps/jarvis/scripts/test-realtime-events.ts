@@ -5,19 +5,18 @@
  * Run with: cd apps/jarvis && npx tsx scripts/test-realtime-events.ts
  *
  * This script:
- * 1. Gets a session token from the Jarvis server
+ * 1. Gets a session token from zerg-backend
  * 2. Connects to OpenAI Realtime API using WebRTC
  * 3. Sends a text message
  * 4. Logs ALL events received
  * 5. Shows exactly what event structure the API returns
  *
- * PREREQUISITE: Start Jarvis server first:
- *   cd apps/jarvis && bun run dev:server
+ * PREREQUISITE: Start backend first via `make dev` or `make zerg`
  */
 
 import { RealtimeSession, RealtimeAgent, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:8787';
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:47300/api/jarvis';
 
 async function getSessionToken(): Promise<string> {
   console.log(`🎫 Requesting session token from ${SERVER_URL}/session...`);

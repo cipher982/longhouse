@@ -39,7 +39,7 @@ describe('SessionManager sync configuration', () => {
 
     const sessionManager = new SessionManager({}, {
       conversationManagerOptions: {
-        syncBaseUrl: 'http://localhost:8787',
+        syncBaseUrl: 'http://localhost:47300/api/jarvis',
         syncTransport: transport
       },
       maxHistoryTurns: 10

@@ -79,7 +79,7 @@ export class ConversationManager {
       ? (input, init) => fetch(input, init as any)
       : undefined
     const defaultBase = typeof location !== 'undefined'
-      ? `${location.protocol}//${location.hostname}:8787`
+      ? `${location.origin}/api`
       : undefined
 
     this.syncTransport = options.syncTransport ?? defaultTransport

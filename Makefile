@@ -11,13 +11,12 @@ ZERG_BACKEND_PORT ?= $(BACKEND_PORT)
 ZERG_FRONTEND_PORT ?= $(FRONTEND_PORT)
 ZERG_BACKEND_PORT ?= 47300
 ZERG_FRONTEND_PORT ?= 47200
-JARVIS_SERVER_PORT ?= 8787
 JARVIS_WEB_PORT ?= 8080
 
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate tool-check validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -136,7 +135,7 @@ logs: ## View logs from running services
 
 logs-app: ## View logs for app services (excludes Postgres)
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed jarvis-web jarvis-server; \
+		$(COMPOSE_DEV) logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed jarvis-web; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
@@ -235,11 +234,10 @@ test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 # ---------------------------------------------------------------------------
 # SDK & Integration
 # ---------------------------------------------------------------------------
-generate-sdk: ## Generate OpenAPI/AsyncAPI clients and tool manifest
+generate-sdk: ## Generate OpenAPI types from backend schema
 	@echo "🔄 Generating SDK..."
-	@cd apps/zerg/backend && uv run python -m zerg.main --openapi-json > ../../../packages/contracts/openapi.json
-	@cd packages/contracts && bun run generate
-	@uv run python scripts/generate-tool-manifest.py
+	@cd apps/zerg/backend && uv run python -c "from zerg.main import app; app.openapi()" 2>/dev/null
+	@cd apps/zerg/frontend-web && bun run generate:api
 	@echo "✅ SDK generation complete"
 
 seed-agents: ## Seed baseline Zerg agents for Jarvis
@@ -261,12 +259,7 @@ validate: ## Run all validation checks
 	@$(MAKE) validate-ws
 	@printf '\n2️⃣  Validating Makefile structure...\n'
 	@$(MAKE) validate-makefile
-	@printf '\n3️⃣  Validating tool contracts...\n'
-	@$(MAKE) tool-check
 	@printf '\n✅ All validations passed\n'
-
-tool-check: ## Validate tool contracts (for CI)
-	@uv run python scripts/generate-tool-manifest.py --validate
 
 validate-ws: ## Check WebSocket code is in sync (for CI)
 	@bash scripts/regen-ws-code.sh >/dev/null 2>&1

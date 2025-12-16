@@ -215,7 +215,7 @@ export class ConversationController {
       const hasAssistant = messages.some(m => m.role === 'assistant');
       if (!hasUser || !hasAssistant) return;
 
-      // Call Jarvis BFF → jarvis-server to generate a short title.
+      // Call Jarvis BFF endpoint on zerg-backend to generate a short title.
       const resp = await fetch(`${CONFIG.JARVIS_API_BASE}/conversation/title`, {
         method: 'POST',
         headers: this.buildJsonHeaders(),
