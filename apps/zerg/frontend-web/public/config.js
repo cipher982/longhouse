@@ -21,3 +21,16 @@ console.log("Loaded runtime config:", {
   WS_BASE_URL: window.WS_BASE_URL,
   origin: window.location.origin
 });
+
+// Umami Analytics - only on production domain
+if (!LOCAL_HOSTS.has(window.location.hostname)) {
+  const script = document.createElement('script');
+  script.defer = true;
+  script.src = 'https://analytics.drose.io/script.js';
+  script.dataset.websiteId = '486eaa80-2916-41ee-a2a2-f55209495028';
+  script.dataset.domains = 'swarmlet.com';
+  document.head.appendChild(script);
+  console.log("Umami analytics loaded for production domain");
+} else {
+  console.log("Umami analytics skipped (localhost)");
+}
