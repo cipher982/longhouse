@@ -116,6 +116,8 @@ class SupervisorService:
             "get_worker_metadata",
             "get_current_time",
             "http_request",
+            "runner_list",
+            "runner_create_enroll_token",
             "send_email",
         ]
 
