@@ -59,7 +59,7 @@ async def sync_url_source(db: Session, source: KnowledgeSource) -> None:
             path=url,
             content_text=content,
             title=title,
-            metadata={
+            doc_metadata={
                 "content_type": response.headers.get("content-type"),
                 "status_code": response.status_code,
                 "content_length": len(content),
