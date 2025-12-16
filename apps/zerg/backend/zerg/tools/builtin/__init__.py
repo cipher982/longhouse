@@ -13,6 +13,7 @@ from zerg.tools.builtin.github_tools import TOOLS as GITHUB_TOOLS
 from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
 from zerg.tools.builtin.imessage_tools import TOOLS as IMESSAGE_TOOLS
 from zerg.tools.builtin.jira_tools import TOOLS as JIRA_TOOLS
+from zerg.tools.builtin.knowledge_tools import TOOLS as KNOWLEDGE_TOOLS
 from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
@@ -35,6 +36,7 @@ BUILTIN_TOOLS = (
     + HTTP_TOOLS
     + IMESSAGE_TOOLS
     + JIRA_TOOLS
+    + KNOWLEDGE_TOOLS
     + LINEAR_TOOLS
     + MATH_TOOLS
     + NOTION_TOOLS
