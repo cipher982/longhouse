@@ -67,10 +67,13 @@ export default function RunnerDetailPage() {
       return;
     }
 
+    // Clear any previously displayed secret before starting rotation
+    setRotatedSecret(null);
+    setSecretCopied(false);
+
     try {
       const result = await rotateSecretMutation.mutateAsync(runnerId);
       setRotatedSecret(result.runner_secret);
-      setSecretCopied(false);
     } catch (error) {
       console.error("Failed to rotate secret:", error);
       alert("Failed to rotate secret");
@@ -276,7 +279,8 @@ export default function RunnerDetailPage() {
                     type="button"
                     className="rotate-secret-button"
                     onClick={handleRotateSecret}
-                    disabled={rotateSecretMutation.isPending}
+                    disabled={rotateSecretMutation.isPending || !!rotatedSecret}
+                    title={rotatedSecret ? "Acknowledge the current secret first" : undefined}
                   >
                     {rotateSecretMutation.isPending ? "Rotating..." : "Rotate Secret"}
                   </button>
