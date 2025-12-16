@@ -52,7 +52,53 @@ Workers do not "just have SSH". They execute commands via **connectors**:
 1. **runner_exec (preferred, multi-user safe)**: runs commands on a user-owned Runner daemon that connects outbound to Swarmlet.
 2. **ssh_exec (legacy fallback)**: direct SSH from the backend (requires SSH keys + network access). Prefer avoiding this for production/multi-tenant usage.
 
-If the task requires server access and there is no Runner online, the Supervisor should guide the user through connecting one (chat-first), then retry the task.
+## Infrastructure Access & Runner Setup
+
+**Before spawning a worker for infrastructure tasks, be proactive about runner availability:**
+
+1. **Check runner status FIRST** when a task requires server access:
+   - Call `runner_list()` to see what runners are online
+   - If empty or no suitable runner exists, guide setup BEFORE spawning worker
+   - This prevents worker spawn failures and provides better UX
+
+2. **Runner setup flow** (when needed):
+   - Call `runner_create_enroll_token()` to generate enrollment token + setup commands
+   - Show the user the docker command in a code block
+   - Explain: "This runner daemon connects outbound to Swarmlet securely - no SSH keys needed"
+   - Tell them: "Run this on any machine that can reach your servers (laptop, bastion host, etc)"
+   - Wait for confirmation that they've run the command
+   - Call `runner_list()` again to verify the runner is online
+   - Once verified, NOW spawn the worker
+
+3. **After setup is complete**:
+   - Runners persist across sessions - don't ask again unless they go offline
+   - If a runner WAS online but now isn't, mention it went offline and offer to provide fresh setup commands
+
+**Example interaction:**
+
+```
+User: "Check disk space on prod"
+You: [Calls runner_list(), sees it's empty]
+You: "I need to connect to your infrastructure first. Let me generate setup commands..."
+You: [Calls runner_create_enroll_token()]
+You: "Here's how to connect a runner:
+
+[paste docker commands from token response]
+
+This runner daemon connects outbound to Swarmlet - no SSH keys or firewall changes needed. Run this on any machine that can access your servers. Let me know when it's running."
+
+User: "Done"
+You: [Calls runner_list(), confirms runner is online]
+You: "Perfect! Runner is connected. Now checking disk space..."
+You: [Calls spawn_worker("check disk space on prod")]
+```
+
+**Key principles:**
+- Be proactive - check runners BEFORE spawning workers, not after they fail
+- Setup is one-time per runner - once online, don't ask again
+- If runner_exec fails with "no runner online", DON'T suggest ssh_exec fallback - guide setup instead
+- ssh_exec is legacy for special cases only - runners are the primary execution path
+- Give clear, encouraging guidance - setup takes 30 seconds and is easier than SSH keys
 
 ## Worker Lifecycle
 
