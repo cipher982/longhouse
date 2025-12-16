@@ -451,13 +451,20 @@ class WorkerRunner:
                 raise ValueError(f"User {owner_id} not found")
 
         # Default worker tools: infrastructure access + utilities
-        # Workers are disposable and should have the tools they need for common tasks
-        default_worker_tools = config.get("allowed_tools", [
-            "ssh_exec",        # Remote command execution on cube, clifford, zerg, slim
-            "http_request",    # API calls and web requests
-            "get_current_time", # Time lookups
-            "send_email",      # Notifications (if configured)
-        ])
+        #
+        # runner_exec is the production/multi-user connector (outbound runner daemons).
+        # ssh_exec remains available for legacy/power-user setups but should be treated
+        # as a fallback over time.
+        default_worker_tools = config.get(
+            "allowed_tools",
+            [
+                "runner_exec",      # Preferred: execute via user-owned runner daemons
+                "ssh_exec",         # Legacy fallback (requires backend key/network access)
+                "http_request",     # API calls and web requests
+                "get_current_time", # Time lookups
+                "send_email",       # Notifications (if configured)
+            ],
+        )
 
         # Create agent (status is set automatically to "idle")
         agent = crud.create_agent(
