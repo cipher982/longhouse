@@ -55,6 +55,7 @@ from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jarvis import router as jarvis_router
+from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -476,6 +477,7 @@ app.include_router(email_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")
 app.include_router(triggers_router, prefix=f"{API_PREFIX}")
+app.include_router(knowledge_router, prefix=f"{API_PREFIX}")
 app.include_router(runs_router, prefix=f"{API_PREFIX}")
 app.include_router(runners_router, prefix=f"{API_PREFIX}")  # Runners execution infrastructure
 app.include_router(workflows_router, prefix=f"{API_PREFIX}")
