@@ -91,6 +91,10 @@ services:
       context: .
       dockerfile: apps/jarvis/apps/web/Dockerfile.prod
       target: production
+      args:
+        VITE_UMAMI_WEBSITE_ID: ${VITE_UMAMI_WEBSITE_ID}
+        VITE_UMAMI_SCRIPT_SRC: ${VITE_UMAMI_SCRIPT_SRC}
+        VITE_UMAMI_DOMAINS: ${VITE_UMAMI_DOMAINS}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
@@ -134,6 +138,10 @@ services:
       context: ./apps/zerg/frontend-web
       dockerfile: Dockerfile
       target: production
+      args:
+        VITE_UMAMI_WEBSITE_ID: ${VITE_UMAMI_WEBSITE_ID}
+        VITE_UMAMI_SCRIPT_SRC: ${VITE_UMAMI_SCRIPT_SRC}
+        VITE_UMAMI_DOMAINS: ${VITE_UMAMI_DOMAINS}
     restart: unless-stopped
     depends_on:
       - backend
