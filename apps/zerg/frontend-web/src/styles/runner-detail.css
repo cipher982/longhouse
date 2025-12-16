@@ -276,6 +276,131 @@
   line-height: 1.6;
 }
 
+/* Danger Items */
+
+.danger-item {
+  padding: 1.5rem;
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.danger-item:last-child {
+  margin-bottom: 0;
+}
+
+.danger-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.danger-item-info {
+  flex: 1;
+}
+
+.danger-item-info h3 {
+  color: #fafafa;
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+}
+
+/* Rotate Secret Button */
+
+.rotate-secret-button {
+  padding: 0.75rem 1.5rem;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 6px;
+  color: #facc15;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.rotate-secret-button:hover:not(:disabled) {
+  background: rgba(234, 179, 8, 0.2);
+  border-color: rgba(234, 179, 8, 0.5);
+}
+
+.rotate-secret-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Rotated Secret Display */
+
+.rotated-secret-display {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+}
+
+.secret-warning {
+  color: #10b981;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+  font-size: 0.875rem;
+}
+
+.secret-value-container {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.secret-value {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  color: #fafafa;
+  font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+  font-size: 0.875rem;
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copy-secret-button {
+  padding: 0.75rem 1rem;
+  background: #10b981;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.copy-secret-button:hover {
+  background: #059669;
+}
+
+.dismiss-secret-button {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  color: #10b981;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dismiss-secret-button:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+
 /* Responsive */
 
 @media (max-width: 768px) {
@@ -298,6 +423,23 @@
 
   .save-button,
   .cancel-button {
+    width: 100%;
+  }
+
+  .danger-item-header {
+    flex-direction: column;
+  }
+
+  .rotate-secret-button,
+  .revoke-button-large {
+    width: 100%;
+  }
+
+  .secret-value-container {
+    flex-direction: column;
+  }
+
+  .copy-secret-button {
     width: 100%;
   }
 }
