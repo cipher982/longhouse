@@ -1,15 +1,20 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import { resolve } from 'path'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// Detect if running in Docker (service names) or native (localhost)
-const isDocker = process.env.DOCKER === '1' || process.env.NODE_ENV === 'docker'
-const JARVIS_SERVER = isDocker ? 'http://jarvis-server:8787' : 'http://localhost:8787'
-const ZERG_BACKEND = isDocker ? 'http://zerg-backend:8000' : 'http://localhost:47300'
-const ZERG_WS = isDocker ? 'ws://zerg-backend:8000' : 'ws://localhost:47300'
+export default defineConfig(({ mode }) => {
+  // Load .env from repo root (monorepo root contains single .env file)
+  const repoRoot = resolve(__dirname, '../../../..')
+  loadEnv(mode, repoRoot, '')
 
-export default defineConfig({
+  // Detect if running in Docker (service names) or native (localhost)
+  const isDocker = process.env.DOCKER === '1' || process.env.NODE_ENV === 'docker'
+  const JARVIS_SERVER = isDocker ? 'http://jarvis-server:8787' : 'http://localhost:8787'
+  const ZERG_BACKEND = isDocker ? 'http://zerg-backend:8000' : 'http://localhost:47300'
+  const ZERG_WS = isDocker ? 'ws://zerg-backend:8000' : 'ws://localhost:47300'
+
+  return {
   logLevel: 'warn',
   plugins: [
     react(),
@@ -154,5 +159,6 @@ export default defineConfig({
         changeOrigin: true,
       },
     }
+  }
   }
 })

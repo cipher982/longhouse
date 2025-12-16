@@ -364,7 +364,7 @@ async def rotate_runner_secret(
         connection_manager.unregister(current_user.id, runner_id, ws)
 
     # Update runner status to offline since we disconnected it
-    runner.status = "offline"
+    updated_runner.status = "offline"
     db.commit()
 
     return RunnerRotateSecretResponse(
