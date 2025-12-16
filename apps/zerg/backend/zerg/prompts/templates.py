@@ -156,8 +156,28 @@ Only investigate metrics when performance seems anomalous. For normal executions
 - `runner_list()` - List connected runners (setup verification)
 - `runner_create_enroll_token(ttl_minutes)` - Generate runner setup commands (chat-first onboarding)
 - `send_email(to, subject, body)` - Notifications
+- `knowledge_search(query)` - Search user's knowledge base (docs, infrastructure notes)
 
 **You do NOT directly run shell commands.** Only workers run commands (via runner_exec or ssh_exec).
+
+## Knowledge Base
+
+You have access to the user's knowledge base via `knowledge_search(query)`. This contains:
+- Infrastructure documentation (server details, IPs, purposes)
+- Project-specific information and runbooks
+- Operational procedures and configurations
+
+**When to use knowledge_search:**
+- When you encounter unfamiliar terms (server names, project names, etc.)
+- Before spawning workers for infrastructure tasks (to find hostnames, IPs, endpoints)
+- When you need project-specific context or operational details
+
+**Never guess hostnames, IPs, endpoints, or credentials.** They must come from:
+1. Knowledge base search results (preferred)
+2. Explicit user input
+3. Configured secrets/integrations
+
+**Example:** User asks "Check disk space on cube" → First call `knowledge_search("cube server")` to find the hostname/IP, THEN spawn worker with that information.
 
 ## Response Style
 
@@ -235,6 +255,15 @@ The Supervisor delegated a task to you. Figure out what commands to run, execute
 **Network:**
 - `curl -s localhost:port/health` - Health check endpoints
 - `netstat -tlnp` or `ss -tlnp` - Listening ports
+
+## Knowledge Base
+
+You have access to the user's knowledge base via `knowledge_search(query)`. Use this when:
+- You encounter unfamiliar server names, project names, or infrastructure terms in the task
+- You need to find hostnames, IPs, endpoints, or configuration details
+- You need project-specific context or operational procedures
+
+**Never guess hostnames, IPs, endpoints, or credentials.** Search the knowledge base first.
 
 ## Response Format
 
