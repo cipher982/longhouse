@@ -362,3 +362,66 @@ class TemplateDeployRequest(BaseModel):
     template_id: int
     name: Optional[str] = None  # Override template name if desired
     description: Optional[str] = None  # Override template description if desired
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base schemas (Phase 0)
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeSourceBase(BaseModel):
+    name: str
+    source_type: str
+    config: Dict[str, Any]
+    sync_schedule: Optional[str] = None
+
+
+class KnowledgeSourceCreate(KnowledgeSourceBase):
+    pass
+
+
+class KnowledgeSourceUpdate(BaseModel):
+    name: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    sync_schedule: Optional[str] = None
+
+
+class KnowledgeSource(KnowledgeSourceBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    owner_id: int
+    sync_status: str
+    last_synced_at: Optional[datetime] = None
+    sync_error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeDocumentBase(BaseModel):
+    path: str
+    title: Optional[str] = None
+    content_text: str
+    content_hash: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class KnowledgeDocument(KnowledgeDocumentBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source_id: int
+    owner_id: int
+    fetched_at: datetime
+
+
+class KnowledgeSearchResult(BaseModel):
+    """A search result from the knowledge base."""
+
+    source_name: str
+    source_id: int
+    document_id: int
+    path: str
+    title: Optional[str] = None
+    snippets: List[str]  # Matching text excerpts
+    score: float  # Relevance score
