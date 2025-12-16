@@ -82,6 +82,22 @@ Important: The **worker chooses commands** (as it does today). The runner is "du
 
 ## Onboarding UX (v1)
 
+### Primary path (Jarvis-first)
+
+Zerg (dashboard) is **not** the primary user experience. Jarvis is.
+
+The intended flow is:
+
+1. User asks Jarvis to do something that requires command execution (e.g. "check disk on prod").
+2. Supervisor decides a worker needs infra access.
+3. If no runner is online (or the required capability is missing), the Supervisor guides setup in chat:
+   - `runner_list()` to see what exists
+   - `runner_create_enroll_token()` to generate a one-time token + copy/paste commands
+4. User runs the commands on their laptop/bastion/ops box.
+5. Runner appears online; Supervisor retries by spawning the worker again.
+
+This keeps the “runner setup surface” inside the main product path (chat), with the dashboard as optional admin tooling.
+
 ### Recommended onboarding (fast + realistic)
 
 "Install a runner on a machine that already has access to your world":
@@ -100,6 +116,8 @@ This avoids "install on every prod server" while still letting users reach many 
    - `ENROLL_TOKEN` (one-time, TTL e.g. 10 minutes)
    - `docker run ...` (copy/paste)
 3. Runner registers and appears "Online".
+
+Note: the UI flow is helpful for power users/admins, but Jarvis-first onboarding should work even if the user never opens the dashboard.
 
 ### Runner runtime packaging
 
