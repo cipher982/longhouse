@@ -427,8 +427,7 @@ async def ensure_cors_on_errors(request: Request, exc: Exception):
         headers.update(
             {
                 "Access-Control-Allow-Origin": origin if "*" not in cors_origins else "*",
-                # Default to no credentials; opt-in via middleware config if needed
-                "Access-Control-Allow-Credentials": "false",
+                "Access-Control-Allow-Credentials": "true",  # Match middleware config for cookie auth
                 "Access-Control-Allow-Methods": "*",
                 "Access-Control-Allow-Headers": "*",
             }
@@ -440,7 +439,7 @@ async def ensure_cors_on_errors(request: Request, exc: Exception):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,  # Required for cookie-based auth (dev login, session cookies)
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
