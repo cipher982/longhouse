@@ -196,3 +196,6 @@ comet_latest.dmg
 .clinerules/
 .playwright-mcp/
 apps/zerg/backend/scripts/user_context.local.json
+
+# Environment backups
+.env-backups-*/
