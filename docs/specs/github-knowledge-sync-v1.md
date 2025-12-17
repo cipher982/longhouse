@@ -1,9 +1,25 @@
-# GitHub Knowledge Sync - V1 Spec
+# GitHub Knowledge Sync - V1.1 Spec
 
-**Status:** Ready for Implementation
+**Status:** In Progress (completing V1.1 gaps)
 **Author:** David Rose
 **Reviewed by:** Senior Dev
-**Last Updated:** 2024-12-16
+**Last Updated:** 2025-12-17
+**Version:** 1.1
+
+---
+
+## 0. Current State
+
+### What's Implemented (V1.0)
+
+- Knowledge sources exist (url, github_repo) with CRUD + sync + keyword search
+- GitHub repo sync uses GitHub API tree/blob approach with pathspec include/exclude defaults and incremental blob fetching by SHA
+- Sync endpoint currently behaves synchronously: `POST /api/knowledge/sources/{id}/sync` returns 200 with the updated KnowledgeSource (status lifecycle: syncing → success|failed)
+- Frontend at `/settings/knowledge` for managing sources
+
+### V1.1 Scope
+
+Finish "Sources + Search" so agents actually use the knowledge; keep Phase 2+ (compiler/provenance) explicitly out-of-scope except for forward-compatible metadata.
 
 ---
 
@@ -84,12 +100,32 @@ Include/exclude patterns are evaluated against **repo-relative POSIX paths** (e.
 
 ### KnowledgeDocument Storage
 
-| Field          | Value                                                                                           |
-| -------------- | ----------------------------------------------------------------------------------------------- |
-| `path`         | Clickable GitHub blob URL: `https://github.com/{owner}/{repo}/blob/{branch}/{filepath}`         |
-| `title`        | Filename (e.g., `AGENTS.md`)                                                                    |
-| `content_text` | Decoded file content (UTF-8)                                                                    |
-| `doc_metadata` | `{"github_sha": "abc123", "github_size": 1234, "branch": "main", "repo_path": "docs/guide.md"}` |
+| Field          | Value                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------- |
+| `path`         | Clickable GitHub blob URL: `https://github.com/{owner}/{repo}/blob/{branch}/{filepath}` |
+| `title`        | Filename (e.g., `AGENTS.md`)                                                            |
+| `content_text` | Decoded file content (UTF-8)                                                            |
+| `doc_metadata` | See below for full schema                                                               |
+
+### doc_metadata Schema (V1.1 - Provenance-friendly)
+
+For GitHub-synced documents, store both "friendly latest" and "immutable exact" references:
+
+```python
+{
+    # Existing fields
+    "github_sha": "abc123def456...",           # Blob SHA (file content hash)
+    "github_size": 1234,                        # File size in bytes
+    "branch": "main",                           # Branch name
+    "repo_path": "docs/guide.md",               # Repo-relative path
+
+    # V1.1 additions for provenance
+    "github_commit_sha": "789xyz...",           # HEAD commit SHA at sync time
+    "github_permalink_url": "https://github.com/{owner}/{repo}/blob/{commit_sha}/{repo_path}"
+}
+```
+
+**Rationale:** The `path` field stores the branch URL (latest view), while `github_permalink_url` provides an immutable reference for future provenance/citation features.
 
 ---
 
@@ -182,26 +218,186 @@ Response 400 (Validation error):
 }
 ```
 
-### 4.4 Trigger Sync (existing, unchanged)
+### 4.4 Trigger Sync
+
+**Current behavior (V1.1 - synchronous):**
 
 ```
 POST /api/knowledge/sources/{source_id}/sync
 Authorization: Bearer <session>
 
-Response 202:
+Response 200:
 {
-    "status": "syncing",
-    "source_id": 42
+    "id": 42,
+    "name": "MyTech Infrastructure",
+    "source_type": "github_repo",
+    "sync_status": "success",        // or "failed"
+    "sync_error": null,              // populated on failure
+    "last_synced_at": "2025-12-17T10:00:00Z",
+    ...
 }
 ```
 
-**Important:** This endpoint must return quickly. For GitHub repos, run sync in a background task and use a **new DB session** (do not reuse the request session after returning).
+The endpoint blocks until sync finishes and returns the updated KnowledgeSource.
+
+**Future note (not required now):** We may add an async 202 Accepted mode later when scheduling/concurrency lands.
+
+### 4.5 Search Knowledge Documents
+
+```
+GET /api/knowledge/search?q=deployment+runbook&limit=10
+Authorization: Bearer <session>
+
+Response 200:
+{
+    "results": [
+        {
+            "id": 123,
+            "source_id": 42,
+            "source_name": "MyTech Infrastructure",
+            "title": "deployment-runbook.md",
+            "path": "https://github.com/cipher982/mytech/blob/main/docs/deployment-runbook.md",
+            "snippet": "...relevant excerpt with **highlighted** matches...",
+            "doc_metadata": {
+                "github_permalink_url": "https://github.com/cipher982/mytech/blob/abc123/docs/deployment-runbook.md"
+            }
+        }
+    ],
+    "total": 1
+}
+```
 
 ---
 
-## 5. Backend Implementation
+## 5. Agent Tool Integration (V1.1 - Critical Gap)
 
-### 5.1 New Module: `zerg/connectors/github_api.py`
+### 5.1 Tool Availability (Allowlists)
+
+**Problem:** The prompts mention `knowledge_search`, but Supervisor and default Worker allowlists do not include it.
+
+**Solution:** Keep allowlists, and explicitly enable `knowledge_search`:
+
+- Add `knowledge_search` to:
+  - Supervisor default tool list
+  - Worker default tool list
+
+**Acceptance:** A freshly created Supervisor + Worker can call `knowledge_search` without manual config.
+
+### 5.2 knowledge_search Runtime User Context
+
+**Problem:** `knowledge_search` must resolve `owner_id` from real runtime context. Current code references a non-existent context module.
+
+**Required behavior:**
+
+| Execution Context       | How to resolve owner_id                                                           |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| Worker execution        | Resolve from `WorkerContext`                                                      |
+| Supervisor (non-worker) | Resolve via per-run credential resolver context (or equivalent agent-run context) |
+| No context available    | Return structured error: "knowledge_search requires authenticated user context"   |
+
+**Acceptance:** Tool works in both Supervisor and Worker runs.
+
+### 5.3 Implementation Notes
+
+```python
+# In knowledge_search tool implementation:
+
+async def knowledge_search(query: str, limit: int = 10) -> list[dict]:
+    """Search the user's knowledge base.
+
+    Resolves owner_id from execution context (WorkerContext or run context).
+    """
+    # 1. Get execution context
+    context = get_current_execution_context()  # WorkerContext or SupervisorContext
+
+    if not context or not context.owner_id:
+        return {"error": "knowledge_search requires authenticated user context"}
+
+    owner_id = context.owner_id
+
+    # 2. Query knowledge documents
+    results = knowledge_crud.search_documents(
+        db=context.db,
+        owner_id=owner_id,
+        query=query,
+        limit=limit
+    )
+
+    # 3. Return formatted results
+    return [
+        {
+            "title": doc.title,
+            "url": doc.doc_metadata.get("github_permalink_url") or doc.path,
+            "snippet": doc.snippet,
+            "source": doc.source_name,
+        }
+        for doc in results
+    ]
+```
+
+---
+
+## 6. GitHub Sync: Spec Clarifications
+
+### 6.1 Truncated Tree Handling
+
+GitHub trees may return `truncated=true` on large repos (>100k files).
+
+**Required behavior:**
+
+1. If `truncated=true`:
+   - Continue syncing files returned (best-effort)
+   - Skip cleanup deletion (already implemented)
+   - Mark sync as failed with specific error message
+
+2. Error message format:
+
+   ```
+   "Partial sync: repository too large for full crawl.
+   {N} files synced, but some files may be missing.
+   Consider using more specific include_paths patterns."
+   ```
+
+3. `sync_status="failed"` with the above in `sync_error`
+
+**Rationale:** Truncated repos must NOT silently appear "fully synced". Users need visibility.
+
+**Acceptance:** UI shows "Partial sync: repo too large for full crawl" (exact wording flexible).
+
+### 6.2 Sync with Provenance Metadata
+
+When syncing a GitHub repo, persist both "friendly latest" and "immutable exact" references.
+
+Update `fetch_and_store()` to include:
+
+```python
+knowledge_crud.upsert_knowledge_document(
+    db,
+    source_id=source.id,
+    owner_id=source.owner_id,
+    path=doc_path,  # Branch URL (latest view)
+    content_text=content,
+    title=file_path.split("/")[-1],
+    doc_metadata={
+        # Existing
+        "github_sha": file_sha,
+        "github_size": file_info.get("size", 0),
+        "branch": branch,
+        "repo_path": file_path,
+        # V1.1 additions
+        "github_commit_sha": commit_sha,  # HEAD commit at sync time
+        "github_permalink_url": f"https://github.com/{owner}/{repo}/blob/{commit_sha}/{file_path}",
+    },
+)
+```
+
+**Acceptance:** Every GitHub-synced document has commit SHA + permalink URL recorded.
+
+---
+
+## 7. Backend Implementation
+
+### 7.1 New Module: `zerg/connectors/github_api.py`
 
 Shared GitHub API utilities (extracted from github_tools.py):
 
@@ -254,7 +450,7 @@ def github_sync_client(
     )
 ```
 
-### 5.2 New Module: `zerg/connectors/credentials.py`
+### 7.2 New Module: `zerg/connectors/credentials.py`
 
 Account-level credential helper (mirrors CredentialResolver pattern):
 
@@ -340,7 +536,7 @@ def has_account_credential(
     )
 ```
 
-### 5.3 Sync Function: `sync_github_repo_source()`
+### 7.3 Sync Function: `sync_github_repo_source()`
 
 Add to `zerg/services/knowledge_sync_service.py`:
 
@@ -431,7 +627,7 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
 
             truncated = bool(tree_data.get("truncated"))
             if truncated:
-                logger.warning(f"Repository tree truncated for {owner}/{repo} - large repo (skipping cleanup)")
+                logger.warning(f"Repository tree truncated for {owner}/{repo} - large repo")
 
             # 6. Filter files by patterns and size
             files_to_sync = []
@@ -511,6 +707,9 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
                                 "github_size": file_info.get("size", 0),
                                 "branch": branch,
                                 "repo_path": file_path,
+                                # V1.1: Provenance metadata
+                                "github_commit_sha": commit_sha,
+                                "github_permalink_url": f"https://github.com/{owner}/{repo}/blob/{commit_sha}/{file_path}",
                             },
                         )
 
@@ -548,8 +747,18 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
                             logger.info(f"Removed deleted file: {doc.path}")
 
             # 10. Update sync status
-            knowledge_crud.update_source_sync_status(db, source.id, status="success")
-            logger.info(f"Successfully synced GitHub repo {owner}/{repo} (branch={branch})")
+            if truncated:
+                # V1.1: Truncated repos must be visible to users
+                error_msg = (
+                    f"Partial sync: repository too large for full crawl. "
+                    f"{len(files_to_sync)} files synced, but some files may be missing. "
+                    f"Consider using more specific include_paths patterns."
+                )
+                knowledge_crud.update_source_sync_status(db, source.id, status="failed", error=error_msg)
+                logger.warning(f"Partial sync for {owner}/{repo}: {error_msg}")
+            else:
+                knowledge_crud.update_source_sync_status(db, source.id, status="success")
+                logger.info(f"Successfully synced GitHub repo {owner}/{repo} (branch={branch})")
 
     except httpx.HTTPStatusError as e:
         error_msg = _handle_github_error(e, owner, repo)
@@ -578,7 +787,7 @@ def _handle_github_error(e: httpx.HTTPStatusError, owner: str, repo: str) -> str
         return f"GitHub API error: {status} - {e.response.text[:200]}"
 ```
 
-### 5.4 Router Updates: `zerg/routers/knowledge.py`
+### 7.4 Router Updates: `zerg/routers/knowledge.py`
 
 ```python
 # Add to imports
@@ -701,7 +910,7 @@ async def list_repo_branches(
     return {"branches": branches}
 ```
 
-### 5.5 Update Dispatcher
+### 7.5 Update Dispatcher
 
 In `sync_knowledge_source()`:
 
@@ -716,9 +925,9 @@ else:
 
 ---
 
-## 6. Frontend Implementation
+## 8. Frontend Implementation
 
-### 6.1 New Page: `/settings/knowledge`
+### 8.1 New Page: `/settings/knowledge`
 
 **Route:** Add to router as `/settings/knowledge`
 
@@ -735,7 +944,7 @@ else:
 - Actions: Sync Now, Edit, Delete
 - "Add Source" button opens modal
 
-### 6.2 Add Source Modal
+### 8.2 Add Source Modal
 
 **Step 1: Type Selection**
 
@@ -848,7 +1057,45 @@ If GitHub not connected:
 └─────────────────────────────────────┘
 ```
 
-### 6.3 Schedule to Cron Mapping
+### 8.3 Knowledge Search Panel (V1.1 - Must Have)
+
+Add a minimal "Search Knowledge Base" panel to `/settings/knowledge`:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Search Knowledge Base                                   │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│ [Search your synced content...                     🔍]  │
+│                                                         │
+│ Results:                                                │
+│ ┌─────────────────────────────────────────────────────┐ │
+│ │ 📄 deployment-runbook.md                            │ │
+│ │    Source: MyTech Infrastructure                    │ │
+│ │    "...run the deploy script with --prod flag..."   │ │
+│ │    🔗 View on GitHub                                │ │
+│ ├─────────────────────────────────────────────────────┤ │
+│ │ 📄 AGENTS.md                                        │ │
+│ │    Source: Zerg Platform                            │ │
+│ │    "...follow the conventions in this file..."      │ │
+│ │    🔗 View on GitHub                                │ │
+│ └─────────────────────────────────────────────────────┘ │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+
+- Input: query string
+- Output: list of results with:
+  - Source name
+  - Title
+  - Clickable URL (prefer permalink if present; otherwise path)
+  - Snippets
+
+**Purpose:** User can verify synced content is searchable without going to agent chat.
+
+### 8.4 Schedule to Cron Mapping
 
 | UI Option   | `sync_schedule` value        |
 | ----------- | ---------------------------- |
@@ -857,7 +1104,12 @@ If GitHub not connected:
 | Every day   | `0 6 * * *` (6am UTC)        |
 | Every week  | `0 6 * * 0` (Sunday 6am UTC) |
 
-### 6.4 New Hooks
+### 8.5 Optional UI Enhancements
+
+- Show per-source "documents synced" count
+- Show "partial sync" warning state distinct from failure (amber vs red badge)
+
+### 8.6 New Hooks
 
 ```typescript
 // src/hooks/useKnowledgeSources.ts
@@ -883,6 +1135,15 @@ export function useSyncKnowledgeSource() {
   });
 }
 
+// V1.1: Search hook
+export function useKnowledgeSearch(query: string) {
+  return useQuery({
+    queryKey: ['knowledge-search', query],
+    queryFn: () => api.get('/api/knowledge/search', { params: { q: query } }),
+    enabled: query.length >= 2,
+  });
+}
+
 // src/hooks/useGitHubRepos.ts
 export function useGitHubRepos(page = 1) {
   return useQuery({
@@ -905,36 +1166,51 @@ export function useGitHubBranches(owner: string, repo: string) {
 
 ---
 
-## 7. Files to Create/Modify
+## 9. Scheduling (Explicitly Deferred)
 
-### New Files
+We store `sync_schedule`, but do not run scheduled syncs today.
 
-| File                                                                      | Purpose                     |
-| ------------------------------------------------------------------------- | --------------------------- |
-| `apps/zerg/backend/zerg/connectors/github_api.py`                         | Shared GitHub API utilities |
-| `apps/zerg/backend/zerg/connectors/credentials.py`                        | Account credential helpers  |
-| `apps/zerg/frontend-web/src/pages/KnowledgeSourcesPage.tsx`               | Knowledge sources list page |
-| `apps/zerg/frontend-web/src/components/knowledge/AddSourceModal.tsx`      | Add source wizard           |
-| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoPicker.tsx`    | Repo selection              |
-| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoConfig.tsx`    | Configuration form          |
-| `apps/zerg/frontend-web/src/components/knowledge/KnowledgeSourceCard.tsx` | Source card                 |
-| `apps/zerg/frontend-web/src/hooks/useKnowledgeSources.ts`                 | Knowledge source hooks      |
-| `apps/zerg/frontend-web/src/hooks/useGitHubRepos.ts`                      | GitHub repo hooks           |
-| `apps/zerg/backend/tests/test_knowledge_github.py`                        | GitHub sync tests           |
+**Decision:** Scheduling is Phase 1.5; do not implement in the same patch as "agents can use knowledge", unless you already have a scheduler framework you can reuse with minimal risk.
 
-### Modified Files
+**If/when implemented:**
 
-| File                                                        | Changes                          |
-| ----------------------------------------------------------- | -------------------------------- |
-| `apps/zerg/backend/pyproject.toml`                          | Add `pathspec` dependency        |
-| `apps/zerg/backend/zerg/services/knowledge_sync_service.py` | Add `sync_github_repo_source()`  |
-| `apps/zerg/backend/zerg/routers/knowledge.py`               | Add GitHub endpoints, validation |
-| `apps/zerg/backend/zerg/tools/builtin/github_tools.py`      | Import from shared module        |
-| `apps/zerg/frontend-web/src/routes/App.tsx`                 | Add `/settings/knowledge` route  |
+- MUST include a "fast no-op" gate (store and compare `last_synced_commit_sha` for GitHub sources) to avoid hourly full crawls.
 
 ---
 
-## 8. Testing Requirements
+## 10. Files to Create/Modify
+
+### New Files
+
+| File                                                                       | Purpose                     |
+| -------------------------------------------------------------------------- | --------------------------- |
+| `apps/zerg/backend/zerg/connectors/github_api.py`                          | Shared GitHub API utilities |
+| `apps/zerg/backend/zerg/connectors/credentials.py`                         | Account credential helpers  |
+| `apps/zerg/frontend-web/src/pages/KnowledgeSourcesPage.tsx`                | Knowledge sources list page |
+| `apps/zerg/frontend-web/src/components/knowledge/AddSourceModal.tsx`       | Add source wizard           |
+| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoPicker.tsx`     | Repo selection              |
+| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoConfig.tsx`     | Configuration form          |
+| `apps/zerg/frontend-web/src/components/knowledge/KnowledgeSourceCard.tsx`  | Source card                 |
+| `apps/zerg/frontend-web/src/components/knowledge/KnowledgeSearchPanel.tsx` | V1.1: Search panel          |
+| `apps/zerg/frontend-web/src/hooks/useKnowledgeSources.ts`                  | Knowledge source hooks      |
+| `apps/zerg/frontend-web/src/hooks/useGitHubRepos.ts`                       | GitHub repo hooks           |
+| `apps/zerg/backend/tests/test_knowledge_github.py`                         | GitHub sync tests           |
+
+### Modified Files
+
+| File                                                        | Changes                                  |
+| ----------------------------------------------------------- | ---------------------------------------- |
+| `apps/zerg/backend/pyproject.toml`                          | Add `pathspec` dependency                |
+| `apps/zerg/backend/zerg/services/knowledge_sync_service.py` | Add `sync_github_repo_source()`          |
+| `apps/zerg/backend/zerg/routers/knowledge.py`               | Add GitHub endpoints, validation         |
+| `apps/zerg/backend/zerg/tools/builtin/github_tools.py`      | Import from shared module                |
+| `apps/zerg/backend/zerg/tools/builtin/knowledge_tools.py`   | V1.1: Fix context resolution             |
+| `apps/zerg/backend/zerg/agents/prompts/*.py`                | V1.1: Add knowledge_search to allowlists |
+| `apps/zerg/frontend-web/src/routes/App.tsx`                 | Add `/settings/knowledge` route          |
+
+---
+
+## 11. Testing Requirements
 
 ### Unit Tests
 
@@ -967,6 +1243,12 @@ class TestGitHubRepoSync:
     async def test_sync_handles_rate_limit(self, db_session, _dev_user):
         """Test graceful handling of GitHub rate limiting."""
 
+    async def test_sync_truncated_repo_fails_with_message(self, db_session, _dev_user):
+        """V1.1: Test that truncated repos show user-visible error."""
+
+    async def test_sync_stores_provenance_metadata(self, db_session, _dev_user):
+        """V1.1: Test github_commit_sha and github_permalink_url are stored."""
+
 
 class TestGitHubKnowledgeAPI:
     """Tests for GitHub knowledge API endpoints."""
@@ -979,11 +1261,24 @@ class TestGitHubKnowledgeAPI:
 
     def test_create_github_source_requires_connection(self, client):
         """Test 400 when GitHub not connected."""
+
+
+class TestKnowledgeSearchTool:
+    """V1.1: Tests for knowledge_search tool integration."""
+
+    async def test_knowledge_search_resolves_worker_context(self):
+        """Test tool works in Worker execution."""
+
+    async def test_knowledge_search_resolves_supervisor_context(self):
+        """Test tool works in Supervisor execution."""
+
+    async def test_knowledge_search_fails_without_context(self):
+        """Test tool returns error when no user context available."""
 ```
 
 ---
 
-## 9. Decisions Made
+## 12. Decisions Made
 
 | Question                 | Decision                                                  |
 | ------------------------ | --------------------------------------------------------- |
@@ -994,56 +1289,90 @@ class TestGitHubKnowledgeAPI:
 | Sync schedule options    | Manual, Hourly, Daily, Weekly                             |
 | Source deletion          | Cascade delete documents (current behavior)               |
 | GitHub Enterprise        | Not v1, but design for easy `api_base_url` addition later |
+| Truncated repos          | V1.1: Fail with user-visible message, not silent success  |
+| Provenance metadata      | V1.1: Store commit SHA + permalink for future citations   |
+| Tool allowlists          | V1.1: Explicitly add knowledge_search to defaults         |
 
 ---
 
-## 10. Implementation Order
+## 13. Implementation Order
 
-1. **Backend foundation**
+### V1.0 (Completed)
+
+1. **Backend foundation** ✅
    - Add `pathspec` dependency (gitignore-style matching)
    - Create `zerg/connectors/github_api.py`
    - Create `zerg/connectors/credentials.py`
    - Update `github_tools.py` to use shared module
 
-2. **Sync implementation**
+2. **Sync implementation** ✅
    - Add `sync_github_repo_source()` to knowledge_sync_service.py
    - Add validation to knowledge router
    - Write unit tests
 
-3. **API endpoints**
+3. **API endpoints** ✅
    - Add `/github/repos` endpoint (paginated)
    - Add `/github/repos/{owner}/{repo}/branches` endpoint
    - Test with curl/Postman
 
-4. **Frontend - Page & List**
+4. **Frontend - Page & List** ✅
    - Create KnowledgeSourcesPage
    - Create KnowledgeSourceCard
    - Wire up hooks
 
-5. **Frontend - Add Modal**
+5. **Frontend - Add Modal** ✅
    - Create AddSourceModal with type picker
    - Create GitHubRepoPicker
    - Create GitHubRepoConfig
 
-6. **Polish & Testing**
-   - Error handling edge cases
-   - Loading states
-   - Integration testing
-   - Documentation
+### V1.1 (In Progress)
+
+6. **Agent Tool Integration** (Critical)
+   - [ ] Add `knowledge_search` to Supervisor default allowlist
+   - [ ] Add `knowledge_search` to Worker default allowlist
+   - [ ] Fix `knowledge_search` to resolve owner_id from execution context
+   - [ ] Write tests for tool context resolution
+
+7. **Sync Improvements**
+   - [ ] Add `github_commit_sha` and `github_permalink_url` to doc_metadata
+   - [ ] Mark truncated repo syncs as failed with user-visible message
+   - [ ] Write tests for provenance metadata
+
+8. **Frontend Search Panel**
+   - [ ] Add KnowledgeSearchPanel component to /settings/knowledge
+   - [ ] Wire up useKnowledgeSearch hook
+   - [ ] Add navigation link to settings
+
+9. **Polish & Testing**
+   - [ ] Manual E2E testing
+   - [ ] Error handling edge cases
+   - [ ] Documentation
 
 ---
 
-## 11. Future Considerations (Not V1)
+## 14. Future Considerations (Not V1.x)
 
 - **GitHub Enterprise** - Add `api_base_url` to config schema
 - **Webhook-triggered sync** - GitHub webhook on push to auto-sync
 - **Multi-branch** - Sync multiple branches as separate doc sets
 - **Binary file extraction** - PDF/image content extraction
 - **GitLab / Bitbucket** - Same pattern, different API
+- **Scheduled sync execution** - Phase 1.5 with fast no-op gate
+- **Provenance/citations** - Phase 2 compiler integration
 
 ---
 
-## 12. Implementation Progress
+## 15. V1.1 Acceptance Checklist
+
+- [ ] Supervisor and default Worker agents can call `knowledge_search`
+- [ ] `knowledge_search` resolves `owner_id` correctly in both Supervisor + Worker contexts
+- [ ] GitHub sync stores `github_commit_sha` and `github_permalink_url` per document
+- [ ] Truncated repo sync is user-visible (not silently "success")
+- [ ] `/settings/knowledge` includes a basic search UI for verification
+
+---
+
+## 16. Implementation Progress
 
 ### Stage 1: Backend Foundation ✅
 
@@ -1087,9 +1416,23 @@ class TestGitHubKnowledgeAPI:
 
 **Commit:** `feat(knowledge): add frontend knowledge sources page (Stages 4-5)`
 
-### Stage 6: Polish & Testing
+### Stage 6: V1.1 - Agent Tool Integration 🔄
 
-- [x] Wire up route at /settings/knowledge
-- [x] TypeScript build passing
-- [ ] Manual E2E testing
+- [ ] Add `knowledge_search` to Supervisor default allowlist
+- [ ] Add `knowledge_search` to Worker default allowlist
+- [ ] Fix `knowledge_search` context resolution
+- [ ] Write tool integration tests
+
+### Stage 7: V1.1 - Sync Improvements 🔄
+
+- [ ] Add provenance metadata (github_commit_sha, github_permalink_url)
+- [ ] Handle truncated repos with user-visible error
+- [ ] Write provenance tests
+
+### Stage 8: V1.1 - Frontend Search Panel 🔄
+
+- [ ] Create KnowledgeSearchPanel component
+- [ ] Add useKnowledgeSearch hook
+- [ ] Wire up route at /settings/knowledge
 - [ ] Add navigation link to settings
+- [ ] Manual E2E testing
