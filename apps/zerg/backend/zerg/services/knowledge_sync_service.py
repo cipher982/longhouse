@@ -357,6 +357,9 @@ async def sync_knowledge_source(db: Session, source_id: int) -> None:
 
     logger.info(f"Starting sync for source {source_id} ({source.source_type})")
 
+    # Set status to "syncing" at the start
+    knowledge_crud.update_source_sync_status(db, source_id, status="syncing")
+
     if source.source_type == "url":
         await sync_url_source(db, source)
     elif source.source_type == "github_repo":
