@@ -4,9 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
+
+// CSS Layer order declaration (MUST be first)
+import "./styles/layers.css";
+
+// Core styles (tokens defined in legacy.css via generated/tokens.css)
 import "./styles/legacy.css";
+
+// Component styles (@layer components)
 import "./styles/modal.css";
 import "./styles/chat.css";
+
+// Page styles (@layer pages)
 import "./styles/profile-admin.css";
 import "./styles/settings.css";
 import "./styles/css/agent-settings.css";

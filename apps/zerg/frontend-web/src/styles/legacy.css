@@ -1,21 +1,25 @@
+/* Tokens first (already in @layer tokens via generated file) */
 @import url("./generated/tokens.css");
-@import url("./styles.css");
-@import url("./chat.css");
-@import url("./run_button.css");
-@import url("./css/util.css");
-@import url("./css/buttons.css");
-@import url("./css/forms.css");
-@import url("./css/nav.css");
-@import url("./css/agent_shelf.css");
-@import url("./css/canvas.css");
-@import url("./css/dashboard.css");
-@import url("./css/toast.css");
-@import url("./css/status.css");
-@import url("./css/ops.css");
-@import url("./css/modal.css");
-@import url("./css/tool_config_modal.css");
-@import url("./css/mcp.css");
-@import url("./css/particle.css");
-@import url("./css/components/buttons.css");
-@import url("./css/components/disclosure.css");
-@import url("./css/components/execution-results.css");
+
+/* All legacy CSS wrapped in @layer legacy for cascade control */
+@layer legacy {
+  @import url("./styles.css");
+  @import url("./run_button.css");
+  @import url("./css/util.css");
+  @import url("./css/buttons.css");
+  @import url("./css/forms.css");
+  @import url("./css/nav.css");
+  @import url("./css/agent_shelf.css");
+  @import url("./css/canvas.css");
+  @import url("./css/dashboard.css");
+  @import url("./css/toast.css");
+  @import url("./css/status.css");
+  @import url("./css/ops.css");
+  @import url("./css/modal.css");
+  @import url("./css/tool_config_modal.css");
+  @import url("./css/mcp.css");
+  @import url("./css/particle.css");
+  @import url("./css/components/buttons.css");
+  @import url("./css/components/disclosure.css");
+  @import url("./css/components/execution-results.css");
+}
