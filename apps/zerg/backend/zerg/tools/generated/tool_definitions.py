@@ -60,6 +60,12 @@ class ToolName(str, Enum):
     READ_WORKER_FILE = "read_worker_file"
     GREP_WORKERS = "grep_workers"
     GET_WORKER_METADATA = "get_worker_metadata"
+    # Knowledge tools
+    KNOWLEDGE_SEARCH = "knowledge_search"
+    # Runner tools
+    RUNNER_LIST = "runner_list"
+    RUNNER_EXEC = "runner_exec"
+    RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
 
 
 class ServerName(str, Enum):
@@ -82,6 +88,8 @@ class ServerName(str, Enum):
     IMESSAGE = "imessage"
     SSH = "ssh"
     SUPERVISOR = "supervisor"
+    KNOWLEDGE = "knowledge"
+    RUNNER = "runner"
 
 
 # Tool to server mapping for validation
@@ -140,6 +148,12 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.READ_WORKER_FILE: ServerName.SUPERVISOR,
     ToolName.GREP_WORKERS: ServerName.SUPERVISOR,
     ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
+    # Knowledge tools
+    ToolName.KNOWLEDGE_SEARCH: ServerName.KNOWLEDGE,
+    # Runner tools
+    ToolName.RUNNER_LIST: ServerName.RUNNER,
+    ToolName.RUNNER_EXEC: ServerName.RUNNER,
+    ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER,
 }
 
 
