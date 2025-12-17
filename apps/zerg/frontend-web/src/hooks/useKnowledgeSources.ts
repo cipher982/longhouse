@@ -85,9 +85,12 @@ export function useSyncKnowledgeSource() {
   return useMutation({
     mutationFn: (id: number) => syncKnowledgeSource(id),
     onSuccess: (data) => {
-      const statusMsg = data.sync_status === "success" ? "Sync complete" : "Sync finished";
-      toast.success(statusMsg);
       queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] });
+      if (data.sync_status === "failed") {
+        toast.error(data.sync_error || "Sync failed");
+      } else {
+        toast.success("Sync complete");
+      }
     },
     onError: (error: Error) => {
       toast.error(`Failed to sync: ${error.message}`);
