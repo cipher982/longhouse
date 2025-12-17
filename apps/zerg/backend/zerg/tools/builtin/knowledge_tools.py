@@ -47,18 +47,18 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
             }
         ]
     """
+    from zerg.context import get_worker_context
     from zerg.crud import knowledge_crud
     from zerg.database import db_session
-    from zerg.dependencies.context import get_context
 
-    # Get current user from context
-    ctx = get_context()
-    if ctx is None or ctx.user_id is None:
+    # Get current user from worker context (V1.1: fixed context resolution)
+    ctx = get_worker_context()
+    if ctx is None or ctx.owner_id is None:
         return [{
-            "error": "No user context available. Knowledge search requires authentication."
+            "error": "No user context available. knowledge_search requires authenticated worker context."
         }]
 
-    owner_id = ctx.user_id
+    owner_id = ctx.owner_id
 
     # Search documents
     with db_session() as db:
