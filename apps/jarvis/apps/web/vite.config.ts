@@ -136,6 +136,21 @@ export default defineConfig(({ mode }) => {
         ws: true,
         changeOrigin: true,
       },
+      // SSE endpoints need special handling to prevent buffering
+      '/api/jarvis/chat': {
+        target: ZERG_BACKEND,
+        changeOrigin: true,
+        headers: {
+          'Connection': 'keep-alive',
+        },
+      },
+      '/api/jarvis/supervisor/events': {
+        target: ZERG_BACKEND,
+        changeOrigin: true,
+        headers: {
+          'Connection': 'keep-alive',
+        },
+      },
       '/api': {
         target: ZERG_BACKEND,
         changeOrigin: true,
