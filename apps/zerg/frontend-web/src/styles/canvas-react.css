@@ -1,848 +1,851 @@
 /* React Flow Canvas Styles - matching Rust implementation */
 
-/*
- * E2E Test Compatibility Layer
+@layer pages {
+  /*
+   * E2E Test Compatibility Layer
  *
  * E2E tests were written for Rust implementation and expect specific CSS selectors.
  * These rules allow existing tests to find React Flow elements using legacy selectors.
  */
 
-/*
+  /*
  * E2E Test Compatibility: Add JavaScript to dynamically apply compatibility classes
  * This approach ensures E2E tests can find React Flow elements using legacy selectors
  */
 
-/* Override React Flow default styles for refined dark theme */
-.react-flow {
-  background: var(--color-surface-page) !important;
-}
-
-.react-flow__background {
-  background: var(--color-surface-page) !important;
-}
-
-/* Canvas workspace container */
-.canvas-workspace {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  background: var(--color-surface-page);
-  position: relative;
-  padding: 0;
-}
-
-.canvas-workspace.logs-open {
-  gap: 0;
-}
-
-.canvas-stage {
-  flex: 1 1 auto;
-  min-width: 0;
-  position: relative;
-  min-height: 600px;
-}
-
-.execution-logs-drawer {
-  flex: 0 0 clamp(280px, 25vw, 350px);
-  height: 100%;
-  background: var(--color-surface-card);
-  border-left: 1px solid var(--color-border-subtle);
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--shadow-xl);
-  animation: drawerSlideIn var(--motion-duration-fast)
-    var(--motion-easing-standard);
-  z-index: var(--z-dropdown);
-}
-
-/* Draggable window variant of logs panel */
-.execution-logs-draggable {
-  position: fixed;
-  width: 400px;
-  max-height: 500px;
-  height: auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  animation: none;
-  z-index: var(--z-dropdown);
-  flex: none;
-  overflow: hidden;
-}
-
-.execution-logs-draggable.dragging {
-  box-shadow: var(--shadow-xl);
-  opacity: 0.95;
-  user-select: none;
-}
-
-@keyframes drawerSlideIn {
-  from {
-    transform: translateX(12px);
-    opacity: 0;
+  /* Override React Flow default styles for refined dark theme */
+  .react-flow {
+    background: var(--color-surface-page) !important;
   }
 
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-/* Agent Shelf Items - consolidated into agent_shelf.css to avoid duplication
-   See: src/styles/css/agent_shelf.css (agent-pill styles)
-   Removed: 34 lines of duplicate styling */
-
-/* Custom Node Styles - refined for modern aesthetic */
-.agent-node {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-left: 3px solid var(--color-brand-primary);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  font-family: var(--font-family-base);
-  min-width: 140px;
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  align-items: center;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.agent-node:hover {
-  border-color: var(--color-brand-primary);
-  box-shadow: var(--shadow-glow);
-  transform: translateY(-2px);
-}
-
-.agent-node .agent-icon {
-  font-size: var(--font-size-md);
-  margin-right: var(--space-2);
-  opacity: 0.8;
-}
-
-.tool-node {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-left: 3px solid var(--color-intent-success);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  font-family: var(--font-family-base);
-  min-width: 140px;
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  align-items: center;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.tool-node:hover {
-  border-color: var(--color-intent-success);
-  box-shadow: 0 0 16px rgb(16 185 129 / 20%);
-  transform: translateY(-2px);
-}
-
-.tool-node .tool-icon {
-  font-size: var(--font-size-md);
-  margin-right: var(--space-2);
-}
-
-.trigger-node {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-left: 3px solid var(--color-intent-warning);
-  border-radius: var(--radius-lg);
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  font-family: var(--font-family-base);
-  min-width: 140px;
-  box-shadow: var(--shadow-sm);
-  display: flex;
-  align-items: center;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.trigger-node:hover {
-  border-color: var(--color-intent-warning);
-  box-shadow: 0 0 16px rgb(245 158 11 / 20%);
-  transform: translateY(-2px);
-}
-
-.trigger-node .trigger-icon {
-  font-size: var(--font-size-md);
-  margin-right: var(--space-2);
-}
-
-.canvas-drag-preview {
-  z-index: 200;
-  pointer-events: none;
-  filter: drop-shadow(0 8px 16px rgb(0 0 0 / 35%));
-}
-
-.drag-preview-node {
-  pointer-events: none;
-  opacity: 0.95;
-  transition: none;
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-}
-
-/* React Flow Controls styling */
-.react-flow__controls {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-}
-
-.react-flow__controls-button {
-  background: transparent;
-  border: none;
-  color: var(--color-text-secondary);
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.react-flow__controls-button:hover {
-  background: var(--color-surface-overlay);
-  color: var(--color-text-primary);
-}
-
-/* React Flow MiniMap styling */
-.react-flow__minimap {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-}
-
-/* Canvas save banner */
-.canvas-save-banner {
-  position: absolute;
-  top: var(--space-4);
-  right: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-lg);
-  background: var(--color-brand-primary);
-  color: white;
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  box-shadow: var(--shadow-lg);
-  border: 1px solid var(--color-brand-secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  letter-spacing: 0.01em;
-  animation: bannerPop var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.canvas-save-banner::before {
-  content: "•";
-  font-size: var(--font-size-xl);
-  line-height: 1;
-  color: white;
-  opacity: 0.8;
-}
-
-@keyframes bannerPop {
-  from {
-    transform: translateY(-8px);
-    opacity: 0;
+  .react-flow__background {
+    background: var(--color-surface-page) !important;
   }
 
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-/* Canvas container adjustments for React Flow */
-.canvas-container {
-  display: flex;
-  flex-direction: row;
-  height: 100%;
-  background: var(--color-surface-section);
-}
-
-/* Agent shelf layout */
-
-/* #agent-shelf styling consolidated into agent_shelf.css (canonical source)
-   See: src/styles/css/agent_shelf.css for all shelf-related styles */
-
-/* Override React Flow edge styles */
-.react-flow__edge-path {
-  stroke: var(--color-text-muted);
-  stroke-width: 2;
-}
-
-.react-flow__edge.selected .react-flow__edge-path {
-  stroke: var(--color-brand-primary);
-  stroke-width: 3;
-}
-
-/* Handle styles for connections */
-.react-flow__handle {
-  background: var(--color-brand-primary);
-  border: 2px solid var(--color-text-primary);
-  width: 8px;
-  height: 8px;
-}
-
-.react-flow__handle.connecting {
-  background: var(--color-brand-secondary);
-}
-
-.react-flow__handle.valid {
-  background: var(--color-intent-success);
-}
-
-/* Execution Controls */
-.execution-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-5);
-  background: var(--color-surface-section);
-  border-bottom: 1px solid var(--color-border-subtle);
-  margin-bottom: 0;
-}
-
-.execution-buttons {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.canvas-mode-toggles {
-  display: inline-flex;
-  gap: var(--space-1);
-  margin-left: var(--space-4);
-}
-
-.canvas-toggle-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-card);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  font-size: var(--font-size-sm);
-}
-
-.canvas-toggle-btn:hover {
-  border-color: var(--color-brand-primary);
-  color: var(--color-text-primary);
-}
-
-.canvas-toggle-btn[aria-pressed="true"] {
-  background: rgb(99 102 241 / 15%);
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-  box-shadow: var(--shadow-glow);
-}
-
-.run-button {
-  background: var(--color-intent-success);
-  border: none;
-  color: white;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.run-button:hover:not(:disabled) {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
-  box-shadow: 0 0 16px rgb(16 185 129 / 30%);
-}
-
-.run-button:disabled {
-  background: var(--color-text-muted);
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.run-button.loading {
-  background: var(--color-intent-warning);
-  cursor: wait;
-}
-
-.cancel-button {
-  background: var(--color-intent-error);
-  border: none;
-  color: white;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.cancel-button:hover:not(:disabled) {
-  filter: brightness(1.1);
-  transform: translateY(-1px);
-  box-shadow: 0 0 16px rgb(239 68 68 / 30%);
-}
-
-.logs-button {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  color: var(--color-text-secondary);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.logs-button:hover {
-  background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
-  border-color: var(--color-border-primary);
-}
-
-/* Execution Status Display */
-.execution-status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-md);
-  border: 1px solid;
-}
-
-.execution-status--waiting {
-  background: var(--color-intent-warning-muted);
-  border-color: var(--color-intent-warning);
-  color: var(--color-intent-warning);
-}
-
-.execution-status--running {
-  background: rgb(99 102 241 / 15%);
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-  animation: pulse 2s infinite;
-}
-
-.execution-status--finished {
-  background: var(--color-intent-success-muted);
-  border-color: var(--color-intent-success);
-  color: var(--color-intent-success);
-}
-
-.execution-status--cancelled {
-  background: var(--color-intent-error-muted);
-  border-color: var(--color-intent-error);
-  color: var(--color-intent-error);
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
+  /* Canvas workspace container */
+  .canvas-workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: var(--color-surface-page);
+    position: relative;
+    padding: 0;
   }
 
-  50% {
-    opacity: 0.6;
+  .canvas-workspace.logs-open {
+    gap: 0;
   }
-}
 
-.execution-id {
-  font-size: var(--font-size-xs);
-  opacity: 0.7;
-  font-family: var(--font-family-mono);
-}
+  .canvas-stage {
+    flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+    min-height: 600px;
+  }
 
-/* Execution Logs Drawer */
-.logs-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-3) var(--space-4);
-  background: var(--color-surface-section);
-  border-bottom: 1px solid var(--color-border-subtle);
-  user-select: none;
-}
-
-.execution-logs-draggable .logs-header {
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  cursor: grab;
-}
-
-.execution-logs-draggable .logs-header:active {
-  cursor: grabbing;
-}
-
-.logs-header h4 {
-  margin: 0;
-  font-family: var(--font-family-display);
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.close-logs {
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-lg);
-  cursor: pointer;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-md);
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.close-logs:hover {
-  background: var(--color-surface-overlay);
-  color: var(--color-text-primary);
-}
-
-.logs-content {
-  flex: 1;
-  padding: var(--space-4);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-height: 0;
-}
-
-.execution-logs-draggable .logs-content {
-  max-height: calc(500px - 60px);
-  overflow-y: auto;
-}
-
-.execution-info {
-  display: flex;
-  gap: var(--space-6);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-mono);
-}
-
-.execution-info > div {
-  min-width: 0;
-}
-
-.execution-info pre {
-  background: var(--color-surface-page);
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-xs);
-  max-width: 400px;
-  overflow: auto;
-}
-
-.logs-output h5 {
-  margin: 0 0 var(--space-2) 0;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--color-text-primary);
-}
-
-.logs-text {
-  background: var(--color-surface-page);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  color: var(--color-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
-  margin: 0;
-}
-
-@media (width <= 1200px) {
   .execution-logs-drawer {
-    position: absolute;
-    inset: 64px 16px 16px;
-    flex: none;
-    width: auto;
-    max-width: none;
+    flex: 0 0 clamp(280px, 25vw, 350px);
+    height: 100%;
+    background: var(--color-surface-card);
     border-left: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-xl);
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-xl);
+    animation: drawerSlideIn var(--motion-duration-fast)
+      var(--motion-easing-standard);
+    z-index: var(--z-dropdown);
+  }
+
+  /* Draggable window variant of logs panel */
+  .execution-logs-draggable {
+    position: fixed;
+    width: 400px;
+    max-height: 500px;
+    height: auto;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    animation: none;
+    z-index: var(--z-dropdown);
+    flex: none;
     overflow: hidden;
   }
 
-  .logs-header {
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  }
-}
-
-.canvas-context-menu {
-  position: fixed;
-  z-index: var(--z-dropdown);
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  min-width: 180px;
-  box-shadow: var(--shadow-lg);
-  padding: var(--space-1) 0;
-  backdrop-filter: blur(8px);
-}
-
-.canvas-context-menu button {
-  width: 100%;
-  background: none;
-  border: none;
-  text-align: left;
-  padding: var(--space-2) var(--space-4);
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  display: block;
-  transition: background-color var(--motion-duration-fast)
-    var(--motion-easing-standard);
-}
-
-.canvas-context-menu button:hover {
-  background: var(--color-surface-overlay);
-  color: var(--color-text-primary);
-}
-
-.shortcut-help-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgb(9 9 11 / 70%);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
-  padding: var(--space-6);
-}
-
-.shortcut-help-panel {
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-xl);
-  padding: var(--space-5) var(--space-6);
-  width: min(420px, 100%);
-  box-shadow: var(--shadow-xl);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.shortcut-help-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.shortcut-help-header h3 {
-  margin: 0;
-  font-family: var(--font-family-display);
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.shortcut-help-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
-
-.shortcut-help-list kbd {
-  display: inline-block;
-  padding: 2px var(--space-1);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-page);
-  border: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family-mono);
-  color: var(--color-text-primary);
-  margin-right: var(--space-1);
-}
-
-.shortcut-help-hint {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  text-align: right;
-}
-
-/* ========== MOBILE RESPONSIVE BREAKPOINTS (max-width: 767px) ========== */
-
-@media (width <= 767px) {
-  /* Hide React Flow Controls on mobile - they're 32px and hard to tap */
-  .react-flow__controls {
-    display: none;
+  .execution-logs-draggable.dragging {
+    box-shadow: var(--shadow-xl);
+    opacity: 0.95;
+    user-select: none;
   }
 
-  /* Hide MiniMap on mobile - overlays lower-left and blocks canvas interaction */
-  .react-flow__minimap {
-    display: none;
+  @keyframes drawerSlideIn {
+    from {
+      transform: translateX(12px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
   }
 
-  /* Stack execution controls vertically on mobile */
-  .execution-controls {
-    flex-direction: column;
-    gap: 12px;
-    padding: 10px 12px;
-  }
+  /* Agent Shelf Items - consolidated into agent_shelf.css to avoid duplication
+   See: src/styles/css/agent_shelf.css (agent-pill styles)
+   Removed: 34 lines of duplicate styling */
 
-  /* Increase button sizes for mobile touch targets (>= 48px) */
-  .execution-buttons {
-    flex-direction: column;
-    width: 100%;
-    gap: 10px;
-  }
-
-  .run-button,
-  .cancel-button,
-  .logs-button {
-    width: 100%;
-    padding: 12px 14px;
-    font-size: 15px;
-    min-height: 48px;
+  /* Custom Node Styles - refined for modern aesthetic */
+  .agent-node {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-brand-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    font-family: var(--font-family-base);
+    min-width: 140px;
+    box-shadow: var(--shadow-sm);
     display: flex;
     align-items: center;
-    justify-content: center;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  /* Stack mode toggles vertically */
-  .canvas-mode-toggles {
-    flex-direction: column;
+  .agent-node:hover {
+    border-color: var(--color-brand-primary);
+    box-shadow: var(--shadow-glow);
+    transform: translateY(-2px);
+  }
+
+  .agent-node .agent-icon {
+    font-size: var(--font-size-md);
+    margin-right: var(--space-2);
+    opacity: 0.8;
+  }
+
+  .tool-node {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-intent-success);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    font-family: var(--font-family-base);
+    min-width: 140px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    align-items: center;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .tool-node:hover {
+    border-color: var(--color-intent-success);
+    box-shadow: 0 0 16px rgb(16 185 129 / 20%);
+    transform: translateY(-2px);
+  }
+
+  .tool-node .tool-icon {
+    font-size: var(--font-size-md);
+    margin-right: var(--space-2);
+  }
+
+  .trigger-node {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-left: 3px solid var(--color-intent-warning);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3) var(--space-4);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    font-family: var(--font-family-base);
+    min-width: 140px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    align-items: center;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .trigger-node:hover {
+    border-color: var(--color-intent-warning);
+    box-shadow: 0 0 16px rgb(245 158 11 / 20%);
+    transform: translateY(-2px);
+  }
+
+  .trigger-node .trigger-icon {
+    font-size: var(--font-size-md);
+    margin-right: var(--space-2);
+  }
+
+  .canvas-drag-preview {
+    z-index: 200;
+    pointer-events: none;
+    filter: drop-shadow(0 8px 16px rgb(0 0 0 / 35%));
+  }
+
+  .drag-preview-node {
+    pointer-events: none;
+    opacity: 0.95;
+    transition: none;
     width: 100%;
-    margin: 0;
-    gap: 8px;
+    height: 100%;
+    box-sizing: border-box;
+  }
+
+  /* React Flow Controls styling */
+  .react-flow__controls {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  .react-flow__controls-button {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .react-flow__controls-button:hover {
+    background: var(--color-surface-overlay);
+    color: var(--color-text-primary);
+  }
+
+  /* React Flow MiniMap styling */
+  .react-flow__minimap {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  /* Canvas save banner */
+  .canvas-save-banner {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-lg);
+    background: var(--color-brand-primary);
+    color: white;
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--color-brand-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    letter-spacing: 0.01em;
+    animation: bannerPop var(--motion-duration-fast)
+      var(--motion-easing-standard);
+  }
+
+  .canvas-save-banner::before {
+    content: "•";
+    font-size: var(--font-size-xl);
+    line-height: 1;
+    color: white;
+    opacity: 0.8;
+  }
+
+  @keyframes bannerPop {
+    from {
+      transform: translateY(-8px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  /* Canvas container adjustments for React Flow */
+  .canvas-container {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    background: var(--color-surface-section);
+  }
+
+  /* Agent shelf layout */
+
+  /* #agent-shelf styling consolidated into agent_shelf.css (canonical source)
+   See: src/styles/css/agent_shelf.css for all shelf-related styles */
+
+  /* Override React Flow edge styles */
+  .react-flow__edge-path {
+    stroke: var(--color-text-muted);
+    stroke-width: 2;
+  }
+
+  .react-flow__edge.selected .react-flow__edge-path {
+    stroke: var(--color-brand-primary);
+    stroke-width: 3;
+  }
+
+  /* Handle styles for connections */
+  .react-flow__handle {
+    background: var(--color-brand-primary);
+    border: 2px solid var(--color-text-primary);
+    width: 8px;
+    height: 8px;
+  }
+
+  .react-flow__handle.connecting {
+    background: var(--color-brand-secondary);
+  }
+
+  .react-flow__handle.valid {
+    background: var(--color-intent-success);
+  }
+
+  /* Execution Controls */
+  .execution-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-5);
+    background: var(--color-surface-section);
+    border-bottom: 1px solid var(--color-border-subtle);
+    margin-bottom: 0;
+  }
+
+  .execution-buttons {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+  }
+
+  .canvas-mode-toggles {
+    display: inline-flex;
+    gap: var(--space-1);
+    margin-left: var(--space-4);
   }
 
   .canvas-toggle-btn {
-    width: 100%;
-    height: 44px;
-    min-height: 44px;
-    font-size: 13px;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-card);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    font-size: var(--font-size-sm);
   }
 
-  /* Ensure execution status is readable on small screens */
-  .execution-status {
-    font-size: 13px;
-    padding: 8px 10px;
-    width: 100%;
-  }
-}
-
-/* ========== TABLET/LANDSCAPE ADJUSTMENTS (max-width: 1024px) ========== */
-
-@media (width <= 1024px) and (orientation: landscape) {
-  /* On landscape tablets, still show controls but make them more compact */
-  .execution-controls {
-    flex-wrap: wrap;
-    padding: 10px 12px;
+  .canvas-toggle-btn:hover {
+    border-color: var(--color-brand-primary);
+    color: var(--color-text-primary);
   }
 
-  .execution-buttons {
-    gap: 6px;
+  .canvas-toggle-btn[aria-pressed="true"] {
+    background: rgb(99 102 241 / 15%);
+    border-color: var(--color-brand-primary);
+    color: var(--color-brand-primary);
+    box-shadow: var(--shadow-glow);
   }
 
-  .run-button,
-  .cancel-button,
-  .logs-button {
-    padding: 8px 12px;
-    font-size: 13px;
-  }
-}
-
-/* ========== ACCESSIBILITY: PREFERS-REDUCED-MOTION ========== */
-
-/* Respect user preference for reduced motion (WCAG 2.1 criterion 2.3.3) */
-
-@media (prefers-reduced-motion: reduce) {
-  /* Disable all animations and transitions */
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-
-  /* Specific canvas elements */
-  .execution-logs-drawer {
-    animation: none !important;
-  }
-
-  .canvas-save-banner {
-    animation: none !important;
-  }
-
-  .execution-status--running {
-    animation: none !important;
-  }
-
-  .execution-controls,
-  .canvas-toggle-btn,
-  .react-flow__controls-button,
-  .run-button,
-  .cancel-button,
-  .logs-button,
-  .agent-pill,
-  .tool-palette-item,
-  .react-flow__edge,
-  .react-flow__node {
-    transition: none !important;
-  }
-
-  /* Preserve hover/focus visual states without animation */
-  .agent-pill:hover {
-    transform: none !important;
-    box-shadow: 0 4px 8px rgb(0 0 0 / 20%);
-  }
-
-  .tool-palette-item:hover {
-    transform: none !important;
-    box-shadow: 0 2px 4px rgb(0 0 0 / 10%);
+  .run-button {
+    background: var(--color-intent-success);
+    border: none;
+    color: white;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
   }
 
   .run-button:hover:not(:disabled) {
-    transform: none !important;
-    box-shadow: 0 4px 8px rgb(16 185 129 / 30%);
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+    box-shadow: 0 0 16px rgb(16 185 129 / 30%);
+  }
+
+  .run-button:disabled {
+    background: var(--color-text-muted);
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .run-button.loading {
+    background: var(--color-intent-warning);
+    cursor: wait;
+  }
+
+  .cancel-button {
+    background: var(--color-intent-error);
+    border: none;
+    color: white;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .cancel-button:hover:not(:disabled) {
-    transform: none !important;
-    box-shadow: 0 4px 8px rgb(239 68 68 / 30%);
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+    box-shadow: 0 0 16px rgb(239 68 68 / 30%);
   }
 
-  /* Remove transforms that create motion */
-  .agent-shelf-item:hover {
-    transform: none !important;
+  .logs-button {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-secondary);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .logs-button:hover {
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+    border-color: var(--color-border-primary);
+  }
+
+  /* Execution Status Display */
+  .execution-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid;
+  }
+
+  .execution-status--waiting {
+    background: var(--color-intent-warning-muted);
+    border-color: var(--color-intent-warning);
+    color: var(--color-intent-warning);
+  }
+
+  .execution-status--running {
+    background: rgb(99 102 241 / 15%);
+    border-color: var(--color-brand-primary);
+    color: var(--color-brand-primary);
+    animation: pulse 2s infinite;
+  }
+
+  .execution-status--finished {
+    background: var(--color-intent-success-muted);
+    border-color: var(--color-intent-success);
+    color: var(--color-intent-success);
+  }
+
+  .execution-status--cancelled {
+    background: var(--color-intent-error-muted);
+    border-color: var(--color-intent-error);
+    color: var(--color-intent-error);
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.6;
+    }
+  }
+
+  .execution-id {
+    font-size: var(--font-size-xs);
+    opacity: 0.7;
+    font-family: var(--font-family-mono);
+  }
+
+  /* Execution Logs Drawer */
+  .logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-section);
+    border-bottom: 1px solid var(--color-border-subtle);
+    user-select: none;
+  }
+
+  .execution-logs-draggable .logs-header {
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    cursor: grab;
+  }
+
+  .execution-logs-draggable .logs-header:active {
+    cursor: grabbing;
+  }
+
+  .logs-header h4 {
+    margin: 0;
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-md);
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .close-logs {
+    background: none;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-lg);
+    cursor: pointer;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-md);
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .close-logs:hover {
+    background: var(--color-surface-overlay);
+    color: var(--color-text-primary);
+  }
+
+  .logs-content {
+    flex: 1;
+    padding: var(--space-4);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-height: 0;
+  }
+
+  .execution-logs-draggable .logs-content {
+    max-height: calc(500px - 60px);
+    overflow-y: auto;
+  }
+
+  .execution-info {
+    display: flex;
+    gap: var(--space-6);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    font-family: var(--font-family-mono);
+  }
+
+  .execution-info > div {
+    min-width: 0;
+  }
+
+  .execution-info pre {
+    background: var(--color-surface-page);
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs);
+    max-width: 400px;
+    overflow: auto;
+  }
+
+  .logs-output h5 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+
+  .logs-text {
+    background: var(--color-surface-page);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  @media (width <= 1200px) {
+    .execution-logs-drawer {
+      position: absolute;
+      inset: 64px 16px 16px;
+      flex: none;
+      width: auto;
+      max-width: none;
+      border-left: 1px solid var(--color-border-subtle);
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+    }
+
+    .logs-header {
+      border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    }
+  }
+
+  .canvas-context-menu {
+    position: fixed;
+    z-index: var(--z-dropdown);
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    min-width: 180px;
+    box-shadow: var(--shadow-lg);
+    padding: var(--space-1) 0;
+    backdrop-filter: blur(8px);
+  }
+
+  .canvas-context-menu button {
+    width: 100%;
+    background: none;
+    border: none;
+    text-align: left;
+    padding: var(--space-2) var(--space-4);
+    color: var(--color-text-secondary);
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    display: block;
+    transition: background-color var(--motion-duration-fast)
+      var(--motion-easing-standard);
+  }
+
+  .canvas-context-menu button:hover {
+    background: var(--color-surface-overlay);
+    color: var(--color-text-primary);
+  }
+
+  .shortcut-help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgb(9 9 11 / 70%);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--z-modal);
+    padding: var(--space-6);
+  }
+
+  .shortcut-help-panel {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    padding: var(--space-5) var(--space-6);
+    width: min(420px, 100%);
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .shortcut-help-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .shortcut-help-header h3 {
+    margin: 0;
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .shortcut-help-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  .shortcut-help-list kbd {
+    display: inline-block;
+    padding: 2px var(--space-1);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-page);
+    border: 1px solid var(--color-border-subtle);
+    font-size: var(--font-size-xs);
+    font-family: var(--font-family-mono);
+    color: var(--color-text-primary);
+    margin-right: var(--space-1);
+  }
+
+  .shortcut-help-hint {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    text-align: right;
+  }
+
+  /* ========== MOBILE RESPONSIVE BREAKPOINTS (max-width: 767px) ========== */
+
+  @media (width <= 767px) {
+    /* Hide React Flow Controls on mobile - they're 32px and hard to tap */
+    .react-flow__controls {
+      display: none;
+    }
+
+    /* Hide MiniMap on mobile - overlays lower-left and blocks canvas interaction */
+    .react-flow__minimap {
+      display: none;
+    }
+
+    /* Stack execution controls vertically on mobile */
+    .execution-controls {
+      flex-direction: column;
+      gap: 12px;
+      padding: 10px 12px;
+    }
+
+    /* Increase button sizes for mobile touch targets (>= 48px) */
+    .execution-buttons {
+      flex-direction: column;
+      width: 100%;
+      gap: 10px;
+    }
+
+    .run-button,
+    .cancel-button,
+    .logs-button {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 15px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Stack mode toggles vertically */
+    .canvas-mode-toggles {
+      flex-direction: column;
+      width: 100%;
+      margin: 0;
+      gap: 8px;
+    }
+
+    .canvas-toggle-btn {
+      width: 100%;
+      height: 44px;
+      min-height: 44px;
+      font-size: 13px;
+    }
+
+    /* Ensure execution status is readable on small screens */
+    .execution-status {
+      font-size: 13px;
+      padding: 8px 10px;
+      width: 100%;
+    }
+  }
+
+  /* ========== TABLET/LANDSCAPE ADJUSTMENTS (max-width: 1024px) ========== */
+
+  @media (width <= 1024px) and (orientation: landscape) {
+    /* On landscape tablets, still show controls but make them more compact */
+    .execution-controls {
+      flex-wrap: wrap;
+      padding: 10px 12px;
+    }
+
+    .execution-buttons {
+      gap: 6px;
+    }
+
+    .run-button,
+    .cancel-button,
+    .logs-button {
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+  }
+
+  /* ========== ACCESSIBILITY: PREFERS-REDUCED-MOTION ========== */
+
+  /* Respect user preference for reduced motion (WCAG 2.1 criterion 2.3.3) */
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Disable all animations and transitions */
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+
+    /* Specific canvas elements */
+    .execution-logs-drawer {
+      animation: none !important;
+    }
+
+    .canvas-save-banner {
+      animation: none !important;
+    }
+
+    .execution-status--running {
+      animation: none !important;
+    }
+
+    .execution-controls,
+    .canvas-toggle-btn,
+    .react-flow__controls-button,
+    .run-button,
+    .cancel-button,
+    .logs-button,
+    .agent-pill,
+    .tool-palette-item,
+    .react-flow__edge,
+    .react-flow__node {
+      transition: none !important;
+    }
+
+    /* Preserve hover/focus visual states without animation */
+    .agent-pill:hover {
+      transform: none !important;
+      box-shadow: 0 4px 8px rgb(0 0 0 / 20%);
+    }
+
+    .tool-palette-item:hover {
+      transform: none !important;
+      box-shadow: 0 2px 4px rgb(0 0 0 / 10%);
+    }
+
+    .run-button:hover:not(:disabled) {
+      transform: none !important;
+      box-shadow: 0 4px 8px rgb(16 185 129 / 30%);
+    }
+
+    .cancel-button:hover:not(:disabled) {
+      transform: none !important;
+      box-shadow: 0 4px 8px rgb(239 68 68 / 30%);
+    }
+
+    /* Remove transforms that create motion */
+    .agent-shelf-item:hover {
+      transform: none !important;
+    }
   }
 }
