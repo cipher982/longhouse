@@ -32,31 +32,6 @@ logger = logging.getLogger(__name__)
 # Supported source types
 ALLOWED_SOURCE_TYPES = {"url", "github_repo"}
 
-# Allowed URL schemes for URL sources (security: prevent javascript: and other dangerous schemes)
-ALLOWED_URL_SCHEMES = {"http", "https"}
-
-
-def _validate_url_scheme(url: str) -> None:
-    """Validate that a URL uses an allowed scheme (http/https only).
-
-    Raises HTTPException if the URL scheme is not allowed.
-    This prevents javascript:, data:, and other potentially dangerous schemes.
-    """
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid URL scheme '{parsed.scheme}'. Only http and https are allowed.",
-            )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid URL format: {e}",
-        )
-
 router = APIRouter(
     prefix="/knowledge",
     tags=["knowledge"],
@@ -95,8 +70,6 @@ async def create_source(
                 status_code=400,
                 detail="URL source requires 'url' in config",
             )
-        # Security: Validate URL scheme to prevent javascript:, data:, etc.
-        _validate_url_scheme(source_in.config["url"])
 
     # Validate GitHub repo source config
     if source_in.source_type == "github_repo":
@@ -181,10 +154,6 @@ async def update_source(
     # Check ownership
     if source.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
-
-    # Security: Validate URL scheme if updating a URL source config
-    if source.source_type == "url" and source_in.config and "url" in source_in.config:
-        _validate_url_scheme(source_in.config["url"])
 
     # Update source
     updated_source = knowledge_crud.update_knowledge_source(
@@ -330,10 +299,6 @@ async def search(
     for doc, source in results:
         snippets = extract_snippets(doc.content_text, q, max_snippets=3)
 
-        # V1.1: Extract permalink from doc_metadata if available
-        doc_metadata = doc.doc_metadata or {}
-        permalink = doc_metadata.get("github_permalink_url")
-
         formatted_results.append(
             KnowledgeSearchResult(
                 source_name=source.name,
@@ -343,7 +308,6 @@ async def search(
                 title=doc.title,
                 snippets=snippets,
                 score=1.0,  # Phase 0: no relevance scoring
-                permalink=permalink,
             )
         )
 
