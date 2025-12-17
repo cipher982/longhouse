@@ -1,7 +1,7 @@
 import logging
 import os
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional
 
 # FastAPI helpers
 from fastapi import APIRouter
@@ -29,6 +29,7 @@ from zerg.dependencies.auth import require_super_admin
 
 # Usage service
 from zerg.services.usage_service import get_all_users_usage, get_user_usage_detail
+from zerg.schemas.usage import AdminUserDetailResponse, AdminUsersResponse
 
 router = APIRouter(
     prefix="/admin",
@@ -610,12 +611,16 @@ async def fix_database_schema():
 # ---------------------------------------------------------------------------
 
 
-@router.get("/users")
+@router.get("/users", response_model=AdminUsersResponse)
 async def list_users_with_usage(
-    sort: str = Query("cost_today", description="Sort field: cost_today, cost_7d, cost_30d, email, created_at"),
-    order: str = Query("desc", description="Sort order: asc or desc"),
+    sort: Literal["cost_today", "cost_7d", "cost_30d", "email", "created_at"] = Query(
+        "cost_today",
+        description="Sort field: cost_today, cost_7d, cost_30d, email, created_at",
+    ),
+    order: Literal["asc", "desc"] = Query("desc", description="Sort order: asc or desc"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    active: Optional[bool] = Query(None, description="Filter by active status (true/false). Omit for all users."),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin),
 ):
@@ -624,11 +629,10 @@ async def list_users_with_usage(
     Returns users sorted by the specified field with usage stats for today, 7d, and 30d.
     Admin-only endpoint.
     """
-    result = get_all_users_usage(db, sort=sort, order=order, limit=limit, offset=offset)
-    return result
+    return get_all_users_usage(db, sort=sort, order=order, limit=limit, offset=offset, active=active)
 
 
-@router.get("/users/{user_id}/usage")
+@router.get("/users/{user_id}/usage", response_model=AdminUserDetailResponse)
 async def get_user_usage_details(
     user_id: int,
     period: Literal["today", "7d", "30d"] = Query("7d", description="Period for daily breakdown"),
