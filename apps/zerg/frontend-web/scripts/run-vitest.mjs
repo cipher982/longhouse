@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Preflight: verify single React installation
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const verifyScript = resolve(__dirname, "../../../../scripts/verify-single-react.mjs");
+const verifyResult = spawnSync(process.execPath, [verifyScript], { stdio: "inherit" });
+if (verifyResult.status !== 0) {
+  console.error("\nReact verification failed. Fix React duplication before running tests.");
+  process.exit(1);
+}
 
 const rawArgs = process.argv.slice(2);
 const vitestArgs = [];

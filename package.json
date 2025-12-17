@@ -21,7 +21,8 @@
     "test": "make test",
     "generate-sdk": "make generate-sdk",
     "validate:css": "node scripts/validate-css-classes.js",
-    "validate:all": "bun run validate:css && ./scripts/fast-contract-check.sh"
+    "validate:all": "bun run validate:css && ./scripts/fast-contract-check.sh",
+    "verify:react": "node scripts/verify-single-react.mjs"
   },
   "devDependencies": {
     "@asyncapi/cli": "^3.1.0",
@@ -29,6 +30,8 @@
     "asyncapi-rust-ws-template": "^0.3.2"
   },
   "overrides": {
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3"
   },
