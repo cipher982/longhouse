@@ -12,7 +12,9 @@ from fastapi import Query
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.connectors.credentials import get_account_credential
 from zerg.connectors.credentials import has_account_credential
+from zerg.connectors.github_api import github_async_client
 from zerg.connectors.registry import ConnectorType
 from zerg.crud import knowledge_crud
 from zerg.database import get_db
@@ -305,3 +307,107 @@ async def search(
         )
 
     return formatted_results
+
+
+# ---------------------------------------------------------------------------
+# GitHub Integration
+# ---------------------------------------------------------------------------
+
+
+@router.get("/github/repos")
+async def list_github_repos(
+    *,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List GitHub repositories available to the user (paginated).
+
+    V1: This endpoint mirrors GitHub's /user/repos listing (no global search).
+    The UI search box filters locally across loaded pages and uses "Load more".
+    """
+    creds = get_account_credential(db, current_user.id, ConnectorType.GITHUB)
+    if not creds or "token" not in creds:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub not connected. Go to Settings > Integrations to connect GitHub.",
+        )
+
+    token = creds["token"]
+
+    # Build params
+    params = {"per_page": per_page, "page": page, "sort": "updated"}
+
+    async with github_async_client(token) as gh:
+        response = await gh.get("/user/repos", params=params)
+        response.raise_for_status()
+        repos_data = response.json()
+
+    repos = []
+    for repo in repos_data:
+        repos.append(
+            {
+                "full_name": repo["full_name"],
+                "owner": repo["owner"]["login"],
+                "name": repo["name"],
+                "private": repo["private"],
+                "default_branch": repo["default_branch"],
+                "description": repo["description"],
+                "updated_at": repo["updated_at"],
+            }
+        )
+
+    # Check if there are more pages via Link header
+    link_header = response.headers.get("Link", "")
+    has_more = 'rel="next"' in link_header
+
+    return {
+        "repositories": repos,
+        "page": page,
+        "per_page": per_page,
+        "has_more": has_more,
+    }
+
+
+@router.get("/github/repos/{owner}/{repo}/branches")
+async def list_repo_branches(
+    *,
+    owner: str = Path(...),
+    repo: str = Path(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List branches for a GitHub repository."""
+    creds = get_account_credential(db, current_user.id, ConnectorType.GITHUB)
+    if not creds or "token" not in creds:
+        raise HTTPException(status_code=400, detail="GitHub not connected")
+
+    token = creds["token"]
+
+    async with github_async_client(token) as gh:
+        # Get repo info for default branch
+        repo_resp = await gh.get(f"/repos/{owner}/{repo}")
+        if repo_resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Repository not found or not accessible")
+        repo_resp.raise_for_status()
+        default_branch = repo_resp.json()["default_branch"]
+
+        # Get branches
+        branches_resp = await gh.get(f"/repos/{owner}/{repo}/branches", params={"per_page": 100})
+        branches_resp.raise_for_status()
+
+    branches = []
+    for b in branches_resp.json():
+        branches.append(
+            {
+                "name": b["name"],
+                "protected": b.get("protected", False),
+                "is_default": b["name"] == default_branch,
+            }
+        )
+
+    # Sort so default branch is first
+    branches.sort(key=lambda x: (not x["is_default"], x["name"]))
+
+    return {"branches": branches}
