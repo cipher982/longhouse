@@ -497,3 +497,145 @@ class TestGitHubKnowledgeAPI:
         assert data["config"]["owner"] == "testuser"
         assert data["config"]["repo"] == "testrepo"
         assert data["sync_status"] == "pending"
+
+    def test_list_github_repos_not_connected(self, client, _dev_user: User):
+        """Test 400 when GitHub not connected."""
+        response = client.get("/api/knowledge/github/repos")
+        assert response.status_code == 400
+        assert "GitHub not connected" in response.json()["detail"]
+
+    def test_list_github_repos_success(self, client, db_session: Session, _dev_user: User):
+        """Test listing GitHub repos when connected."""
+        # Create GitHub credential
+        _create_github_credential(db_session, _dev_user)
+
+        mock_repos = [
+            {
+                "full_name": "testuser/repo1",
+                "owner": {"login": "testuser"},
+                "name": "repo1",
+                "private": False,
+                "default_branch": "main",
+                "description": "Test repo 1",
+                "updated_at": "2024-12-16T10:00:00Z",
+            },
+            {
+                "full_name": "testuser/repo2",
+                "owner": {"login": "testuser"},
+                "name": "repo2",
+                "private": True,
+                "default_branch": "develop",
+                "description": "Test repo 2",
+                "updated_at": "2024-12-15T10:00:00Z",
+            },
+        ]
+
+        async def mock_get(endpoint, **kwargs):
+            response = MagicMock()
+            response.json.return_value = mock_repos
+            response.status_code = 200
+            response.headers = {}  # No next page
+            response.raise_for_status = MagicMock()
+            return response
+
+        with patch("zerg.routers.knowledge.github_async_client") as mock_client:
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value.get = mock_get
+            mock_client.return_value = mock_cm
+
+            response = client.get("/api/knowledge/github/repos")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["repositories"]) == 2
+        assert data["repositories"][0]["full_name"] == "testuser/repo1"
+        assert data["repositories"][1]["private"] is True
+        assert data["page"] == 1
+        assert data["has_more"] is False
+
+    def test_list_github_repos_pagination(self, client, db_session: Session, _dev_user: User):
+        """Test pagination of GitHub repos."""
+        # Create GitHub credential
+        _create_github_credential(db_session, _dev_user)
+
+        async def mock_get(endpoint, **kwargs):
+            response = MagicMock()
+            response.json.return_value = [{"full_name": "user/repo", "owner": {"login": "user"}, "name": "repo", "private": False, "default_branch": "main", "description": None, "updated_at": "2024-01-01T00:00:00Z"}]
+            response.status_code = 200
+            response.headers = {"Link": '<https://api.github.com/user/repos?page=2>; rel="next"'}
+            response.raise_for_status = MagicMock()
+            return response
+
+        with patch("zerg.routers.knowledge.github_async_client") as mock_client:
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value.get = mock_get
+            mock_client.return_value = mock_cm
+
+            response = client.get("/api/knowledge/github/repos?page=1&per_page=10")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["has_more"] is True
+        assert data["page"] == 1
+        assert data["per_page"] == 10
+
+    def test_list_branches_not_connected(self, client, _dev_user: User):
+        """Test 400 when GitHub not connected for branches."""
+        response = client.get("/api/knowledge/github/repos/testuser/testrepo/branches")
+        assert response.status_code == 400
+        assert "GitHub not connected" in response.json()["detail"]
+
+    def test_list_branches_success(self, client, db_session: Session, _dev_user: User):
+        """Test listing branches for a repo."""
+        # Create GitHub credential
+        _create_github_credential(db_session, _dev_user)
+
+        async def mock_get(endpoint, **kwargs):
+            response = MagicMock()
+            if "/repos/testuser/testrepo/branches" in endpoint:
+                response.json.return_value = [
+                    {"name": "main", "protected": True},
+                    {"name": "develop", "protected": False},
+                    {"name": "feature/test", "protected": False},
+                ]
+            else:  # repo endpoint
+                response.json.return_value = {"default_branch": "main"}
+            response.status_code = 200
+            response.raise_for_status = MagicMock()
+            return response
+
+        with patch("zerg.routers.knowledge.github_async_client") as mock_client:
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value.get = mock_get
+            mock_client.return_value = mock_cm
+
+            response = client.get("/api/knowledge/github/repos/testuser/testrepo/branches")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["branches"]) == 3
+
+        # Default branch should be first
+        assert data["branches"][0]["name"] == "main"
+        assert data["branches"][0]["is_default"] is True
+        assert data["branches"][0]["protected"] is True
+
+    def test_list_branches_repo_not_found(self, client, db_session: Session, _dev_user: User):
+        """Test 404 when repo not found."""
+        # Create GitHub credential
+        _create_github_credential(db_session, _dev_user)
+
+        async def mock_get(endpoint, **kwargs):
+            response = MagicMock()
+            response.status_code = 404
+            return response
+
+        with patch("zerg.routers.knowledge.github_async_client") as mock_client:
+            mock_cm = AsyncMock()
+            mock_cm.__aenter__.return_value.get = mock_get
+            mock_client.return_value = mock_cm
+
+            response = client.get("/api/knowledge/github/repos/testuser/notfound/branches")
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()

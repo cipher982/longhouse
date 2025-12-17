@@ -1062,12 +1062,14 @@ class TestGitHubKnowledgeAPI:
 
 **Commit:** `feat(knowledge): implement GitHub repo sync (Stage 2)`
 
-### Stage 3: API Endpoints
+### Stage 3: API Endpoints ✅
 
-- [ ] Add `/github/repos` endpoint (paginated repo list)
-- [ ] Add `/github/repos/{owner}/{repo}/branches` endpoint
-- [ ] Test API endpoints
+- [x] Add `/github/repos` endpoint (paginated repo list)
+- [x] Add `/github/repos/{owner}/{repo}/branches` endpoint
+- [x] Test API endpoints (6 new tests, 17 total GitHub tests)
+
+**Commit:** `feat(knowledge): add GitHub API endpoints (Stage 3)`
 
 ### Stage 4-6: Frontend & Polish
 
-_Not yet started - backend must be complete first_
+_Backend complete. Frontend implementation pending._
