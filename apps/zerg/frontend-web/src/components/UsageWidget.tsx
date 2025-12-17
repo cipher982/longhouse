@@ -93,7 +93,13 @@ export default function UsageWidget() {
 
     // Check localStorage to avoid showing multiple times per day
     const today = new Date().toISOString().split("T")[0];
-    const lastWarningDate = localStorage.getItem(WARNING_TOAST_KEY);
+    let lastWarningDate: string | null = null;
+    try {
+      lastWarningDate = localStorage.getItem(WARNING_TOAST_KEY);
+    } catch {
+      // localStorage may be unavailable (e.g. private mode / blocked storage)
+      lastWarningDate = null;
+    }
 
     if (lastWarningDate === today) {
       warningShownRef.current = true;
@@ -130,7 +136,11 @@ export default function UsageWidget() {
     );
 
     // Mark as shown for today
-    localStorage.setItem(WARNING_TOAST_KEY, today);
+    try {
+      localStorage.setItem(WARNING_TOAST_KEY, today);
+    } catch {
+      // Ignore storage errors; toast will still be debounced by ref for this session.
+    }
     warningShownRef.current = true;
   }, [usage]);
 
