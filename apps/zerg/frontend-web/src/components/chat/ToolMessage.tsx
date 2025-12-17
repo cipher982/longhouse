@@ -8,9 +8,6 @@ interface ToolMessageProps {
   message: ThreadMessage;
 }
 
-// Tools that should render as interactive cards instead of raw output
-const CARD_TOOLS = ["runner_create_enroll_token"];
-
 export function ToolMessage({ message }: ToolMessageProps) {
   const [isOpen, setIsOpen] = useState(false);
   const toolName = message.tool_name || "tool";

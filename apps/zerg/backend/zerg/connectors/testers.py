@@ -443,6 +443,9 @@ def _test_ssh(creds: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "success": True,
-        "message": f"SSH target '{name}' configured (test connectivity via runner)",
+        "message": (
+            f"SSH target '{name}' configuration validated. "
+            "Connectivity testing requires an online runner (use runner_ssh_exec)."
+        ),
         "metadata": metadata,
     }

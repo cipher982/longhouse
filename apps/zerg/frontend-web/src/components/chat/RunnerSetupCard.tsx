@@ -17,11 +17,40 @@ type ConnectionStatus = "waiting" | "connected" | "expired";
 
 export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("waiting");
   const [connectedRunner, setConnectedRunner] = useState<Runner | null>(null);
   const [timeRemaining, setTimeRemaining] = useState("");
-  const [initialRunnerIds, setInitialRunnerIds] = useState<Set<number> | null>(null);
+  const [baselineOnlineRunnerIds, setBaselineOnlineRunnerIds] = useState<Set<number> | null>(null);
   const queryClient = useQueryClient();
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall through to legacy copy method
+    }
+
+    // Fallback for insecure contexts / denied permissions
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return ok;
+    } catch {
+      return false;
+    }
+  };
 
   // Calculate time remaining
   const updateTimeRemaining = useCallback(() => {
@@ -53,21 +82,24 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
   useEffect(() => {
     if (status !== "waiting") return;
 
-    // Capture initial runner IDs on first poll
+    // Capture baseline online runner IDs on first poll.
+    // We want to detect either:
+    // - a brand-new runner ID that comes online
+    // - an existing runner that transitions from offline -> online
     const pollForNewRunner = async () => {
       try {
         const runners = await fetchRunners();
-        const currentIds = new Set(runners.map((r) => r.id));
+        const currentOnlineIds = new Set(runners.filter((r) => r.status === "online").map((r) => r.id));
 
-        if (initialRunnerIds === null) {
-          // First poll - capture baseline
-          setInitialRunnerIds(currentIds);
+        if (baselineOnlineRunnerIds === null) {
+          // First poll - capture baseline online runners
+          setBaselineOnlineRunnerIds(currentOnlineIds);
           return;
         }
 
-        // Find new online runners
+        // Find newly-online runner relative to initial baseline
         const newOnlineRunner = runners.find(
-          (r) => r.status === "online" && !initialRunnerIds.has(r.id)
+          (r) => r.status === "online" && !baselineOnlineRunnerIds.has(r.id)
         );
 
         if (newOnlineRunner) {
@@ -85,10 +117,15 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
     pollForNewRunner();
     const interval = setInterval(pollForNewRunner, 3000);
     return () => clearInterval(interval);
-  }, [status, initialRunnerIds, queryClient]);
+  }, [status, baselineOnlineRunnerIds, queryClient]);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(data.docker_command);
+  const handleCopy = async () => {
+    setCopyError(null);
+    const ok = await copyToClipboard(data.docker_command);
+    if (!ok) {
+      setCopyError("Copy failed. Select the command and copy it manually.");
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -154,6 +191,8 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
             {copied ? "✓ Copied" : "📋 Copy"}
           </button>
         </div>
+
+        {copyError && <div className="runner-setup-copy-error">{copyError}</div>}
 
         <div className="runner-setup-status">
           {status === "waiting" && (

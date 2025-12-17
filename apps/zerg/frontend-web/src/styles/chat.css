@@ -799,6 +799,11 @@
     cursor: not-allowed;
   }
 
+  .runner-setup-copy-error {
+    font-size: var(--font-size-sm);
+    color: var(--color-warning);
+  }
+
   .runner-setup-status {
     display: flex;
     justify-content: space-between;

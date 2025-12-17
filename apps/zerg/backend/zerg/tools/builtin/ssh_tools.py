@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import shlex
 from typing import Any
 from typing import Dict
 from typing import List
@@ -225,6 +226,14 @@ def runner_ssh_exec(
         ssh_user = ssh_config.get("user")
         ssh_port = ssh_config.get("port", 22)
 
+        if not ssh_host or not str(ssh_host).strip():
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                f"SSH target '{target}' is missing host configuration. Update it in Settings → Integrations → SSH.",
+            )
+
+        ssh_host = str(ssh_host).strip()
+
         # Build the SSH command
         ssh_parts = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
         if ssh_port and ssh_port != 22:
@@ -235,10 +244,11 @@ def runner_ssh_exec(
             ssh_parts.append(ssh_host)
 
         # Add the command
+        # Keep this as a single argv element; shlex.join will quote it safely.
         ssh_parts.append(command)
 
         # Join into full command
-        ssh_command = " ".join(ssh_parts)
+        ssh_command = shlex.join([str(p) for p in ssh_parts])
 
         # Dispatch to runner
         dispatcher = get_runner_job_dispatcher()
