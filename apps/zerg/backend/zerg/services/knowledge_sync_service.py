@@ -180,6 +180,9 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
                                 "github_size": file_info.get("size", 0),
                                 "branch": branch,
                                 "repo_path": file_path,
+                                # V1.1: Provenance metadata for citations
+                                "github_commit_sha": commit_sha,
+                                "github_permalink_url": f"https://github.com/{owner}/{repo}/blob/{commit_sha}/{file_path}",
                             },
                         )
 
@@ -217,8 +220,18 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
                             logger.info(f"Removed deleted file: {doc.path}")
 
             # 10. Update sync status
-            knowledge_crud.update_source_sync_status(db, source.id, status="success")
-            logger.info(f"Successfully synced GitHub repo {owner}/{repo} (branch={branch})")
+            # V1.1: Truncated repos must be visible to users (not silently "success")
+            if truncated:
+                error_msg = (
+                    f"Partial sync: repository too large for full crawl. "
+                    f"{len(files_to_sync)} files synced, but some files may be missing. "
+                    f"Consider using more specific include_paths patterns."
+                )
+                knowledge_crud.update_source_sync_status(db, source.id, status="failed", error=error_msg)
+                logger.warning(f"Partial sync for {owner}/{repo}: {error_msg}")
+            else:
+                knowledge_crud.update_source_sync_status(db, source.id, status="success")
+                logger.info(f"Successfully synced GitHub repo {owner}/{repo} (branch={branch})")
 
     except httpx.HTTPStatusError as e:
         error_msg = _handle_github_error(e, owner, repo)
