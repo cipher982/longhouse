@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -1075,7 +1075,7 @@ type HeaderRenderer = (
   sortConfig: SortConfig,
   onSort: (key: SortKey) => void,
   sortable?: boolean
-) => JSX.Element;
+) => ReactElement;
 
 const renderHeaderCell: HeaderRenderer = (label, sortKey, sortConfig, onSort, sortable = true) => {
   const dataColumn = label.toLowerCase().replace(/\s+/g, "_");

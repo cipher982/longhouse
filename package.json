@@ -29,8 +29,8 @@
     "asyncapi-rust-ws-template": "^0.3.2"
   },
   "overrides": {
-    "@types/react": "18.3.24",
-    "@types/react-dom": "18.3.7"
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3"
   },
   "main": "index.js",
   "directories": {

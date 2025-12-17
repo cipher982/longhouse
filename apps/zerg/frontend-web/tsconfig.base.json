@@ -14,7 +14,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": ["vite/client", "node"],
+    "types": ["vite/client", "node", "react", "react-dom"],
     "noEmit": true
   }
 }

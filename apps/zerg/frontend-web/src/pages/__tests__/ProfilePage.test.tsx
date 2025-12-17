@@ -66,8 +66,6 @@ describe("ProfilePage", () => {
         json: () => Promise.resolve(mockUser),
       } as Response;
     });
-
-    window.localStorage.setItem("zerg_jwt", "mock-token");
   });
 
   afterEach(() => {
@@ -100,10 +98,8 @@ describe("ProfilePage", () => {
         "/api/users/me",
         expect.objectContaining({
           method: "PUT",
-          headers: expect.objectContaining({
-            "Authorization": "Bearer mock-token",
-            "Content-Type": "application/json",
-          }),
+          credentials: "include",
+          headers: expect.objectContaining({ "Content-Type": "application/json" }),
           body: JSON.stringify({
             display_name: "Updated Name",
           }),
@@ -144,9 +140,7 @@ describe("ProfilePage", () => {
         "/api/users/me/avatar",
         expect.objectContaining({
           method: "POST",
-          headers: expect.objectContaining({
-            "Authorization": "Bearer mock-token",
-          }),
+          credentials: "include",
         })
       );
     });
