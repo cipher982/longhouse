@@ -14,6 +14,7 @@ import { conversationController } from '../lib/conversation-controller'
 import { stateManager } from '../lib/state-manager'
 import { toSidebarConversations } from '../lib/conversation-list'
 import { supervisorProgress } from '../lib/supervisor-progress'
+import { appController } from '../lib/app-controller'
 
 console.info('[Jarvis] Starting React application with realtime session integration')
 
@@ -101,25 +102,22 @@ export default function App() {
   }, [dispatch, textChannel, realtimeSession])
 
   const handleClearAll = useCallback(async () => {
-    const sessionManager = stateManager.getState().sessionManager
-    if (!sessionManager) {
-      console.warn('[App] Clear all conversations - sessionManager not ready, skipping')
-      return
-    }
     console.log('[App] Clear all conversations - starting...')
+
+    // Clear server-side history (source of truth)
     try {
-      await sessionManager.clearAllConversations()
-      console.log('[App] Clear all conversations - IndexedDB cleared successfully')
+      await appController.clearServerHistory()
+      console.log('[App] Clear all conversations - server history cleared')
     } catch (error) {
-      console.error('[App] Clear all conversations - failed:', error)
+      console.warn('[App] Clear all conversations - server clear failed:', error)
+      // Don't continue if server clear fails - that's where the data lives
       return
     }
+
+    // Clear local UI state
     textChannel.clearMessages()
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
-    dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-    stateManager.setConversationId(null)
-    conversationController.setConversationId(null)
 
     // Only reset Realtime context if the user is already connected.
     if (realtimeSession.isConnected()) {
@@ -130,8 +128,6 @@ export default function App() {
       } catch (error) {
         console.warn('[App] Clear all conversations - reconnect failed:', error)
       }
-    } else {
-      console.log('[App] Clear all conversations - realtime not connected; skipping reconnect')
     }
     console.log('[App] Clear all conversations - complete')
   }, [dispatch, textChannel, realtimeSession])

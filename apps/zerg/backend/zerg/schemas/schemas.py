@@ -425,3 +425,5 @@ class KnowledgeSearchResult(BaseModel):
     title: Optional[str] = None
     snippets: List[str]  # Matching text excerpts
     score: float  # Relevance score
+    # V1.1: Provenance - immutable permalink to exact version (if available)
+    permalink: Optional[str] = None
