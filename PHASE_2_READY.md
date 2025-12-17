@@ -82,7 +82,6 @@ All services healthy:
 postgres           - Up (healthy)
 zerg-backend       - Up (healthy)
 zerg-frontend      - Up (healthy)
-jarvis-server      - Up (healthy)
 jarvis-web         - Up (healthy)
 reverse-proxy      - Up (healthy)
 ```
