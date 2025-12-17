@@ -765,7 +765,7 @@ Before going live:
 For issues or questions:
 
 - Check logs: `sudo journalctl -u zerg-backend -f`
-- Review documentation: `/docs/jarvis_integration.md`
+- Review documentation: `docs/completed/jarvis_integration.md`
 - Test integration: `./scripts/test-jarvis-integration.sh`
 
 ## Rollback Procedure
@@ -839,6 +839,5 @@ After deployment:
 
 For ongoing development:
 
-- See [Jarvis Integration](./jarvis_integration.md) for API details
-- See [Tool Manifest Workflow](./tool_manifest_workflow.md) for adding tools
-- See main README.swarm.md for development workflow
+- See `docs/completed/jarvis_integration.md` for Jarvis API details
+- Tools are defined in backend code (built-ins + allowlists); Jarvis uses `/api/jarvis/bootstrap` as the authoritative tool list
