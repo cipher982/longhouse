@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   useGitHubRepos,
   useGitHubBranches,
@@ -23,6 +23,7 @@ export function AddKnowledgeSourceModal({
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [page, setPage] = useState(1);
   const [searchFilter, setSearchFilter] = useState("");
+  const [accumulatedRepos, setAccumulatedRepos] = useState<GitHubRepo[]>([]);
 
   // GitHub config state
   const [branch, setBranch] = useState<string>("");
@@ -33,12 +34,32 @@ export function AddKnowledgeSourceModal({
   const [url, setUrl] = useState("");
   const [authHeader, setAuthHeader] = useState("");
 
+  // Only fetch repos when modal is open AND we're on the github_repo step
+  const shouldFetchRepos = isOpen && step === "github_repo";
+
   const createMutation = useCreateKnowledgeSource();
-  const { data: reposData, isLoading: isLoadingRepos, error: reposError } = useGitHubRepos(page, 30);
+  const { data: reposData, isLoading: isLoadingRepos, error: reposError } = useGitHubRepos(page, 30, shouldFetchRepos);
   const { data: branchesData, isLoading: isLoadingBranches } = useGitHubBranches(
     selectedRepo?.owner || "",
     selectedRepo?.name || ""
   );
+
+  // Accumulate repos across pages
+  useEffect(() => {
+    if (reposData?.repositories) {
+      if (page === 1) {
+        // First page replaces
+        setAccumulatedRepos(reposData.repositories);
+      } else {
+        // Subsequent pages accumulate (avoiding duplicates by full_name)
+        setAccumulatedRepos((prev) => {
+          const existing = new Set(prev.map((r) => r.full_name));
+          const newRepos = reposData.repositories.filter((r) => !existing.has(r.full_name));
+          return [...prev, ...newRepos];
+        });
+      }
+    }
+  }, [reposData, page]);
 
   const handleClose = () => {
     // Reset state
@@ -47,6 +68,7 @@ export function AddKnowledgeSourceModal({
     setSelectedRepo(null);
     setPage(1);
     setSearchFilter("");
+    setAccumulatedRepos([]);
     setBranch("");
     setIncludePaths("**/*.md, **/*.mdx");
     setSourceName("");
@@ -120,8 +142,8 @@ export function AddKnowledgeSourceModal({
     handleClose();
   };
 
-  // Filter repos by search
-  const filteredRepos = reposData?.repositories.filter(
+  // Filter accumulated repos by search
+  const filteredRepos = accumulatedRepos.filter(
     (repo) =>
       searchFilter === "" ||
       repo.full_name.toLowerCase().includes(searchFilter.toLowerCase()) ||
@@ -191,7 +213,10 @@ export function AddKnowledgeSourceModal({
                 />
               </div>
 
-              {isLoadingRepos && <p className="loading-text">Loading repositories...</p>}
+              {/* Show loading only on initial load (page 1 with no data yet) */}
+              {isLoadingRepos && accumulatedRepos.length === 0 && (
+                <p className="loading-text">Loading repositories...</p>
+              )}
 
               {reposError && (
                 <p className="error-message">
@@ -199,10 +224,11 @@ export function AddKnowledgeSourceModal({
                 </p>
               )}
 
-              {!isLoadingRepos && !reposError && (
+              {/* Show repos once we have any data */}
+              {accumulatedRepos.length > 0 && !reposError && (
                 <>
                   <div className="repo-list">
-                    {filteredRepos?.map((repo) => (
+                    {filteredRepos.map((repo) => (
                       <button
                         key={repo.full_name}
                         className="repo-item"
@@ -223,8 +249,9 @@ export function AddKnowledgeSourceModal({
                     <button
                       className="load-more-button"
                       onClick={() => setPage((p) => p + 1)}
+                      disabled={isLoadingRepos}
                     >
-                      Load More
+                      {isLoadingRepos ? "Loading..." : "Load More"}
                     </button>
                   )}
                 </>

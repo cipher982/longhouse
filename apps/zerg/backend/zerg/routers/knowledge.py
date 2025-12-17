@@ -188,14 +188,18 @@ async def delete_source(
     return None
 
 
-@router.post("/sources/{source_id}/sync", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/sources/{source_id}/sync", response_model=KnowledgeSource)
 async def sync_source(
     *,
     source_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Trigger immediate sync for a knowledge source."""
+    """Trigger immediate sync for a knowledge source.
+
+    Note: This endpoint performs a synchronous sync and returns when complete.
+    The response contains the updated source with current sync_status.
+    """
     source = knowledge_crud.get_knowledge_source(db, source_id)
     if source is None:
         raise HTTPException(status_code=404, detail="Knowledge source not found")
@@ -204,16 +208,17 @@ async def sync_source(
     if source.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Trigger sync
+    # Perform sync (sets status to "syncing" then "success"/"failed")
     try:
         await knowledge_sync_service.sync_knowledge_source(db, source_id)
-        return {"status": "syncing", "source_id": source_id}
     except Exception as exc:
         logger.error(f"Failed to sync source {source_id}: {exc}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Sync failed: {str(exc)}",
-        )
+        # Don't raise - source.sync_status is already set to "failed" by service
+        # Fall through to return the updated source
+
+    # Refresh and return updated source
+    db.refresh(source)
+    return source
 
 
 # ---------------------------------------------------------------------------
