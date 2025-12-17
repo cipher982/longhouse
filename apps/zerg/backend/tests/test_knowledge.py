@@ -506,12 +506,12 @@ class TestKnowledgeAPI:
             "/api/knowledge/sources",
             json={
                 "name": "Git Repo",
-                "source_type": "git_repo",  # Not supported in Phase 0
-                "config": {"repo_url": "https://github.com/test/repo.git"},
+                "source_type": "gitlab_repo",  # Not supported
+                "config": {"repo_url": "https://gitlab.com/test/repo.git"},
             },
         )
         assert response.status_code == 400
-        assert "Phase 0" in response.json()["detail"]
+        assert "Unsupported source_type" in response.json()["detail"]
 
     def test_create_source_missing_url(self, client, _dev_user: User):
         """Test creating URL source without URL in config."""

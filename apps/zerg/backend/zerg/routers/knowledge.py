@@ -1,25 +1,34 @@
-"""API router for Knowledge Base (Phase 0)."""
+"""API router for Knowledge Base."""
 
 import logging
-from typing import List, Optional
+from typing import List
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Path
+from fastapi import Query
+from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.connectors.credentials import has_account_credential
+from zerg.connectors.registry import ConnectorType
 from zerg.crud import knowledge_crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
-from zerg.schemas.schemas import (
-    KnowledgeDocument,
-    KnowledgeSearchResult,
-    KnowledgeSource,
-    KnowledgeSourceCreate,
-    KnowledgeSourceUpdate,
-)
+from zerg.schemas.schemas import KnowledgeDocument
+from zerg.schemas.schemas import KnowledgeSearchResult
+from zerg.schemas.schemas import KnowledgeSource
+from zerg.schemas.schemas import KnowledgeSourceCreate
+from zerg.schemas.schemas import KnowledgeSourceUpdate
 from zerg.services import knowledge_sync_service
 
 logger = logging.getLogger(__name__)
+
+# Supported source types
+ALLOWED_SOURCE_TYPES = {"url", "github_repo"}
 
 router = APIRouter(
     prefix="/knowledge",
@@ -42,13 +51,14 @@ async def create_source(
 ):
     """Create a new knowledge source.
 
-    Phase 0 only supports source_type="url".
+    Supported source_types: url, github_repo
     """
     # Validate source type
-    if source_in.source_type not in {"url"}:
+    if source_in.source_type not in ALLOWED_SOURCE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported source_type: {source_in.source_type}. Phase 0 only supports 'url'.",
+            detail=f"Unsupported source_type: {source_in.source_type}. "
+            f"Supported types: {', '.join(sorted(ALLOWED_SOURCE_TYPES))}",
         )
 
     # Validate URL source config
@@ -57,6 +67,23 @@ async def create_source(
             raise HTTPException(
                 status_code=400,
                 detail="URL source requires 'url' in config",
+            )
+
+    # Validate GitHub repo source config
+    if source_in.source_type == "github_repo":
+        required_fields = ["owner", "repo"]
+        missing = [f for f in required_fields if f not in source_in.config]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"GitHub repo source missing required fields: {missing}",
+            )
+
+        if not has_account_credential(db, current_user.id, ConnectorType.GITHUB):
+            raise HTTPException(
+                status_code=400,
+                detail="GitHub must be connected before adding a GitHub repository source. "
+                "Go to Settings > Integrations to connect GitHub.",
             )
 
     # Create source
