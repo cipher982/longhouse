@@ -787,6 +787,10 @@ export async function syncKnowledgeSource(id: number): Promise<KnowledgeSource> 
   });
 }
 
+export async function searchKnowledge(query: string, limit: number = 10): Promise<KnowledgeSearchResult[]> {
+  return request<KnowledgeSearchResult[]>(`/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+}
+
 // ---------------------------------------------------------------------------
 // GitHub Integration API (for Knowledge Sources)
 // ---------------------------------------------------------------------------
