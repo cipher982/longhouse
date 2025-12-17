@@ -684,3 +684,108 @@ class TestKnowledgeAPI:
         """Test POST /api/knowledge/sources/{id}/sync with non-existent source."""
         response = client.post("/api/knowledge/sources/99999/sync")
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Search Tool Context Tests (V1.1)
+# ---------------------------------------------------------------------------
+
+
+class TestKnowledgeSearchToolContext:
+    """Tests for knowledge_search tool context resolution (V1.1)."""
+
+    def test_knowledge_search_with_worker_context(self, db_session: Session, _dev_user: User):
+        """Test knowledge_search resolves owner_id from WorkerContext."""
+        from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+        from zerg.tools.builtin.knowledge_tools import knowledge_search
+
+        # Create a source with documents
+        source = knowledge_crud.create_knowledge_source(
+            db_session,
+            owner_id=_dev_user.id,
+            name="Test Infra Docs",
+            source_type="url",
+            config={"url": "https://example.com/"},
+        )
+
+        knowledge_crud.upsert_knowledge_document(
+            db_session,
+            source_id=source.id,
+            owner_id=_dev_user.id,
+            path="https://example.com/servers.md",
+            content_text="cube (100.70.237.79) - Home GPU server for AI workloads",
+            title="Server Overview",
+        )
+
+        # Set up worker context with the user's owner_id
+        ctx = WorkerContext(
+            worker_id="test-worker-123",
+            owner_id=_dev_user.id,
+            run_id="test-run-123",
+        )
+        token = set_worker_context(ctx)
+
+        try:
+            # Call knowledge_search - should resolve owner_id from context
+            results = knowledge_search("cube", limit=5)
+
+            # Should find the document
+            assert isinstance(results, list)
+            assert len(results) == 1
+            assert results[0]["source"] == "Test Infra Docs"
+            assert "cube" in results[0]["snippets"][0].lower()
+        finally:
+            reset_worker_context(token)
+
+    def test_knowledge_search_without_context_returns_error(self, db_session: Session, _dev_user: User):
+        """Test knowledge_search returns structured error without context."""
+        from zerg.tools.builtin.knowledge_tools import knowledge_search
+
+        # No worker context set - should return error
+        results = knowledge_search("anything", limit=5)
+
+        assert isinstance(results, list)
+        assert len(results) == 1
+        assert "error" in results[0]
+        assert "context" in results[0]["error"].lower()
+
+    def test_knowledge_search_no_results(self, db_session: Session, _dev_user: User):
+        """Test knowledge_search with no matching documents."""
+        from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+        from zerg.tools.builtin.knowledge_tools import knowledge_search
+
+        # Create a source but no matching documents
+        source = knowledge_crud.create_knowledge_source(
+            db_session,
+            owner_id=_dev_user.id,
+            name="Empty Source",
+            source_type="url",
+            config={"url": "https://example.com/"},
+        )
+
+        knowledge_crud.upsert_knowledge_document(
+            db_session,
+            source_id=source.id,
+            owner_id=_dev_user.id,
+            path="https://example.com/unrelated.md",
+            content_text="This document has no matching keywords",
+            title="Unrelated",
+        )
+
+        ctx = WorkerContext(
+            worker_id="test-worker-123",
+            owner_id=_dev_user.id,
+            run_id="test-run-123",
+        )
+        token = set_worker_context(ctx)
+
+        try:
+            results = knowledge_search("nonexistent_query_xyz", limit=5)
+
+            # Should return "no results" message, not empty list
+            assert isinstance(results, list)
+            assert len(results) == 1
+            assert "message" in results[0]
+            assert "no results" in results[0]["message"].lower()
+        finally:
+            reset_worker_context(token)
