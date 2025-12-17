@@ -20,6 +20,7 @@ import { conversationController } from './conversation-controller';
 import { feedbackSystem } from './feedback-system';
 import { CONFIG, buildConversationManagerOptions } from './config';
 import { TextChannelController } from './text-channel-controller';
+import { SupervisorChatController } from './supervisor-chat-controller';
 import { createContextTools } from './tool-factory';
 import { contextLoader } from '../contexts/context-loader';
 import { toSidebarConversations } from './conversation-list';
@@ -28,6 +29,7 @@ export class AppController {
   private initialized = false;
   private connecting = false;
   private textChannelController: TextChannelController | null = null;
+  private supervisorChatController: SupervisorChatController | null = null;
   private lastBootstrapResult: BootstrapResult | null = null;
 
   constructor() {
@@ -56,7 +58,7 @@ export class AppController {
     // 4. Setup Event Listeners
     this.setupVoiceListeners();
 
-    // 5. Initialize Text Channel Controller
+    // 5. Initialize Text Channel Controller (for Realtime voice+text)
     this.textChannelController = new TextChannelController({
       autoConnect: true,
       maxRetries: 3
@@ -64,11 +66,49 @@ export class AppController {
     this.textChannelController.setVoiceController(voiceController);
     this.textChannelController.setConnectCallback(this.connect);
 
-    // 6. Async initialization
+    // 6. Initialize Supervisor Chat Controller (for text-only via Zerg backend)
+    this.supervisorChatController = new SupervisorChatController({
+      maxRetries: 3
+    });
+    await this.supervisorChatController.initialize();
+
+    // 7. Load history from server (if available)
+    await this.loadSupervisorHistory();
+
+    // 8. Async initialization
     await this.textChannelController.initialize();
 
     this.initialized = true;
     logger.info('✅ App Controller initialized');
+  }
+
+  /**
+   * Load conversation history from Supervisor backend
+   */
+  private async loadSupervisorHistory(): Promise<void> {
+    if (!this.supervisorChatController) return;
+
+    try {
+      logger.info('📜 Loading Supervisor chat history...');
+      const messages = await this.supervisorChatController.loadHistory(50);
+
+      if (messages.length > 0) {
+        // Convert to ConversationTurn format for UI
+        const history = messages.map(msg => ({
+          id: crypto.randomUUID(),
+          timestamp: msg.timestamp,
+          conversationId: stateManager.getState().currentConversationId || undefined,
+          userTranscript: msg.role === 'user' ? msg.content : undefined,
+          assistantResponse: msg.role === 'assistant' ? msg.content : undefined,
+        }));
+
+        stateManager.historyLoaded(history);
+        logger.info(`✅ Loaded ${messages.length} messages from Supervisor history`);
+      }
+    } catch (error) {
+      logger.warn('⚠️ Failed to load Supervisor history (non-fatal):', error);
+      // Non-fatal - app continues without history
+    }
   }
 
   /**
@@ -274,13 +314,29 @@ export class AppController {
   }
 
   /**
-   * Send a text message to the session
+   * Send a text message
+   * Routes to SupervisorChatController for text mode, TextChannelController for voice mode
    */
   async sendText(text: string): Promise<void> {
-    if (!this.textChannelController) {
-      throw new Error('Text channel not initialized');
+    // Check if we're in voice mode (Realtime connected)
+    const isVoiceMode = voiceController.isVoiceMode();
+    const isRealtimeConnected = stateManager.getState().session !== null;
+
+    if (isVoiceMode && isRealtimeConnected) {
+      // Voice mode: use Realtime (TextChannelController)
+      if (!this.textChannelController) {
+        throw new Error('Text channel not initialized');
+      }
+      logger.info('[AppController] Sending text via Realtime (voice mode)');
+      await this.textChannelController.sendText(text);
+    } else {
+      // Text mode: use Supervisor backend (SupervisorChatController)
+      if (!this.supervisorChatController) {
+        throw new Error('Supervisor chat not initialized');
+      }
+      logger.info('[AppController] Sending text via Supervisor (text mode)');
+      await this.supervisorChatController.sendMessage(text);
     }
-    await this.textChannelController.sendText(text);
   }
 
   /**
@@ -293,16 +349,19 @@ export class AppController {
     audioController.setListeningMode(false);
 
     try {
-      // 1. Disconnect Session
+      // 1. Cancel any pending supervisor chat
+      this.supervisorChatController?.cancel();
+
+      // 2. Disconnect Session
       await sessionHandler.disconnect();
 
-      // 2. Cleanup State
+      // 3. Cleanup State
       stateManager.setSession(null);
       voiceController.setSession(null);
       voiceController.reset(); // Clears mic, flags, but keeps listeners
       this.textChannelController?.setSession(null);
 
-      // 3. Cleanup Audio
+      // 4. Cleanup Audio
       audioController.dispose(); // Releases mic and stops monitor
 
       logger.info('✅ Disconnected successfully');
