@@ -144,11 +144,16 @@ class TestGitHubRepoSyncService:
         assert "https://github.com/testuser/testrepo/blob/main/README.md" in doc_paths
         assert "https://github.com/testuser/testrepo/blob/main/docs/guide.md" in doc_paths
 
-        # Check metadata
+        # Check metadata (basic fields)
         readme_doc = next(d for d in docs if "README.md" in d.path)
         assert readme_doc.doc_metadata["github_sha"] == "blob1"
         assert readme_doc.doc_metadata["branch"] == "main"
         assert readme_doc.title == "README.md"
+
+        # V1.1: Check provenance metadata
+        assert readme_doc.doc_metadata["github_commit_sha"] == "commit123"
+        assert readme_doc.doc_metadata["github_permalink_url"] == \
+            "https://github.com/testuser/testrepo/blob/commit123/README.md"
 
     @pytest.mark.asyncio
     async def test_sync_incremental_skip_unchanged(self, db_session: Session, _dev_user: User):
@@ -392,6 +397,13 @@ class TestGitHubRepoSyncService:
         doc_titles = {d.title for d in docs}
         assert "EXISTING.md" in doc_titles
         assert "README.md" in doc_titles
+
+        # V1.1: Truncated repos should be marked as failed with user-visible error
+        db_session.refresh(source)
+        assert source.sync_status == "failed"
+        assert "Partial sync" in source.sync_error
+        assert "too large" in source.sync_error.lower()
+        assert "include_paths" in source.sync_error.lower()
 
 
 class TestGitHubPatternMatching:
