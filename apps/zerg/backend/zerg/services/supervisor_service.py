@@ -119,6 +119,8 @@ class SupervisorService:
             "runner_list",
             "runner_create_enroll_token",
             "send_email",
+            # V1.1: knowledge base search for user context
+            "knowledge_search",
         ]
 
         agent = crud.create_agent(
