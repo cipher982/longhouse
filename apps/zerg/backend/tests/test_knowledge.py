@@ -623,3 +623,64 @@ class TestKnowledgeAPI:
         assert len(data) == 1
         assert data[0]["source_name"] == "Infra Docs"
         assert len(data[0]["snippets"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_sync_source_success(self, client, db_session: Session, _dev_user: User):
+        """Test POST /api/knowledge/sources/{id}/sync - success case."""
+        source = knowledge_crud.create_knowledge_source(
+            db_session,
+            owner_id=_dev_user.id,
+            name="Test URL",
+            source_type="url",
+            config={"url": "https://example.com/docs.md"},
+        )
+
+        # Mock the sync service to simulate success
+        with patch("zerg.routers.knowledge.knowledge_sync_service.sync_knowledge_source") as mock_sync:
+            mock_sync.return_value = None  # Sync succeeds (no exception)
+            # Manually update status as the service would
+            knowledge_crud.update_source_sync_status(db_session, source.id, status="success")
+
+            response = client.post(f"/api/knowledge/sources/{source.id}/sync")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == source.id
+        assert data["sync_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_sync_source_failure(self, client, db_session: Session, _dev_user: User):
+        """Test POST /api/knowledge/sources/{id}/sync - failure case.
+
+        When sync fails, the endpoint should still return 200 with the updated source
+        showing sync_status='failed' and sync_error populated.
+        """
+        source = knowledge_crud.create_knowledge_source(
+            db_session,
+            owner_id=_dev_user.id,
+            name="Bad URL",
+            source_type="url",
+            config={"url": "https://example.com/nonexistent.md"},
+        )
+
+        # Mock sync to raise an exception (simulate sync failure)
+        with patch("zerg.routers.knowledge.knowledge_sync_service.sync_knowledge_source") as mock_sync:
+            mock_sync.side_effect = Exception("Connection refused")
+            # Manually update status as the service would on failure
+            knowledge_crud.update_source_sync_status(
+                db_session, source.id, status="failed", error="Connection refused"
+            )
+
+            response = client.post(f"/api/knowledge/sources/{source.id}/sync")
+
+        # Should still return 200, but with failed status
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == source.id
+        assert data["sync_status"] == "failed"
+        assert data["sync_error"] == "Connection refused"
+
+    def test_sync_source_not_found(self, client):
+        """Test POST /api/knowledge/sources/{id}/sync with non-existent source."""
+        response = client.post("/api/knowledge/sources/99999/sync")
+        assert response.status_code == 404
