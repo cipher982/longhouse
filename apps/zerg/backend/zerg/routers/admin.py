@@ -1,6 +1,7 @@
 import logging
 import os
 from enum import Enum
+from typing import Literal
 
 # FastAPI helpers
 from fastapi import APIRouter
@@ -8,20 +9,26 @@ from fastapi import APIRouter as _AR
 from fastapi import Depends
 from fastapi import FastAPI as _FastAPI
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 # Centralised settings
 from zerg.config import get_settings
 
 # Database helpers
 from zerg.database import Base
+from zerg.database import get_db
 from zerg.database import get_session_factory
 
 # Auth dependency
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
+
+# Usage service
+from zerg.services.usage_service import get_all_users_usage, get_user_usage_detail
 
 router = APIRouter(
     prefix="/admin",
@@ -447,9 +454,9 @@ async def reset_database(request: DatabaseResetRequest, current_user=Depends(req
                     conn.execute(
                         text("""
                         INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                          display_name, created_at, updated_at)
+                                          display_name, context, created_at, updated_at)
                         VALUES (1, 'test@example.com', 'ADMIN', 1, 'dev', 'test-user-1',
-                                'Test User', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                'Test User', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         """)
                     )
                     conn.commit()
@@ -596,6 +603,51 @@ async def fix_database_schema():
     except Exception as e:
         logger.error(f"Error fixing database schema: {str(e)}")
         return JSONResponse(status_code=500, content={"detail": f"Failed to fix database schema: {str(e)}"})
+
+
+# ---------------------------------------------------------------------------
+# Admin User Usage Endpoints (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/users")
+async def list_users_with_usage(
+    sort: str = Query("cost_today", description="Sort field: cost_today, cost_7d, cost_30d, email, created_at"),
+    order: str = Query("desc", description="Sort order: asc or desc"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """List all users with their LLM usage statistics.
+
+    Returns users sorted by the specified field with usage stats for today, 7d, and 30d.
+    Admin-only endpoint.
+    """
+    result = get_all_users_usage(db, sort=sort, order=order, limit=limit, offset=offset)
+    return result
+
+
+@router.get("/users/{user_id}/usage")
+async def get_user_usage_details(
+    user_id: int,
+    period: Literal["today", "7d", "30d"] = Query("7d", description="Period for daily breakdown"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """Get detailed LLM usage for a specific user.
+
+    Returns:
+    - User info with usage summary for all periods
+    - Daily breakdown for the specified period
+    - Top agents by cost for the specified period
+
+    Admin-only endpoint.
+    """
+    result = get_user_usage_detail(db, user_id, period)
+    if result is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return result
 
 
 @_legacy_router.post("/reset-database")
