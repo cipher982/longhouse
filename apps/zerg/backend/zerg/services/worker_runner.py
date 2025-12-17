@@ -458,11 +458,12 @@ class WorkerRunner:
         default_worker_tools = config.get(
             "allowed_tools",
             [
-                "runner_exec",      # Preferred: execute via user-owned runner daemons
-                "ssh_exec",         # Legacy fallback (requires backend key/network access)
-                "http_request",     # API calls and web requests
-                "get_current_time", # Time lookups
-                "send_email",       # Notifications (if configured)
+                "runner_exec",       # Preferred: execute via user-owned runner daemons
+                "ssh_exec",          # Legacy fallback (requires backend key/network access)
+                "http_request",      # API calls and web requests
+                "get_current_time",  # Time lookups
+                "send_email",        # Notifications (if configured)
+                "knowledge_search",  # V1.1: user knowledge base search
             ],
         )
 
