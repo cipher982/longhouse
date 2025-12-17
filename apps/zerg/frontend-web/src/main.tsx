@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import "./styles/legacy.css";
+import "./styles/modal.css";
 import "./styles/chat.css";
 import "./styles/profile-admin.css";
 import "./styles/settings.css";

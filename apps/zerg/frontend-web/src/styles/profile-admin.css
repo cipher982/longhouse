@@ -597,8 +597,8 @@
   opacity: 0.6;
 }
 
-/* Modal Styles */
-.modal-overlay {
+/* Admin Page Confirmation Modal - scoped to admin page only */
+.admin-page .modal-overlay {
   position: fixed;
   inset: 0;
   background: rgb(0 0 0 / 75%);
@@ -609,7 +609,7 @@
   animation: fadeIn 0.2s ease;
 }
 
-.modal-content {
+.admin-page .modal-content {
   background: var(--dark-card, #2a2a3a);
   border: 1px solid var(--border-color, #3d3d5c);
   border-radius: var(--radius-lg, 8px);
@@ -632,21 +632,21 @@
   }
 }
 
-.modal-content h3 {
+.admin-page .modal-content h3 {
   color: var(--text, #fff);
   font-size: 20px;
   font-weight: 600;
   margin: 0 0 16px;
 }
 
-.modal-content p {
+.admin-page .modal-content p {
   color: var(--text-secondary, #e0e0e0);
   font-size: 14px;
   line-height: 1.6;
   margin: 0 0 24px;
 }
 
-.modal-actions {
+.admin-page .modal-actions {
   display: flex;
   gap: 12px;
   justify-content: flex-end;

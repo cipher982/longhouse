@@ -58,7 +58,7 @@ export default function KnowledgeSourcesPage() {
   }
 
   return (
-    <div className="profile-container">
+    <div className="profile-container knowledge-sources-page">
       <div className="profile-content">
         <div className="section-header">
           <div>
