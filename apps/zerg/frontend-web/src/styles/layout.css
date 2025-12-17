@@ -1,135 +1,137 @@
 /* Layout & Reset – Modern CSS Foundation */
 
-/* --------------------------------------------------------- */
-/* CSS Reset - Applied universally                           */
-/* --------------------------------------------------------- */
+@layer base {
+  /* --------------------------------------------------------- */
+  /* CSS Reset - Applied universally                           */
+  /* --------------------------------------------------------- */
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
 
-/* --------------------------------------------------------- */
-/* Grid helpers                                              */
-/* --------------------------------------------------------- */
+  /* --------------------------------------------------------- */
+  /* Grid helpers                                              */
+  /* --------------------------------------------------------- */
 
-.grid {
-  display: grid;
-  gap: var(--spacing-lg);
-}
+  .grid {
+    display: grid;
+    gap: var(--spacing-lg);
+  }
 
-.grid-2 {
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
+  .grid-2 {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
 
-.grid-3 {
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-}
+  .grid-3 {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
 
-.grid-4 {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-}
+  .grid-4 {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
 
-/* --------------------------------------------------------- */
-/* Flex helpers                                              */
-/* --------------------------------------------------------- */
+  /* --------------------------------------------------------- */
+  /* Flex helpers                                              */
+  /* --------------------------------------------------------- */
 
-.flex {
-  display: flex;
-}
+  .flex {
+    display: flex;
+  }
 
-.flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+  .flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
-.flex-column {
-  display: flex;
-  flex-direction: column;
-}
+  .flex-column {
+    display: flex;
+    flex-direction: column;
+  }
 
-.spacer {
-  flex: 1 1 auto;
-}
+  .spacer {
+    flex: 1 1 auto;
+  }
 
-/* --------------------------------------------------------- */
-/* Application grid layout (header, tabs, content, status)   */
-/* --------------------------------------------------------- */
+  /* --------------------------------------------------------- */
+  /* Application grid layout (header, tabs, content, status)   */
+  /* --------------------------------------------------------- */
 
-html {
-  height: 100%;
-}
+  html {
+    height: 100%;
+  }
 
-body {
-  height: 100%;
-  margin: 0;
-  min-width: 320px; /* minimum supported viewport - horizontal scroll below this */
-}
+  body {
+    height: 100%;
+    margin: 0;
+    min-width: 320px; /* minimum supported viewport - horizontal scroll below this */
+  }
 
-/* The React root acts as the application grid */
-#react-root {
-  display: grid;
-  grid-template-rows: auto auto 1fr auto;
-  height: 100%;
-  min-height: 100vh;
-  min-height: 100dvh; /* modern viewport units */
-}
+  /* The React root acts as the application grid */
+  #react-root {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    height: 100%;
+    min-height: 100vh;
+    min-height: 100dvh; /* modern viewport units */
+  }
 
-/* Place elements explicitly so order in DOM does not matter */
-.header {
-  grid-row: 1;
-}
+  /* Place elements explicitly so order in DOM does not matter */
+  .header {
+    grid-row: 1;
+  }
 
-.tabs-container {
-  grid-row: 2;
-}
+  .tabs-container {
+    grid-row: 2;
+  }
 
-.status-bar {
-  grid-row: 4;
-}
+  .status-bar {
+    grid-row: 4;
+  }
 
-/* Content area - main scrollable viewport */
-#app-container {
-  grid-row: 3;
-  min-height: 0; /* required for grid children to respect overflow */
-  display: flex;
-  flex-direction: column;
-  overflow-x: hidden; /* prevent page-level horizontal scroll */
-  overflow-y: auto;
-  position: relative;
-}
+  /* Content area - main scrollable viewport */
+  #app-container {
+    grid-row: 3;
+    min-height: 0; /* required for grid children to respect overflow */
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden; /* prevent page-level horizontal scroll */
+    overflow-y: auto;
+    position: relative;
+  }
 
-/* Ensure direct children fill available space */
-#app-container > * {
-  flex: 1 1 auto;
-  min-height: 0;
-}
+  /* Ensure direct children fill available space */
+  #app-container > * {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
 
-/* --------------------------------------------------------- */
-/* Page loader for lazy-loaded routes                        */
-/* --------------------------------------------------------- */
+  /* --------------------------------------------------------- */
+  /* Page loader for lazy-loaded routes                        */
+  /* --------------------------------------------------------- */
 
-.page-loader {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 200px;
-  height: 100%;
-}
+  .page-loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    height: 100%;
+  }
 
-.page-loader-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--color-border-subtle, #333);
-  border-top-color: var(--color-brand-primary, #6366f1);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
+  .page-loader-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--color-border-subtle, #333);
+    border-top-color: var(--color-brand-primary, #6366f1);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }
