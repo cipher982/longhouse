@@ -1070,6 +1070,26 @@ class TestGitHubKnowledgeAPI:
 
 **Commit:** `feat(knowledge): add GitHub API endpoints (Stage 3)`
 
-### Stage 4-6: Frontend & Polish
+### Stage 4: Frontend - Page & List ✅
 
-_Backend complete. Frontend implementation pending._
+- [x] Regenerate OpenAPI types with `make generate-sdk`
+- [x] Add API functions to api.ts (knowledge sources + GitHub repos)
+- [x] Create useKnowledgeSources.ts hooks
+- [x] Create KnowledgeSourceCard component
+- [x] Create KnowledgeSourcesPage
+
+### Stage 5: Frontend - Add Modal ✅
+
+- [x] Create AddKnowledgeSourceModal with type picker
+- [x] Implement GitHubRepoPicker (inline in modal)
+- [x] Implement branch selection and include_paths config
+- [x] Create knowledge-sources.css styles
+
+**Commit:** `feat(knowledge): add frontend knowledge sources page (Stages 4-5)`
+
+### Stage 6: Polish & Testing
+
+- [x] Wire up route at /settings/knowledge
+- [x] TypeScript build passing
+- [ ] Manual E2E testing
+- [ ] Add navigation link to settings

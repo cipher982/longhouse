@@ -737,3 +737,101 @@ export async function rotateRunnerSecret(runnerId: number): Promise<RotateSecret
     method: "POST",
   });
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge Sources API
+// ---------------------------------------------------------------------------
+
+export type KnowledgeSource = Schemas["KnowledgeSource"];
+export type KnowledgeSourceCreate = Schemas["KnowledgeSourceCreate"];
+export type KnowledgeSourceUpdate = Schemas["KnowledgeSourceUpdate"];
+export type KnowledgeDocument = Schemas["KnowledgeDocument"];
+export type KnowledgeSearchResult = Schemas["KnowledgeSearchResult"];
+
+export async function fetchKnowledgeSources(): Promise<KnowledgeSource[]> {
+  return request<KnowledgeSource[]>(`/knowledge/sources`);
+}
+
+export async function fetchKnowledgeSource(id: number): Promise<KnowledgeSource> {
+  return request<KnowledgeSource>(`/knowledge/sources/${id}`);
+}
+
+export async function createKnowledgeSource(
+  payload: KnowledgeSourceCreate
+): Promise<KnowledgeSource> {
+  return request<KnowledgeSource>(`/knowledge/sources`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateKnowledgeSource(
+  id: number,
+  payload: KnowledgeSourceUpdate
+): Promise<KnowledgeSource> {
+  return request<KnowledgeSource>(`/knowledge/sources/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteKnowledgeSource(id: number): Promise<void> {
+  return request<void>(`/knowledge/sources/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function syncKnowledgeSource(id: number): Promise<KnowledgeSource> {
+  return request<KnowledgeSource>(`/knowledge/sources/${id}/sync`, {
+    method: "POST",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GitHub Integration API (for Knowledge Sources)
+// ---------------------------------------------------------------------------
+
+export interface GitHubRepo {
+  full_name: string;
+  owner: string;
+  name: string;
+  private: boolean;
+  default_branch: string;
+  description: string | null;
+  updated_at: string;
+}
+
+export interface GitHubReposResponse {
+  repositories: GitHubRepo[];
+  page: number;
+  per_page: number;
+  has_more: boolean;
+}
+
+export interface GitHubBranch {
+  name: string;
+  protected: boolean;
+  is_default: boolean;
+}
+
+export interface GitHubBranchesResponse {
+  branches: GitHubBranch[];
+}
+
+export async function fetchGitHubRepos(
+  page: number = 1,
+  perPage: number = 30
+): Promise<GitHubReposResponse> {
+  return request<GitHubReposResponse>(
+    `/knowledge/github/repos?page=${page}&per_page=${perPage}`
+  );
+}
+
+export async function fetchGitHubBranches(
+  owner: string,
+  repo: string
+): Promise<GitHubBranchesResponse> {
+  return request<GitHubBranchesResponse>(
+    `/knowledge/github/repos/${owner}/${repo}/branches`
+  );
+}
