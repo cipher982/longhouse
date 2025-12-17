@@ -16,6 +16,7 @@ import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
 import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
+import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
 
 // App logo (served from public folder)
@@ -730,6 +731,9 @@ export default function DashboardPage() {
             </button>
           </div>
         </div>
+
+        {/* LLM Usage Widget */}
+        <UsageWidget />
 
         <table id="agents-table" className="agents-table">
           <thead>

@@ -7,12 +7,13 @@ dependency to supply the active user.
 
 import json
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import File
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import UploadFile
 from fastapi import status
 from pydantic import BaseModel, ValidationError
@@ -27,10 +28,14 @@ from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
+from zerg.schemas.usage import UserUsageResponse
 from zerg.schemas.user_context import UserContext
 
 # Avatar helper
 from zerg.services.avatar_service import store_avatar_for_user
+
+# Usage service
+from zerg.services.usage_service import get_user_usage
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
 
@@ -94,6 +99,26 @@ def read_current_user(current_user=Depends(get_current_user)):
     """Return the authenticated user's profile."""
 
     return current_user  # SQLAlchemy row – FastAPI will use attrs to dict
+
+
+# ---------------------------------------------------------------------------
+# /users/me/usage – LLM usage stats
+# ---------------------------------------------------------------------------
+
+
+@router.get("/users/me/usage", response_model=UserUsageResponse)
+def read_current_user_usage(
+    period: Literal["today", "7d", "30d"] = Query("today", description="Time period for usage stats"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return the authenticated user's LLM usage stats.
+
+    Returns token counts, costs, and daily budget limit status.
+    The `limit` field always reflects today's daily limit usage,
+    regardless of the selected period.
+    """
+    return get_user_usage(db, current_user.id, period)
 
 
 # ---------------------------------------------------------------------------
