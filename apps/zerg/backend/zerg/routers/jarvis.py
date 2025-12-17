@@ -948,12 +948,14 @@ class JarvisChatRequest(BaseModel):
     message: str = Field(..., description="User message text")
 
 
-async def _chat_stream_generator(run_id: int, owner_id: int):
+async def _chat_stream_generator(run_id: int, owner_id: int, message: str):
     """Generate SSE events for chat streaming.
 
     Subscribes to supervisor events and streams assistant responses.
+    The background task is started from within this generator to avoid race conditions.
     """
     queue: asyncio.Queue = asyncio.Queue()
+    task_handle: Optional[asyncio.Task] = None
 
     async def event_handler(event):
         """Filter and queue relevant events."""
@@ -967,7 +969,36 @@ async def _chat_stream_generator(run_id: int, owner_id: int):
 
         await queue.put(event)
 
-    # Subscribe to supervisor events
+    async def run_supervisor_background():
+        """Execute supervisor in background."""
+        from zerg.database import db_session
+        from zerg.services.supervisor_service import SupervisorService
+
+        try:
+            with db_session() as bg_db:
+                service = SupervisorService(bg_db)
+                await service.run_supervisor(
+                    owner_id=owner_id,
+                    task=message,
+                    run_id=run_id,
+                    timeout=120,
+                )
+        except Exception as e:
+            logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
+            # Emit error event so the stream knows to close
+            await event_bus.publish(
+                EventType.ERROR,
+                {
+                    "event_type": "error",
+                    "run_id": run_id,
+                    "owner_id": owner_id,
+                    "error": str(e),
+                },
+            )
+        finally:
+            await _pop_supervisor_task(run_id)
+
+    # Subscribe to supervisor events BEFORE starting background task
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
@@ -983,6 +1014,11 @@ async def _chat_stream_generator(run_id: int, owner_id: int):
             }),
         }
 
+        # NOW start the background task - after subscriptions are ready and connected event sent
+        logger.info(f"Chat SSE: starting background supervisor for run {run_id}")
+        task_handle = asyncio.create_task(run_supervisor_background())
+        await _register_supervisor_task(run_id, task_handle)
+
         # Stream events until supervisor completes or errors
         complete = False
         while not complete:
@@ -990,6 +1026,7 @@ async def _chat_stream_generator(run_id: int, owner_id: int):
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                 event_type = event.get("event_type") or event.get("type") or "event"
+                logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
 
                 # Check for completion
                 if event_type in ("supervisor_complete", "error"):
@@ -1022,6 +1059,8 @@ async def _chat_stream_generator(run_id: int, owner_id: int):
 
     except asyncio.CancelledError:
         logger.info(f"Chat SSE stream disconnected for run {run_id}")
+        if task_handle and not task_handle.done():
+            task_handle.cancel()
     finally:
         # Unsubscribe from all events
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
@@ -1092,35 +1131,10 @@ async def jarvis_chat(
         f"message: {request.message[:50]}..."
     )
 
-    # Start supervisor execution in background
-    async def run_supervisor_background(owner_id: int, task: str, run_id: int):
-        """Execute supervisor in background."""
-        from zerg.database import db_session
-        from zerg.services.supervisor_service import SupervisorService
-
-        try:
-            with db_session() as bg_db:
-                service = SupervisorService(bg_db)
-                await service.run_supervisor(
-                    owner_id=owner_id,
-                    task=task,
-                    run_id=run_id,
-                    timeout=120,
-                )
-        except Exception as e:
-            logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
-        finally:
-            await _pop_supervisor_task(run_id)
-
-    # Create background task
-    task_handle = asyncio.create_task(
-        run_supervisor_background(current_user.id, request.message, run.id)
-    )
-    await _register_supervisor_task(run.id, task_handle)
-
-    # Return SSE stream
+    # Return SSE stream - background task is started inside the generator
+    # to avoid race conditions with event subscriptions
     return EventSourceResponse(
-        _chat_stream_generator(run.id, current_user.id)
+        _chat_stream_generator(run.id, current_user.id, request.message)
     )
 
 
