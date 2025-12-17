@@ -4,6 +4,7 @@ import type {
   KnowledgeSource,
   KnowledgeSourceCreate,
   KnowledgeSourceUpdate,
+  KnowledgeSearchResult,
   GitHubReposResponse,
   GitHubBranchesResponse,
 } from "../services/api";
@@ -14,6 +15,7 @@ import {
   updateKnowledgeSource,
   deleteKnowledgeSource,
   syncKnowledgeSource,
+  searchKnowledge,
   fetchGitHubRepos,
   fetchGitHubBranches,
 } from "../services/api";
@@ -115,5 +117,22 @@ export function useGitHubBranches(owner: string, repo: string) {
     queryKey: ["github-branches", owner, repo],
     queryFn: () => fetchGitHubBranches(owner, repo),
     enabled: !!(owner && repo),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Search Hook (V1.1)
+// ---------------------------------------------------------------------------
+
+export function useKnowledgeSearch(query: string, limit: number = 10) {
+  return useQuery<KnowledgeSearchResult[]>({
+    queryKey: ["knowledge-search", query, limit],
+    queryFn: () => searchKnowledge(query, limit),
+    // Only search when query is at least 2 characters
+    enabled: query.length >= 2,
+    // Don't refetch on window focus for search
+    refetchOnWindowFocus: false,
+    // Cache search results for 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
 }
