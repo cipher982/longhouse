@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useCreateEnrollToken } from "../hooks/useRunners";
-import "../styles/modal.css";
 
 interface AddRunnerModalProps {
   isOpen: boolean;

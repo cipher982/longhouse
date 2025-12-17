@@ -19,7 +19,8 @@
   display: none;
 }
 
-.modal-content {
+/* Scoped to .modal wrapper (legacy pattern) to avoid conflicts with .modal-container pattern */
+.modal > .modal-content {
   background: var(--dark-card);
   border-radius: var(--radius-md);
   padding: var(--spacing-lg);
