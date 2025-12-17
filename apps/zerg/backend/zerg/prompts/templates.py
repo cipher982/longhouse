@@ -177,7 +177,7 @@ You have access to the user's knowledge base via `knowledge_search(query)`. This
 2. Explicit user input
 3. Configured secrets/integrations
 
-**Example:** User asks "Check disk space on cube" → First call `knowledge_search("cube server")` to find the hostname/IP, THEN spawn worker with that information.
+**Example:** User asks "Check disk space on prod-web" → First call `knowledge_search("prod-web server")` to find the hostname/IP, THEN spawn worker with that information.
 
 ## Response Style
 
