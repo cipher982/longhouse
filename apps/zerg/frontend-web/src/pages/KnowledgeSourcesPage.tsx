@@ -6,6 +6,7 @@ import {
 } from "../hooks/useKnowledgeSources";
 import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
+import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
 import "../styles/knowledge-sources.css";
 
 export default function KnowledgeSourcesPage() {
@@ -80,17 +81,21 @@ export default function KnowledgeSourcesPage() {
             </p>
           </div>
         ) : (
-          <div className="runners-grid">
-            {sources?.map((source) => (
-              <KnowledgeSourceCard
-                key={source.id}
-                source={source}
-                onSync={handleSync}
-                onDelete={handleDelete}
-                isSyncing={syncingIds.has(source.id)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="runners-grid">
+              {sources?.map((source) => (
+                <KnowledgeSourceCard
+                  key={source.id}
+                  source={source}
+                  onSync={handleSync}
+                  onDelete={handleDelete}
+                  isSyncing={syncingIds.has(source.id)}
+                />
+              ))}
+            </div>
+            {/* V1.1: Search panel to verify synced content */}
+            <KnowledgeSearchPanel />
+          </>
         )}
       </div>
 
