@@ -84,8 +84,9 @@ export function useSyncKnowledgeSource() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => syncKnowledgeSource(id),
-    onSuccess: () => {
-      toast.success("Sync started");
+    onSuccess: (data) => {
+      const statusMsg = data.sync_status === "success" ? "Sync complete" : "Sync finished";
+      toast.success(statusMsg);
       queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] });
     },
     onError: (error: Error) => {
@@ -98,10 +99,11 @@ export function useSyncKnowledgeSource() {
 // GitHub Repos Hooks
 // ---------------------------------------------------------------------------
 
-export function useGitHubRepos(page: number = 1, perPage: number = 30) {
+export function useGitHubRepos(page: number = 1, perPage: number = 30, enabled: boolean = true) {
   return useQuery<GitHubReposResponse>({
     queryKey: ["github-repos", page, perPage],
     queryFn: () => fetchGitHubRepos(page, perPage),
+    enabled,
   });
 }
 
