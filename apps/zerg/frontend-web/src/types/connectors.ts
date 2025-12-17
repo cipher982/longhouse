@@ -14,10 +14,11 @@ export interface ConnectorStatus {
   type: string;
   name: string;
   description: string;
-  category: "notifications" | "project_management";
+  category: "notifications" | "project_management" | "infrastructure";
   icon: string;
   docs_url: string;
   fields: CredentialField[];
+  enabled_tools: string[];
   configured: boolean;
   display_name: string | null;
   test_status: "untested" | "success" | "failed";
@@ -54,7 +55,7 @@ export interface AccountConnectorStatus extends ConnectorStatus {
   // Same fields as ConnectorStatus - account-level credentials
 }
 
-export type ConnectorCategory = "notifications" | "project_management";
+export type ConnectorCategory = "notifications" | "project_management" | "infrastructure";
 
 // Connector type identifiers
 export type ConnectorType =
@@ -66,7 +67,8 @@ export type ConnectorType =
   | "jira"
   | "linear"
   | "notion"
-  | "imessage";
+  | "imessage"
+  | "ssh";
 
 // Icon mapping for connectors (Lucide icon names)
 export const CONNECTOR_ICONS: Record<string, string> = {
@@ -79,4 +81,5 @@ export const CONNECTOR_ICONS: Record<string, string> = {
   linear: "layout",
   notion: "file-text",
   imessage: "message-circle",
+  ssh: "terminal",
 };

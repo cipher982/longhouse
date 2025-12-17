@@ -3,6 +3,7 @@
  * Supports both OAuth flow and manual credential entry.
  */
 
+import { useState } from "react";
 import type { ConnectorStatus, AccountConnectorStatus } from "../../types/connectors";
 
 // Connectors that support OAuth flow
@@ -32,6 +33,8 @@ export function ConnectorCard({
   isTesting,
   isOAuthPending,
 }: ConnectorCardProps) {
+  const [showTools, setShowTools] = useState(false);
+
   const statusClass = connector.configured
     ? connector.test_status === "success"
       ? "status-success"
@@ -50,6 +53,7 @@ export function ConnectorCard({
 
   const connectedViaOAuth = connector.metadata?.connected_via === "oauth";
   const supportsOAuth = isOAuthConnector(connector.type);
+  const enabledTools = connector.enabled_tools || [];
 
   return (
     <div className={`connector-card ${statusClass}`}>
@@ -72,6 +76,30 @@ export function ConnectorCard({
                 {String(value)}
               </span>
             ))}
+        </div>
+      )}
+
+      {/* Tool Access Disclosure */}
+      {enabledTools.length > 0 && (
+        <div className="connector-tools">
+          <button
+            type="button"
+            className="tools-toggle"
+            onClick={() => setShowTools(!showTools)}
+          >
+            <span className="tools-icon">🔧</span>
+            <span>{enabledTools.length} tool{enabledTools.length !== 1 ? "s" : ""} enabled</span>
+            <span className={`tools-chevron ${showTools ? "open" : ""}`}>▶</span>
+          </button>
+          {showTools && (
+            <ul className="tools-list">
+              {enabledTools.map((tool) => (
+                <li key={tool} className="tool-item">
+                  <code>{tool}</code>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

@@ -129,6 +129,7 @@ def list_agent_connectors(
                 icon=definition["icon"],
                 docs_url=definition["docs_url"],
                 fields=fields,
+                enabled_tools=definition.get("enabled_tools", []),
                 configured=cred is not None,
                 display_name=cred.display_name if cred else None,
                 test_status=cred.test_status if cred else "untested",

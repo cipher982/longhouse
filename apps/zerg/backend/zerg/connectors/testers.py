@@ -51,6 +51,7 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
         ConnectorType.LINEAR: _test_linear,
         ConnectorType.NOTION: _test_notion,
         ConnectorType.IMESSAGE: _test_imessage,
+        ConnectorType.SSH: _test_ssh,
     }
 
     tester = testers.get(connector_type)
@@ -384,4 +385,64 @@ def _test_imessage(creds: dict[str, Any]) -> dict[str, Any]:
         "success": True,
         "message": "iMessage configured (requires macOS host at runtime)",
         "metadata": {"enabled": True},
+    }
+
+
+def _test_ssh(creds: dict[str, Any]) -> dict[str, Any]:
+    """Validate SSH target configuration.
+
+    SSH connectivity can only be tested from a runner that has SSH access
+    to the target. This tester validates the configuration format and
+    returns success if the config looks valid.
+
+    Actual SSH connectivity testing requires:
+    1. An online runner with SSH access to the target
+    2. Using runner_ssh_exec to test the connection
+
+    The frontend can optionally trigger a live test by dispatching a simple
+    command (e.g., 'echo ok') via runner_ssh_exec after the config is saved.
+    """
+    name = creds.get("name")
+    host = creds.get("host")
+    ssh_config_name = creds.get("ssh_config_name")
+
+    if not name:
+        return {"success": False, "message": "Missing target name"}
+
+    # Either host or ssh_config_name must be provided
+    if not host and not ssh_config_name:
+        return {"success": False, "message": "Missing host or ssh_config_name"}
+
+    # Validate host format if provided
+    if host:
+        # Basic host validation - not empty, no whitespace, no obvious issues
+        host = host.strip()
+        if not host or " " in host:
+            return {"success": False, "message": "Invalid host format"}
+
+    # Validate port if provided
+    port = creds.get("port")
+    if port:
+        try:
+            port_num = int(port)
+            if port_num < 1 or port_num > 65535:
+                return {"success": False, "message": "Port must be between 1 and 65535"}
+        except ValueError:
+            return {"success": False, "message": "Port must be a number"}
+
+    # Build metadata
+    metadata: dict[str, Any] = {"name": name}
+    if host:
+        metadata["host"] = host
+    if ssh_config_name:
+        metadata["ssh_config_name"] = ssh_config_name
+    if creds.get("user"):
+        metadata["user"] = creds["user"]
+    if port:
+        metadata["port"] = int(port)
+
+    return {
+        "success": True,
+        "message": f"SSH target '{name}' configured (test connectivity via runner)",
+        "metadata": metadata,
     }

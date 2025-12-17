@@ -25,6 +25,7 @@ class ConnectorType(str, Enum):
     LINEAR = "linear"
     NOTION = "notion"
     IMESSAGE = "imessage"
+    SSH = "ssh"
 
 
 class CredentialField(TypedDict):
@@ -37,16 +38,17 @@ class CredentialField(TypedDict):
     required: bool  # Whether the field is required
 
 
-class ConnectorDefinition(TypedDict):
+class ConnectorDefinition(TypedDict, total=False):
     """Full definition of a connector type."""
 
     type: ConnectorType
     name: str  # Display name
     description: str  # Short description
-    category: str  # 'notifications' or 'project_management'
+    category: str  # 'notifications', 'project_management', or 'infrastructure'
     icon: str  # Emoji icon
     docs_url: str  # URL to setup documentation
     fields: List[CredentialField]  # Required credential fields
+    enabled_tools: List[str]  # Tools enabled by this connector (optional)
 
 
 CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
@@ -66,6 +68,7 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             }
         ],
+        "enabled_tools": ["send_slack_message"],
     },
     ConnectorType.DISCORD: {
         "type": ConnectorType.DISCORD,
@@ -83,6 +86,7 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             }
         ],
+        "enabled_tools": ["send_discord_message"],
     },
     ConnectorType.EMAIL: {
         "type": ConnectorType.EMAIL,
@@ -107,6 +111,7 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             },
         ],
+        "enabled_tools": ["send_email"],
     },
     ConnectorType.SMS: {
         "type": ConnectorType.SMS,
@@ -138,6 +143,7 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             },
         ],
+        "enabled_tools": ["send_sms"],
     },
     ConnectorType.GITHUB: {
         "type": ConnectorType.GITHUB,
@@ -154,6 +160,14 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "placeholder": "ghp_... or github_pat_...",
                 "required": True,
             }
+        ],
+        "enabled_tools": [
+            "github_create_issue",
+            "github_list_issues",
+            "github_get_issue",
+            "github_add_comment",
+            "github_list_pull_requests",
+            "github_get_pull_request",
         ],
     },
     ConnectorType.JIRA: {
@@ -186,6 +200,14 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             },
         ],
+        "enabled_tools": [
+            "jira_create_issue",
+            "jira_list_issues",
+            "jira_get_issue",
+            "jira_add_comment",
+            "jira_transition_issue",
+            "jira_update_issue",
+        ],
     },
     ConnectorType.LINEAR: {
         "type": ConnectorType.LINEAR,
@@ -202,6 +224,14 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "placeholder": "lin_api_...",
                 "required": True,
             }
+        ],
+        "enabled_tools": [
+            "linear_create_issue",
+            "linear_list_issues",
+            "linear_get_issue",
+            "linear_update_issue",
+            "linear_add_comment",
+            "linear_list_teams",
         ],
     },
     ConnectorType.NOTION: {
@@ -220,6 +250,14 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             }
         ],
+        "enabled_tools": [
+            "notion_create_page",
+            "notion_get_page",
+            "notion_update_page",
+            "notion_search",
+            "notion_query_database",
+            "notion_append_blocks",
+        ],
     },
     ConnectorType.IMESSAGE: {
         "type": ConnectorType.IMESSAGE,
@@ -237,6 +275,53 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "required": True,
             }
         ],
+        "enabled_tools": ["send_imessage"],
+    },
+    ConnectorType.SSH: {
+        "type": ConnectorType.SSH,
+        "name": "SSH Target",
+        "description": "Configure SSH targets for remote command execution via runners",
+        "category": "infrastructure",
+        "icon": "terminal",
+        "docs_url": "https://docs.swarmlet.com/connectors/ssh",
+        "fields": [
+            {
+                "key": "name",
+                "label": "Target Name",
+                "type": "text",
+                "placeholder": "prod-web-1",
+                "required": True,
+            },
+            {
+                "key": "host",
+                "label": "Host",
+                "type": "text",
+                "placeholder": "192.168.1.100 or server.example.com",
+                "required": True,
+            },
+            {
+                "key": "user",
+                "label": "Username",
+                "type": "text",
+                "placeholder": "deploy (optional, uses runner's SSH config)",
+                "required": False,
+            },
+            {
+                "key": "port",
+                "label": "Port",
+                "type": "text",
+                "placeholder": "22",
+                "required": False,
+            },
+            {
+                "key": "ssh_config_name",
+                "label": "SSH Config Name",
+                "type": "text",
+                "placeholder": "Optional: use name from ~/.ssh/config",
+                "required": False,
+            },
+        ],
+        "enabled_tools": ["runner_ssh_exec", "ssh_target_list"],
     },
 }
 

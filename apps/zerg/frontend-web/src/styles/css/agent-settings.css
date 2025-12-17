@@ -810,4 +810,268 @@
     color: var(--color-text-muted);
     border: 1px solid var(--color-border-muted);
   }
+
+  /* ------------------------------------------------------------------
+   Integrations Info Box
+   ------------------------------------------------------------------ */
+
+  .integrations-info-box {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    padding: var(--space-4);
+    background: linear-gradient(
+      135deg,
+      rgb(99 102 241 / 5%) 0%,
+      rgb(139 92 246 / 5%) 100%
+    );
+    border: 1px solid rgb(99 102 241 / 15%);
+    border-radius: var(--radius-md);
+  }
+
+  .info-box-icon {
+    font-size: 1.25rem;
+    flex-shrink: 0;
+  }
+
+  .info-box-content {
+    flex: 1;
+  }
+
+  .info-box-content strong {
+    display: block;
+    margin-bottom: var(--space-1);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .info-box-content p {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+  }
+
+  /* ------------------------------------------------------------------
+   Connector Card Styles
+   ------------------------------------------------------------------ */
+
+  .connector-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .connector-card {
+    background: var(--color-surface-elevated);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .connector-card:hover {
+    border-color: var(--color-border-primary);
+  }
+
+  .connector-card.status-success {
+    border-left: 3px solid var(--color-intent-success);
+  }
+
+  .connector-card.status-failed {
+    border-left: 3px solid var(--color-intent-error);
+  }
+
+  .connector-card.status-untested {
+    border-left: 3px solid var(--color-intent-warning);
+  }
+
+  .connector-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .connector-name {
+    font-weight: 600;
+    font-size: var(--font-size-base);
+    color: var(--color-text-primary);
+  }
+
+  .connector-status {
+    font-size: var(--font-size-xs);
+    font-weight: 500;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .connector-status.status-success {
+    background: var(--color-intent-success-muted, rgb(16 185 129 / 15%));
+    color: var(--color-intent-success);
+  }
+
+  .connector-status.status-failed {
+    background: var(--color-intent-error-muted, rgb(239 68 68 / 15%));
+    color: var(--color-intent-error);
+  }
+
+  .connector-status.status-untested {
+    background: var(--color-intent-warning-muted, rgb(245 158 11 / 15%));
+    color: var(--color-intent-warning);
+  }
+
+  .connector-status.status-unconfigured {
+    background: var(--color-surface-overlay);
+    color: var(--color-text-muted);
+  }
+
+  .connector-display-name {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .connector-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .metadata-item {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    background: var(--color-surface-tertiary);
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+  }
+
+  /* Tool Access Disclosure */
+  .connector-tools {
+    border-top: 1px solid var(--color-border-muted);
+    padding-top: var(--space-3);
+  }
+
+  .tools-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2);
+    background: none;
+    border: none;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background-color 0.2s ease;
+  }
+
+  .tools-toggle:hover {
+    background: var(--color-surface-tertiary);
+  }
+
+  .tools-icon {
+    font-size: 0.875rem;
+  }
+
+  .tools-chevron {
+    margin-left: auto;
+    font-size: 0.625rem;
+    transition: transform 0.2s ease;
+  }
+
+  .tools-chevron.open {
+    transform: rotate(90deg);
+  }
+
+  .tools-list {
+    list-style: none;
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .tool-item {
+    font-size: var(--font-size-xs);
+  }
+
+  .tool-item code {
+    background: var(--color-surface-tertiary);
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-family-mono);
+    color: var(--color-text-secondary);
+  }
+
+  .connector-card-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: auto;
+  }
+
+  .connector-card-actions button {
+    flex: 1;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+  }
+
+  .connector-card-actions .btn-primary {
+    background: var(--color-brand-primary);
+    color: white;
+    border: none;
+  }
+
+  .connector-card-actions .btn-primary:hover:not(:disabled) {
+    background: var(--color-brand-primary-hover);
+  }
+
+  .connector-card-actions .btn-secondary {
+    background: var(--color-surface-tertiary);
+    color: var(--color-text-primary);
+    border: 1px solid var(--color-border-muted);
+  }
+
+  .connector-card-actions .btn-secondary:hover:not(:disabled) {
+    background: var(--color-surface-elevated);
+    border-color: var(--color-border-primary);
+  }
+
+  .connector-card-actions .btn-tertiary {
+    background: none;
+    color: var(--color-text-secondary);
+    border: none;
+  }
+
+  .connector-card-actions .btn-tertiary:hover:not(:disabled) {
+    color: var(--color-text-primary);
+    background: var(--color-surface-tertiary);
+  }
+
+  .connector-card-actions .btn-danger {
+    background: none;
+    color: var(--color-intent-error);
+    border: none;
+  }
+
+  .connector-card-actions .btn-danger:hover:not(:disabled) {
+    background: var(--color-intent-error-muted, rgb(239 68 68 / 15%));
+  }
+
+  .connector-card-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }

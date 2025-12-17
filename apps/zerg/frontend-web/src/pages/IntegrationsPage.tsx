@@ -104,6 +104,7 @@ export default function IntegrationsPage() {
   // Group connectors by category
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
+  const infrastructure = connectors?.filter((c) => c.category === "infrastructure") ?? [];
 
   if (error) {
     return (
@@ -123,8 +124,18 @@ export default function IntegrationsPage() {
           <h2>Integrations</h2>
           <p className="integrations-description">
             Configure credentials for external services. These integrations are shared across all your agents.
-            Individual agents can override these settings if needed.
           </p>
+          <div className="integrations-info-box">
+            <div className="info-box-icon">💡</div>
+            <div className="info-box-content">
+              <strong>Credential Hierarchy</strong>
+              <p>
+                Account-level credentials configured here are used by all your agents by default.
+                You can override specific credentials per-agent in the agent's settings if needed
+                (e.g., different GitHub tokens for personal vs. work projects).
+              </p>
+            </div>
+          </div>
         </div>
 
         {isLoading ? (
@@ -172,6 +183,28 @@ export default function IntegrationsPage() {
                 ))}
               </div>
             </div>
+
+            {infrastructure.length > 0 && (
+              <div className="connector-group">
+                <h3>Infrastructure</h3>
+                <p className="section-description">
+                  Configure SSH targets for remote command execution via runners.
+                  Runners use your local SSH config to access these targets.
+                </p>
+                <div className="connector-cards">
+                  {infrastructure.map((connector) => (
+                    <ConnectorCard
+                      key={connector.type}
+                      connector={connector}
+                      onConfigure={() => openConfigModal(connector)}
+                      onTest={() => handleTest(connector)}
+                      onDelete={() => handleDelete(connector)}
+                      isTesting={testConnector.isPending}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

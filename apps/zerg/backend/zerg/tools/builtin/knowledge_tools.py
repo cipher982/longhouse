@@ -48,17 +48,28 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
         ]
     """
     from zerg.context import get_worker_context
+    from zerg.connectors.context import get_credential_resolver
     from zerg.crud import knowledge_crud
     from zerg.database import db_session
 
-    # Get current user from worker context (V1.1: fixed context resolution)
-    ctx = get_worker_context()
-    if ctx is None or ctx.owner_id is None:
-        return [{
-            "error": "No user context available. knowledge_search requires authenticated worker context."
-        }]
+    # Get current user from execution context (V1.1: supports both Worker and Supervisor)
+    # Priority: WorkerContext > CredentialResolver (set by AgentRunner for all runs)
+    owner_id = None
 
-    owner_id = ctx.owner_id
+    # Try WorkerContext first (set by WorkerRunner)
+    ctx = get_worker_context()
+    if ctx is not None and ctx.owner_id is not None:
+        owner_id = ctx.owner_id
+    else:
+        # Fall back to CredentialResolver (set by AgentRunner for Supervisor runs)
+        resolver = get_credential_resolver()
+        if resolver is not None and resolver.owner_id is not None:
+            owner_id = resolver.owner_id
+
+    if owner_id is None:
+        return [{
+            "error": "No user context available. knowledge_search requires authenticated execution context."
+        }]
 
     # Search documents
     with db_session() as db:

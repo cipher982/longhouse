@@ -1,294 +1,372 @@
-"""SSH-related tools for remote command execution.
+"""SSH execution tools via runners.
 
-This tool enables worker agents to execute commands on remote infrastructure servers.
-It implements the "shell-first philosophy" where SSH access is the primitive for
-remote operations, rather than modeling each command as a separate tool.
+This module provides tools for executing commands on SSH targets that are
+configured as account-level connectors. Commands are dispatched to a runner
+which has access to the SSH targets via its local SSH config or keys.
 
-Security:
-- Host allowlist enforced (cube, clifford, zerg, slim)
-- SSH key authentication only (no password auth)
-- Timeout protection to prevent hanging connections
+Architecture:
+- SSH targets are configured as AccountConnectorCredential with type="ssh"
+- When runner_ssh_exec is called, it resolves the target from the credential
+- The actual SSH execution happens on the runner (uses runner's SSH access)
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
-import subprocess
-import time
-from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
 
 from langchain_core.tools import StructuredTool
 
+from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.registry import ConnectorType
+from zerg.context import get_worker_context
+from zerg.crud import runner_crud
+from zerg.database import get_db
+from zerg.models.models import AccountConnectorCredential
+from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
+from zerg.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
 
-# Allowed SSH hosts with their default configurations
-ALLOWED_HOSTS = {
-    # Tailnet/private IPs align with ~/.ssh/config on the host
-    "cube": {"user": "drose", "host": "100.104.187.47", "port": "2222"},
-    "clifford": {"user": "drose", "host": "5.161.97.53", "port": "22"},
-    "zerg": {"user": "zerg", "host": "100.120.197.80", "port": "22"},
-    "slim": {"user": "drose", "host": "100.119.163.83", "port": "22"},
-}
 
-# Maximum output size before truncation (10KB)
-MAX_OUTPUT_SIZE = 10 * 1024
+def _run_coro_sync(coro: Any) -> Dict[str, Any]:
+    """Run an async coroutine from a sync context."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(coro)).result()
 
 
-def _parse_host(host: str) -> tuple[str, str, str] | None:
-    """Parse host string into (user, hostname, port).
-
-    Supports formats:
-    - "cube", "clifford", "zerg", "slim" (known hosts)
-    - "user@hostname" (custom format)
+def _resolve_ssh_target(owner_id: int, target: str, db: Any) -> dict[str, Any] | None:
+    """Resolve SSH target name to connection details from AccountConnectorCredential.
 
     Args:
-        host: Host identifier or user@hostname format
+        owner_id: User ID
+        target: SSH target name (e.g., "prod-web-1")
+        db: Database session
 
     Returns:
-        Tuple of (user, hostname, port) or None if invalid
+        Dict with SSH connection details or None if not found
     """
-    # Check if it's a known host alias
-    if host in ALLOWED_HOSTS:
-        config = ALLOWED_HOSTS[host]
-        return (config["user"], config["host"], config["port"])
+    import json
 
-    # Parse custom user@hostname format
-    if "@" in host:
-        parts = host.split("@")
-        if len(parts) == 2:
-            user, hostname = parts
-            if user and hostname:
-                return (user, hostname, "22")
+    # Query all SSH credentials for this owner
+    ssh_creds = (
+        db.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == owner_id,
+            AccountConnectorCredential.connector_type == ConnectorType.SSH.value,
+        )
+        .all()
+    )
+
+    # Find credential with matching name
+    for cred in ssh_creds:
+        try:
+            decrypted = decrypt(cred.encrypted_value)
+            cred_data = json.loads(decrypted)
+            if cred_data.get("name") == target:
+                return cred_data
+        except Exception as e:
+            logger.warning(f"Failed to decrypt SSH credential {cred.id}: {e}")
+            continue
 
     return None
 
 
-def ssh_exec(
-    host: str,
-    command: str,
-    timeout_secs: int = 30,
-) -> Dict[str, Any]:
-    """Execute a command on a remote server via SSH.
-
-    This tool enables worker agents to run commands on infrastructure servers.
-    Workers already know how to use standard Unix tools (df, docker, journalctl, etc.)
-    - this gives them the primitive to access remote systems.
-
-    Allowed hosts (by alias):
-    - cube: Home GPU server (AI workloads, cameras)
-    - clifford: Production VPS (90% of web apps)
-    - zerg: Project server (dedicated workloads)
-    - slim: EU VPS (cost-effective workloads)
-
-    You can also use custom "user@hostname" format for flexibility.
-
-    Security notes:
-    - Only allowlisted hosts (cube, clifford, zerg, slim) are accessible
-    - Uses SSH key authentication via ~/.ssh/id_ed25519 (rosetta key)
-    - Commands have timeout protection
-    - Output is truncated if > 10KB to prevent token explosion
+def _find_online_runner(owner_id: int, db: Any) -> tuple[int, str] | None:
+    """Find an online runner for the user.
 
     Args:
-        host: Server alias ("cube", "clifford", "zerg", "slim") or "user@hostname"
-        command: Shell command to execute remotely
-        timeout_secs: Maximum seconds to wait before killing the command (default: 30)
+        owner_id: User ID
+        db: Database session
+
+    Returns:
+        Tuple of (runner_id, runner_name) or None if no online runner
+    """
+    runners = runner_crud.get_runners(db=db, owner_id=owner_id, limit=100)
+    for runner in runners:
+        if runner.status == "online":
+            return (runner.id, runner.name)
+    return None
+
+
+def runner_ssh_exec(
+    target: str,
+    command: str,
+    runner: str | None = None,
+    timeout_secs: int = 30,
+) -> Dict[str, Any]:
+    """Execute a command on an SSH target via a runner.
+
+    SSH targets are configured in your account settings. The command is
+    dispatched to a runner which executes it on the target using SSH.
+
+    Args:
+        target: SSH target name (e.g., "prod-web-1") as configured in account settings
+        command: Shell command to execute on the SSH target
+        runner: Optional runner name/ID to use. If not specified, uses first online runner.
+        timeout_secs: Maximum seconds to wait (default: 30)
 
     Returns:
         Success envelope with:
-        - host: The host that was connected to
-        - command: The command that was executed
-        - exit_code: Command exit code (0 = success, non-zero = failure)
-        - stdout: Standard output from command
-        - stderr: Standard error from command
+        - target: SSH target name
+        - command: Command that was executed
+        - exit_code: Command exit code (0 = success)
+        - stdout: Standard output
+        - stderr: Standard error
         - duration_ms: Execution time in milliseconds
+        - runner: Name of runner that executed the command
 
-        Or error envelope for actual failures (timeout, connection failure, invalid host)
+        Or error envelope for:
+        - SSH target not found (not configured)
+        - No online runner available
+        - SSH connection failed
+        - Timeout
+        - Command execution error
 
     Example:
-        >>> ssh_exec("cube", "docker ps")
+        >>> runner_ssh_exec("prod-web-1", "df -h")
         {
             "ok": True,
             "data": {
-                "host": "cube",
-                "command": "docker ps",
+                "target": "prod-web-1",
+                "command": "df -h",
                 "exit_code": 0,
-                "stdout": "CONTAINER ID   IMAGE...",
+                "stdout": "Filesystem      Size  Used...",
                 "stderr": "",
-                "duration_ms": 1234
+                "duration_ms": 1234,
+                "runner": "my-laptop"
             }
         }
 
-        >>> ssh_exec("cube", "docker ps | grep nonexistent")
-        {
-            "ok": True,
-            "data": {
-                "host": "cube",
-                "command": "docker ps | grep nonexistent",
-                "exit_code": 1,
-                "stdout": "",
-                "stderr": "",
-                "duration_ms": 456
-            }
-        }
-
-    Note: Non-zero exit codes are NOT errors - they indicate the command ran
-    but returned a failure code. Only connection/timeout failures are errors.
+    Note: The runner must have SSH access to the target (via its ~/.ssh/config,
+    SSH agent, or key files). SSH keys are NOT stored in Swarmlet.
     """
-    try:
-        # Validate host parameter
-        if not host:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "host parameter is required",
-            )
-
-        # Validate command parameter
-        if not command:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "command parameter is required",
-            )
-
-        # Parse and validate host
-        parsed = _parse_host(host)
-        if not parsed:
-            allowed = ", ".join(ALLOWED_HOSTS.keys())
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                f"Unknown host: {host}. Allowed: {allowed}, or use 'user@hostname' format.",
-            )
-
-        user, hostname, port = parsed
-
-        # Pick an SSH key: prefer id_ed25519, fall back to "rosetta" if present
-        home_dir = Path(subprocess.os.path.expanduser("~"))
-        id_key = home_dir / ".ssh" / "id_ed25519"
-        rosetta_key = home_dir / ".ssh" / "rosetta"
-        key_path = None
-        if id_key.exists():
-            key_path = id_key
-        elif rosetta_key.exists():
-            key_path = rosetta_key
-
-        # Construct SSH command
-        # -o StrictHostKeyChecking=no: Don't prompt for host key verification
-        # -o ConnectTimeout=5: Fail fast if connection hangs
-        # -o UserKnownHostsFile=/tmp/...: container root is read-only in prod; avoid ~/.ssh writes
-        ssh_cmd = [
-            "ssh",
-            "-F",
-            "/dev/null",  # ignore host config files (avoids macOS-only directives)
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=5",
-            "-o",
-            "UserKnownHostsFile=/tmp/zerg_known_hosts",
-            "-o",
-            "GlobalKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-p",
-            port,
-        ]
-
-        if key_path:
-            ssh_cmd.extend(["-i", str(key_path)])
-        else:
-            logger.warning("SSH key not found; relying on default SSH agent/keys")
-
-        ssh_cmd.extend([f"{user}@{hostname}", command])
-
-        logger.info(f"Executing SSH command on {host}: {command}")
-        start_time = time.time()
-
-        # Execute command with timeout
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_secs,
+    # Get worker context for owner_id
+    ctx = get_worker_context()
+    if not ctx or ctx.owner_id is None:
+        return tool_error(
+            ErrorType.VALIDATION_ERROR,
+            "runner_ssh_exec requires worker context with owner_id",
         )
 
-        duration_ms = int((time.time() - start_time) * 1000)
+    owner_id = ctx.owner_id
+    worker_id = ctx.worker_id
+    run_id = ctx.run_id
 
-        # Get stdout/stderr and truncate if necessary
-        stdout = result.stdout
-        stderr = result.stderr
+    # Validate parameters
+    if not target:
+        return tool_error(ErrorType.VALIDATION_ERROR, "target parameter is required")
 
-        if len(stdout) > MAX_OUTPUT_SIZE:
-            stdout = stdout[:MAX_OUTPUT_SIZE] + "\n... [stdout truncated]"
+    if not command:
+        return tool_error(ErrorType.VALIDATION_ERROR, "command parameter is required")
 
-        if len(stderr) > MAX_OUTPUT_SIZE:
-            stderr = stderr[:MAX_OUTPUT_SIZE] + "\n... [stderr truncated]"
+    if timeout_secs <= 0:
+        return tool_error(
+            ErrorType.VALIDATION_ERROR,
+            "timeout_secs must be positive",
+        )
 
-        # SSH uses exit code 255 for connection-level failures. Treat these as errors so
-        # workers can fail-fast and report actionable setup issues (keys, host reachability, etc).
-        if result.returncode == 255:
-            detail = (stderr or stdout or "").strip()
-            msg = f"SSH connection failed to {host}"
-            if detail:
-                msg = f"{msg}: {detail}"
-            return tool_error(ErrorType.EXECUTION_ERROR, msg)
+    db = next(get_db())
+    try:
+        # Resolve SSH target from account credentials
+        ssh_config = _resolve_ssh_target(owner_id, target, db)
+        if not ssh_config:
+            return tool_error(
+                ErrorType.VALIDATION_ERROR,
+                f"SSH target '{target}' not found. Configure it in Settings → Integrations → SSH.",
+            )
 
-        # Return success envelope even for non-zero exit codes
-        # (non-zero exit code means command ran but failed, not a connection error)
+        # Find a runner to use
+        if runner:
+            # Specific runner requested
+            if runner.startswith("runner:"):
+                runner_id = int(runner.split(":")[1])
+                runner_record = runner_crud.get_runner(db, runner_id)
+            else:
+                runner_record = runner_crud.get_runner_by_name(db, owner_id, runner)
+
+            if not runner_record or runner_record.owner_id != owner_id:
+                return tool_error(
+                    ErrorType.VALIDATION_ERROR,
+                    f"Runner '{runner}' not found",
+                )
+            if runner_record.status != "online":
+                return tool_error(
+                    ErrorType.EXECUTION_ERROR,
+                    f"Runner '{runner_record.name}' is {runner_record.status}",
+                )
+            runner_id = runner_record.id
+            runner_name = runner_record.name
+        else:
+            # Use first online runner
+            result = _find_online_runner(owner_id, db)
+            if not result:
+                return tool_error(
+                    ErrorType.EXECUTION_ERROR,
+                    "No online runners available. Connect a runner first.",
+                )
+            runner_id, runner_name = result
+
+        # Build SSH command for the runner
+        # The runner will execute this via its local SSH
+        ssh_host = ssh_config.get("ssh_config_name") or ssh_config.get("host")
+        ssh_user = ssh_config.get("user")
+        ssh_port = ssh_config.get("port", 22)
+
+        # Build the SSH command
+        ssh_parts = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+        if ssh_port and ssh_port != 22:
+            ssh_parts.extend(["-p", str(ssh_port)])
+        if ssh_user:
+            ssh_parts.append(f"{ssh_user}@{ssh_host}")
+        else:
+            ssh_parts.append(ssh_host)
+
+        # Add the command
+        ssh_parts.append(command)
+
+        # Join into full command
+        ssh_command = " ".join(ssh_parts)
+
+        # Dispatch to runner
+        dispatcher = get_runner_job_dispatcher()
+        result = _run_coro_sync(
+            dispatcher.dispatch_job(
+                db=db,
+                owner_id=owner_id,
+                runner_id=runner_id,
+                command=ssh_command,
+                timeout_secs=timeout_secs,
+                worker_id=worker_id,
+                run_id=run_id,
+            )
+        )
+
+        # Check if result is an error
+        if not result.get("ok"):
+            error = result.get("error", {})
+            error_message = error.get("message", "Unknown error")
+            return tool_error(
+                ErrorType.EXECUTION_ERROR,
+                f"SSH execution failed: {error_message}",
+            )
+
+        # Transform result
+        data = result.get("data", {})
         return tool_success({
-            "host": host,
+            "target": target,
             "command": command,
-            "exit_code": result.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-            "duration_ms": duration_ms,
+            "exit_code": data.get("exit_code", -1),
+            "stdout": data.get("stdout", ""),
+            "stderr": data.get("stderr", ""),
+            "duration_ms": data.get("duration_ms", 0),
+            "runner": runner_name,
         })
 
-    except subprocess.TimeoutExpired:
-        logger.error(f"SSH command timeout after {timeout_secs}s on {host}: {command}")
-        return tool_error(
-            ErrorType.EXECUTION_ERROR,
-            f"Command timed out after {timeout_secs} seconds",
-        )
-
-    except subprocess.CalledProcessError as e:
-        # This shouldn't happen with subprocess.run (it doesn't raise by default)
-        # but include for completeness
-        logger.error(f"SSH command failed on {host}: {e}")
-        return tool_error(
-            ErrorType.EXECUTION_ERROR,
-            f"SSH command failed: {str(e)}",
-        )
-
-    except FileNotFoundError:
-        logger.error("SSH binary not found in PATH")
-        return tool_error(
-            ErrorType.EXECUTION_ERROR,
-            "SSH client not found. Ensure OpenSSH is installed.",
-        )
-
     except Exception as e:
-        logger.exception(f"Unexpected error executing SSH command on {host}")
+        logger.exception(f"Error executing SSH command on target {target}")
         return tool_error(
             ErrorType.EXECUTION_ERROR,
             f"Unexpected error: {str(e)}",
         )
+    finally:
+        db.close()
+
+
+def ssh_target_list() -> Dict[str, Any]:
+    """List configured SSH targets for the current user.
+
+    Returns all SSH targets configured in account settings.
+    Use this to see what SSH targets are available for runner_ssh_exec.
+
+    Returns:
+        Success envelope with:
+        - targets: List of SSH target configurations (name, host, user, etc.)
+
+    Example:
+        >>> ssh_target_list()
+        {
+            "ok": True,
+            "data": {
+                "targets": [
+                    {"name": "prod-web-1", "host": "192.168.1.10", "user": "deploy"},
+                    {"name": "staging", "ssh_config_name": "staging-server"}
+                ]
+            }
+        }
+    """
+    import json
+
+    resolver = get_credential_resolver()
+    if not resolver:
+        return tool_error(
+            ErrorType.EXECUTION_ERROR,
+            "No credential context available",
+        )
+
+    db = resolver.db
+    owner_id = resolver.owner_id
+
+    # Query all SSH credentials for this owner
+    ssh_creds = (
+        db.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == owner_id,
+            AccountConnectorCredential.connector_type == ConnectorType.SSH.value,
+        )
+        .all()
+    )
+
+    targets = []
+    for cred in ssh_creds:
+        try:
+            decrypted = decrypt(cred.encrypted_value)
+            cred_data = json.loads(decrypted)
+            # Include only non-sensitive info
+            target_info = {
+                "name": cred_data.get("name"),
+                "host": cred_data.get("host"),
+            }
+            if cred_data.get("user"):
+                target_info["user"] = cred_data["user"]
+            if cred_data.get("port"):
+                target_info["port"] = cred_data["port"]
+            if cred_data.get("ssh_config_name"):
+                target_info["ssh_config_name"] = cred_data["ssh_config_name"]
+            targets.append(target_info)
+        except Exception as e:
+            logger.warning(f"Failed to decrypt SSH credential {cred.id}: {e}")
+            continue
+
+    return tool_success({"targets": targets})
 
 
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
-        func=ssh_exec,
-        name="ssh_exec",
+        func=runner_ssh_exec,
+        name="runner_ssh_exec",
         description=(
-            "Execute a shell command on a remote infrastructure server via SSH. "
-            "Allowed hosts: cube (home GPU), clifford (production VPS), zerg (project server), slim (EU VPS). "
-            "Returns exit code, stdout, stderr, and duration. Non-zero exit codes are not errors - "
-            "they indicate the command ran but returned a failure code."
+            "Execute a shell command on an SSH target via a runner. "
+            "SSH targets are configured in Settings → Integrations. "
+            "The runner handles the SSH connection using its local SSH config/keys. "
+            "Use ssh_target_list to see available targets."
         ),
+    ),
+    StructuredTool.from_function(
+        func=ssh_target_list,
+        name="ssh_target_list",
+        description="List configured SSH targets available for runner_ssh_exec.",
     ),
 ]
