@@ -28,6 +28,8 @@ import httpx
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
+from zerg.connectors.github_api import GITHUB_API_BASE
+from zerg.connectors.github_api import github_headers
 from zerg.connectors.registry import ConnectorType
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import connector_not_configured_error
@@ -36,9 +38,6 @@ from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
-
-# GitHub API base URL
-GITHUB_API_BASE = "https://api.github.com"
 
 
 def _resolve_github_token(token: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
@@ -89,12 +88,7 @@ def _make_github_request(
             )
 
         url = f"{GITHUB_API_BASE}{endpoint}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "Zerg-Agent/1.0"
-        }
+        headers = github_headers(token)
 
         with httpx.Client() as client:
             response = client.request(
