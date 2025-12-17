@@ -1211,6 +1211,42 @@ def jarvis_history(
     )
 
 
+@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
+def jarvis_clear_history(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> None:
+    """Clear conversation history by creating a new Supervisor thread.
+
+    This creates a fresh thread for the user's Supervisor agent, effectively
+    clearing all conversation history. The old thread is preserved in the
+    database but no longer used.
+
+    Args:
+        db: Database session
+        current_user: Authenticated user
+    """
+    from zerg.services.supervisor_service import SupervisorService
+    from zerg.models.models import Agent
+
+    supervisor_service = SupervisorService(db)
+
+    # Get supervisor agent and current thread
+    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+    old_thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+
+    # Delete all messages from the thread (keeps thread, clears history)
+    from zerg.models.models import ThreadMessage
+
+    deleted_count = db.query(ThreadMessage).filter(
+        ThreadMessage.thread_id == old_thread.id,
+    ).delete()
+
+    db.commit()
+
+    logger.info(f"Jarvis history cleared: deleted {deleted_count} messages from thread {old_thread.id} for user {current_user.id}")
+
+
 # ---------------------------------------------------------------------------
 # BFF Proxy Endpoints
 # ---------------------------------------------------------------------------

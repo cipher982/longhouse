@@ -374,6 +374,25 @@ export class AppController {
     }
   }
 
+  /**
+   * Clear server-side conversation history
+   * Called when user clicks "Clear All"
+   */
+  async clearServerHistory(): Promise<void> {
+    if (!this.supervisorChatController) {
+      logger.warn('[AppController] Cannot clear server history - supervisor chat not initialized');
+      return;
+    }
+
+    try {
+      await this.supervisorChatController.clearHistory();
+      logger.info('[AppController] Server history cleared');
+    } catch (error) {
+      logger.error('[AppController] Failed to clear server history:', error);
+      throw error;
+    }
+  }
+
   // ================= PRIVATE HELPERS =================
 
   private setupVoiceListeners() {

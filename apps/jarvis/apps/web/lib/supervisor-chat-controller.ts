@@ -226,7 +226,7 @@ export class SupervisorChatController {
               const parsedData = JSON.parse(data);
               await this.handleSSEEvent(eventType || 'message', parsedData);
             } catch (error) {
-              logger.warn('[SupervisorChat] Failed to parse SSE data:', data, error);
+              logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
             }
           }
         }
@@ -240,7 +240,7 @@ export class SupervisorChatController {
    * Handle individual SSE events
    */
   private async handleSSEEvent(eventType: string, data: any): Promise<void> {
-    logger.debug('[SupervisorChat] SSE event:', eventType, data);
+    logger.debug('[SupervisorChat] SSE event:', { eventType, data });
 
     // Handle connected event separately
     if (eventType === 'connected') {
@@ -332,7 +332,7 @@ export class SupervisorChatController {
         break;
 
       default:
-        logger.debug('[SupervisorChat] Unknown SSE event type:', eventType, data);
+        logger.debug('[SupervisorChat] Unknown SSE event type:', { eventType, data });
     }
   }
 
@@ -349,6 +349,31 @@ export class SupervisorChatController {
     if (this.currentRunId) {
       eventBus.emit('supervisor:cleared', { timestamp: Date.now() });
       this.currentRunId = null;
+    }
+  }
+
+  /**
+   * Clear server-side conversation history
+   * Creates a new Supervisor thread, effectively clearing all history
+   */
+  async clearHistory(): Promise<void> {
+    try {
+      logger.info('[SupervisorChat] Clearing server-side history...');
+
+      const url = `${CONFIG.JARVIS_API_BASE}/history`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        credentials: 'include', // Cookie auth
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to clear history: ${response.status} ${response.statusText}`);
+      }
+
+      logger.info('[SupervisorChat] Server-side history cleared');
+    } catch (error) {
+      logger.error('[SupervisorChat] Failed to clear history:', error);
+      throw error;
     }
   }
 
