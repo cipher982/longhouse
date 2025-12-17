@@ -98,11 +98,11 @@ export function useWebSocket(
   const messageQueueRef = useRef<WebSocketMessage[]>([]);
   const connectRef = useRef<(() => void) | null>(null);
   const intentionalCloseRef = useRef(false);
-  const onMessageRef = useRef<typeof onMessage>();
-  const onConnectRef = useRef<typeof onConnect>();
-  const onDisconnectRef = useRef<typeof onDisconnect>();
-  const onErrorRef = useRef<typeof onError>();
-  const onStreamingMessageRef = useRef<typeof onStreamingMessage>();
+  const onMessageRef = useRef<typeof onMessage>(onMessage);
+  const onConnectRef = useRef<typeof onConnect>(onConnect);
+  const onDisconnectRef = useRef<typeof onDisconnect>(onDisconnect);
+  const onErrorRef = useRef<typeof onError>(onError);
+  const onStreamingMessageRef = useRef<typeof onStreamingMessage>(onStreamingMessage);
   const invalidateQueriesRef = useRef<(string | number | object)[][]>(invalidateQueries);
 
   useEffect(() => {
