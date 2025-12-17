@@ -1040,3 +1040,34 @@ class TestGitHubKnowledgeAPI:
 - **Multi-branch** - Sync multiple branches as separate doc sets
 - **Binary file extraction** - PDF/image content extraction
 - **GitLab / Bitbucket** - Same pattern, different API
+
+---
+
+## 12. Implementation Progress
+
+### Stage 1: Backend Foundation ✅
+
+- [x] Add `pathspec>=0.12.0` to pyproject.toml
+- [x] Create `zerg/connectors/github_api.py` - shared async/sync HTTP clients
+- [x] Create `zerg/connectors/credentials.py` - account credential helpers
+- [x] Update `github_tools.py` to use shared module imports
+
+**Commit:** `feat(knowledge): add GitHub API shared modules (Stage 1)`
+
+### Stage 2: Sync Implementation ✅
+
+- [x] Add `sync_github_repo_source()` to knowledge_sync_service.py
+- [x] Add github_repo validation to knowledge router
+- [x] Write unit tests for GitHub sync (11 tests)
+
+**Commit:** `feat(knowledge): implement GitHub repo sync (Stage 2)`
+
+### Stage 3: API Endpoints
+
+- [ ] Add `/github/repos` endpoint (paginated repo list)
+- [ ] Add `/github/repos/{owner}/{repo}/branches` endpoint
+- [ ] Test API endpoints
+
+### Stage 4-6: Frontend & Polish
+
+_Not yet started - backend must be complete first_
