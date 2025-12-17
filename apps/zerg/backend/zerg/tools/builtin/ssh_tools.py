@@ -5,9 +5,13 @@ It implements the "shell-first philosophy" where SSH access is the primitive for
 remote operations, rather than modeling each command as a separate tool.
 
 Security:
-- Host allowlist enforced (cube, clifford, zerg, slim)
 - SSH key authentication only (no password auth)
 - Timeout protection to prevent hanging connections
+- Output truncation to prevent token explosion
+
+Note: This is a LEGACY tool. For multi-tenant deployments, prefer the Runner system
+which executes commands on user-owned infrastructure without requiring SSH keys
+on the backend.
 """
 
 from __future__ import annotations
@@ -28,15 +32,6 @@ from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
-# Allowed SSH hosts with their default configurations
-ALLOWED_HOSTS = {
-    # Tailnet/private IPs align with ~/.ssh/config on the host
-    "cube": {"user": "drose", "host": "100.104.187.47", "port": "2222"},
-    "clifford": {"user": "drose", "host": "5.161.97.53", "port": "22"},
-    "zerg": {"user": "zerg", "host": "100.120.197.80", "port": "22"},
-    "slim": {"user": "drose", "host": "100.119.163.83", "port": "22"},
-}
-
 # Maximum output size before truncation (10KB)
 MAX_OUTPUT_SIZE = 10 * 1024
 
@@ -44,30 +39,34 @@ MAX_OUTPUT_SIZE = 10 * 1024
 def _parse_host(host: str) -> tuple[str, str, str] | None:
     """Parse host string into (user, hostname, port).
 
-    Supports formats:
-    - "cube", "clifford", "zerg", "slim" (known hosts)
-    - "user@hostname" (custom format)
+    Supports format: "user@hostname" or "user@hostname:port"
 
     Args:
-        host: Host identifier or user@hostname format
+        host: Host string in user@hostname or user@hostname:port format
 
     Returns:
         Tuple of (user, hostname, port) or None if invalid
     """
-    # Check if it's a known host alias
-    if host in ALLOWED_HOSTS:
-        config = ALLOWED_HOSTS[host]
-        return (config["user"], config["host"], config["port"])
+    # Parse user@hostname or user@hostname:port format
+    if "@" not in host:
+        return None
 
-    # Parse custom user@hostname format
-    if "@" in host:
-        parts = host.split("@")
-        if len(parts) == 2:
-            user, hostname = parts
-            if user and hostname:
-                return (user, hostname, "22")
+    parts = host.split("@")
+    if len(parts) != 2:
+        return None
 
-    return None
+    user, host_part = parts
+    if not user or not host_part:
+        return None
+
+    # Check for port specification
+    if ":" in host_part:
+        hostname, port = host_part.rsplit(":", 1)
+        if not hostname or not port.isdigit():
+            return None
+        return (user, hostname, port)
+
+    return (user, host_part, "22")
 
 
 def ssh_exec(
@@ -81,22 +80,16 @@ def ssh_exec(
     Workers already know how to use standard Unix tools (df, docker, journalctl, etc.)
     - this gives them the primitive to access remote systems.
 
-    Allowed hosts (by alias):
-    - cube: Home GPU server (AI workloads, cameras)
-    - clifford: Production VPS (90% of web apps)
-    - zerg: Project server (dedicated workloads)
-    - slim: EU VPS (cost-effective workloads)
-
-    You can also use custom "user@hostname" format for flexibility.
+    NOTE: This is a legacy tool. For multi-tenant deployments, prefer the Runner
+    system (runner_exec) which executes commands on user-owned infrastructure.
 
     Security notes:
-    - Only allowlisted hosts (cube, clifford, zerg, slim) are accessible
-    - Uses SSH key authentication via ~/.ssh/id_ed25519 (rosetta key)
+    - Uses SSH key authentication via ~/.ssh/id_ed25519
     - Commands have timeout protection
     - Output is truncated if > 10KB to prevent token explosion
 
     Args:
-        host: Server alias ("cube", "clifford", "zerg", "slim") or "user@hostname"
+        host: Server in "user@hostname" or "user@hostname:port" format
         command: Shell command to execute remotely
         timeout_secs: Maximum seconds to wait before killing the command (default: 30)
 
@@ -112,11 +105,11 @@ def ssh_exec(
         Or error envelope for actual failures (timeout, connection failure, invalid host)
 
     Example:
-        >>> ssh_exec("cube", "docker ps")
+        >>> ssh_exec("deploy@prod-server.example.com", "docker ps")
         {
             "ok": True,
             "data": {
-                "host": "cube",
+                "host": "deploy@prod-server.example.com",
                 "command": "docker ps",
                 "exit_code": 0,
                 "stdout": "CONTAINER ID   IMAGE...",
@@ -125,14 +118,14 @@ def ssh_exec(
             }
         }
 
-        >>> ssh_exec("cube", "docker ps | grep nonexistent")
+        >>> ssh_exec("admin@10.0.0.5:2222", "df -h")
         {
             "ok": True,
             "data": {
-                "host": "cube",
-                "command": "docker ps | grep nonexistent",
-                "exit_code": 1,
-                "stdout": "",
+                "host": "admin@10.0.0.5:2222",
+                "command": "df -h",
+                "exit_code": 0,
+                "stdout": "Filesystem      Size  Used Avail Use% Mounted on...",
                 "stderr": "",
                 "duration_ms": 456
             }
@@ -159,23 +152,22 @@ def ssh_exec(
         # Parse and validate host
         parsed = _parse_host(host)
         if not parsed:
-            allowed = ", ".join(ALLOWED_HOSTS.keys())
             return tool_error(
                 ErrorType.VALIDATION_ERROR,
-                f"Unknown host: {host}. Allowed: {allowed}, or use 'user@hostname' format.",
+                f"Invalid host format: {host}. Use 'user@hostname' or 'user@hostname:port' format.",
             )
 
         user, hostname, port = parsed
 
-        # Pick an SSH key: prefer id_ed25519, fall back to "rosetta" if present
+        # Pick an SSH key: prefer id_ed25519, fall back to id_rsa
         home_dir = Path(subprocess.os.path.expanduser("~"))
         id_key = home_dir / ".ssh" / "id_ed25519"
-        rosetta_key = home_dir / ".ssh" / "rosetta"
+        rsa_key = home_dir / ".ssh" / "id_rsa"
         key_path = None
         if id_key.exists():
             key_path = id_key
-        elif rosetta_key.exists():
-            key_path = rosetta_key
+        elif rsa_key.exists():
+            key_path = rsa_key
 
         # Construct SSH command
         # -o StrictHostKeyChecking=no: Don't prompt for host key verification
@@ -285,10 +277,11 @@ TOOLS: List[StructuredTool] = [
         func=ssh_exec,
         name="ssh_exec",
         description=(
-            "Execute a shell command on a remote infrastructure server via SSH. "
-            "Allowed hosts: cube (home GPU), clifford (production VPS), zerg (project server), slim (EU VPS). "
+            "Execute a shell command on a remote server via SSH. "
+            "Host must be in 'user@hostname' or 'user@hostname:port' format. "
             "Returns exit code, stdout, stderr, and duration. Non-zero exit codes are not errors - "
-            "they indicate the command ran but returned a failure code."
+            "they indicate the command ran but returned a failure code. "
+            "NOTE: Prefer runner_exec for multi-tenant deployments."
         ),
     ),
 ]

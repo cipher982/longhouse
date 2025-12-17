@@ -6,7 +6,7 @@ layer of abstraction to identify exactly where the flag gets lost or incorrectly
 
 Usage:
     # Local execution:
-    cd /Users/davidrose/git/zerg/apps/zerg/backend
+    cd apps/zerg/backend
     python debug_token_stream.py
 
     # Inside Docker container:
