@@ -1,0 +1,16 @@
+/* ====================================================================
+   CSS Cascade Layers - Order Declaration
+
+   Layer precedence (lowest → highest):
+   1. tokens   - Design system variables (just defines values)
+   2. base     - Resets and normalize styles
+   3. legacy   - All legacy CSS files (lower priority than new code)
+   4. components - Shared components like modals, buttons
+   5. pages    - Page-specific styles (highest priority)
+
+   By declaring this order upfront, we prevent legacy CSS from
+   accidentally overriding newer component styles regardless of
+   import/load order.
+   ==================================================================== */
+
+@layer tokens, base, legacy, components, pages;
