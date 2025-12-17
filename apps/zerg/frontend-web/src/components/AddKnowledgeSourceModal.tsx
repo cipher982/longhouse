@@ -187,6 +187,7 @@ export function AddKnowledgeSourceModal({
               <button
                 className="source-type-card"
                 onClick={() => handleTypeSelect("url")}
+                data-testid="source-type-url"
               >
                 <div className="source-type-icon">
                   <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -340,6 +341,7 @@ export function AddKnowledgeSourceModal({
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://example.com/docs.md"
                   className="form-input"
+                  data-testid="url-input"
                   required
                 />
               </div>
@@ -387,6 +389,7 @@ export function AddKnowledgeSourceModal({
               className="modal-button modal-button-primary"
               onClick={handleSubmitUrl}
               disabled={createMutation.isPending || !url}
+              data-testid="submit-url-source"
             >
               {createMutation.isPending ? "Adding..." : "Add Source"}
             </button>

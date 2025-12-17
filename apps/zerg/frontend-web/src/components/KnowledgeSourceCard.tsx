@@ -69,7 +69,7 @@ export function KnowledgeSourceCard({
   };
 
   return (
-    <div className="runner-card knowledge-source-card">
+    <div className="runner-card knowledge-source-card" data-testid={`knowledge-source-${source.id}`}>
       <div className="runner-card-header">
         <div className="source-header-left">
           <span className={`source-icon source-icon-${getSourceTypeIcon(source.source_type)}`}>
@@ -121,6 +121,7 @@ export function KnowledgeSourceCard({
           className="runner-action-button"
           onClick={() => onSync(source.id)}
           disabled={isSyncing || source.sync_status === "syncing"}
+          data-testid={`sync-source-${source.id}`}
         >
           {isSyncing || source.sync_status === "syncing" ? "Syncing..." : "Sync Now"}
         </button>

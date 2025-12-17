@@ -68,13 +68,13 @@ export default function KnowledgeSourcesPage() {
               Connect knowledge sources to give your agents context about your codebase, documentation, and more.
             </p>
           </div>
-          <button className="btn-add" onClick={() => setIsModalOpen(true)}>
+          <button className="btn-add" onClick={() => setIsModalOpen(true)} data-testid="add-knowledge-source-btn">
             + Add Source
           </button>
         </div>
 
         {sources && sources.length === 0 ? (
-          <div className="empty-state">
+          <div className="empty-state" data-testid="empty-state">
             <p>No knowledge sources configured yet.</p>
             <p className="empty-state-hint">
               Add a GitHub repository or URL to get started.

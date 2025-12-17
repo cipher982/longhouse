@@ -287,9 +287,9 @@ def get_session_factory() -> sessionmaker:
                         conn.execute(
                             text("""
                             INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                              display_name, created_at, updated_at)
+                                              display_name, context, created_at, updated_at)
                             VALUES (1, 'test@example.com', 'ADMIN', 1, 'dev', 'test-user-1',
-                                   'Test User', datetime('now'), datetime('now'))
+                                   'Test User', '{}', datetime('now'), datetime('now'))
                         """)
                         )
                         conn.commit()

@@ -3,6 +3,11 @@ import { test as base, expect, BrowserContext, type Page } from '@playwright/tes
 export type { Page };
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ---------------------------------------------------------------------------
 // Shared Playwright *test* object that injects the `X-Test-Worker` header *and*

@@ -12,7 +12,7 @@ export function KnowledgeSearchPanel() {
   const { data: results, isLoading, error } = useKnowledgeSearch(query);
 
   return (
-    <div className="knowledge-search-panel">
+    <div className="knowledge-search-panel" data-testid="knowledge-search-panel">
       <div className="search-panel-header">
         <h3>Search Knowledge Base</h3>
         <p className="search-panel-hint">
@@ -27,6 +27,7 @@ export function KnowledgeSearchPanel() {
           placeholder="Search your synced content..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          data-testid="knowledge-search-input"
         />
       </div>
 
@@ -49,9 +50,9 @@ export function KnowledgeSearchPanel() {
       )}
 
       {results && results.length > 0 && (
-        <div className="search-results">
+        <div className="search-results" data-testid="knowledge-search-results">
           {results.map((result, idx) => (
-            <div key={idx} className="search-result-item">
+            <div key={idx} className="search-result-item" data-testid={`search-result-${idx}`}>
               <div className="search-result-header">
                 <span className="search-result-icon">📄</span>
                 <span className="search-result-title">{result.title}</span>
