@@ -23,6 +23,13 @@ export default defineConfig(({ mode }) => {
     resolve: {
       // Ensure Vite resolves dependencies from workspace root node_modules
       preserveSymlinks: false,
+      // Force React to resolve from local node_modules to prevent version mismatches in tests
+      alias: {
+        react: path.resolve(__dirname, "node_modules/react"),
+        "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
+        "react/jsx-runtime": path.resolve(__dirname, "node_modules/react/jsx-runtime"),
+        "react/jsx-dev-runtime": path.resolve(__dirname, "node_modules/react/jsx-dev-runtime"),
+      },
     },
     server: {
       host: "0.0.0.0",
