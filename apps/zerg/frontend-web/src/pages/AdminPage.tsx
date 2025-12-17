@@ -1,8 +1,61 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+
+// Types for admin user usage data
+interface UserPeriodUsage {
+  tokens: number;
+  cost_usd: number;
+  runs: number;
+}
+
+interface AdminUserUsage {
+  today: UserPeriodUsage;
+  seven_days: UserPeriodUsage;
+  thirty_days: UserPeriodUsage;
+}
+
+interface AdminUserRow {
+  id: number;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_active: boolean;
+  created_at: string | null;
+  usage: AdminUserUsage;
+}
+
+interface AdminUsersResponse {
+  users: AdminUserRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+interface DailyBreakdown {
+  date: string;
+  tokens: number;
+  cost_usd: number;
+  runs: number;
+}
+
+interface TopAgentUsage {
+  agent_id: number;
+  name: string;
+  tokens: number;
+  cost_usd: number;
+  runs: number;
+}
+
+interface AdminUserDetailResponse {
+  user: AdminUserRow;
+  period: string;
+  summary: UserPeriodUsage;
+  daily_breakdown: DailyBreakdown[];
+  top_agents: TopAgentUsage[];
+}
 
 // Types for ops data - matching actual backend contract
 interface OpsSummary {
@@ -95,6 +148,39 @@ async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || "Failed to reset database");
+  }
+
+  return response.json();
+}
+
+// Admin users API functions
+async function fetchAdminUsers(
+  sort: string = "cost_today",
+  order: string = "desc"
+): Promise<AdminUsersResponse> {
+  const response = await fetch(
+    `${config.apiBaseUrl}/admin/users?sort=${sort}&order=${order}&limit=100`,
+    { credentials: "include" }
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch users");
+  }
+
+  return response.json();
+}
+
+async function fetchUserDetail(
+  userId: number,
+  period: string = "7d"
+): Promise<AdminUserDetailResponse> {
+  const response = await fetch(
+    `${config.apiBaseUrl}/admin/users/${userId}/usage?period=${period}`,
+    { credentials: "include" }
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch user details");
   }
 
   return response.json();
@@ -227,6 +313,232 @@ function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
   );
 }
 
+// Format cost helper
+function formatCost(cost: number): string {
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  if (cost >= 0.01) return `$${cost.toFixed(3)}`;
+  return `$${cost.toFixed(4)}`;
+}
+
+// Users table component with usage stats
+function UsersTable({
+  users,
+  sortField,
+  sortOrder,
+  onSort,
+  onUserClick,
+}: {
+  users: AdminUserRow[];
+  sortField: string;
+  sortOrder: string;
+  onSort: (field: string) => void;
+  onUserClick: (userId: number) => void;
+}) {
+  const renderSortArrow = (field: string) => {
+    if (sortField !== field) return null;
+    return <span className="sort-arrow">{sortOrder === "asc" ? "▲" : "▼"}</span>;
+  };
+
+  if (users.length === 0) {
+    return (
+      <div className="empty-state">
+        <p>No users found</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="users-table-container">
+      <table className="users-table">
+        <thead>
+          <tr>
+            <th onClick={() => onSort("email")} className="sortable">
+              User {renderSortArrow("email")}
+            </th>
+            <th>Role</th>
+            <th onClick={() => onSort("cost_today")} className="sortable numeric">
+              Today {renderSortArrow("cost_today")}
+            </th>
+            <th onClick={() => onSort("cost_7d")} className="sortable numeric">
+              7 Days {renderSortArrow("cost_7d")}
+            </th>
+            <th onClick={() => onSort("cost_30d")} className="sortable numeric">
+              30 Days {renderSortArrow("cost_30d")}
+            </th>
+            <th onClick={() => onSort("created_at")} className="sortable">
+              Joined {renderSortArrow("created_at")}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.map((user) => (
+            <tr
+              key={user.id}
+              onClick={() => onUserClick(user.id)}
+              className="clickable-row"
+            >
+              <td className="user-cell">
+                <div className="user-info">
+                  <span className="user-email">{user.email}</span>
+                  {user.display_name && (
+                    <span className="user-display-name">{user.display_name}</span>
+                  )}
+                </div>
+              </td>
+              <td>
+                <span className={`role-badge role-${user.role.toLowerCase()}`}>
+                  {user.role}
+                </span>
+              </td>
+              <td className="numeric">{formatCost(user.usage.today.cost_usd)}</td>
+              <td className="numeric">{formatCost(user.usage.seven_days.cost_usd)}</td>
+              <td className="numeric">{formatCost(user.usage.thirty_days.cost_usd)}</td>
+              <td>
+                {user.created_at
+                  ? new Date(user.created_at).toLocaleDateString()
+                  : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// User detail modal
+function UserDetailModal({
+  userId,
+  isOpen,
+  onClose,
+}: {
+  userId: number | null;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const [period, setPeriod] = useState<"today" | "7d" | "30d">("7d");
+
+  const { data: detail, isLoading } = useQuery({
+    queryKey: ["admin-user-detail", userId, period],
+    queryFn: () => fetchUserDetail(userId!, period),
+    enabled: isOpen && userId !== null,
+  });
+
+  if (!isOpen || userId === null) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content user-detail-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>User Usage Details</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+
+        {isLoading ? (
+          <div className="loading-state">Loading user details...</div>
+        ) : detail ? (
+          <div className="user-detail-content">
+            {/* User Info */}
+            <div className="user-detail-header">
+              <div className="user-detail-info">
+                <h4>{detail.user.email}</h4>
+                {detail.user.display_name && (
+                  <p className="display-name">{detail.user.display_name}</p>
+                )}
+                <span className={`role-badge role-${detail.user.role.toLowerCase()}`}>
+                  {detail.user.role}
+                </span>
+              </div>
+              <div className="period-selector">
+                <select
+                  value={period}
+                  onChange={(e) => setPeriod(e.target.value as "today" | "7d" | "30d")}
+                >
+                  <option value="today">Today</option>
+                  <option value="7d">Last 7 Days</option>
+                  <option value="30d">Last 30 Days</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Usage Summary Cards */}
+            <div className="usage-summary-row">
+              <div className="usage-summary-card">
+                <span className="label">Tokens</span>
+                <span className="value">{detail.summary.tokens.toLocaleString()}</span>
+              </div>
+              <div className="usage-summary-card">
+                <span className="label">Cost</span>
+                <span className="value">{formatCost(detail.summary.cost_usd)}</span>
+              </div>
+              <div className="usage-summary-card">
+                <span className="label">Runs</span>
+                <span className="value">{detail.summary.runs}</span>
+              </div>
+            </div>
+
+            {/* Daily Breakdown */}
+            {detail.daily_breakdown.length > 0 && (
+              <div className="detail-section">
+                <h5>Daily Breakdown</h5>
+                <table className="breakdown-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th className="numeric">Tokens</th>
+                      <th className="numeric">Cost</th>
+                      <th className="numeric">Runs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.daily_breakdown.map((day) => (
+                      <tr key={day.date}>
+                        <td>{day.date}</td>
+                        <td className="numeric">{day.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(day.cost_usd)}</td>
+                        <td className="numeric">{day.runs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Top Agents */}
+            {detail.top_agents.length > 0 && (
+              <div className="detail-section">
+                <h5>Top Agents by Cost</h5>
+                <table className="breakdown-table">
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th className="numeric">Tokens</th>
+                      <th className="numeric">Cost</th>
+                      <th className="numeric">Runs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.top_agents.map((agent) => (
+                      <tr key={agent.agent_id}>
+                        <td>{agent.name}</td>
+                        <td className="numeric">{agent.tokens.toLocaleString()}</td>
+                        <td className="numeric">{formatCost(agent.cost_usd)}</td>
+                        <td className="numeric">{agent.runs}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="error-state">Failed to load user details</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminPage() {
   const { user } = useAuth();
   const [selectedWindow, setSelectedWindow] = useState<"today" | "7d" | "30d">("today");
@@ -239,6 +551,12 @@ function AdminPage() {
     type: null,
     requirePassword: false,
   });
+
+  // Users table state
+  const [usersSortField, setUsersSortField] = useState("cost_today");
+  const [usersSortOrder, setUsersSortOrder] = useState("desc");
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [userDetailOpen, setUserDetailOpen] = useState(false);
 
   // Ops summary query - FIXED: Move ALL hooks before any conditional logic
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
@@ -253,6 +571,14 @@ function AdminPage() {
     queryKey: ["super-admin-status"],
     queryFn: fetchSuperAdminStatus,
     enabled: !!user,
+  });
+
+  // Admin users query
+  const { data: usersData, isLoading: usersLoading } = useQuery({
+    queryKey: ["admin-users", usersSortField, usersSortOrder],
+    queryFn: () => fetchAdminUsers(usersSortField, usersSortOrder),
+    enabled: !!user,
+    refetchInterval: 60000, // Refresh every minute
   });
 
   // Database reset mutation
@@ -273,6 +599,22 @@ function AdminPage() {
       toast.error("Admin access required to view this page");
     }
   }, [summaryError]);
+
+  // Handle users table sort
+  const handleUsersSort = (field: string) => {
+    if (field === usersSortField) {
+      setUsersSortOrder(usersSortOrder === "asc" ? "desc" : "asc");
+    } else {
+      setUsersSortField(field);
+      setUsersSortOrder("desc");
+    }
+  };
+
+  // Handle user row click
+  const handleUserClick = (userId: number) => {
+    setSelectedUserId(userId);
+    setUserDetailOpen(true);
+  };
 
   // Check if user is admin (this should be checked by the router, but let's be safe)
   if (!user) {
@@ -404,6 +746,27 @@ function AdminPage() {
             <TopAgentsTable agents={summary.top_agents_today} />
           </div>
 
+          {/* Users Usage Section */}
+          <div className="admin-section">
+            <h3>User LLM Usage</h3>
+            <p className="section-description">
+              Click on a user to see detailed usage breakdown
+            </p>
+            {usersLoading ? (
+              <div className="loading-state">Loading users...</div>
+            ) : usersData?.users ? (
+              <UsersTable
+                users={usersData.users}
+                sortField={usersSortField}
+                sortOrder={usersSortOrder}
+                onSort={handleUsersSort}
+                onUserClick={handleUserClick}
+              />
+            ) : (
+              <div className="empty-state">No users found</div>
+            )}
+          </div>
+
           {/* System Information - using real backend data */}
           <div className="admin-section">
             <h3>System Information</h3>
@@ -498,6 +861,16 @@ function AdminPage() {
         confirmText={resetMutation.isPending ? "Processing..." : "Confirm"}
         isDangerous={true}
         requirePassword={modalState.requirePassword}
+      />
+
+      {/* User Detail Modal */}
+      <UserDetailModal
+        userId={selectedUserId}
+        isOpen={userDetailOpen}
+        onClose={() => {
+          setUserDetailOpen(false);
+          setSelectedUserId(null);
+        }}
       />
     </div>
   );
