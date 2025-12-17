@@ -674,6 +674,9 @@ export interface paths {
         /**
          * Sync Source
          * @description Trigger immediate sync for a knowledge source.
+         *
+         *     Note: This endpoint performs a synchronous sync and returns when complete.
+         *     The response contains the updated source with current sync_status.
          */
         post: operations["sync_source_api_knowledge_sources__source_id__sync_post"];
         delete?: never;
@@ -3452,6 +3455,8 @@ export interface components {
             snippets: string[];
             /** Score */
             score: number;
+            /** Permalink */
+            permalink?: string | null;
         };
         /** KnowledgeSource */
         KnowledgeSource: {
@@ -5913,12 +5918,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["KnowledgeSource"];
                 };
             };
             /** @description Validation Error */
