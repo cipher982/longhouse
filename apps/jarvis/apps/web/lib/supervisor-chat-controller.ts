@@ -150,16 +150,24 @@ export class SupervisorChatController {
   private async streamChatResponse(message: string, signal: AbortSignal): Promise<void> {
     const url = `${CONFIG.JARVIS_API_BASE}/chat`;
 
-    logger.info('[SupervisorChat] Initiating SSE stream...');
+    logger.info('[SupervisorChat] Initiating SSE stream to:', url);
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
       },
       credentials: 'include', // Cookie auth
       body: JSON.stringify({ message }),
       signal,
+    });
+
+    logger.info(`[SupervisorChat] Response status: ${response.status} ${response.statusText}`);
+    logger.info('[SupervisorChat] Response headers:', {
+      contentType: response.headers.get('content-type'),
+      transferEncoding: response.headers.get('transfer-encoding'),
+      connection: response.headers.get('connection'),
     });
 
     if (!response.ok) {
@@ -181,7 +189,9 @@ export class SupervisorChatController {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let currentEvent = '';
+    let chunkCount = 0;
+
+    logger.info('[SupervisorChat] Starting to read SSE stream...');
 
     try {
       while (true) {
@@ -191,14 +201,23 @@ export class SupervisorChatController {
         }
 
         const { done, value } = await reader.read();
+        chunkCount++;
+
+        logger.info(`[SupervisorChat] Stream read #${chunkCount}:`, { done, valueLength: value?.length });
 
         if (done) {
-          logger.info('[SupervisorChat] SSE stream closed');
+          logger.info(`[SupervisorChat] SSE stream closed after ${chunkCount} reads`);
+          // Process any remaining buffer
+          if (buffer.trim()) {
+            logger.info('[SupervisorChat] Remaining buffer:', buffer);
+          }
           break;
         }
 
         // Decode chunk and add to buffer
-        buffer += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        logger.info(`[SupervisorChat] Received chunk (${chunk.length} chars):`, chunk.substring(0, 200));
 
         // Process complete SSE messages (separated by \n\n)
         const messages = buffer.split('\n\n');
