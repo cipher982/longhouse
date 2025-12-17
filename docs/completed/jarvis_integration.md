@@ -458,7 +458,7 @@ All services run in a single Docker network with Nginx reverse proxy.
 JARPXY_PORT=30080         # External: Jarvis PWA entry point
 ZGPXY_PORT=30081          # External: Zerg Dashboard entry point
 JARVIS_WEB_PORT=8080      # Internal: jarvis-web container
-JARVIS_SERVER_PORT=8787   # Internal: jarvis-server container
+JARVIS_SERVER_PORT=8787   # Legacy: jarvis-server (removed; zerg-backend now serves /api/jarvis/*)
 ZERG_BACKEND_PORT=8000    # Internal: zerg-backend container
 ZERG_FRONTEND_PORT=5173   # Internal: zerg-frontend container
 
@@ -574,7 +574,7 @@ curl -s -X POST http://localhost:30080/api/session \
   -d '{"device_secret":"your-secret"}' \
   -c "$COOKIE_JAR" -b "$COOKIE_JAR"
 
-# Note: Unified mode uses /api/session (proxied to jarvis-server)
+# Note: Unified mode uses /api/jarvis/session (served by zerg-backend; jarvis-server removed)
 # All other /api/* routes are proxied to zerg-backend
 ```
 
@@ -609,7 +609,7 @@ curl -N http://localhost:47300/api/jarvis/events \
 
 **Note**: In unified mode, API routes are split between:
 
-- `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787)
+- Legacy: `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787) (removed)
 - `/api/zerg/*` → zerg-backend (Port 8000)
 
 ### Seeding Baseline Agents

@@ -277,7 +277,7 @@ Document which approach is used and keep production strictly `Secure`.
 
 ### A) Frontend runtime config
 
-- [ ] Update `apps/zerg/frontend-web/public/config.js` to remove `api.swarmlet.com` usage for `swarmlet.com`.
+- [x] Update `apps/zerg/frontend-web/public/config.js` to remove `api.swarmlet.com` usage for `swarmlet.com`.
 - [ ] Confirm the production build loads config.js before app boot (existing behavior).
 
 ### B) Backend: cookie set/clear + verify endpoint

@@ -135,7 +135,7 @@ Currently, connectors must be created via API or database. Frontend UI for SMS c
 **API Endpoint**: `POST /api/connectors`
 
 ```bash
-curl -X POST https://api.swarmlet.com/api/connectors \
+curl -X POST https://swarmlet.com/api/connectors \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -193,7 +193,7 @@ Twilio can send delivery status updates to a webhook endpoint.
    ```python
    result = send_sms(
        # ... other params ...
-       status_callback="https://api.swarmlet.com/webhook/sms/delivery/123"
+       status_callback="https://swarmlet.com/webhook/sms/delivery/123"
    )
    ```
 
