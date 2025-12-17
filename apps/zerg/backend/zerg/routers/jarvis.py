@@ -938,6 +938,280 @@ async def jarvis_events(
 
 
 # ---------------------------------------------------------------------------
+# Chat Endpoint (Text-Only via Supervisor)
+# ---------------------------------------------------------------------------
+
+
+class JarvisChatRequest(BaseModel):
+    """Request for text chat with Supervisor."""
+
+    message: str = Field(..., description="User message text")
+
+
+async def _chat_stream_generator(run_id: int, owner_id: int):
+    """Generate SSE events for chat streaming.
+
+    Subscribes to supervisor events and streams assistant responses.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def event_handler(event):
+        """Filter and queue relevant events."""
+        # Security: only emit events for this owner
+        if event.get("owner_id") != owner_id:
+            return
+
+        # Filter by run_id
+        if "run_id" in event and event.get("run_id") != run_id:
+            return
+
+        await queue.put(event)
+
+    # Subscribe to supervisor events
+    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.ERROR, event_handler)
+
+    try:
+        # Send initial connection event
+        yield {
+            "event": "connected",
+            "data": json.dumps({
+                "message": "Chat stream connected",
+                "run_id": run_id,
+            }),
+        }
+
+        # Stream events until supervisor completes or errors
+        complete = False
+        while not complete:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                event_type = event.get("event_type") or event.get("type") or "event"
+
+                # Check for completion
+                if event_type in ("supervisor_complete", "error"):
+                    complete = True
+
+                # Format payload
+                payload = {
+                    k: v
+                    for k, v in event.items()
+                    if k not in {"event_type", "type", "owner_id"}
+                }
+
+                yield {
+                    "event": event_type,
+                    "data": json.dumps({
+                        "type": event_type,
+                        "payload": payload,
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    }),
+                }
+
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps({
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    }),
+                }
+
+    except asyncio.CancelledError:
+        logger.info(f"Chat SSE stream disconnected for run {run_id}")
+    finally:
+        # Unsubscribe from all events
+        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.ERROR, event_handler)
+
+
+@router.post("/chat")
+async def jarvis_chat(
+    request: JarvisChatRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> EventSourceResponse:
+    """Text chat endpoint - streams responses from Supervisor.
+
+    This endpoint provides a simpler alternative to /supervisor for text-only
+    chat. It still uses the Supervisor under the hood but returns an SSE stream
+    directly instead of requiring a separate connection.
+
+    Args:
+        request: Chat request with user message
+        db: Database session
+        current_user: Authenticated user
+
+    Returns:
+        EventSourceResponse streaming chat responses
+
+    Example:
+        POST /api/jarvis/chat
+        {"message": "What's the weather?"}
+
+        Streams SSE events:
+        - supervisor_started: Chat processing started
+        - supervisor_thinking: Supervisor analyzing
+        - supervisor_complete: Final response with result
+    """
+    from zerg.services.supervisor_service import SupervisorService
+
+    supervisor_service = SupervisorService(db)
+
+    # Server-side enforcement: respect user tool configuration
+    if not _is_tool_enabled(current_user.context or {}, "supervisor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tool disabled: supervisor",
+        )
+
+    # Get or create supervisor components
+    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+    thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+
+    # Create run record
+    from zerg.models.enums import RunStatus, RunTrigger
+
+    run = AgentRun(
+        agent_id=agent.id,
+        thread_id=thread.id,
+        status=RunStatus.RUNNING,
+        trigger=RunTrigger.API,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    logger.info(
+        f"Jarvis chat: created run {run.id} for user {current_user.id}, "
+        f"message: {request.message[:50]}..."
+    )
+
+    # Start supervisor execution in background
+    async def run_supervisor_background(owner_id: int, task: str, run_id: int):
+        """Execute supervisor in background."""
+        from zerg.database import db_session
+        from zerg.services.supervisor_service import SupervisorService
+
+        try:
+            with db_session() as bg_db:
+                service = SupervisorService(bg_db)
+                await service.run_supervisor(
+                    owner_id=owner_id,
+                    task=task,
+                    run_id=run_id,
+                    timeout=120,
+                )
+        except Exception as e:
+            logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
+        finally:
+            await _pop_supervisor_task(run_id)
+
+    # Create background task
+    task_handle = asyncio.create_task(
+        run_supervisor_background(current_user.id, request.message, run.id)
+    )
+    await _register_supervisor_task(run.id, task_handle)
+
+    # Return SSE stream
+    return EventSourceResponse(
+        _chat_stream_generator(run.id, current_user.id)
+    )
+
+
+# ---------------------------------------------------------------------------
+# History Endpoint
+# ---------------------------------------------------------------------------
+
+
+class JarvisChatMessage(BaseModel):
+    """Single chat message in history."""
+
+    role: str = Field(..., description="Message role: user or assistant")
+    content: str = Field(..., description="Message content")
+    timestamp: datetime = Field(..., description="Message timestamp")
+
+
+class JarvisHistoryResponse(BaseModel):
+    """Chat history response."""
+
+    messages: List[JarvisChatMessage] = Field(..., description="List of messages")
+    total: int = Field(..., description="Total message count")
+
+
+@router.get("/history", response_model=JarvisHistoryResponse)
+def jarvis_history(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> JarvisHistoryResponse:
+    """Get conversation history from Supervisor thread.
+
+    Returns paginated message history from the user's supervisor thread.
+    Only includes user and assistant messages (filters out system messages).
+
+    Args:
+        limit: Maximum number of messages to return (default 50)
+        offset: Number of messages to skip (default 0)
+        db: Database session
+        current_user: Authenticated user
+
+    Returns:
+        JarvisHistoryResponse with messages and total count
+    """
+    from zerg.services.supervisor_service import SupervisorService
+    from zerg.models.models import ThreadMessage
+
+    supervisor_service = SupervisorService(db)
+
+    # Get supervisor thread (creates if doesn't exist)
+    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+    thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+
+    # Query messages from thread (user and assistant only)
+    query = (
+        db.query(ThreadMessage)
+        .filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.role.in_(["user", "assistant"]),
+        )
+        .order_by(ThreadMessage.sent_at.asc())
+    )
+
+    # Get total count
+    total = query.count()
+
+    # Get paginated messages
+    messages = query.offset(offset).limit(limit).all()
+
+    # Convert to response format
+    chat_messages = [
+        JarvisChatMessage(
+            role=msg.role,
+            content=msg.content,
+            timestamp=msg.sent_at,
+        )
+        for msg in messages
+    ]
+
+    logger.info(
+        f"Jarvis history: returned {len(chat_messages)} messages "
+        f"(offset={offset}, limit={limit}, total={total}) for user {current_user.id}"
+    )
+
+    return JarvisHistoryResponse(
+        messages=chat_messages,
+        total=total,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BFF Proxy Endpoints
 # ---------------------------------------------------------------------------
 
