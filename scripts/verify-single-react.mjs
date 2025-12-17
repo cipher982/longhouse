@@ -73,58 +73,50 @@ try {
   errors.push(`Failed to read React package versions: ${e.message}`);
 }
 
-// 3. Scan for multiple React installations in app paths
-console.log("\n3. Scanning for React installations in app directories:");
+// 3. Scan for workspace-local React installs (these are always bad)
+console.log("\n3. Scanning for workspace-local React installations:");
 try {
-  // Find all react package.json files
   const findResult = execSync(
-    'find . -path "*node_modules/react/package.json" -not -path "./node_modules/@asyncapi/*" -not -path "./node_modules/asyncapi-*/*" -not -path "./node_modules/generator-*/*" -not -path "./node_modules/use-resize-observer/*" -not -path "./node_modules/@hookstate/*" -not -path "./node_modules/@headlessui/*" 2>/dev/null || true',
+    'find apps packages -path "*/node_modules/react/package.json" -o -path "*/node_modules/react-dom/package.json" 2>/dev/null || true',
     { cwd: ROOT, encoding: "utf-8" }
   ).trim();
 
-  const reactPaths = findResult
-    .split("\n")
-    .filter((p) => p && !p.includes("@asyncapi") && !p.includes("asyncapi-"));
+  const badPaths = findResult.split("\n").filter(Boolean);
 
-  console.log(`   Found ${reactPaths.length} React installation(s) in app paths:`);
-  reactPaths.forEach((p) => console.log(`     - ${p}`));
-
-  // Check versions of all found React installations
-  const versions = new Set();
-  for (const pkgPath of reactPaths) {
-    try {
-      const fullPath = join(ROOT, pkgPath);
-      const pkg = JSON.parse(readFileSync(fullPath, "utf-8"));
-      versions.add(pkg.version);
-
-      if (pkg.version !== EXPECTED_REACT_VERSION) {
-        warnings.push(`${pkgPath} has version ${pkg.version} (expected ${EXPECTED_REACT_VERSION})`);
-      }
-    } catch (e) {
-      warnings.push(`Could not read ${pkgPath}: ${e.message}`);
-    }
-  }
-
-  if (versions.size > 1) {
+  if (badPaths.length > 0) {
+    console.log(`   Found ${badPaths.length} forbidden workspace-local install(s):`);
+    badPaths.forEach((p) => console.log(`     - ${p}`));
     errors.push(
-      `Multiple React versions detected: ${[...versions].join(", ")}. ` +
-        `All should be ${EXPECTED_REACT_VERSION}`
+      "Workspace-local React installs detected. Delete the listed node_modules and run `bun install` from repo root."
     );
-  }
-
-  // Specifically check workspace apps don't have divergent React
-  const appPaths = reactPaths.filter(
-    (p) => p.startsWith("./apps/") && !p.includes("node_modules/@")
-  );
-
-  if (appPaths.length > 1) {
-    warnings.push(
-      `Multiple React copies in app workspaces: ${appPaths.join(", ")}. ` +
-        `This may cause hooks errors if not all the same version.`
-    );
+  } else {
+    console.log("   OK (no workspace-local React installs found)");
   }
 } catch (e) {
-  warnings.push(`Could not scan for React installations: ${e.message}`);
+  warnings.push(`Could not scan for workspace-local React installs: ${e.message}`);
+}
+
+// 3b. Verify workspace resolution matches root
+console.log("\n3b. Verifying workspace resolution:");
+try {
+  const workspaces = [
+    { name: "zerg-frontend", path: "apps/zerg/frontend-web/package.json" },
+    { name: "jarvis-web", path: "apps/jarvis/apps/web/package.json" },
+  ];
+
+  for (const ws of workspaces) {
+    const wsRequire = createRequire(join(ROOT, ws.path));
+    const resolvedPath = wsRequire.resolve("react");
+    const expectedPrefix = join(ROOT, "node_modules/react/");
+
+    if (!resolvedPath.startsWith(expectedPrefix)) {
+      errors.push(`${ws.name} resolves react to unexpected location: ${resolvedPath}`);
+    } else {
+      console.log(`   ${ws.name}: OK (resolves to root node_modules)`);
+    }
+  }
+} catch (e) {
+  warnings.push(`Could not verify workspace resolution: ${e.message}`);
 }
 
 // 4. Verify root package.json has overrides
