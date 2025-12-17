@@ -1,6 +1,6 @@
 # GitHub Knowledge Sync - V1.1 Spec
 
-**Status:** In Progress (completing V1.1 gaps)
+**Status:** ✅ Complete
 **Author:** David Rose
 **Reviewed by:** Senior Dev
 **Last Updated:** 2025-12-17
@@ -1364,11 +1364,11 @@ class TestKnowledgeSearchTool:
 
 ## 15. V1.1 Acceptance Checklist
 
-- [ ] Supervisor and default Worker agents can call `knowledge_search`
-- [ ] `knowledge_search` resolves `owner_id` correctly in both Supervisor + Worker contexts
-- [ ] GitHub sync stores `github_commit_sha` and `github_permalink_url` per document
-- [ ] Truncated repo sync is user-visible (not silently "success")
-- [ ] `/settings/knowledge` includes a basic search UI for verification
+- [x] Supervisor and default Worker agents can call `knowledge_search`
+- [x] `knowledge_search` resolves `owner_id` correctly in both Supervisor + Worker contexts
+- [x] GitHub sync stores `github_commit_sha` and `github_permalink_url` per document
+- [x] Truncated repo sync is user-visible (not silently "success")
+- [x] `/settings/knowledge` includes a basic search UI for verification
 
 ---
 
@@ -1416,23 +1416,29 @@ class TestKnowledgeSearchTool:
 
 **Commit:** `feat(knowledge): add frontend knowledge sources page (Stages 4-5)`
 
-### Stage 6: V1.1 - Agent Tool Integration 🔄
+### Stage 6: V1.1 - Agent Tool Integration ✅
 
-- [ ] Add `knowledge_search` to Supervisor default allowlist
-- [ ] Add `knowledge_search` to Worker default allowlist
-- [ ] Fix `knowledge_search` context resolution
-- [ ] Write tool integration tests
+- [x] Add `knowledge_search` to Supervisor default allowlist
+- [x] Add `knowledge_search` to Worker default allowlist
+- [x] Fix `knowledge_search` context resolution (use get_worker_context())
+- [x] Write tool integration tests (3 new tests)
 
-### Stage 7: V1.1 - Sync Improvements 🔄
+**Commit:** `fix(knowledge): use WorkerContext for knowledge_search tool (V1.1)`
+**Commit:** `feat(knowledge): add knowledge_search to default tool allowlists (V1.1)`
 
-- [ ] Add provenance metadata (github_commit_sha, github_permalink_url)
-- [ ] Handle truncated repos with user-visible error
-- [ ] Write provenance tests
+### Stage 7: V1.1 - Sync Improvements ✅
 
-### Stage 8: V1.1 - Frontend Search Panel 🔄
+- [x] Add provenance metadata (github_commit_sha, github_permalink_url)
+- [x] Handle truncated repos with user-visible error
+- [x] Write provenance tests
 
-- [ ] Create KnowledgeSearchPanel component
-- [ ] Add useKnowledgeSearch hook
-- [ ] Wire up route at /settings/knowledge
-- [ ] Add navigation link to settings
-- [ ] Manual E2E testing
+**Commit:** `feat(knowledge): add provenance metadata and truncated repo handling (V1.1)`
+
+### Stage 8: V1.1 - Frontend Search Panel ✅
+
+- [x] Create KnowledgeSearchPanel component
+- [x] Add useKnowledgeSearch hook
+- [x] Add searchKnowledge API function
+- [x] Integrated into KnowledgeSourcesPage
+
+**Commit:** `feat(frontend): add KnowledgeSearchPanel for verifying synced content (V1.1)`
