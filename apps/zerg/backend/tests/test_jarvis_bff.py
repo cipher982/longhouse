@@ -223,3 +223,172 @@ class TestBootstrapPromptIntegration:
         # Should have the expected tools
         assert "get_current_location" in tool_names
         assert "route_to_supervisor" in tool_names
+
+
+class TestChatEndpoint:
+    """Tests for POST /api/jarvis/chat endpoint."""
+
+    def test_chat_requires_auth(self, client):
+        """Chat returns 401 when AUTH_DISABLED=0 and no token is provided."""
+        import zerg.dependencies.auth as auth
+
+        prev = auth.AUTH_DISABLED
+        auth.AUTH_DISABLED = False
+        try:
+            response = client.post("/api/jarvis/chat", json={"message": "Hello"})
+            assert response.status_code == 401
+        finally:
+            auth.AUTH_DISABLED = prev
+
+    # NOTE: Testing SSE streaming is complex with the sync test client
+    # The endpoint is tested manually and through integration tests
+    # Here we just verify auth and validation work correctly
+
+    def test_chat_validates_message_required(self, client):
+        """Chat endpoint requires message field."""
+        response = client.post("/api/jarvis/chat", json={})
+        assert response.status_code == 422  # Validation error
+
+
+class TestHistoryEndpoint:
+    """Tests for GET /api/jarvis/history endpoint."""
+
+    def test_history_requires_auth(self, client):
+        """History returns 401 when AUTH_DISABLED=0 and no token is provided."""
+        import zerg.dependencies.auth as auth
+
+        prev = auth.AUTH_DISABLED
+        auth.AUTH_DISABLED = False
+        try:
+            response = client.get("/api/jarvis/history")
+            assert response.status_code == 401
+        finally:
+            auth.AUTH_DISABLED = prev
+
+    def test_history_returns_empty_for_new_user(self, client, test_user, db_session):
+        """History endpoint returns empty list for new user."""
+        response = client.get("/api/jarvis/history")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have messages list and total count
+        assert "messages" in data
+        assert "total" in data
+        assert isinstance(data["messages"], list)
+        assert data["total"] == 0
+
+    def test_history_returns_messages(self, client, test_user, db_session):
+        """History endpoint returns conversation messages."""
+        from zerg.services.supervisor_service import SupervisorService
+        from zerg.crud import crud
+
+        # Create supervisor thread with messages
+        supervisor_service = SupervisorService(db_session)
+        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
+        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Add some messages
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="user",
+            content="Hello!",
+            processed=True,
+        )
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="assistant",
+            content="Hi! How can I help?",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Get history
+        response = client.get("/api/jarvis/history")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should have 2 messages (excluding system message)
+        assert len(data["messages"]) == 2
+        assert data["total"] == 2
+
+        # Check message structure
+        msg = data["messages"][0]
+        assert "role" in msg
+        assert "content" in msg
+        assert "timestamp" in msg
+        assert msg["role"] == "user"
+        assert msg["content"] == "Hello!"
+
+    def test_history_pagination(self, client, test_user, db_session):
+        """History endpoint supports pagination."""
+        from zerg.services.supervisor_service import SupervisorService
+        from zerg.crud import crud
+
+        # Create supervisor thread with multiple messages
+        supervisor_service = SupervisorService(db_session)
+        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
+        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Add 5 message pairs (10 messages total)
+        for i in range(5):
+            crud.create_thread_message(
+                db=db_session,
+                thread_id=thread.id,
+                role="user",
+                content=f"Message {i}",
+                processed=True,
+            )
+            crud.create_thread_message(
+                db=db_session,
+                thread_id=thread.id,
+                role="assistant",
+                content=f"Response {i}",
+                processed=True,
+            )
+        db_session.commit()
+
+        # Get first page (limit 3)
+        response = client.get("/api/jarvis/history?limit=3&offset=0")
+        data = response.json()
+
+        assert len(data["messages"]) == 3
+        assert data["total"] == 10
+
+        # Get second page
+        response = client.get("/api/jarvis/history?limit=3&offset=3")
+        data = response.json()
+
+        assert len(data["messages"]) == 3
+        assert data["total"] == 10
+
+    def test_history_filters_system_messages(self, client, test_user, db_session):
+        """History endpoint only returns user and assistant messages."""
+        from zerg.services.supervisor_service import SupervisorService
+        from zerg.crud import crud
+
+        # Create supervisor thread (has system message by default)
+        supervisor_service = SupervisorService(db_session)
+        agent = supervisor_service.get_or_create_supervisor_agent(test_user.id)
+        thread = supervisor_service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Add user message
+        crud.create_thread_message(
+            db=db_session,
+            thread_id=thread.id,
+            role="user",
+            content="Hello!",
+            processed=True,
+        )
+        db_session.commit()
+
+        # Get history
+        response = client.get("/api/jarvis/history")
+        data = response.json()
+
+        # Should only have 1 message (user), not the system message
+        assert len(data["messages"]) == 1
+        assert data["messages"][0]["role"] == "user"
