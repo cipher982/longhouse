@@ -447,9 +447,9 @@ async def reset_database(request: DatabaseResetRequest, current_user=Depends(req
                     conn.execute(
                         text("""
                         INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                          display_name, created_at, updated_at)
+                                          display_name, context, created_at, updated_at)
                         VALUES (1, 'test@example.com', 'ADMIN', 1, 'dev', 'test-user-1',
-                                'Test User', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                'Test User', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         """)
                     )
                     conn.commit()
