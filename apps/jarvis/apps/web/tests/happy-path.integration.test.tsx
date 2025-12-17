@@ -10,7 +10,7 @@
  * - No test that verified AI responses actually render in the UI
  *
  * This test requires:
- * - Running jarvis-server (for session token)
+ * - Running zerg-backend (for Jarvis BFF + session token)
  * - Valid OPENAI_API_KEY (for actual API calls)
  *
  * Run with: bun test happy-path.integration
@@ -37,7 +37,7 @@ const mockMediaStream = {
 }
 
 describe('Happy Path Integration - Message Send and Response', () => {
-  // These tests require a running `jarvis-server` and real credentials.
+  // These tests require a running `zerg-backend` and real credentials.
   // In unit-test runs (CI/dev), skip to avoid flaky network-dependent failures.
   const integrationEnabled = process.env.JARVIS_INTEGRATION_TESTS === '1'
 

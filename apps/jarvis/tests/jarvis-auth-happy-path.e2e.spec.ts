@@ -4,12 +4,11 @@ import { test, expect } from '@playwright/test';
  * Jarvis BFF (Backend-for-Frontend) Integration E2E Tests
  *
  * Tests the zerg-backend BFF layer that provides /api/jarvis/* endpoints.
- * These endpoints proxy to jarvis-server and enforce server-side auth/tool validation.
+ * These endpoints are served by zerg-backend (no separate jarvis-server) and enforce server-side auth/tool validation.
  *
  * These tests run in the fully containerized Docker environment with:
  *   - postgres (database)
  *   - zerg-backend (BFF layer, AUTH_DISABLED=1 for e2e)
- *   - jarvis-server (OpenAI Realtime proxy)
  *   - jarvis-web (PWA)
  *   - nginx reverse-proxy (routes /api/* to zerg-backend)
  *
@@ -68,7 +67,7 @@ test.describe('Jarvis BFF Integration', () => {
     });
 
     // Should not be rejected as unknown (400)
-    // May fail for other reasons (503 if jarvis-server unavailable)
+    // May fail for other reasons (e.g. 503 if upstream tool service unavailable)
     expect(response.status()).not.toBe(400);
   });
 
@@ -110,7 +109,7 @@ test.describe('Jarvis BFF Error Handling', () => {
     expect(response.status()).toBeLessThan(500);
   });
 
-  test('session proxy handles jarvis-server timeout gracefully', async ({ request }) => {
+  test('session proxy handles upstream timeout gracefully', async ({ request }) => {
     // This tests that the proxy doesn't crash on slow responses
     const response = await request.get('/api/jarvis/session');
 

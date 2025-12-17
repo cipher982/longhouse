@@ -16,8 +16,7 @@ The `bridge-mode.e2e.test.tsx` file contains end-to-end tests for the full Jarvi
 
 **Required services:**
 
-- `jarvis-server` (Express bridge server)
-- `zerg-backend` (optional, for full supervisor features)
+- `zerg-backend` (Jarvis BFF at `/api/jarvis/*` + OpenAI Realtime proxy)
 - `postgres` (if using persistent storage)
 
 **Environment variables:**
@@ -30,8 +29,8 @@ VITE_JARVIS_DEVICE_SECRET=your-secret    # Auth for supervisor features (optiona
 **OpenAI Configuration:**
 One of:
 
-- Real OpenAI API key in jarvis-server config
-- Mock responses configured in jarvis-server
+- Real OpenAI API key configured for zerg-backend (Jarvis BFF)
+- Mock responses configured in zerg-backend
 - Accept connection failures (tests will gracefully handle and report)
 
 ### Running the Tests
@@ -52,7 +51,7 @@ bun test bridge-mode.e2e
 #### Individual Service Testing
 
 ```bash
-# Start only jarvis-server
+# Start Jarvis stack (zerg-backend + jarvis-web)
 make jarvis
 
 # Run tests
@@ -95,10 +94,10 @@ This allows tests to be valuable in both integration and unit test contexts.
 ```bash
 # Check services are running
 docker ps
-# Should see: jarvis-server, postgres, zerg-backend
+# Should see: postgres, zerg-backend
 
 # Check logs
-docker logs docker-jarvis-server-1 -f
+docker logs docker-zerg-backend-1 -f
 
 # Verify bridge mode is enabled
 echo $VITE_JARVIS_ENABLE_REALTIME_BRIDGE

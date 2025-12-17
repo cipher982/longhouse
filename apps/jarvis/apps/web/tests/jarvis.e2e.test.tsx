@@ -1,10 +1,10 @@
 /**
  * Jarvis E2E Tests
  *
- * Tests full integration with jarvis-server and realtime controllers.
+ * Tests full integration with zerg-backend (Jarvis BFF) and realtime controllers.
  *
  * Prerequisites:
- * - jarvis-server running (via docker-compose)
+ * - zerg-backend running (via docker-compose)
  * - VITE_JARVIS_DEVICE_SECRET set in .env
  * - Mock OpenAI or real API key configured
  *

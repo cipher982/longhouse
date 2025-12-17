@@ -57,7 +57,7 @@ make test-jarvis-grep GREP="should send"  # Specific test by name
 
 **Requirements for local E2E**:
 
-1. Start jarvis-server: `cd apps/server && npm run dev`
+1. Start zerg-backend (Jarvis BFF): `make zerg` (or `make dev` for full stack)
 2. Start jarvis-web: `cd apps/web && npm run dev`
 3. Then run tests
 
@@ -89,6 +89,9 @@ docker compose -f docker-compose.test.yml build jarvis-web
 ```bash
 make test-jarvis-text  # Runs in Docker, see console
 ```
+
+Note: Jarvis no longer uses a separate `jarvis-server` service. The Jarvis BFF
+and OpenAI Realtime proxy are served by `zerg-backend` at `/api/jarvis/*`.
 
 ### 2. Run locally with visible browser
 
@@ -129,7 +132,7 @@ make test-jarvis-grep GREP="Text Message Happy Path"
 
 ```bash
 # Terminal 1: Keep services running
-docker compose -f docker-compose.test.yml up jarvis-server jarvis-web
+docker compose -f docker-compose.test.yml up zerg-backend jarvis-web
 
 # Terminal 2: Edit code, rerun test (instant reload)
 make test-jarvis-text
