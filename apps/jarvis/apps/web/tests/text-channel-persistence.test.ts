@@ -1,28 +1,19 @@
 /**
  * Text Channel Persistence Tests
  *
- * Tests that text messages are persisted to IndexedDB via conversationController.
- * This is the Phase 2 fix for the SSOT history refactor.
+ * Jarvis web no longer persists conversations in IndexedDB.
+ * These tests ensure we still do optimistic UI updates and send to the backend.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useTextChannel } from '../src/hooks/useTextChannel'
-import { conversationController } from '../lib/conversation-controller'
 import { appController } from '../lib/app-controller'
 
 // Mock the appController
 vi.mock('../lib/app-controller', () => ({
   appController: {
     sendText: vi.fn().mockResolvedValue(undefined),
-  },
-}))
-
-// Mock conversationController
-vi.mock('../lib/conversation-controller', () => ({
-  conversationController: {
-    addUserTurn: vi.fn().mockResolvedValue(true), // Returns true on successful persistence
-    addAssistantTurn: vi.fn().mockResolvedValue(true),
   },
 }))
 
@@ -54,24 +45,18 @@ describe('Text Channel Persistence', () => {
   })
 
   describe('sendMessage', () => {
-    it('should persist user message to IndexedDB', async () => {
+    it('should send user message to backend', async () => {
       const { result } = renderHook(() => useTextChannel())
 
       await act(async () => {
         await result.current.sendMessage('Hello from text')
       })
 
-      // Should call conversationController.addUserTurn to persist
-      expect(conversationController.addUserTurn).toHaveBeenCalledWith('Hello from text')
+      expect(appController.sendText).toHaveBeenCalledWith('Hello from text')
     })
 
-    it('should persist user message before sending to backend', async () => {
+    it('should trim message before sending', async () => {
       const callOrder: string[] = []
-
-      vi.mocked(conversationController.addUserTurn).mockImplementation(async () => {
-        callOrder.push('addUserTurn')
-        return true  // Persistence succeeded
-      })
 
       vi.mocked(appController.sendText).mockImplementation(async () => {
         callOrder.push('sendText')
@@ -80,11 +65,11 @@ describe('Text Channel Persistence', () => {
       const { result } = renderHook(() => useTextChannel())
 
       await act(async () => {
-        await result.current.sendMessage('Test message')
+        await result.current.sendMessage('  Test message  ')
       })
 
-      // User turn should be persisted before sending to backend
-      expect(callOrder).toEqual(['addUserTurn', 'sendText'])
+      expect(callOrder).toEqual(['sendText'])
+      expect(appController.sendText).toHaveBeenCalledWith('Test message')
     })
 
     it('should not persist empty messages', async () => {
@@ -95,17 +80,7 @@ describe('Text Channel Persistence', () => {
         await result.current.sendMessage('   ')
       })
 
-      expect(conversationController.addUserTurn).not.toHaveBeenCalled()
-    })
-
-    it('should trim message before persisting', async () => {
-      const { result } = renderHook(() => useTextChannel())
-
-      await act(async () => {
-        await result.current.sendMessage('  Hello with spaces  ')
-      })
-
-      expect(conversationController.addUserTurn).toHaveBeenCalledWith('Hello with spaces')
+      expect(appController.sendText).not.toHaveBeenCalled()
     })
 
     it('should dispatch ADD_MESSAGE to React state', async () => {
@@ -124,9 +99,9 @@ describe('Text Channel Persistence', () => {
       })
     })
 
-    it('should abort send and surface error when persistence fails', async () => {
-      // Simulate persistence failure (sessionManager not ready)
-      vi.mocked(conversationController.addUserTurn).mockResolvedValueOnce(false)
+    it('should handle backend send exceptions gracefully', async () => {
+      const error = new Error('Backend failed')
+      vi.mocked(appController.sendText).mockRejectedValueOnce(error)
 
       const onError = vi.fn()
       const { result } = renderHook(() => useTextChannel({ onError }))
@@ -135,46 +110,20 @@ describe('Text Channel Persistence', () => {
         await result.current.sendMessage('Test')
       })
 
-      // Should have attempted to persist
-      expect(conversationController.addUserTurn).toHaveBeenCalled()
-      // Should NOT have sent to backend since persistence failed
-      expect(appController.sendText).not.toHaveBeenCalled()
-      // Error should be surfaced
-      expect(onError).toHaveBeenCalled()
-    })
-
-    it('should handle persistence exceptions gracefully', async () => {
-      const error = new Error('IndexedDB write failed')
-      vi.mocked(conversationController.addUserTurn).mockRejectedValueOnce(error)
-
-      const onError = vi.fn()
-      const { result } = renderHook(() => useTextChannel({ onError }))
-
-      await act(async () => {
-        await result.current.sendMessage('Test')
-      })
-
-      // Should have attempted to persist
-      expect(conversationController.addUserTurn).toHaveBeenCalled()
-      // Should NOT have sent to backend since persistence threw
-      expect(appController.sendText).not.toHaveBeenCalled()
+      // Should have attempted to send
+      expect(appController.sendText).toHaveBeenCalled()
       // Error should be surfaced
       expect(onError).toHaveBeenCalled()
     })
   })
 
   describe('SSOT compliance', () => {
-    it('should ensure text and voice messages use same persistence path', async () => {
-      // Text messages should use conversationController.addUserTurn just like voice does
+    it('does not write to local persistence', async () => {
       const { result } = renderHook(() => useTextChannel())
-
       await act(async () => {
         await result.current.sendMessage('Text message')
       })
-
-      // conversationController.addUserTurn is the same method used by voice path
-      expect(conversationController.addUserTurn).toHaveBeenCalledTimes(1)
-      expect(conversationController.addUserTurn).toHaveBeenCalledWith('Text message')
+      expect(appController.sendText).toHaveBeenCalledTimes(1)
     })
   })
 })

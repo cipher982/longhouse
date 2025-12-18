@@ -78,13 +78,6 @@ describe('Session Bootstrap (SSOT)', () => {
     },
   ]
 
-  const mockSessionManager = {
-    getConversationManager: vi.fn().mockReturnValue({
-      getCurrentConversationId: vi.fn().mockResolvedValue('conv-123'),
-    }),
-    getConversationHistory: vi.fn().mockResolvedValue(mockTurns),
-  }
-
   const mockOptions: BootstrapOptions = {
     context: {
       name: 'Test Agent',
@@ -110,7 +103,8 @@ describe('Session Bootstrap (SSOT)', () => {
         defaultPrompts: [],
       },
     },
-    sessionManager: mockSessionManager as any,
+    conversationId: 'conv-123',
+    history: mockTurns,
     onTokenRequest: vi.fn().mockResolvedValue('mock-token'),
     realtimeHistoryTurns: 8,
   }
@@ -120,11 +114,8 @@ describe('Session Bootstrap (SSOT)', () => {
   })
 
   describe('bootstrapSession', () => {
-    it('loads history exactly once from IndexedDB', async () => {
+    it('uses the provided server history (SSOT)', async () => {
       await bootstrapSession(mockOptions)
-
-      // History should be fetched exactly once
-      expect(mockSessionManager.getConversationHistory).toHaveBeenCalledTimes(1)
     })
 
     it('returns the same history data for UI consumption', async () => {
@@ -183,9 +174,7 @@ describe('Session Bootstrap (SSOT)', () => {
     })
 
     it('handles empty history gracefully', async () => {
-      mockSessionManager.getConversationHistory.mockResolvedValueOnce([])
-
-      const result = await bootstrapSession(mockOptions)
+      const result = await bootstrapSession({ ...mockOptions, history: [] })
 
       expect(result.history).toEqual([])
       expect(result.hydratedItemCount).toBe(0)
@@ -212,9 +201,6 @@ describe('Session Bootstrap (SSOT)', () => {
   describe('SSOT guarantees', () => {
     it('UI and Realtime receive data from the same single query', async () => {
       const result = await bootstrapSession(mockOptions)
-
-      // Verify single query
-      expect(mockSessionManager.getConversationHistory).toHaveBeenCalledTimes(1)
 
       // Verify UI gets full history
       expect(result.history).toHaveLength(3)

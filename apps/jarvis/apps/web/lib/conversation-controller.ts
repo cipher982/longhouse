@@ -5,19 +5,14 @@
  * Responsibilities:
  * - Manage conversation turns (user/assistant)
  * - Handle streaming responses
- * - Persist to IndexedDB via SessionManager
  * - Emit state changes via stateManager (React handles UI)
  *
  * NOTE: This controller does NOT manipulate the DOM directly.
  * All UI updates are done via stateManager events → React hooks → React state.
  */
 
-import { logger, type SessionManager } from '@jarvis/core';
-import type { ConversationTurn } from '@jarvis/data-local';
+import { logger } from '@jarvis/core';
 import { stateManager } from './state-manager';
-import { toSidebarConversations } from './conversation-list';
-import { CONFIG } from './config';
-import { isTestMode } from './test-helpers';
 
 export interface ConversationState {
   conversationId: string | null;
@@ -41,9 +36,7 @@ export class ConversationController {
     pendingUserMessageId: null
   };
 
-  private sessionManager: SessionManager | null = null;
   private listeners: Set<ConversationListener> = new Set();
-  private autoTitleInFlight: Set<string> = new Set();
 
   constructor() {}
 
@@ -60,13 +53,6 @@ export class ConversationController {
   }
 
   // ============= Setup =============
-
-  /**
-   * Set the session manager for persistence
-   */
-  setSessionManager(sessionManager: SessionManager | null): void {
-    this.sessionManager = sessionManager;
-  }
 
   /**
    * Set current conversation ID
@@ -96,145 +82,25 @@ export class ConversationController {
 
   /**
    * Add user turn and persist to IndexedDB
-   * NOTE: React UI handles displaying the message, this only persists
-   * @returns true if persisted successfully, false if skipped (no sessionManager or timestamp provided)
+   *
+   * DEPRECATED: Jarvis web now uses server-side persistence (Supervisor/Postgres).
+   * The React UI is responsible for optimistic rendering of user messages.
+   *
+   * Kept as a no-op for backwards compatibility with older call sites/tests.
    */
-  async addUserTurn(transcript: string, timestamp?: Date): Promise<boolean> {
-    // Clear any pending message state
+  async addUserTurn(_transcript: string, _timestamp?: Date): Promise<boolean> {
     this.state.pendingUserMessageId = null;
-
-    // Record to IndexedDB if not from history loading (no timestamp provided)
-    if (!timestamp) {
-      return await this.recordTurn('user', transcript);
-    }
-    return false; // Skipped persistence (from history loading)
+    return true;
   }
 
   /**
    * Add assistant turn and persist to IndexedDB
-   * NOTE: React UI handles displaying the message, this only persists
+   *
+   * DEPRECATED: Jarvis web now uses server-side persistence (Supervisor/Postgres).
+   * Kept as a no-op for backwards compatibility.
    */
-  async addAssistantTurn(response: string, timestamp?: Date): Promise<void> {
-    // Record to IndexedDB if not from history loading
-    if (!timestamp) {
-      await this.recordTurn('assistant', response);
-    }
-  }
-
-  /**
-   * Record turn to IndexedDB
-   * @returns true if persisted successfully, false if no sessionManager
-   */
-  private async recordTurn(type: 'user' | 'assistant', content: string): Promise<boolean> {
-    if (!this.sessionManager) {
-      logger.warn('Cannot persist turn: sessionManager not initialized');
-      return false;
-    }
-
-    try {
-      const turn: ConversationTurn = {
-        id: crypto.randomUUID(),
-        timestamp: new Date(),
-        conversationId: this.state.conversationId || undefined,
-        ...(type === 'user'
-          ? { userTranscript: content }
-          : { assistantResponse: content }
-        )
-      };
-
-      await this.sessionManager.addConversationTurn(turn);
-      logger.debug('Recorded conversation turn', `${type}: ${content.substring(0, 50)}...`);
-
-      // ConversationManager may auto-create a conversation on first turn.
-      // Sync the resulting conversation ID + sidebar list back to the UI.
-      try {
-        const activeId = await this.sessionManager.getConversationManager().getCurrentConversationId();
-        if (activeId && activeId !== this.state.conversationId) {
-          this.setConversationId(activeId);
-          stateManager.setConversationId(activeId);
-        }
-
-        const allConversations = await this.sessionManager.getAllConversations();
-        stateManager.setConversations(toSidebarConversations(allConversations, activeId ?? this.state.conversationId));
-
-        if (type === 'assistant') {
-          void this.maybeAutoTitleConversation(activeId ?? this.state.conversationId).catch((e) => {
-            logger.debug('Auto-title skipped/failed', e);
-          });
-        }
-      } catch (e) {
-        logger.debug('Conversation list refresh skipped/failed', e);
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Failed to record conversation turn:', error);
-      return false;
-    }
-  }
-
-  private buildJsonHeaders(): HeadersInit {
-    // Cookie-based auth - no Authorization header needed
-    // Cookies are sent automatically with credentials: 'include' on fetch calls
-    return { 'Content-Type': 'application/json' };
-  }
-
-  private isDefaultConversationName(name: string): boolean {
-    return name.trim().startsWith('Conversation ');
-  }
-
-  private async maybeAutoTitleConversation(conversationId: string | null | undefined): Promise<void> {
-    if (!this.sessionManager) return;
-    if (!conversationId) return;
-    if (typeof window !== 'undefined' && isTestMode()) return;
-    if (this.autoTitleInFlight.has(conversationId)) return;
-
-    const conversationManager = this.sessionManager.getConversationManager();
-    const titledKey = `conversation_title_generated:${conversationId}`;
-    this.autoTitleInFlight.add(conversationId);
-    try {
-      const alreadyTitled = await conversationManager.getKV<boolean>(titledKey);
-      if (alreadyTitled) return;
-
-      const conversation = await conversationManager.getConversation(conversationId);
-      if (!conversation) return;
-      if (!this.isDefaultConversationName(conversation.name)) return;
-
-      const recent = await this.sessionManager.getRecentConversationContext(8);
-      const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-      for (const t of recent) {
-        const user = typeof t.userTranscript === 'string' ? t.userTranscript.trim() : '';
-        const assistant = typeof (t.assistantResponse || t.assistantText) === 'string'
-          ? String(t.assistantResponse || t.assistantText).trim()
-          : '';
-        if (user) messages.push({ role: 'user', content: user });
-        if (assistant) messages.push({ role: 'assistant', content: assistant });
-      }
-
-      const hasUser = messages.some(m => m.role === 'user');
-      const hasAssistant = messages.some(m => m.role === 'assistant');
-      if (!hasUser || !hasAssistant) return;
-
-      // Call Jarvis BFF endpoint on zerg-backend to generate a short title.
-      const resp = await fetch(`${CONFIG.JARVIS_API_BASE}/conversation/title`, {
-        method: 'POST',
-        headers: this.buildJsonHeaders(),
-        credentials: 'include', // Cookie auth
-        body: JSON.stringify({ messages }),
-      });
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const title = typeof data?.title === 'string' ? data.title.trim() : '';
-      if (!title) return;
-
-      await this.sessionManager.renameConversation(conversationId, title);
-      await conversationManager.setKV(titledKey, true);
-
-      const allConversations = await this.sessionManager.getAllConversations();
-      stateManager.setConversations(toSidebarConversations(allConversations, conversationId));
-    } finally {
-      this.autoTitleInFlight.delete(conversationId);
-    }
+  async addAssistantTurn(_response: string, _timestamp?: Date): Promise<void> {
+    return;
   }
 
   // ============= Streaming Response Management =============
@@ -276,11 +142,6 @@ export class ConversationController {
     const finalText = this.state.streamingText;
     logger.streamingResponse(finalText, true);
 
-    // Record to IndexedDB
-    if (finalText) {
-      await this.recordTurn('assistant', finalText);
-    }
-
     // Clean up streaming state
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
@@ -304,27 +165,6 @@ export class ConversationController {
    */
   isStreaming(): boolean {
     return this.state.streamingMessageId !== null;
-  }
-
-  // ============= History Management =============
-
-  /**
-   * Get conversation history from IndexedDB
-   * Returns history array for React to render
-   */
-  async getHistory(): Promise<ConversationTurn[]> {
-    if (!this.sessionManager || !this.state.conversationId) {
-      return [];
-    }
-
-    try {
-      const history = await this.sessionManager.getConversationHistory();
-      logger.conversation('Retrieved conversation history', history.length);
-      return history;
-    } catch (error) {
-      console.error('Failed to load conversation history:', error);
-      return [];
-    }
   }
 
   /**
@@ -390,7 +230,6 @@ export class ConversationController {
    */
   dispose(): void {
     this.clear();
-    this.sessionManager = null;
     logger.info('Conversation controller disposed');
   }
 }

@@ -7,10 +7,21 @@
  * 3. Sidebar toggle
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '../src/context'
 import App from '../src/App'
+
+// Prevent tests from trying to establish a real OpenAI Realtime session.
+vi.mock('../lib/app-controller', () => ({
+  appController: {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    connect: vi.fn().mockResolvedValue(undefined),
+    disconnect: vi.fn().mockResolvedValue(undefined),
+    sendText: vi.fn().mockResolvedValue(undefined),
+    clearServerHistory: vi.fn().mockResolvedValue(undefined),
+  },
+}))
 
 describe('Jarvis React App', () => {
   beforeEach(() => {

@@ -35,6 +35,7 @@ export interface UseRealtimeSessionOptions {
 export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const dispatch = useAppDispatch()
   const initializedRef = useRef(false)
+  const appControllerInitRef = useRef(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const optionsRef = useRef(options)
   optionsRef.current = options  // Always keep ref up to date
@@ -54,12 +55,6 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     if (pttBtn && audioRef.current) {
       audioController.initialize(audioRef.current, pttBtn)
     }
-
-    // Initialize app controller (this sets up JarvisClient, etc.)
-    appController.initialize().catch((error) => {
-      console.error('[useRealtimeSession] App controller init failed:', error)
-      optionsRef.current.onError?.(error)
-    })
   }, [dispatch])  // dispatch needed for history callback
 
   // Subscribe to controller events - SEPARATE effect so it always runs
@@ -198,6 +193,18 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     }
 
     stateManager.addListener(handleStateChange)
+
+    // Initialize app controller AFTER listeners are attached, so we don't miss
+    // early events like HISTORY_LOADED that occur during bootstrap/init.
+    if (!appControllerInitRef.current) {
+      appControllerInitRef.current = true
+      appController.initialize().catch((error) => {
+        console.error('[useRealtimeSession] App controller init failed:', error)
+        optionsRef.current.onError?.(error)
+        // Allow retry if init fails (helps transient network errors and test isolation)
+        appControllerInitRef.current = false
+      })
+    }
 
     // Cleanup
     return () => {

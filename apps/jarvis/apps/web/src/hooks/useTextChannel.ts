@@ -8,7 +8,6 @@
 import { useCallback, useState } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
 import { appController } from '../../lib/app-controller'
-import { conversationController } from '../../lib/conversation-controller'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
@@ -57,19 +56,9 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       try {
         console.log('[useTextChannel] Sending message:', trimmedText)
 
-        // Persist user message to IndexedDB (SSOT - same path as voice)
-        // This ensures text messages survive page refresh
-        const persisted = await conversationController.addUserTurn(trimmedText)
-        if (!persisted) {
-          // Abort send if persistence failed - don't send orphan messages
-          // This prevents messages from being sent but not surviving refresh
-          throw new Error('Unable to save message - please try again')
-        }
-
         // Send to backend via appController
         await appController.sendText(trimmedText)
-        // Response will come through realtime session events
-        // The conversation controller handles adding assistant messages
+        // Response arrives via Supervisor SSE -> stateManager -> React
         setIsSending(false)
       } catch (error) {
         console.error('[useTextChannel] Error sending message:', error)
