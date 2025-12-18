@@ -24,6 +24,7 @@ from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
 from zerg.tools.builtin.supervisor_tools import TOOLS as SUPERVISOR_TOOLS
 from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
+from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
 from zerg.tools.registry import ToolRegistry
 
 BUILTIN_TOOLS = (
@@ -47,6 +48,7 @@ BUILTIN_TOOLS = (
     + SSH_TOOLS
     + SUPERVISOR_TOOLS
     + UUID_TOOLS
+    + WEB_SEARCH_TOOLS
 )
 
 __all__ = [

@@ -44,6 +44,7 @@ dependencies = [
     "testcontainers>=4.13.1",
     "psycopg>=3.2.10",
     "pathspec>=0.12.0",
+    "tavily-python>=0.7.0",
 ]
 
 [build-system]
