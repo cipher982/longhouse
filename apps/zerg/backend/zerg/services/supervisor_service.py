@@ -63,6 +63,9 @@ class SupervisorRunResult:
 class SupervisorService:
     """Service for managing supervisor agent execution."""
 
+    # Bump this whenever BASE_SUPERVISOR_PROMPT meaningfully changes.
+    SUPERVISOR_PROMPT_VERSION = 1
+
     def __init__(self, db: Session):
         """Initialize the supervisor service.
 
@@ -90,6 +93,49 @@ class SupervisorService:
         for agent in agents:
             config = agent.config or {}
             if config.get("is_supervisor"):
+                # Keep the supervisor prompt and tool allowlist in sync with code.
+                # Supervisor agents are system-managed; stale prompts routinely cause
+                # "I searched but found nothing" hallucinations because the model is
+                # running with outdated tool descriptions.
+                changed = False
+                user = crud.get_user(self.db, owner_id)
+                if user:
+                    desired_prompt = build_supervisor_prompt(user)
+                    if agent.system_instructions != desired_prompt:
+                        agent.system_instructions = desired_prompt
+                        changed = True
+
+                supervisor_tools = [
+                    "spawn_worker",
+                    "list_workers",
+                    "read_worker_result",
+                    "read_worker_file",
+                    "grep_workers",
+                    "get_worker_metadata",
+                    "get_current_time",
+                    "http_request",
+                    "runner_list",
+                    "runner_create_enroll_token",
+                    "send_email",
+                    "contact_user",
+                    "knowledge_search",
+                    "web_search",
+                    "web_fetch",
+                ]
+                if agent.allowed_tools != supervisor_tools:
+                    agent.allowed_tools = supervisor_tools
+                    changed = True
+
+                # Track prompt version in config for future migrations/debugging.
+                if config.get("prompt_version") != self.SUPERVISOR_PROMPT_VERSION:
+                    config["prompt_version"] = self.SUPERVISOR_PROMPT_VERSION
+                    agent.config = config
+                    changed = True
+
+                if changed:
+                    self.db.commit()
+                    self.db.refresh(agent)
+
                 logger.debug(f"Found existing supervisor agent {agent.id} for user {owner_id}")
                 return agent
 
@@ -103,6 +149,7 @@ class SupervisorService:
 
         supervisor_config = {
             "is_supervisor": True,
+            "prompt_version": self.SUPERVISOR_PROMPT_VERSION,
             "temperature": 0.7,
             "max_tokens": 2000,
         }
