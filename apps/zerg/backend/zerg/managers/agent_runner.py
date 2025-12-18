@@ -156,22 +156,21 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 owner_id=self.agent.owner_id,
                 agent_id=self.agent.id,
             )
-            # Inject as user message + assistant acknowledgment
-            # This pattern ensures the LLM treats it as established context
-            from langchain_core.messages import AIMessage as LCAIMessage
-            from langchain_core.messages import HumanMessage
+            # Inject as SystemMessage - this is background context, NOT user input
+            # The agent should be aware of connector status but not discuss it
+            # unless the user explicitly asks about integrations
+            from langchain_core.messages import SystemMessage
 
-            context_injection = [
-                HumanMessage(content=context_text),
-                LCAIMessage(content="Understood. I'm aware of the current connector status."),
-            ]
+            context_system_msg = SystemMessage(
+                content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}"
+            )
 
-            # Insert after system message (index 0) if it exists
+            # Insert after main system message (index 0) if it exists
             if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
-                original_msgs = [original_msgs[0]] + context_injection + original_msgs[1:]
+                original_msgs = [original_msgs[0], context_system_msg] + original_msgs[1:]
             else:
                 # No system message, prepend context
-                original_msgs = context_injection + original_msgs
+                original_msgs = [context_system_msg] + original_msgs
 
             logger.debug(
                 "[AgentRunner] Injected connector context for agent %s (owner_id=%s)",
