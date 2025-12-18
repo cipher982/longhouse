@@ -36,13 +36,13 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
         - score: Relevance score (higher is better)
 
     Example:
-        >>> knowledge_search("cube server ip address")
+        >>> knowledge_search("prod-web server ip address")
         [
             {
                 "source": "Infrastructure Docs",
-                "path": "https://mytech.com/AGENTS.md",
+                "path": "https://docs.example.com/servers.md",
                 "title": "Server Overview",
-                "snippets": ["cube (100.70.237.79) - Home GPU server"],
+                "snippets": ["prod-web (192.0.2.10) - Production web server"],
                 "score": 0.95
             }
         ]

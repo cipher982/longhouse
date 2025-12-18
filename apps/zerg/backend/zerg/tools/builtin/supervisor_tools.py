@@ -55,7 +55,7 @@ async def spawn_worker_async(
         If wait=True: The worker's result or error details
 
     Example:
-        spawn_worker("Check disk usage on cube server via SSH")  # Returns immediately
+        spawn_worker("Check disk usage on prod-web server via SSH")  # Returns immediately
         spawn_worker("Research vacuums", wait=True)  # Waits for completion
         spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
         spawn_worker("Complex task", wait=True, decision_mode="hybrid")  # LLM-assisted decisions

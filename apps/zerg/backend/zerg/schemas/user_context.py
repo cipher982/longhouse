@@ -13,8 +13,8 @@ class ServerConfig(BaseModel):
     """Configuration for a single server in user context.
 
     Examples:
-        {"name": "clifford", "ip": "5.161.97.53", "purpose": "Production VPS"}
-        {"name": "cube", "platform": "Ubuntu", "notes": "Home GPU server"}
+        {"name": "prod-web", "ip": "192.0.2.10", "purpose": "Production VPS"}
+        {"name": "gpu-server", "platform": "Ubuntu", "notes": "GPU compute server"}
     """
 
     name: str = Field(..., description="Server name or hostname")
@@ -52,15 +52,15 @@ class UserContext(BaseModel):
 
     Examples:
         {
-            "display_name": "David",
+            "display_name": "Jane",
             "role": "Software Engineer",
             "location": "San Francisco",
             "servers": [
-                {"name": "clifford", "ip": "5.161.97.53", "purpose": "Production VPS"}
+                {"name": "prod-web", "ip": "192.0.2.10", "purpose": "Production VPS"}
             ],
             "integrations": {
-                "github": "david-rose",
-                "email": "hello@drose.io"
+                "github": "janedoe",
+                "email": "jane@example.com"
             },
             "tools": {
                 "location": true,
@@ -92,18 +92,18 @@ class UserContext(BaseModel):
         extra = "allow"  # Allow additional fields for flexibility
         json_schema_extra = {
             "example": {
-                "display_name": "David",
+                "display_name": "Jane",
                 "role": "Software Engineer",
                 "location": "San Francisco",
                 "servers": [
                     {
-                        "name": "clifford",
-                        "ip": "5.161.97.53",
+                        "name": "prod-web",
+                        "ip": "192.0.2.10",
                         "purpose": "Production VPS",
                         "platform": "Ubuntu",
                     }
                 ],
-                "integrations": {"github": "david-rose", "email": "hello@drose.io"},
+                "integrations": {"github": "janedoe", "email": "jane@example.com"},
                 "tools": {"location": True, "whoop": True, "obsidian": True, "supervisor": True},
                 "custom_instructions": "Prefer TypeScript over JavaScript",
             }
