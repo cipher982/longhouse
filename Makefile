@@ -15,8 +15,9 @@ JARVIS_WEB_PORT ?= 8080
 
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
+COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-zerg generate-sdk seed-agents validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-single test-zerg generate-sdk seed-agents validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -205,9 +206,39 @@ test-jarvis-watch: ## Run Jarvis unit tests in watch mode (TDD)
 	@echo "🧪 Running Jarvis unit tests in watch mode..."
 	cd apps/jarvis/apps/web && npm test -- --watch
 
-test-jarvis-e2e: ## Run Jarvis E2E tests (Docker required)
-	@echo "🧪 Running Jarvis E2E tests..."
-	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test
+test-jarvis-e2e: ## Run Jarvis E2E tests (isolated Docker environment)
+	@echo "🧪 Running Jarvis E2E tests (isolated)..."
+	@$(MAKE) test-e2e-up
+	$(COMPOSE_E2E) run --rm playwright npx playwright test
+	@$(MAKE) test-e2e-down
+
+test-e2e-up: ## Start isolated E2E test environment
+	@echo "🚀 Starting isolated E2E environment..."
+	$(COMPOSE_E2E) up -d --build
+	@echo "⏳ Waiting for services to be healthy..."
+	@for i in {1..30}; do \
+		if [ "$$($(COMPOSE_E2E) ps | grep "(healthy)" | wc -l)" -ge 4 ]; then \
+			echo "✅ E2E environment is ready"; \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "❌ Timeout waiting for services to be healthy"; \
+	$(COMPOSE_E2E) ps; \
+	exit 1
+
+test-e2e-down: ## Stop and clean up isolated E2E environment
+	@echo "🧹 Cleaning up E2E environment..."
+	$(COMPOSE_E2E) down -v --remove-orphans
+
+test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=supervisor-progress)
+	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=test-name" && exit 1)
+	@echo "🧪 Running single E2E test: $(TEST)..."
+	@if ! $(COMPOSE_E2E) ps reverse-proxy | grep -q "Up"; then $(MAKE) test-e2e-up; fi
+	$(COMPOSE_E2E) run --rm playwright npx playwright test $(TEST)
+
+test-e2e-logs: ## View logs for isolated E2E environment
+	$(COMPOSE_E2E) logs -f
 
 test-jarvis-e2e-ui: ## Run Jarvis E2E tests with interactive UI
 	@echo "🧪 Running Jarvis E2E tests (UI mode)..."
@@ -215,15 +246,18 @@ test-jarvis-e2e-ui: ## Run Jarvis E2E tests with interactive UI
 
 test-jarvis-text: ## Run text message E2E tests only
 	@echo "🧪 Running text message tests..."
-	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test text-message-happy-path
+	@if ! $(COMPOSE_E2E) ps reverse-proxy | grep -q "Up"; then $(MAKE) test-e2e-up; fi
+	$(COMPOSE_E2E) run --rm playwright npx playwright test text-message-happy-path
 
 test-jarvis-history: ## Run history hydration E2E tests only
 	@echo "🧪 Running history hydration tests..."
-	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test history-hydration
+	@if ! $(COMPOSE_E2E) ps reverse-proxy | grep -q "Up"; then $(MAKE) test-e2e-up; fi
+	$(COMPOSE_E2E) run --rm playwright npx playwright test history-hydration
 
 test-jarvis-grep: ## Run specific test by name (usage: make test-jarvis-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-jarvis-grep GREP='test name'" && exit 1)
-	docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright npx playwright test --grep "$(GREP)"
+	@if ! $(COMPOSE_E2E) ps reverse-proxy | grep -q "Up"; then $(MAKE) test-e2e-up; fi
+	$(COMPOSE_E2E) run --rm playwright npx playwright test --grep "$(GREP)"
 
 test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."
