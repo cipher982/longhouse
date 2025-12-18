@@ -66,6 +66,7 @@ Base = declarative_base()
 # This prevents "no such table" errors when worker databases are created
 try:
     from zerg.models.models import Agent  # noqa: F401
+    from zerg.models.models import AgentMemoryKV  # noqa: F401
     from zerg.models.models import AgentMessage  # noqa: F401
     from zerg.models.models import AgentRun  # noqa: F401
     from zerg.models.models import CanvasLayout  # noqa: F401
@@ -408,6 +409,7 @@ def initialize_database(engine: Engine = None) -> None:
     # Import all models to ensure they are registered with Base
     # We need to import the models explicitly to ensure they're registered
     from zerg.models.models import Agent  # noqa: F401
+    from zerg.models.models import AgentMemoryKV  # noqa: F401
     from zerg.models.models import AgentMessage  # noqa: F401
     from zerg.models.models import AgentRun  # noqa: F401
     from zerg.models.models import CanvasLayout  # noqa: F401
