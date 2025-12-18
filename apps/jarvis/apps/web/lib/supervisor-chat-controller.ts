@@ -193,6 +193,49 @@ export class SupervisorChatController {
 
     logger.info('[SupervisorChat] Starting to read SSE stream...');
 
+    // Helper to process SSE messages from buffer
+    const processBuffer = async (): Promise<string> => {
+      // Normalize line endings and split on double newlines (SSE message boundary)
+      const normalizedBuffer = buffer.replace(/\r\n/g, '\n');
+      const parts = normalizedBuffer.split('\n\n');
+
+      // Keep the last part as remaining buffer (might be incomplete)
+      const remaining = parts.pop() || '';
+
+      logger.debug(`[SupervisorChat] Processing ${parts.length} complete messages, remaining: ${remaining.length} chars`);
+
+      for (const message of parts) {
+        if (message.trim() === '') continue;
+
+        const lines = message.split('\n');
+        let eventType = '';
+        let data = '';
+
+        // Parse SSE message format
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventType = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            data = line.substring(5).trim();
+          }
+        }
+
+        logger.info(`[SupervisorChat] Processing SSE event: ${eventType}`);
+
+        // Handle the event
+        if (data) {
+          try {
+            const parsedData = JSON.parse(data);
+            await this.handleSSEEvent(eventType || 'message', parsedData);
+          } catch (error) {
+            logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
+          }
+        }
+      }
+
+      return remaining;
+    };
+
     try {
       while (true) {
         // Check if aborted
@@ -203,13 +246,13 @@ export class SupervisorChatController {
         const { done, value } = await reader.read();
         chunkCount++;
 
-        logger.info(`[SupervisorChat] Stream read #${chunkCount}:`, { done, valueLength: value?.length });
-
         if (done) {
-          logger.info(`[SupervisorChat] SSE stream closed after ${chunkCount} reads`);
-          // Process any remaining buffer
+          logger.info(`[SupervisorChat] Stream ended after ${chunkCount} reads`);
+          // Process any remaining complete messages in buffer
           if (buffer.trim()) {
-            logger.info('[SupervisorChat] Remaining buffer:', buffer);
+            // Add a final \n\n to ensure the last message is processed
+            buffer += '\n\n';
+            await processBuffer();
           }
           break;
         }
@@ -217,38 +260,10 @@ export class SupervisorChatController {
         // Decode chunk and add to buffer
         const chunk = decoder.decode(value, { stream: true });
         buffer += chunk;
-        logger.info(`[SupervisorChat] Received chunk (${chunk.length} chars):`, chunk.substring(0, 200));
+        logger.debug(`[SupervisorChat] Received chunk #${chunkCount} (${chunk.length} chars)`);
 
-        // Process complete SSE messages (separated by \n\n)
-        const messages = buffer.split('\n\n');
-        buffer = messages.pop() || ''; // Keep incomplete message in buffer
-
-        for (const message of messages) {
-          if (message.trim() === '') continue;
-
-          const lines = message.split('\n');
-          let eventType = '';
-          let data = '';
-
-          // Parse SSE message format
-          for (const line of lines) {
-            if (line.startsWith('event:')) {
-              eventType = line.substring(6).trim();
-            } else if (line.startsWith('data:')) {
-              data = line.substring(5).trim();
-            }
-          }
-
-          // Handle the event
-          if (data) {
-            try {
-              const parsedData = JSON.parse(data);
-              await this.handleSSEEvent(eventType || 'message', parsedData);
-            } catch (error) {
-              logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
-            }
-          }
-        }
+        // Process complete SSE messages
+        buffer = await processBuffer();
       }
     } finally {
       reader.releaseLock();
