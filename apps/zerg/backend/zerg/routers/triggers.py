@@ -8,11 +8,8 @@ and executes the associated agent immediately.
 # typing and forward-ref convenience
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
-import time
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -129,55 +126,63 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     return trg
 
 
-@router.post("/{trigger_id}/events", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{trigger_id}/events",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[],  # Override router-level auth - this endpoint is public
+)
 async def fire_trigger_event(
     *,
     trigger_id: int = Path(..., gt=0),
     payload: Dict = Body(default={}),  # Arbitrary JSON body
-    x_zerg_timestamp: str = Header(..., alias="X-Zerg-Timestamp"),
-    x_zerg_signature: str = Header(..., alias="X-Zerg-Signature"),
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Webhook endpoint that fires a trigger event.
+    """Public webhook endpoint that fires a trigger event.
 
-    Security: the caller must sign the request body using HMAC-SHA256.
+    Security: Bearer token authentication using the trigger's unique secret.
 
-    Signature string to hash:
-        "{timestamp}.{raw_body}"
+    Request format:
+        POST /api/triggers/{trigger_id}/events
+        Authorization: Bearer <trigger.secret>
+        Content-Type: application/json
 
-    where *timestamp* is the same value sent in `X-Zerg-Timestamp` header and
-    *raw_body* is the exact JSON body (no whitespace changes).  The hex-encoded
-    digest is provided via `X-Zerg-Signature` header.
+        {arbitrary json body or empty}
+
+    Returns:
+        202 Accepted: {"status": "accepted"} - triggered successfully
+        404 Not Found: invalid token OR unknown trigger (don't leak existence)
+        413 Payload Too Large: request body exceeds 256 KiB limit
     """
 
-    # 1) Validate timestamp (prevents replay attacks)
-    try:
-        ts_int = int(x_zerg_timestamp)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid X-Zerg-Timestamp header")
-
-    now = int(time.time())
-    if abs(now - ts_int) > constants.TRIGGER_TIMESTAMP_TOLERANCE_S:
-        raise HTTPException(status_code=400, detail="Timestamp skew too large")
-
-    # 2) Recompute HMAC and compare (constant-time)
-    signing_secret = constants.TRIGGER_SIGNING_SECRET.encode()
-
-    # We must use the *raw* body as delivered on the wire, not the already-
-    # parsed `payload` dict.  FastAPI gives us access via request.body() but
-    # we'd need Request object; instead re-serialise deterministically.
+    # 1) Validate body size (256 KiB limit)
     body_serialised = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    MAX_BODY_SIZE = 256 * 1024  # 256 KiB
+    if len(body_serialised.encode()) > MAX_BODY_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Request body too large (max 256 KiB)",
+        )
 
-    data_to_sign = f"{x_zerg_timestamp}.{body_serialised}".encode()
-    expected_sig = hmac.new(signing_secret, data_to_sign, hashlib.sha256).hexdigest()
+    # 2) Extract bearer token from Authorization header
+    if not authorization or not authorization.startswith("Bearer "):
+        # Return 404 to avoid leaking trigger existence
+        raise HTTPException(status_code=404, detail="Not found")
 
-    if not hmac.compare_digest(expected_sig, x_zerg_signature):
-        raise HTTPException(status_code=403, detail="Invalid signature")
+    bearer_token = authorization[7:]  # Strip "Bearer " prefix
 
-    # 3) Check trigger exists
+    # 3) Fetch trigger and validate token (constant-time comparison)
     trg = crud.get_trigger(db, trigger_id)
     if trg is None:
-        raise HTTPException(status_code=404, detail="Trigger not found")
+        # Return 404 for unknown trigger
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Constant-time comparison to prevent timing attacks
+    import secrets
+
+    if not secrets.compare_digest(bearer_token, trg.secret):
+        # Return 404 for invalid token (don't leak trigger existence)
+        raise HTTPException(status_code=404, detail="Not found")
 
     # 4) Publish event on internal bus
     await event_bus.publish(
