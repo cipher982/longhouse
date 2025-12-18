@@ -121,6 +121,9 @@ class SupervisorService:
             "send_email",
             # V1.1: knowledge base search for user context
             "knowledge_search",
+            # V1.2: web research capabilities
+            "web_search",
+            "web_fetch",
         ]
 
         agent = crud.create_agent(

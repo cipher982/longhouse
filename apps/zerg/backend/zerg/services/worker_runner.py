@@ -464,6 +464,8 @@ class WorkerRunner:
                 "get_current_time",  # Time lookups
                 "send_email",        # Notifications (if configured)
                 "knowledge_search",  # V1.1: user knowledge base search
+                "web_search",        # V1.2: web search via Tavily
+                "web_fetch",         # V1.2: fetch and parse web pages
             ],
         )
 
