@@ -392,6 +392,9 @@ async def test_temporary_agent_has_infrastructure_tools(
         assert "get_current_time" in temp_agent.allowed_tools
         # V1.1: knowledge_search should be available to workers
         assert "knowledge_search" in temp_agent.allowed_tools
+        # V1.2: web research tools should be available to workers
+        assert "web_search" in temp_agent.allowed_tools
+        assert "web_fetch" in temp_agent.allowed_tools
     finally:
         # Clean up the test agent
         crud.delete_agent(db_session, temp_agent.id)

@@ -369,16 +369,10 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
     Validates the session from cookie (preferred) or Authorization header.
     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
 
-    This endpoint is designed to be called by nginx auth_request to gate
-    protected routes like /dashboard and /chat.
-
-    Security: Performs full validation including:
-    - JWT signature verification
-    - Token expiry check
-    - User existence in database
-    - User is_active status
+    In development mode (AUTH_DISABLED=1), always returns 204.
     """
-    from zerg.auth.strategy import _decode_jwt_fallback
+    if _settings.auth_disabled:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Try to extract token: prefer cookie, fall back to bearer
     token: str | None = None

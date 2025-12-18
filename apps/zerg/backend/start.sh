@@ -20,6 +20,11 @@ echo "=== Migration Log $(date) ===" > "$MIGRATION_LOG"
 
 # Output to both console and log file
 {
+    echo "🔄 Initializing database schema if needed..."
+    python scripts/init_db.py 2>&1 || {
+        echo "⚠️ Database initialization failed (might be ok if using existing DB)"
+    }
+
     echo "🔄 Running database migrations..."
     echo "Working directory: $(pwd)"
     echo "Alembic config exists: $(test -f alembic.ini && echo 'YES' || echo 'NO')"
