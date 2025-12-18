@@ -463,6 +463,7 @@ class WorkerRunner:
                 "http_request",      # API calls and web requests
                 "get_current_time",  # Time lookups
                 "send_email",        # Notifications (if configured)
+                "contact_user",      # V1.3: notify owner about task completion/errors
                 "knowledge_search",  # V1.1: user knowledge base search
                 "web_search",        # V1.2: web search via Tavily
                 "web_fetch",         # V1.2: fetch and parse web pages
