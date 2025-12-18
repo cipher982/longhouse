@@ -939,3 +939,41 @@ class KnowledgeDocument(Base):
     # Relationships
     source = relationship("KnowledgeSource", back_populates="documents")
     owner = relationship("User", backref="knowledge_documents")
+
+
+# ---------------------------------------------------------------------------
+# User Tasks – Agent-created tasks for users
+# ---------------------------------------------------------------------------
+
+
+class UserTask(Base):
+    """A task created by an agent for a user.
+
+    Agents can use task management tools to create, update, and track
+    tasks for their users. This provides a lightweight task management
+    system without external dependencies.
+    """
+
+    __tablename__ = "user_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Foreign key to user (CASCADE delete when user is removed)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Task details
+    title = Column(Text, nullable=False)
+    notes = Column(Text, nullable=True)
+
+    # Status: pending, done, cancelled
+    status = Column(String(20), nullable=False, default="pending")
+
+    # Optional due date
+    due_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", backref="user_tasks")
