@@ -176,9 +176,10 @@ class TestWebSearch:
         # Test tool args schema
         schema = web_search_tool.args_schema
         assert schema is not None
-        assert "query" in schema.schema()["properties"]
-        assert "max_results" in schema.schema()["properties"]
-        assert "search_depth" in schema.schema()["properties"]
+        json_schema = schema.model_json_schema()
+        assert "query" in json_schema["properties"]
+        assert "max_results" in json_schema["properties"]
+        assert "search_depth" in json_schema["properties"]
 
     @patch("zerg.tools.builtin.web_search.TavilyClient")
     @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
