@@ -12,6 +12,7 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import relationship
@@ -977,3 +978,40 @@ class UserTask(Base):
 
     # Relationships
     user = relationship("User", backref="user_tasks")
+
+
+# ---------------------------------------------------------------------------
+# Agent Memory – Persistent key-value storage for agents
+# ---------------------------------------------------------------------------
+
+
+class AgentMemoryKV(Base):
+    """Persistent key-value memory storage for agents.
+
+    Allows agents to store and retrieve arbitrary data across conversations.
+    Each entry is scoped to a user and can be tagged for easy retrieval.
+    Optional expiration allows for automatic cleanup of temporary data.
+    """
+
+    __tablename__ = "agent_memory_kv"
+
+    # Composite primary key (user_id, key)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, primary_key=True)
+    key = Column(Text, nullable=False, primary_key=True)
+
+    # JSON value - can store any JSON-serializable data (dict, list, string, number, bool)
+    # Don't use MutableDict here since the value can be any JSON type, not just dict
+    value = Column(JSON, nullable=False)
+
+    # Optional tags for filtering (stored as JSON array)
+    tags = Column(MutableList.as_mutable(JSON), nullable=True, default=lambda: [])
+
+    # Optional expiration
+    expires_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", backref="agent_memory")
