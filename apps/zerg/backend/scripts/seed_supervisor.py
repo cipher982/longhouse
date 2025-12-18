@@ -24,7 +24,7 @@ from zerg.database import get_db
 from zerg.models.enums import AgentStatus
 from zerg.models.models import Agent
 from zerg.models_config import DEFAULT_MODEL_ID
-from zerg.prompts.supervisor_prompt import get_supervisor_prompt
+from zerg.prompts import build_supervisor_prompt
 
 
 def get_or_create_user(db, email: str = None):
@@ -95,10 +95,15 @@ def seed_supervisor(user_email: str = None, name: str = "Supervisor"):
         "http_request",
         # Notification tools (if configured)
         "send_email",
+        # Knowledge base
+        "knowledge_search",
+        # Runner setup
+        "runner_list",
+        "runner_create_enroll_token",
     ]
 
-    # Get the comprehensive system prompt
-    system_prompt = get_supervisor_prompt()
+    # Get the context-aware system prompt (preferred over legacy template)
+    system_prompt = build_supervisor_prompt(user)
 
     # Simple task instructions that will be appended to every conversation
     task_instructions = """You are helping the user accomplish their goals.
