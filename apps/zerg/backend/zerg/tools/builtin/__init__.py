@@ -4,6 +4,7 @@ This module contains the standard tools that come with the platform.
 All tools in this module are aggregated into a single list for registry construction.
 """
 
+from zerg.tools.builtin.agent_memory_tools import TOOLS as AGENT_MEMORY_TOOLS
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
@@ -31,7 +32,8 @@ from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
 from zerg.tools.registry import ToolRegistry
 
 BUILTIN_TOOLS = (
-    CONNECTOR_TOOLS
+    AGENT_MEMORY_TOOLS
+    + CONNECTOR_TOOLS
     + CONTACT_USER_TOOLS
     + CONTAINER_TOOLS
     + DATETIME_TOOLS
