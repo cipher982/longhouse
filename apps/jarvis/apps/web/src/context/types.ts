@@ -28,14 +28,20 @@ export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'proce
 /**
  * Chat message
  */
+export type AssistantStatus = 'queued' | 'typing' | 'streaming' | 'final' | 'error' | 'canceled';
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp?: Date
   isStreaming?: boolean
+  skipAnimation?: boolean
   /** OpenAI item ID for matching transcripts to placeholders */
   itemId?: string
+  /** New fields for Option C (Jarvis Typing Indicator) */
+  status?: AssistantStatus
+  correlationId?: string
 }
 
 /**
@@ -80,6 +86,7 @@ export type AppAction =
   | { type: 'SET_MESSAGES'; messages: ChatMessage[] }
   | { type: 'ADD_MESSAGE'; message: ChatMessage }
   | { type: 'UPDATE_MESSAGE'; itemId: string; content: string }
+  | { type: 'UPDATE_MESSAGE_BY_CORRELATION_ID'; correlationId: string; updates: Partial<ChatMessage> }
   | { type: 'SET_STREAMING_CONTENT'; content: string }
   | { type: 'SET_USER_TRANSCRIPT_PREVIEW'; text: string }
   | { type: 'SET_CONVERSATION_ID'; id: string | null }

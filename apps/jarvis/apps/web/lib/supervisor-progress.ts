@@ -525,25 +525,21 @@ export class SupervisorProgressUI {
       return;
     }
 
+    // Container is reserved for worker delegation progress (top of chat).
+    // In the 'thinking' phase we render nothing here; React renders an in-chat typing bubble.
+    if (this.phase === 'thinking') {
+      this.container.innerHTML = '';
+      this.container.style.display = 'none';
+      this.container.classList.remove('supervisor-progress--delegating');
+      this.container.classList.add('supervisor-progress--thinking');
+      return;
+    }
+
     this.container.style.display = 'block';
 
     // Update phase classes for CSS styling
-    this.container.classList.toggle('supervisor-progress--thinking', this.phase === 'thinking');
-    this.container.classList.toggle('supervisor-progress--delegating', this.phase === 'delegating');
-
-    if (this.phase === 'thinking') {
-      // Minimal thinking indicator (typing dots)
-      this.container.innerHTML = `
-        <div class="supervisor-thinking-indicator">
-          <div class="thinking-dots">
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-          </div>
-        </div>
-      `;
-      return;
-    }
+    this.container.classList.remove('supervisor-progress--thinking');
+    this.container.classList.add('supervisor-progress--delegating');
 
     // Full delegating modal with workers
     const workersArray = Array.from(this.workers.values());

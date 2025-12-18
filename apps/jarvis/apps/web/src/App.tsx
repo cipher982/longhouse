@@ -6,7 +6,7 @@
  * and React hooks subscribe to those events and update React state.
  */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
@@ -158,8 +158,6 @@ export default function App() {
 
         <ChatContainer
           messages={state.messages}
-          isStreaming={false}
-          streamingContent=""
           userTranscriptPreview={state.userTranscriptPreview}
         />
 

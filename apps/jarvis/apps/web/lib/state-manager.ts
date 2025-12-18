@@ -68,7 +68,8 @@ export type StateChangeEvent =
   | { type: 'VOICE_STATUS_CHANGED'; status: VoiceStatus }
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
-  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date } }
+  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date; skipAnimation?: boolean; correlationId?: string } }
+  | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
   | { type: 'HISTORY_LOADED'; history: any[] };
@@ -184,15 +185,23 @@ export class StateManager {
   /**
    * Notify that a message has been finalized (streaming complete)
    */
-  finalizeMessage(content: string): void {
+  finalizeMessage(content: string, correlationId?: string): void {
     const message = {
       id: crypto.randomUUID(),
       role: 'assistant' as const,
       content,
       timestamp: new Date(),
       skipAnimation: true, // Skip fade-in since user already saw it streaming
+      correlationId,
     };
     this.notifyListeners({ type: 'MESSAGE_FINALIZED', message });
+  }
+
+  /**
+   * Update assistant message status via correlationId
+   */
+  updateAssistantStatus(correlationId: string, status: string, content?: string): void {
+    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED', correlationId, status, content });
   }
 
   /**

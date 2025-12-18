@@ -11,6 +11,9 @@ describe('SupervisorProgressUI tool events', () => {
     ui = new SupervisorProgressUI();
     ui.initialize('supervisor-progress');
     eventBus.emit('supervisor:started', { runId: 1, task: 'test task', timestamp: Date.now() });
+    // Progress UI only renders once we enter 'delegating' phase (worker spawned).
+    eventBus.emit('supervisor:worker_spawned', { jobId: 1, task: 'worker task', timestamp: Date.now() });
+    eventBus.emit('supervisor:worker_started', { jobId: 1, workerId: 'worker-1', timestamp: Date.now() });
   });
 
   afterEach(() => {
@@ -39,6 +42,7 @@ describe('SupervisorProgressUI tool events', () => {
   });
 
   it('drops tool events with empty workerId', () => {
+    const workersBefore = (ui as unknown as { workers: Map<number, any> }).workers.size;
     eventBus.emit('worker:tool_started', {
       workerId: '',
       toolName: 'ssh_exec',
@@ -48,6 +52,6 @@ describe('SupervisorProgressUI tool events', () => {
     });
 
     const workers = (ui as unknown as { workers: Map<number, any> }).workers;
-    expect(workers.size).toBe(0);
+    expect(workers.size).toBe(workersBefore);
   });
 });
