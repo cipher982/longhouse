@@ -946,9 +946,10 @@ class JarvisChatRequest(BaseModel):
     """Request for text chat with Supervisor."""
 
     message: str = Field(..., description="User message text")
+    client_correlation_id: Optional[str] = Field(None, description="Client-generated correlation ID")
 
 
-async def _chat_stream_generator(run_id: int, owner_id: int, message: str):
+async def _chat_stream_generator(run_id: int, owner_id: int, message: str, client_correlation_id: Optional[str] = None):
     """Generate SSE events for chat streaming.
 
     Subscribes to supervisor events and streams assistant responses.
@@ -1011,6 +1012,7 @@ async def _chat_stream_generator(run_id: int, owner_id: int, message: str):
             "data": json.dumps({
                 "message": "Chat stream connected",
                 "run_id": run_id,
+                "client_correlation_id": client_correlation_id,
             }),
         }
 
@@ -1044,6 +1046,7 @@ async def _chat_stream_generator(run_id: int, owner_id: int, message: str):
                     "data": json.dumps({
                         "type": event_type,
                         "payload": payload,
+                        "client_correlation_id": client_correlation_id,
                         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     }),
                 }
@@ -1134,7 +1137,7 @@ async def jarvis_chat(
     # Return SSE stream - background task is started inside the generator
     # to avoid race conditions with event subscriptions
     return EventSourceResponse(
-        _chat_stream_generator(run.id, current_user.id, request.message)
+        _chat_stream_generator(run.id, current_user.id, request.message, request.client_correlation_id)
     )
 
 
