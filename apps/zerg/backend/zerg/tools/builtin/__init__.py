@@ -5,6 +5,7 @@ All tools in this module are aggregated into a single list for registry construc
 """
 
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
+from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.container_tools import TOOLS as CONTAINER_TOOLS
 from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
 from zerg.tools.builtin.discord_tools import TOOLS as DISCORD_TOOLS
@@ -30,6 +31,7 @@ from zerg.tools.registry import ToolRegistry
 
 BUILTIN_TOOLS = (
     CONNECTOR_TOOLS
+    + CONTACT_USER_TOOLS
     + CONTAINER_TOOLS
     + DATETIME_TOOLS
     + DISCORD_TOOLS
