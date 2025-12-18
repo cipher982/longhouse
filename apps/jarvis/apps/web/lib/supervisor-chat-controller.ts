@@ -56,6 +56,8 @@ export class SupervisorChatController {
   private currentAbortController: AbortController | null = null;
   private currentRunId: number | null = null;
   private lastCorrelationId: string | null = null;
+  private watchdogTimer: number | null = null;
+  private readonly WATCHDOG_TIMEOUT_MS = 60000;
 
   constructor(config: SupervisorChatConfig = {}) {
     this.config = {
@@ -131,6 +133,11 @@ export class SupervisorChatController {
     // Create new abort controller for this request
     this.currentAbortController = new AbortController();
 
+    // Start watchdog timer if we have a correlation ID
+    if (clientCorrelationId) {
+      this.startWatchdog(clientCorrelationId);
+    }
+
     try {
       // Start SSE stream
       await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId);
@@ -145,12 +152,45 @@ export class SupervisorChatController {
       logger.error('[SupervisorChat] Failed to send message:', error);
       throw error;
     } finally {
+      this.clearWatchdog();
       this.currentAbortController = null;
       this.currentRunId = null;
       // Only clear if this was the correlation ID we were tracking for this call
       if (this.lastCorrelationId === clientCorrelationId) {
         this.lastCorrelationId = null;
       }
+    }
+  }
+
+  /**
+   * Start the 60s watchdog timer
+   */
+  private startWatchdog(correlationId: string): void {
+    this.clearWatchdog();
+    this.watchdogTimer = window.setTimeout(() => {
+      logger.warn(`[SupervisorChat] Watchdog timeout for ${correlationId}`);
+      stateManager.updateAssistantStatus(correlationId, 'error');
+      stateManager.showToast('Timed out waiting for response', 'error');
+      this.cancel();
+    }, this.WATCHDOG_TIMEOUT_MS);
+  }
+
+  /**
+   * Reset ("pet") the watchdog timer to keep the request alive
+   */
+  private petWatchdog(correlationId?: string): void {
+    if (this.watchdogTimer && correlationId) {
+      this.startWatchdog(correlationId);
+    }
+  }
+
+  /**
+   * Clear any active watchdog timer
+   */
+  private clearWatchdog(): void {
+    if (this.watchdogTimer !== null) {
+      window.clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
   }
 
@@ -184,12 +224,13 @@ export class SupervisorChatController {
       throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
     }
 
-    if (!response.body) {
+    const body = response.body;
+    if (!body) {
       throw new Error('No response body for SSE stream');
     }
 
     // Process SSE stream
-    await this.processSSEStream(response.body, signal);
+    await this.processSSEStream(body, signal);
   }
 
   /**
@@ -290,6 +331,7 @@ export class SupervisorChatController {
 
     // Handle connected event separately
     if (eventType === 'connected') {
+      this.petWatchdog(correlationId);
       this.currentRunId = data.run_id;
       logger.info(`[SupervisorChat] Connected to run ${data.run_id}, correlationId: ${correlationId}`);
       if (correlationId) {
@@ -310,6 +352,7 @@ export class SupervisorChatController {
 
     switch (eventType) {
       case 'supervisor_started':
+        this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor started');
         if (payload.run_id) {
           this.currentRunId = payload.run_id;
@@ -328,6 +371,7 @@ export class SupervisorChatController {
         break;
 
       case 'supervisor_thinking':
+        this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor thinking:', payload.message);
         if (correlationId) {
           stateManager.updateAssistantStatus(correlationId, 'typing');
@@ -342,6 +386,7 @@ export class SupervisorChatController {
         break;
 
       case 'supervisor_complete':
+        this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor complete');
         const result = payload.result;
 
@@ -364,6 +409,10 @@ export class SupervisorChatController {
 
           // Finalize the message
           await conversationController.finalizeStreaming();
+
+          if (correlationId) {
+            stateManager.updateAssistantStatus(correlationId, 'final', result);
+          }
         }
 
         // Clear supervisor progress UI
