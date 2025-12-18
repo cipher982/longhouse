@@ -254,7 +254,7 @@ worker_result = read_worker_result("2024-12-03T14-32-00_analyze-logs")
 Run the interactive demo:
 
 ```bash
-cd /Users/davidrose/git/zerg/apps/zerg/backend
+cd apps/zerg/backend
 uv run python examples/supervisor_tools_demo.py
 ```
 
@@ -262,15 +262,15 @@ uv run python examples/supervisor_tools_demo.py
 
 ### Created:
 
-- `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/supervisor_tools.py` - Tool implementations
-- `/Users/davidrose/git/zerg/apps/zerg/backend/tests/test_supervisor_tools.py` - Unit tests
-- `/Users/davidrose/git/zerg/apps/zerg/backend/tests/test_supervisor_tools_integration.py` - Integration tests
-- `/Users/davidrose/git/zerg/apps/zerg/backend/examples/supervisor_tools_demo.py` - Demo script
-- `/Users/davidrose/git/zerg/apps/zerg/backend/docs/supervisor_tools.md` - This document
+- `zerg/tools/builtin/supervisor_tools.py` - Tool implementations
+- `tests/test_supervisor_tools.py` - Unit tests
+- `tests/test_supervisor_tools_integration.py` - Integration tests
+- `examples/supervisor_tools_demo.py` - Demo script
+- `docs/supervisor_tools.md` - This document
 
 ### Modified:
 
-- `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/__init__.py` - Registered supervisor tools
+- `zerg/tools/builtin/__init__.py` - Registered supervisor tools
 
 ## Next Steps
 
