@@ -56,9 +56,16 @@ make env-check     # Validate required env vars before starting
 make stop
 
 # Run tests
-make test          # All tests
+make test          # All tests (Unit + E2E)
 make test-zerg     # Backend + frontend + e2e
-make test-jarvis   # Jarvis Playwright tests
+make test-jarvis   # Jarvis unit tests
+make test-jarvis-e2e # Jarvis E2E tests (isolated environment)
+
+# Targeted E2E testing
+make test-e2e-up     # Start isolated E2E environment
+make test-e2e-single TEST=name # Run single test (e.g. TEST=supervisor-progress)
+make test-e2e-logs   # View E2E service logs
+make test-e2e-down   # Cleanup E2E environment
 
 # Regenerate generated code
 make generate-sdk  # OpenAPI types
@@ -83,6 +90,24 @@ Single unified compose file: `docker/docker-compose.yml`
 docker compose -f docker/docker-compose.yml --profile full up
 docker compose -f docker/docker-compose.yml --profile zerg up
 ```
+
+## Testing Infrastructure
+
+Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to prevent data corruption in your development database.
+
+### E2E Test Isolation
+- **Project Name**: E2E tests run under the `zerg-e2e` Docker project name.
+- **Network**: All services communicate via an internal `test` network.
+- **Database**: Uses a dedicated `postgres:15-alpine` container with its own volume.
+- **Entry Point**: A dedicated `nginx` reverse proxy handles routing for tests.
+
+### Database Initialization
+- The backend automatically detects missing tables and initializes the schema on startup via `scripts/init_db.py`.
+- No manual migration steps are required for fresh test environments.
+
+### Running Tests
+- Use `make test-jarvis-e2e` for a full clean run.
+- For active development, use `make test-e2e-up` to keep the environment running, then `make test-e2e-single TEST=<filename>` to iterate quickly on a specific test file.
 
 ## Conventions
 
@@ -127,6 +152,10 @@ Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API 
 6. **Ports**: external entry 30080; service ports (8080/47200/47300) are internal. Avoid binding conflicts if running pieces standalone.
 
 7. **Python virtual env**: backend uses `apps/zerg/backend/.venv/`; use `uv run` or activate venv.
+
+8. **E2E Test Isolation**: E2E tests run in a separate Docker project (`zerg-e2e`). If tests fail due to "database connection" issues, ensure no other containers are conflicting on the internal network and try `make test-e2e-reset`.
+
+9. **Auth in Tests**: When `AUTH_DISABLED=1` (default for tests), the `/api/auth/verify` endpoint always returns 204. This allows the frontend to proceed without a real login.
 
 ## Environment Setup
 
