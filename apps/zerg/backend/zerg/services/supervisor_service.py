@@ -119,6 +119,7 @@ class SupervisorService:
             "runner_list",
             "runner_create_enroll_token",
             "send_email",
+            "contact_user",  # V1.3: notify owner about events
             # V1.1: knowledge base search for user context
             "knowledge_search",
             # V1.2: web research capabilities
