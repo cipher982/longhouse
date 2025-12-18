@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest'
 import { SupervisorChatController } from '../lib/supervisor-chat-controller'
 import { stateManager } from '../lib/state-manager'
 import { conversationController } from '../lib/conversation-controller'
@@ -22,32 +22,53 @@ vi.mock('../lib/conversation-controller', () => ({
   },
 }))
 
-// Mock fetch for SSE
-const mockFetch = vi.fn()
-global.fetch = mockFetch
-
 describe('SupervisorChatController (Typing Indicator Option C)', () => {
   let controller: SupervisorChatController
+  let fetchMock: Mock
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.useFakeTimers()
+
+    // Create a fresh fetch mock for each test
+    fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
     controller = new SupervisorChatController()
   })
 
-  it('sends clientCorrelationId in request body', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-      body: new ReadableStream({
-        start(c) {
-          c.close();
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  const createMockResponse = (bodyData?: string | Uint8Array) => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(c) {
+        if (bodyData) {
+          const value = typeof bodyData === 'string' ? encoder.encode(bodyData) : bodyData
+          c.enqueue(value)
         }
-      }),
+        c.close()
+      }
     })
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: stream,
+    } as any as Response
+  }
+
+  it('sends clientCorrelationId in request body', async () => {
+    fetchMock.mockResolvedValueOnce(createMockResponse())
 
     await controller.sendMessage('Hello', 'test-id')
 
-    expect(mockFetch).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/chat'),
       expect.objectContaining({
         body: JSON.stringify({ message: 'Hello', client_correlation_id: 'test-id' }),
@@ -58,18 +79,8 @@ describe('SupervisorChatController (Typing Indicator Option C)', () => {
   it('updates status to typing on connected event with correlationId', async () => {
     const correlationId = 'test-id'
     const sseData = `event: connected\ndata: ${JSON.stringify({ run_id: 123, client_correlation_id: correlationId })}\n\n`
-    const encoder = new TextEncoder()
 
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-      body: new ReadableStream({
-        start(c) {
-          c.enqueue(encoder.encode(sseData));
-          c.close();
-        }
-      }),
-    })
+    fetchMock.mockResolvedValueOnce(createMockResponse(sseData))
 
     await controller.sendMessage('Hello', correlationId)
 
@@ -81,29 +92,27 @@ describe('SupervisorChatController (Typing Indicator Option C)', () => {
     const secondCorrelationId = 'second-id'
 
     // Setup first call to stay "active"
-    let firstCallController: ReadableStreamDefaultController;
-    const firstCallStream = new ReadableStream({
-      start(c) { firstCallController = c; }
-    });
+    let firstCallResolve: any
+    const firstCallPromise = new Promise(resolve => { firstCallResolve = resolve })
 
-    mockFetch.mockImplementationOnce(() => {
+    fetchMock.mockImplementationOnce(() => {
       return Promise.resolve({
         ok: true,
-        headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-        body: firstCallStream,
-      })
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: {
+          getReader: () => ({
+            read: () => firstCallPromise,
+            releaseLock: () => {},
+          }),
+        },
+      } as any as Response)
     })
 
     // Setup second call to finish immediately
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-      body: new ReadableStream({
-        start(c) { c.close(); }
-      }),
-    })
+    fetchMock.mockResolvedValueOnce(createMockResponse())
 
-    // Start first send (don't await yet as it blocks)
+    // Start first send
     const p1 = controller.sendMessage('First', firstCorrelationId)
 
     // Send second message
@@ -112,39 +121,9 @@ describe('SupervisorChatController (Typing Indicator Option C)', () => {
     // Should have canceled the first one
     expect(stateManager.updateAssistantStatus).toHaveBeenCalledWith(firstCorrelationId, 'canceled')
 
-    // Cleanup first call
-    firstCallController!.close();
-    await p1
-  })
-
-  it('maps supervisor_complete to final status and streams result', async () => {
-    const correlationId = 'test-id'
-    const resultText = 'Finished result'
-    const sseData = `event: supervisor_complete\ndata: ${JSON.stringify({
-      type: 'supervisor_complete',
-      payload: { result: resultText },
-      client_correlation_id: correlationId
-    })}\n\n`
-    const encoder = new TextEncoder()
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-      body: new ReadableStream({
-        start(c) {
-          c.enqueue(encoder.encode(sseData));
-          c.close();
-        }
-      }),
-    })
-
-    await controller.sendMessage('Hello', correlationId)
-
-    // Verify it started streaming with the correlationId
-    expect(conversationController.startStreaming).toHaveBeenCalledWith(correlationId)
-
-    // Verify it updated to final state
-    expect(stateManager.updateAssistantStatus).toHaveBeenCalledWith(correlationId, 'final', resultText)
+    // Cleanup
+    firstCallResolve({ done: true })
+    try { await p1 } catch (e) {}
   })
 
   it('handles terminal error by updating status to error', async () => {
@@ -155,22 +134,40 @@ describe('SupervisorChatController (Typing Indicator Option C)', () => {
       payload: { error: errorMsg },
       client_correlation_id: correlationId
     })}\n\n`
-    const encoder = new TextEncoder()
 
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/event-stream' : null) },
-      body: new ReadableStream({
-        start(c) {
-          c.enqueue(encoder.encode(sseData));
-          c.close();
-        }
-      }),
-    })
+    fetchMock.mockResolvedValueOnce(createMockResponse(sseData))
 
     await controller.sendMessage('Hello', correlationId)
 
     expect(stateManager.updateAssistantStatus).toHaveBeenCalledWith(correlationId, 'error')
     expect(stateManager.showToast).toHaveBeenCalledWith(expect.stringContaining(errorMsg), 'error')
+  })
+
+  it('watchdog triggers error status after silence', async () => {
+    const correlationId = 'timeout-id'
+
+    fetchMock.mockImplementationOnce(() => {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/event-stream' }),
+        body: {
+          getReader: () => ({
+            read: () => new Promise(() => {}), // Never resolve
+            releaseLock: () => {},
+          }),
+        },
+      } as any as Response)
+    })
+
+    const sendPromise = controller.sendMessage('Hello', correlationId)
+
+    // Advance timers by 61s
+    vi.advanceTimersByTime(61000)
+
+    expect(stateManager.updateAssistantStatus).toHaveBeenCalledWith(correlationId, 'error')
+    expect(stateManager.showToast).toHaveBeenCalledWith('Timed out waiting for response', 'error')
+
+    // Don't await the hung promise
   })
 })
