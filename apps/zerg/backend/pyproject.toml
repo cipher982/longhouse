@@ -45,6 +45,7 @@ dependencies = [
     "psycopg>=3.2.10",
     "pathspec>=0.12.0",
     "tavily-python>=0.7.0",
+    "trafilatura>=2.0.0",
 ]
 
 [build-system]
