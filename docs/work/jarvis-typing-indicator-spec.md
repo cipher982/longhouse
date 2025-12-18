@@ -1,5 +1,10 @@
 # Jarvis “Typing” Indicator Spec (Option C: Two-Step Confirm)
 
+## Status
+
+- **Implemented:** Yes (as of 2025-12-18)
+- **Open items:** None
+
 ## Goal
 
 Make the assistant “typing” UI feel instant and trustworthy, without conflating it with worker/progress UI:
@@ -71,7 +76,7 @@ These are logical events; wire them to actual app events (SSE/stateManager/etc.)
 
 - `USER_SEND`:
   - Create assistant placeholder bubble in `queued`
-  - Start a **max timeout** timer (e.g. 60s) → `error` if no progress
+  - Start a **max timeout** timer (60s) → `error` if no progress (and abort the stream)
 
 #### Confirmed typing
 
@@ -133,6 +138,7 @@ If backend echo isn’t available, a fallback can be used (e.g. “most recent p
 - `queued` should be visually subtle (empty bubble, shimmer, or minimal placeholder).
 - Dots should appear only after `SEND_ACK`/`RUN_STARTED`.
 - Timeout: 60s recommended before flipping to `error` (tune based on worst-case runs).
+- Watchdog should be **“petted”** on any evidence of liveness (e.g. `connected`, progress events, and `heartbeat`).
 
 ## Testing Checklist
 
@@ -147,6 +153,16 @@ If backend echo isn’t available, a fallback can be used (e.g. “most recent p
 ## Mapping to Current Jarvis Events (Implementation Notes)
 
 This section documents suggested wiring to existing Jarvis web events as of December 2025.
+
+### Actual wiring (implemented)
+
+- `USER_SEND` → frontend creates assistant placeholder with `status='queued'` and a `clientCorrelationId`.
+- `SEND_ACK` → **SSE `connected` event** (server sends `run_id` + echoes `client_correlation_id`) transitions `queued → typing`.
+- `RUN_STARTED` / “still alive” → `supervisor_started`, `supervisor_thinking`, and `heartbeat` pet the watchdog and keep `typing` live.
+- `ASSISTANT_TOKEN` → first streaming/content update transitions to `streaming` (same bubble).
+- `ASSISTANT_FINAL` → message finalizes into `final` (same bubble).
+- `USER_CANCEL` (multi-send abort) → previous bubble is explicitly marked `canceled` before aborting the previous SSE stream.
+- `RUN_ERROR` or watchdog timeout → bubble becomes `error` and the stream is aborted.
 
 ### Likely event sources
 
