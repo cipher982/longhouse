@@ -1352,6 +1352,20 @@ wheels = [
 ]
 
 [[package]]
+name = "tavily-python"
+version = "0.7.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "requests" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/eb/d7371ee68119380ab6561c6998eacf3031327ba89c6081d36128ab4a2184/tavily_python-0.7.17.tar.gz", hash = "sha256:437ba064639dfdce1acdbc37cbb73246abe500ab735e988a4b8698a8d5fb7df7", size = 21321, upload-time = "2025-12-17T17:08:39.3Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/ce/88565f0c9f7654bc90e19f1e76b3bffee7ff9c1741a2124ec2f2900fb080/tavily_python-0.7.17-py3-none-any.whl", hash = "sha256:a2725b9cba71e404e73d19ff277df916283c10100137c336e07f8e1bd7789fcf", size = 18214, upload-time = "2025-12-17T17:08:38.442Z" },
+]
+
+[[package]]
 name = "tenacity"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1607,6 +1621,7 @@ dependencies = [
     { name = "simpleeval" },
     { name = "sqlalchemy" },
     { name = "sse-starlette" },
+    { name = "tavily-python" },
     { name = "testcontainers" },
     { name = "uvicorn" },
     { name = "websockets" },
@@ -1645,6 +1660,7 @@ requires-dist = [
     { name = "simpleeval", specifier = ">=1.0.3" },
     { name = "sqlalchemy", specifier = ">=2.0.38" },
     { name = "sse-starlette", specifier = ">=1.6.5" },
+    { name = "tavily-python", specifier = ">=0.7.0" },
     { name = "testcontainers", specifier = ">=4.13.1" },
     { name = "uvicorn", specifier = ">=0.24.0" },
     { name = "websockets", specifier = ">=12.0" },
