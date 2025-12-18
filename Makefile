@@ -231,6 +231,10 @@ test-e2e-down: ## Stop and clean up isolated E2E environment
 	@echo "🧹 Cleaning up E2E environment..."
 	$(COMPOSE_E2E) down -v --remove-orphans
 
+test-e2e-reset: ## Reset E2E database and environment
+	@$(MAKE) test-e2e-down
+	@$(MAKE) test-e2e-up
+
 test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=supervisor-progress)
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=test-name" && exit 1)
 	@echo "🧪 Running single E2E test: $(TEST)..."

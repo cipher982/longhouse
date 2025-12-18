@@ -374,6 +374,8 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
     if _settings.auth_disabled:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    from zerg.auth.strategy import _decode_jwt_fallback
+
     # Try to extract token: prefer cookie, fall back to bearer
     token: str | None = None
 
