@@ -34,6 +34,13 @@ interface WorkerState {
 }
 
 /**
+ * Two-phase display mode:
+ * - 'thinking': Minimal indicator (typing dots) for quick responses
+ * - 'delegating': Full modal with worker details for complex tasks
+ */
+type ProgressPhase = 'thinking' | 'delegating';
+
+/**
  * Display mode for supervisor progress UI
  * - 'floating': Fixed position toast at bottom-right (always visible)
  * - 'inline': Embedded in chat flow (original behavior, can scroll out of view)
@@ -51,6 +58,7 @@ export class SupervisorProgressUI {
   private tickerInterval: number | null = null; // For live duration updates
   private clearTimeout: number | null = null; // For delayed clear after complete/error
   private displayMode: DisplayMode = 'floating';
+  private phase: ProgressPhase = 'thinking'; // Two-phase: thinking (minimal) → delegating (full modal)
 
   constructor() {
     this.subscribeToEvents();
@@ -182,6 +190,7 @@ export class SupervisorProgressUI {
 
   /**
    * Handle supervisor started
+   * Starts in 'thinking' phase with minimal indicator (typing dots)
    */
   private handleStarted(runId: number, task: string): void {
     // Cancel any pending clear from previous supervisor complete/error
@@ -189,14 +198,13 @@ export class SupervisorProgressUI {
 
     this.isActive = true;
     this.currentRunId = runId;
+    this.phase = 'thinking'; // Start minimal - upgrade on worker spawn
     this.workers.clear();
     this.workersByWorkerId.clear();
-    this.startTicker();
-    console.log(`[SupervisorProgress] Started run ${runId}: ${task}`);
+    // Don't start ticker yet - only needed for delegation phase
+    console.log(`[SupervisorProgress] Started run ${runId} (thinking phase): ${task}`);
     this.render();
-
-    // Draw attention to the supervisor UI when it activates
-    this.pulseAttention();
+    // No attention pulse for thinking phase - it's subtle
   }
 
   /**
@@ -232,8 +240,17 @@ export class SupervisorProgressUI {
 
   /**
    * Handle worker spawned
+   * Upgrades from 'thinking' to 'delegating' phase on first worker
    */
   private handleWorkerSpawned(jobId: number, task: string): void {
+    // Upgrade to full modal on first worker spawn
+    if (this.phase === 'thinking') {
+      this.phase = 'delegating';
+      this.startTicker(); // Now we need live duration updates
+      this.pulseAttention(); // Draw attention when upgrading to full modal
+      console.log(`[SupervisorProgress] Upgraded to delegating phase`);
+    }
+
     this.workers.set(jobId, {
       jobId,
       task,
@@ -417,11 +434,19 @@ export class SupervisorProgressUI {
 
   /**
    * Handle supervisor complete
+   * Clears immediately if still in 'thinking' phase (quick response, no workers)
+   * Delays clear if in 'delegating' phase (let user see final state)
    */
   private handleComplete(runId: number, result: string, status: string): void {
-    console.log(`[SupervisorProgress] Complete: ${runId} (${status})`);
-    // Keep showing for a moment then clear
-    this.scheduleClear(2000);
+    console.log(`[SupervisorProgress] Complete: ${runId} (${status}, phase: ${this.phase})`);
+
+    if (this.phase === 'thinking') {
+      // Quick response with no workers - clear immediately
+      this.clear();
+    } else {
+      // Delegating phase - let user see final state for a moment
+      this.scheduleClear(2000);
+    }
   }
 
   /**
@@ -451,6 +476,7 @@ export class SupervisorProgressUI {
     this.cancelPendingClear();
     this.isActive = false;
     this.currentRunId = null;
+    this.phase = 'thinking'; // Reset phase for next run
     this.workers.clear();
     this.workersByWorkerId.clear();
     this.stopTicker();
@@ -487,6 +513,7 @@ export class SupervisorProgressUI {
 
   /**
    * Render the progress UI
+   * Shows minimal "thinking" indicator or full "delegating" modal based on phase
    */
   private render(): void {
     if (!this.container) return;
@@ -494,14 +521,33 @@ export class SupervisorProgressUI {
     if (!this.isActive) {
       this.container.innerHTML = '';
       this.container.style.display = 'none';
+      this.container.classList.remove('supervisor-progress--thinking', 'supervisor-progress--delegating');
       return;
     }
 
     this.container.style.display = 'block';
 
+    // Update phase classes for CSS styling
+    this.container.classList.toggle('supervisor-progress--thinking', this.phase === 'thinking');
+    this.container.classList.toggle('supervisor-progress--delegating', this.phase === 'delegating');
+
+    if (this.phase === 'thinking') {
+      // Minimal thinking indicator (typing dots)
+      this.container.innerHTML = `
+        <div class="supervisor-thinking-indicator">
+          <div class="thinking-dots">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    // Full delegating modal with workers
     const workersArray = Array.from(this.workers.values());
     const runningWorkers = workersArray.filter(w => w.status === 'running' || w.status === 'spawned');
-    const completedWorkers = workersArray.filter(w => w.status === 'complete' || w.status === 'failed');
 
     this.container.innerHTML = `
       <div class="supervisor-progress-content">

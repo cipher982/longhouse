@@ -92,10 +92,12 @@ JARVIS_REALTIME_MODEL=gpt-4o-realtime-preview-2024-12-17 make test
 
 ### Tests That Run in Docker (Always)
 
-| Test File                           | Description                          |
-| ----------------------------------- | ------------------------------------ |
-| `history-hydration.e2e.spec.ts`     | History persistence and UI hydration |
-| `integration/api-endpoints.spec.js` | Jarvis BFF API endpoint tests (zerg) |
+| Test File                                   | Description                                 |
+| ------------------------------------------- | ------------------------------------------- |
+| `history-hydration.e2e.spec.ts`             | History persistence and UI hydration        |
+| `integration/api-endpoints.spec.js`         | Jarvis BFF API endpoint tests (zerg)        |
+| `supervisor-progress-indicator.e2e.spec.ts` | Two-phase supervisor progress indicator UX  |
+| `text-message-happy-path.e2e.spec.ts`       | Text message send and AI response rendering |
 
 ### Skipped Tests (Require Real OpenAI/Hardware)
 
