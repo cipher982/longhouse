@@ -36,6 +36,7 @@ export interface SupervisorChatConfig {
 interface SSEConnectedEvent {
   message: string;
   run_id: number;
+  client_correlation_id?: string;
 }
 
 interface SSESupervisorEvent {
@@ -45,13 +46,16 @@ interface SSESupervisorEvent {
     message?: string;
     result?: string;
     error?: string;
+    status?: string;
   };
+  client_correlation_id?: string;
 }
 
 export class SupervisorChatController {
   private config: SupervisorChatConfig;
   private currentAbortController: AbortController | null = null;
   private currentRunId: number | null = null;
+  private lastCorrelationId: string | null = null;
 
   constructor(config: SupervisorChatConfig = {}) {
     this.config = {
@@ -106,25 +110,30 @@ export class SupervisorChatController {
   /**
    * Send a text message to the Supervisor and handle SSE response stream
    */
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(text: string, clientCorrelationId?: string): Promise<void> {
     if (!text || text.trim().length === 0) {
       throw new Error('Cannot send empty message');
     }
 
     const trimmedText = text.trim();
-    logger.info('[SupervisorChat] Sending message:', trimmedText);
+    logger.info(`[SupervisorChat] Sending message (clientCorrelationId=${clientCorrelationId}): ${trimmedText}`);
 
     // Cancel any previous stream
     if (this.currentAbortController) {
+      if (this.lastCorrelationId) {
+        stateManager.updateAssistantStatus(this.lastCorrelationId, 'canceled');
+      }
       this.currentAbortController.abort();
     }
+
+    this.lastCorrelationId = clientCorrelationId || null;
 
     // Create new abort controller for this request
     this.currentAbortController = new AbortController();
 
     try {
       // Start SSE stream
-      await this.streamChatResponse(trimmedText, this.currentAbortController.signal);
+      await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId);
 
       logger.info('[SupervisorChat] Message sent and stream completed');
     } catch (error) {
@@ -138,13 +147,17 @@ export class SupervisorChatController {
     } finally {
       this.currentAbortController = null;
       this.currentRunId = null;
+      // Only clear if this was the correlation ID we were tracking for this call
+      if (this.lastCorrelationId === clientCorrelationId) {
+        this.lastCorrelationId = null;
+      }
     }
   }
 
   /**
    * Stream chat response via SSE
    */
-  private async streamChatResponse(message: string, signal: AbortSignal): Promise<void> {
+  private async streamChatResponse(message: string, signal: AbortSignal, client_correlation_id?: string): Promise<void> {
     const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/chat`);
 
     logger.info('[SupervisorChat] Initiating SSE stream to:', url);
@@ -156,15 +169,15 @@ export class SupervisorChatController {
         'Accept': 'text/event-stream',
       },
       credentials: 'include', // Cookie auth
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, client_correlation_id }),
       signal,
     });
 
     logger.info(`[SupervisorChat] Response status: ${response.status} ${response.statusText}`);
     logger.info('[SupervisorChat] Response headers:', {
-      contentType: response.headers.get('content-type'),
-      transferEncoding: response.headers.get('transfer-encoding'),
-      connection: response.headers.get('connection'),
+      contentType: response.headers?.get?.('content-type') ?? null,
+      transferEncoding: response.headers?.get?.('transfer-encoding') ?? null,
+      connection: response.headers?.get?.('connection') ?? null,
     });
 
     if (!response.ok) {
@@ -273,10 +286,15 @@ export class SupervisorChatController {
   private async handleSSEEvent(eventType: string, data: any): Promise<void> {
     logger.debug('[SupervisorChat] SSE event:', { eventType, data });
 
+    const correlationId = data.client_correlation_id;
+
     // Handle connected event separately
     if (eventType === 'connected') {
       this.currentRunId = data.run_id;
-      logger.info(`[SupervisorChat] Connected to run ${data.run_id}`);
+      logger.info(`[SupervisorChat] Connected to run ${data.run_id}, correlationId: ${correlationId}`);
+      if (correlationId) {
+        stateManager.updateAssistantStatus(correlationId, 'typing');
+      }
       return;
     }
 
@@ -296,6 +314,9 @@ export class SupervisorChatController {
         if (payload.run_id) {
           this.currentRunId = payload.run_id;
         }
+        if (correlationId) {
+          stateManager.updateAssistantStatus(correlationId, 'typing');
+        }
         // Emit supervisor started event for progress UI
         if (this.currentRunId) {
           eventBus.emit('supervisor:started', {
@@ -308,6 +329,9 @@ export class SupervisorChatController {
 
       case 'supervisor_thinking':
         logger.info('[SupervisorChat] Supervisor thinking:', payload.message);
+        if (correlationId) {
+          stateManager.updateAssistantStatus(correlationId, 'typing');
+        }
         if (payload.message && this.currentRunId) {
           // Emit thinking event for progress UI
           eventBus.emit('supervisor:thinking', {
@@ -321,15 +345,19 @@ export class SupervisorChatController {
         logger.info('[SupervisorChat] Supervisor complete');
         const result = payload.result;
 
-        if (result && typeof result === 'string') {
+        if (payload.status === 'cancelled') {
+          if (correlationId) {
+            stateManager.updateAssistantStatus(correlationId, 'canceled');
+          }
+        } else if (result && typeof result === 'string') {
           // Set streaming text incrementally (simulate streaming for smooth UX)
-          conversationController.startStreaming();
+          conversationController.startStreaming(correlationId);
 
           // Stream the result in chunks
           const chunkSize = 10; // characters per chunk
           for (let i = 0; i < result.length; i += chunkSize) {
             const chunk = result.substring(i, i + chunkSize);
-            conversationController.appendStreaming(chunk);
+            conversationController.appendStreaming(chunk, correlationId);
             // Small delay for visual effect
             await new Promise(resolve => setTimeout(resolve, 10));
           }
@@ -353,6 +381,10 @@ export class SupervisorChatController {
         logger.error('[SupervisorChat] Supervisor error:', payload.error || payload.message);
         const errorMsg = payload.error || payload.message || 'Unknown error';
         stateManager.showToast(`Error: ${errorMsg}`, 'error');
+
+        if (correlationId) {
+          stateManager.updateAssistantStatus(correlationId, 'error');
+        }
 
         if (this.currentRunId) {
           eventBus.emit('supervisor:error', {

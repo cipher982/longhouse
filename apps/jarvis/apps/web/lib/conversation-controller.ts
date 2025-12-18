@@ -19,6 +19,7 @@ export interface ConversationState {
   streamingMessageId: string | null;
   streamingText: string;
   pendingUserMessageId: string | null;
+  currentCorrelationId: string | null;
 }
 
 export type ConversationEvent =
@@ -33,7 +34,8 @@ export class ConversationController {
     conversationId: null,
     streamingMessageId: null,
     streamingText: '',
-    pendingUserMessageId: null
+    pendingUserMessageId: null,
+    currentCorrelationId: null,
   };
 
   private listeners: Set<ConversationListener> = new Set();
@@ -108,12 +110,13 @@ export class ConversationController {
   /**
    * Start a streaming response
    */
-  startStreaming(): void {
-    logger.debug('Starting streaming response');
+  startStreaming(correlationId?: string): void {
+    logger.debug(`Starting streaming response, correlationId: ${correlationId}`);
 
     // Create streaming message ID
     this.state.streamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.state.streamingText = '';
+    this.state.currentCorrelationId = correlationId || null;
 
     this.emit({ type: 'streamingStart' });
   }
@@ -121,16 +124,22 @@ export class ConversationController {
   /**
    * Append text to streaming response
    */
-  appendStreaming(delta: string): void {
+  appendStreaming(delta: string, correlationId?: string): void {
     if (!this.state.streamingMessageId) {
       // Start streaming if not already started
-      this.startStreaming();
+      this.startStreaming(correlationId);
     }
 
     this.state.streamingText += delta;
 
     // Notify React via stateManager
     stateManager.setStreamingText(this.state.streamingText);
+
+    // If we have a correlationId, update that specific bubble too
+    const activeCorrelationId = correlationId || this.state.currentCorrelationId;
+    if (activeCorrelationId) {
+      stateManager.updateAssistantStatus(activeCorrelationId, 'streaming', this.state.streamingText);
+    }
   }
 
   /**
@@ -140,15 +149,21 @@ export class ConversationController {
     if (!this.state.streamingMessageId) return;
 
     const finalText = this.state.streamingText;
+    const correlationId = this.state.currentCorrelationId;
     logger.streamingResponse(finalText, true);
 
     // Clean up streaming state
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
+    this.state.currentCorrelationId = null;
 
     // Clear streaming text and notify React of finalized message
     stateManager.setStreamingText('');
-    stateManager.finalizeMessage(finalText);
+    if (correlationId) {
+      stateManager.finalizeMessage(finalText, correlationId);
+    } else {
+      stateManager.finalizeMessage(finalText);
+    }
 
     this.emit({ type: 'streamingStop' });
   }

@@ -3,25 +3,15 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { renderMarkdown, renderStreamingContent } from '../../lib/markdown-renderer'
-
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp?: Date
-  isStreaming?: boolean
-  skipAnimation?: boolean
-}
+import { renderMarkdown } from '../../lib/markdown-renderer'
+import type { ChatMessage } from '../context/types'
 
 interface ChatContainerProps {
   messages: ChatMessage[]
-  isStreaming?: boolean
-  streamingContent?: string
   userTranscriptPreview?: string  // Live voice transcript preview
 }
 
-export function ChatContainer({ messages, isStreaming, streamingContent, userTranscriptPreview }: ChatContainerProps) {
+export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom when new messages arrive or during streaming
@@ -29,9 +19,9 @@ export function ChatContainer({ messages, isStreaming, streamingContent, userTra
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
     }
-  }, [messages, streamingContent, userTranscriptPreview])
+  }, [messages, userTranscriptPreview])
 
-  const hasContent = messages.length > 0 || isStreaming || userTranscriptPreview
+  const hasContent = messages.length > 0 || userTranscriptPreview
 
   return (
     <div className="chat-wrapper">
@@ -43,27 +33,37 @@ export function ChatContainer({ messages, isStreaming, streamingContent, userTra
           </div>
         ) : (
           <>
-            {messages.map((message) => (
-              <div key={message.id} className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}`}>
+            {messages.map((message) => {
+              const isAssistant = message.role === 'assistant';
+              const isQueued = isAssistant && message.status === 'queued';
+              const isTyping = isAssistant && message.status === 'typing';
+              const hasContent = message.content && message.content.length > 0;
+
+              return (
                 <div
-                  className="message-content"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
-                />
-              </div>
-            ))}
+                  key={message.id}
+                  className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${isQueued ? ' queued' : ''}`}
+                >
+                  <div className="message-content">
+                    {isQueued && !hasContent ? (
+                      <div className="placeholder-shimmer" style={{ width: '100px', height: '20px', borderRadius: '4px', background: 'rgba(255,255,255,0.1)' }} />
+                    ) : isTyping && !hasContent ? (
+                      <div className="thinking-dots thinking-dots--in-chat">
+                        <span className="thinking-dot"></span>
+                        <span className="thinking-dot"></span>
+                        <span className="thinking-dot"></span>
+                      </div>
+                    ) : (
+                      <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
             {/* Show live user voice transcript preview */}
             {userTranscriptPreview && (
               <div className="message user preview">
                 <div className="message-content">{userTranscriptPreview}</div>
-              </div>
-            )}
-            {/* Show assistant streaming response */}
-            {isStreaming && streamingContent && (
-              <div className="message assistant streaming">
-                <div
-                  className="message-content"
-                  dangerouslySetInnerHTML={{ __html: renderStreamingContent(streamingContent) }}
-                />
               </div>
             )}
           </>

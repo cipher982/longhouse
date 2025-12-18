@@ -129,8 +129,31 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           break
 
         case 'MESSAGE_FINALIZED':
-          // Add the finalized assistant message to React state
-          dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
+          // Add or update the finalized assistant message
+          if (event.message.correlationId) {
+            dispatch({
+              type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
+              correlationId: event.message.correlationId,
+              updates: {
+                content: event.message.content,
+                status: 'final',
+                timestamp: event.message.timestamp,
+              },
+            })
+          } else {
+            dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
+          }
+          break
+
+        case 'ASSISTANT_STATUS_CHANGED':
+          dispatch({
+            type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
+            correlationId: event.correlationId,
+            updates: {
+              status: event.status as any,
+              ...(event.content !== undefined ? { content: event.content } : {}),
+            },
+          })
           break
 
         case 'USER_VOICE_COMMITTED':

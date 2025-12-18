@@ -60,6 +60,16 @@ function appReducer(state: AppState, action: AppAction): AppState {
       updated[idx] = { ...updated[idx], content: action.content }
       return { ...state, messages: updated }
     }
+    case 'UPDATE_MESSAGE_BY_CORRELATION_ID': {
+      // Correlation IDs are intended to target the assistant placeholder bubble for a given send.
+      const idx = state.messages.findIndex(
+        (m) => m.role === 'assistant' && m.correlationId === action.correlationId
+      )
+      if (idx === -1) return state
+      const updated = [...state.messages]
+      updated[idx] = { ...updated[idx], ...action.updates }
+      return { ...state, messages: updated }
+    }
     case 'SET_STREAMING_CONTENT':
       return { ...state, streamingContent: action.content }
     case 'SET_USER_TRANSCRIPT_PREVIEW':

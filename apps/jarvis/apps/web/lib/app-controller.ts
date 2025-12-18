@@ -300,13 +300,13 @@ export class AppController {
    * Send a text message
    * Always routes to Supervisor backend - single unified interface
    */
-  async sendText(text: string): Promise<void> {
+  async sendText(text: string, correlationId?: string): Promise<void> {
     if (!this.supervisorChatController) {
       throw new Error('Supervisor chat not initialized');
     }
 
-    logger.info('[AppController] Sending text via Supervisor (unified interface)');
-    await this.supervisorChatController.sendMessage(text);
+    logger.info(`[AppController] Sending text via Supervisor (unified interface), correlationId: ${correlationId}`);
+    await this.supervisorChatController.sendMessage(text, correlationId);
   }
 
   /**

@@ -182,6 +182,16 @@
   animation: pulse 1s ease-in-out infinite;
 }
 
+/* Assistant typing bubble (pre-stream / supervisor thinking) */
+.message.assistant.typing .message-content {
+  display: flex;
+  align-items: center;
+}
+
+.thinking-dots--in-chat {
+  padding: 2px 0;
+}
+
 /* Time stamps */
 .message-time {
   font-size: 0.7rem;

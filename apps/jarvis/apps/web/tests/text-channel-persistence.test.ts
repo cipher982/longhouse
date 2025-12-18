@@ -52,7 +52,7 @@ describe('Text Channel Persistence', () => {
         await result.current.sendMessage('Hello from text')
       })
 
-      expect(appController.sendText).toHaveBeenCalledWith('Hello from text')
+      expect(appController.sendText).toHaveBeenCalledWith('Hello from text', expect.any(String))
     })
 
     it('should trim message before sending', async () => {
@@ -69,7 +69,7 @@ describe('Text Channel Persistence', () => {
       })
 
       expect(callOrder).toEqual(['sendText'])
-      expect(appController.sendText).toHaveBeenCalledWith('Test message')
+      expect(appController.sendText).toHaveBeenCalledWith('Test message', expect.any(String))
     })
 
     it('should not persist empty messages', async () => {

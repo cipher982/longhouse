@@ -38,6 +38,8 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       const trimmedText = text.trim()
       setIsSending(true)
 
+      const correlationId = crypto.randomUUID()
+
       // Create user message
       const userMessage: ChatMessage = {
         id: crypto.randomUUID(),
@@ -46,27 +48,39 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         timestamp: new Date(),
       }
 
+      // Create assistant placeholder (queued)
+      const assistantPlaceholder: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: '',
+        status: 'queued',
+        timestamp: new Date(),
+        correlationId,
+      }
+
       // Add to messages
       dispatch({ type: 'ADD_MESSAGE', message: userMessage })
+      dispatch({ type: 'ADD_MESSAGE', message: assistantPlaceholder })
       options.onMessageSent?.(userMessage)
 
       // Clear any previous error
       setLastError(null)
 
       try {
-        console.log('[useTextChannel] Sending message:', trimmedText)
+        console.log('[useTextChannel] Sending message:', trimmedText, 'correlationId:', correlationId)
 
         // Send to backend via appController
-        await appController.sendText(trimmedText)
+        await appController.sendText(trimmedText, correlationId)
         // Response arrives via Supervisor SSE -> stateManager -> React
         setIsSending(false)
       } catch (error) {
         console.error('[useTextChannel] Error sending message:', error)
 
-        // Rollback: Remove the optimistic user message on failure
+        // Update assistant bubble to error state
         dispatch({
-          type: 'SET_MESSAGES',
-          messages: messages.filter((m) => m.id !== userMessage.id),
+          type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
+          correlationId,
+          updates: { status: 'error' },
         })
 
         dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
