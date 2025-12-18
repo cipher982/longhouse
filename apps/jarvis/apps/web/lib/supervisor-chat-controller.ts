@@ -179,8 +179,9 @@ export class SupervisorChatController {
    * Reset ("pet") the watchdog timer to keep the request alive
    */
   private petWatchdog(correlationId?: string): void {
-    if (this.watchdogTimer && correlationId) {
-      this.startWatchdog(correlationId);
+    const id = correlationId ?? this.lastCorrelationId;
+    if (this.watchdogTimer && id) {
+      this.startWatchdog(id);
     }
   }
 
@@ -244,6 +245,15 @@ export class SupervisorChatController {
 
     logger.info('[SupervisorChat] Starting to read SSE stream...');
 
+    const abortDone = (): Promise<{ done: true; value: undefined }> =>
+      new Promise((resolve) => {
+        if (signal.aborted) {
+          resolve({ done: true, value: undefined });
+          return;
+        }
+        signal.addEventListener('abort', () => resolve({ done: true, value: undefined }), { once: true });
+      });
+
     // Helper to process SSE messages from buffer
     const processBuffer = async (): Promise<string> => {
       // Normalize line endings and split on double newlines (SSE message boundary)
@@ -289,12 +299,7 @@ export class SupervisorChatController {
 
     try {
       while (true) {
-        // Check if aborted
-        if (signal.aborted) {
-          throw new Error('Stream aborted');
-        }
-
-        const { done, value } = await reader.read();
+        const { done, value } = await Promise.race([reader.read(), abortDone()]);
         chunkCount++;
 
         if (done) {
@@ -342,6 +347,7 @@ export class SupervisorChatController {
 
     // Handle heartbeat
     if (eventType === 'heartbeat') {
+      this.petWatchdog();
       logger.debug('[SupervisorChat] Heartbeat');
       return;
     }

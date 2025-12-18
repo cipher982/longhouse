@@ -168,6 +168,7 @@ describe('SupervisorChatController (Typing Indicator Option C)', () => {
     expect(stateManager.updateAssistantStatus).toHaveBeenCalledWith(correlationId, 'error')
     expect(stateManager.showToast).toHaveBeenCalledWith('Timed out waiting for response', 'error')
 
-    // Don't await the hung promise
+    // Stream should be aborted and the send should settle.
+    await expect(sendPromise).resolves.toBeUndefined()
   })
 })
