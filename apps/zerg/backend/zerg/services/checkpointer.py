@@ -47,7 +47,7 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
 
         engine = default_engine
 
-    db_url = str(engine.url)
+    db_url = engine.url.render_as_string(hide_password=False)
 
     # For SQLite databases, use MemorySaver (tests, local dev)
     if "sqlite" in db_url.lower():
@@ -61,7 +61,8 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
             logger.debug("Returning cached PostgresSaver instance")
             return _postgres_checkpointer_cache[db_url]
 
-        logger.info("Initializing PostgresSaver for PostgreSQL database")
+        masked_url = engine.url.render_as_string(hide_password=True)
+        logger.info(f"Initializing PostgresSaver for PostgreSQL database: {masked_url}")
 
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
@@ -69,9 +70,6 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
             # Create PostgresSaver with connection string
             # Note: PostgresSaver.from_conn_string() returns a context manager
             # in newer versions (3.0+). We need to enter it to get the actual instance.
-            # We use __enter__() directly rather than 'with' because we want the
-            # checkpointer to persist for the lifetime of the application.
-            # The connection pooling is managed internally by PostgresSaver.
             try:
                 # Get the context manager and enter it to get the checkpointer instance
                 context_manager = PostgresSaver.from_conn_string(db_url)

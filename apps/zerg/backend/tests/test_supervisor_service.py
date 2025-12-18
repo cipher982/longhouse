@@ -56,6 +56,9 @@ class TestSupervisorService:
         assert "list_workers" in agent.allowed_tools
         # V1.1: knowledge_search should be available to supervisor
         assert "knowledge_search" in agent.allowed_tools
+        # V1.2: web research tools should be available to supervisor
+        assert "web_search" in agent.allowed_tools
+        assert "web_fetch" in agent.allowed_tools
 
     def test_get_or_create_supervisor_agent_returns_existing(self, db_session, test_user):
         """Test that existing supervisor agent is returned on subsequent calls."""
