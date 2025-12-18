@@ -16,7 +16,7 @@
 import { logger } from '@jarvis/core';
 import { stateManager } from './state-manager';
 import { conversationController } from './conversation-controller';
-import { CONFIG } from './config';
+import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 
 export interface SupervisorChatMessage {
@@ -75,7 +75,7 @@ export class SupervisorChatController {
     try {
       logger.info('[SupervisorChat] Loading history from server...');
 
-      const url = `${CONFIG.JARVIS_API_BASE}/history?limit=${limit}`;
+      const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/history?limit=${limit}`);
       const response = await fetch(url, {
         method: 'GET',
         credentials: 'include', // Cookie auth
@@ -123,9 +123,6 @@ export class SupervisorChatController {
     this.currentAbortController = new AbortController();
 
     try {
-      // Add user message to UI immediately
-      await conversationController.addUserTurn(trimmedText);
-
       // Start SSE stream
       await this.streamChatResponse(trimmedText, this.currentAbortController.signal);
 
@@ -148,7 +145,7 @@ export class SupervisorChatController {
    * Stream chat response via SSE
    */
   private async streamChatResponse(message: string, signal: AbortSignal): Promise<void> {
-    const url = `${CONFIG.JARVIS_API_BASE}/chat`;
+    const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/chat`);
 
     logger.info('[SupervisorChat] Initiating SSE stream to:', url);
 
@@ -394,7 +391,7 @@ export class SupervisorChatController {
     try {
       logger.info('[SupervisorChat] Clearing server-side history...');
 
-      const url = `${CONFIG.JARVIS_API_BASE}/history`;
+      const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/history`);
       const response = await fetch(url, {
         method: 'DELETE',
         credentials: 'include', // Cookie auth

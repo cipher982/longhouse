@@ -55,6 +55,32 @@ export const CONFIG = {
   }
 };
 
+/**
+ * Ensure a URL is absolute (helps Node/jsdom tests where undici requires absolute URLs).
+ * In the browser, relative URLs are fine, but this keeps behavior consistent.
+ */
+export function toAbsoluteUrl(url: string): string {
+  // Already absolute
+  if (/^https?:\/\//i.test(url)) return url;
+
+  const origin =
+    typeof window !== 'undefined' &&
+    window?.location?.origin &&
+    window.location.origin !== 'null'
+      ? window.location.origin
+      : 'http://localhost';
+
+  // Fast path for common app URLs like "/api/..."
+  if (url.startsWith('/')) return `${origin}${url}`;
+
+  // Best-effort for other relative URLs ("./foo", "foo")
+  try {
+    return new URL(url, `${origin}/`).toString();
+  } catch {
+    return url;
+  }
+}
+
 // Voice Button State Machine states
 export enum VoiceButtonState {
   IDLE = 'idle',             // Disconnected/not ready

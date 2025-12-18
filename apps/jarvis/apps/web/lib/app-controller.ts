@@ -8,7 +8,7 @@
  */
 
 import { type RealtimeSession } from '@openai/agents/realtime';
-import { logger, getJarvisClient, SessionManager } from '@jarvis/core';
+import { logger, getJarvisClient } from '@jarvis/core';
 import type { ConversationTurn } from '@jarvis/data-local';
 import { stateManager } from './state-manager';
 import { getZergApiUrl } from './config';
@@ -18,12 +18,11 @@ import { audioController } from './audio-controller';
 import { voiceController, type VoiceEvent } from './voice-controller';
 import { conversationController } from './conversation-controller';
 import { feedbackSystem } from './feedback-system';
-import { CONFIG, buildConversationManagerOptions } from './config';
+import { CONFIG, toAbsoluteUrl } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { SupervisorChatController } from './supervisor-chat-controller';
 import { createContextTools } from './tool-factory';
 import { contextLoader } from '../contexts/context-loader';
-import { toSidebarConversations } from './conversation-list';
 
 export class AppController {
   private initialized = false;
@@ -31,6 +30,7 @@ export class AppController {
   private textChannelController: TextChannelController | null = null;
   private supervisorChatController: SupervisorChatController | null = null;
   private lastBootstrapResult: BootstrapResult | null = null;
+  private lastSupervisorTurns: ConversationTurn[] = [];
 
   constructor() {
     // Bind methods to this
@@ -93,8 +93,8 @@ export class AppController {
       const messages = await this.supervisorChatController.loadHistory(50);
 
       if (messages.length > 0) {
-        // Convert to ConversationTurn format for UI
-        const history = messages.map(msg => ({
+        // Convert to ConversationTurn format for UI + voice bootstrap (server is SSOT)
+        const history: ConversationTurn[] = messages.map(msg => ({
           id: crypto.randomUUID(),
           timestamp: msg.timestamp,
           conversationId: stateManager.getState().currentConversationId || undefined,
@@ -102,8 +102,11 @@ export class AppController {
           assistantResponse: msg.role === 'assistant' ? msg.content : undefined,
         }));
 
+        this.lastSupervisorTurns = history;
         stateManager.historyLoaded(history);
         logger.info(`✅ Loaded ${messages.length} messages from Supervisor history`);
+      } else {
+        this.lastSupervisorTurns = [];
       }
     } catch (error) {
       logger.warn('⚠️ Failed to load Supervisor history (non-fatal):', error);
@@ -143,7 +146,7 @@ export class AppController {
     try {
       logger.info('🔄 Fetching bootstrap configuration from server...');
       // Cookie-based auth - credentials: 'include' sends HttpOnly session cookie
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/bootstrap`, {
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/bootstrap`), {
         credentials: 'include',
       });
 
@@ -174,33 +177,14 @@ export class AppController {
 
       const currentContext = await contextLoader.loadContext(contextName);
       stateManager.setContext(currentContext);
-
-      // Initialize Session Manager for this context (same as main.ts)
-      const sessionManager = new SessionManager({}, {
-        conversationManagerOptions: buildConversationManagerOptions(currentContext),
-        maxHistoryTurns: currentContext.settings?.maxHistoryTurns ?? 50,
-      });
-      stateManager.setSessionManager(sessionManager);
-      conversationController.setSessionManager(sessionManager);
-
-      // Initialize session
-      const initialConversationId = await sessionManager.initializeSession(currentContext, contextName);
-      stateManager.setConversationId(initialConversationId);
-      conversationController.setConversationId(initialConversationId);
-
-      // Load conversations for sidebar UI
-      try {
-        const allConversations = await sessionManager.getAllConversations();
-        stateManager.setConversations(toSidebarConversations(allConversations, initialConversationId));
-      } catch (error) {
-        logger.warn('Failed to load conversations for sidebar', error);
-      }
-
-      // Load history immediately for UI (don't wait for Realtime connection)
-      const history = await sessionManager.getConversationHistory();
-      if (history.length > 0) {
-        stateManager.historyLoaded(history);
-      }
+      // Server is SSOT for conversations/history, so we don't initialize the
+      // IndexedDB-backed SessionManager here. Sidebar will be driven by server
+      // support in the future; for now keep a single "Current" thread entry.
+      stateManager.setConversationId(null);
+      conversationController.setConversationId(null);
+      stateManager.setConversations([
+        { id: 'server', name: 'Current', meta: 'Server', active: true },
+      ]);
 
       logger.info(`✅ Context initialized: ${contextName}`);
     } catch (error) {
@@ -231,7 +215,6 @@ export class AppController {
       stateManager.setVoiceStatus('connecting');
 
       const currentContext = stateManager.getState().currentContext;
-      const sessionManager = stateManager.getState().sessionManager;
 
       // 1. Acquire Microphone (via AudioController)
       const micStream = await audioController.requestMicrophone();
@@ -243,18 +226,20 @@ export class AppController {
       if (!currentContext) {
         throw new Error('No active context loaded');
       }
-      if (!sessionManager) {
-        throw new Error('No session manager available');
-      }
 
       // Create tools using factory
-      const tools = createContextTools(currentContext, sessionManager);
+      const tools = createContextTools(currentContext, null);
 
       // 3. Bootstrap session with SSOT history
       // This loads history ONCE and provides it to both UI and Realtime
+      // Server (Supervisor/Postgres) is SSOT now.
+      if (!this.lastSupervisorTurns.length) {
+        await this.loadSupervisorHistory();
+      }
       const bootstrapResult = await bootstrapSession({
         context: currentContext,
-        sessionManager,
+        conversationId: stateManager.getState().currentConversationId ?? null,
+        history: this.lastSupervisorTurns,
         mediaStream: micStream,
         audioElement: undefined,
         tools,
@@ -269,9 +254,7 @@ export class AppController {
 
       // 4. Notify UI with history via stateManager event
       // This is the SAME data used for Realtime hydration
-      if (history.length > 0) {
-        stateManager.historyLoaded(history);
-      }
+      stateManager.historyLoaded(history);
 
       // 5. Update State
       stateManager.setSession(session);
@@ -315,28 +298,15 @@ export class AppController {
 
   /**
    * Send a text message
-   * Routes to SupervisorChatController for text mode, TextChannelController for voice mode
+   * Always routes to Supervisor backend - single unified interface
    */
   async sendText(text: string): Promise<void> {
-    // Check if we're in voice mode (Realtime connected)
-    const isVoiceMode = voiceController.isVoiceMode();
-    const isRealtimeConnected = stateManager.getState().session !== null;
-
-    if (isVoiceMode && isRealtimeConnected) {
-      // Voice mode: use Realtime (TextChannelController)
-      if (!this.textChannelController) {
-        throw new Error('Text channel not initialized');
-      }
-      logger.info('[AppController] Sending text via Realtime (voice mode)');
-      await this.textChannelController.sendText(text);
-    } else {
-      // Text mode: use Supervisor backend (SupervisorChatController)
-      if (!this.supervisorChatController) {
-        throw new Error('Supervisor chat not initialized');
-      }
-      logger.info('[AppController] Sending text via Supervisor (text mode)');
-      await this.supervisorChatController.sendMessage(text);
+    if (!this.supervisorChatController) {
+      throw new Error('Supervisor chat not initialized');
     }
+
+    logger.info('[AppController] Sending text via Supervisor (unified interface)');
+    await this.supervisorChatController.sendMessage(text);
   }
 
   /**
@@ -444,8 +414,12 @@ export class AppController {
     const finalText = text.trim();
     if (!finalText) return;
 
-    // Add to conversation controller (for persistence)
-    conversationController.addUserTurn(finalText);
+    // Send voice transcript to Supervisor (unified interface)
+    try {
+      await this.sendText(finalText);
+    } catch (error) {
+      logger.error('[AppController] Failed to send voice transcript to supervisor:', error);
+    }
   }
 
   private setupSessionEvents(session: RealtimeSession) {
@@ -540,12 +514,24 @@ export class AppController {
 
   private async getSessionToken(): Promise<string> {
     // Cookie-based auth - credentials: 'include' sends HttpOnly session cookie
-    const r = await fetch(`${CONFIG.JARVIS_API_BASE}/session`, {
+    const r = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/session`), {
       credentials: 'include',
     });
     if (!r.ok) throw new Error('Failed to get session token');
     const js = await r.json();
     return js.value || js.client_secret?.value;
+  }
+
+  /**
+   * Test-only: reset internal singletons/state so each test starts from a clean slate.
+   */
+  resetForTests(): void {
+    this.initialized = false;
+    this.connecting = false;
+    this.textChannelController = null;
+    this.supervisorChatController = null;
+    this.lastBootstrapResult = null;
+    this.lastSupervisorTurns = [];
   }
 }
 

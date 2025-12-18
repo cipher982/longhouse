@@ -64,116 +64,46 @@ export default function App() {
 
   const handleNewConversation = useCallback(async () => {
     console.log('[App] Creating new conversation')
-    const sessionManager = stateManager.getState().sessionManager
-    if (!sessionManager) {
-      console.warn('[App] Cannot create new conversation - sessionManager not ready')
-      return
-    }
 
-    // 1. Create new conversation in persistence (SSOT)
-    const newId = await sessionManager.createNewConversation()
-    console.log('[App] New conversation created:', newId)
-
-    // Update sidebar conversation list
-    try {
-      const allConversations = await sessionManager.getAllConversations()
-      dispatch({ type: 'SET_CONVERSATIONS', conversations: toSidebarConversations(allConversations, newId) })
-    } catch (error) {
-      console.warn('[App] Failed to refresh conversation list:', error)
-    }
-
-    // 2. Update all controllers with the new ID
-    conversationController.setConversationId(newId)
-    stateManager.setConversationId(newId)
-
-    // 3. Clear UI and set the NEW ID (not null!)
-    textChannel.clearMessages()
+    // Clear UI state for new conversation
     dispatch({ type: 'SET_MESSAGES', messages: [] })
-    dispatch({ type: 'SET_CONVERSATION_ID', id: newId })
+    dispatch({ type: 'SET_CONVERSATION_ID', id: null })
 
-    // 4. Reconnect session with empty history for fresh context
-    console.log('[App] Reconnecting session for new conversation context...')
-    try {
-      await realtimeSession.reconnect()
-      console.log('[App] Session reconnected with fresh context')
-    } catch (error) {
-      console.warn('[App] Reconnect failed:', error)
-    }
-  }, [dispatch, textChannel, realtimeSession])
+    console.log('[App] New conversation ready')
+  }, [dispatch])
 
   const handleClearAll = useCallback(async () => {
     console.log('[App] Clear all conversations - starting...')
 
-    // Clear server-side history (source of truth)
+    // Clear server-side history (single source of truth)
     try {
       await appController.clearServerHistory()
       console.log('[App] Clear all conversations - server history cleared')
     } catch (error) {
       console.warn('[App] Clear all conversations - server clear failed:', error)
-      // Don't continue if server clear fails - that's where the data lives
       return
     }
 
     // Clear local UI state
-    textChannel.clearMessages()
     dispatch({ type: 'SET_MESSAGES', messages: [] })
-    dispatch({ type: 'SET_CONVERSATIONS', conversations: [] })
 
-    // Only reset Realtime context if the user is already connected.
-    if (realtimeSession.isConnected()) {
-      console.log('[App] Clear all conversations - realtime connected; reconnecting to clear model context...')
-      try {
-        await realtimeSession.reconnect()
-        console.log('[App] Clear all conversations - session reconnected with fresh context')
-      } catch (error) {
-        console.warn('[App] Clear all conversations - reconnect failed:', error)
-      }
-    }
     console.log('[App] Clear all conversations - complete')
-  }, [dispatch, textChannel, realtimeSession])
+  }, [dispatch])
 
   const handleSelectConversation = useCallback(
     async (id: string) => {
       console.log('[App] Switching to conversation:', id)
-      const sessionManager = stateManager.getState().sessionManager
-      if (!sessionManager) {
-        console.warn('[App] Cannot switch conversation - sessionManager not ready')
-        return
-      }
 
-      // 1. Switch persistence layer (SSOT - do this first!)
-      await sessionManager.switchToConversation(id)
-      conversationController.setConversationId(id)
-      stateManager.setConversationId(id)
-
-      // Update sidebar active state + metadata
-      try {
-        const allConversations = await sessionManager.getAllConversations()
-        dispatch({ type: 'SET_CONVERSATIONS', conversations: toSidebarConversations(allConversations, id) })
-      } catch (error) {
-        console.warn('[App] Failed to refresh conversation list:', error)
-      }
-
-      // 2. Update React state with conversation ID
+      // For Supervisor backend, conversations are just different threads
+      // We don't need to switch local state, just update the UI indicator
       dispatch({ type: 'SET_CONVERSATION_ID', id })
 
-      // 3. Clear current messages while we reconnect
-      // History will be loaded via SSOT callback during reconnect
+      // Clear current messages - history will be loaded from server
       dispatch({ type: 'SET_MESSAGES', messages: [] })
 
-      // 4. Reconnect session - this triggers bootstrapSession() which:
-      //    - Loads history ONCE from IndexedDB (SSOT)
-      //    - Hydrates Realtime with history
-      //    - Calls onHistoryLoaded callback to update UI
-      console.log('[App] Reconnecting session for new conversation context...')
-      try {
-        await realtimeSession.reconnect()
-        console.log('[App] Session reconnected with conversation history (SSOT)')
-      } catch (error) {
-        console.warn('[App] Reconnect failed:', error)
-      }
+      console.log('[App] Switched to conversation:', id)
     },
-    [dispatch, realtimeSession]
+    [dispatch]
   )
 
   // Header handlers
@@ -227,9 +157,9 @@ export default function App() {
         <Header title="Jarvis AI" onSync={handleSync} />
 
         <ChatContainer
-          messages={textChannel.messages}
-          isStreaming={textChannel.isStreaming}
-          streamingContent={textChannel.streamingContent}
+          messages={state.messages}
+          isStreaming={false}
+          streamingContent=""
           userTranscriptPreview={state.userTranscriptPreview}
         />
 

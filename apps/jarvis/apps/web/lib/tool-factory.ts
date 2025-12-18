@@ -5,7 +5,7 @@
 
 import { tool } from '@openai/agents';
 import { z } from 'zod';
-import { CONFIG } from './config';
+import { CONFIG, toAbsoluteUrl } from './config';
 import type { SessionManager, SupervisorEvent } from '@jarvis/core';
 import { stateManager } from './state-manager';
 import { eventBus } from './event-bus';
@@ -27,7 +27,7 @@ const locationTool = tool({
   async execute() {
     console.log('📍 Calling location tool');
     try {
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/tool`), {
         method: 'POST',
         headers: buildJsonHeaders(),
         credentials: 'include', // Cookie auth
@@ -62,7 +62,7 @@ const whoopTool = tool({
   }),
   async execute({ date }) {
     try {
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/tool`), {
         method: 'POST',
         headers: buildJsonHeaders(),
         credentials: 'include', // Cookie auth
@@ -96,7 +96,7 @@ const searchNotesTool = tool({
   async execute({ query, limit }) {
     console.log('📝 Calling search_notes tool:', query);
     try {
-      const response = await fetch(`${CONFIG.JARVIS_API_BASE}/tool`, {
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/tool`), {
         method: 'POST',
         headers: buildJsonHeaders(),
         credentials: 'include', // Cookie auth

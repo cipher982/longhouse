@@ -7,11 +7,11 @@
  * previously fetched history separately, causing divergence.
  *
  * ARCHITECTURE:
- * IndexedDB ──single query──> Bootstrap Result ──> UI (full history)
- *                                              ──> Realtime (trimmed + mapped)
+ * Server history (Supervisor/Postgres) ──single query──> Bootstrap Result ──> UI (full history)
+ *                                                                    ──> Realtime (trimmed + mapped)
  */
 
-import { logger, type SessionManager } from '@jarvis/core'
+import { logger } from '@jarvis/core'
 import type { ConversationTurn } from '@jarvis/data-local'
 import { sessionHandler } from './session-handler'
 import { mapConversationToRealtimeItems, trimForRealtime } from './history-mapper'
@@ -27,7 +27,8 @@ export interface BootstrapResult {
 
 export interface BootstrapOptions {
   context: VoiceAgentConfig
-  sessionManager: SessionManager
+  conversationId?: string | null
+  history: ConversationTurn[]
   mediaStream?: MediaStream
   audioElement?: HTMLAudioElement
   tools?: any[]
@@ -46,14 +47,11 @@ export interface BootstrapOptions {
  * 4. No divergence possible between UI and model context
  */
 export async function bootstrapSession(options: BootstrapOptions): Promise<BootstrapResult> {
-  const { sessionManager, realtimeHistoryTurns = 8 } = options
+  const { realtimeHistoryTurns = 8 } = options
 
-  // 1. Get conversation ID (SSOT)
-  const conversationId = await sessionManager.getConversationManager().getCurrentConversationId()
-
-  // 2. Load history ONCE (SSOT) - this is the critical single query
-  const fullHistory = await sessionManager.getConversationHistory()
-  logger.info(`📚 Bootstrap: loaded ${fullHistory.length} turns from IndexedDB`)
+  const conversationId = options.conversationId ?? null
+  const fullHistory = Array.isArray(options.history) ? options.history : []
+  logger.info(`📚 Bootstrap: using ${fullHistory.length} turns from server history`)
 
   // 3. Prepare history for Realtime (subset of same data)
   const realtimeHistory = trimForRealtime(fullHistory, realtimeHistoryTurns)
