@@ -14,6 +14,10 @@ COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.
 COPY apps/jarvis/apps/web/package.json ./apps/web/package.json
 COPY apps/jarvis/apps/native/package.json ./apps/native/package.json
 
+# Copy @swarm/config package (from root packages/)
+COPY packages/config/package.json ./swarm-packages/config/package.json
+COPY packages/config/src ./swarm-packages/config/src
+
 # Install bun for package management
 RUN npm install -g bun
 
