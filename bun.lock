@@ -7,6 +7,7 @@
         "@asyncapi/cli": "^3.1.0",
         "@asyncapi/modelina": "^5.3.1",
         "asyncapi-rust-ws-template": "^0.3.2",
+        "prettier": "3.7.4",
       },
     },
     "apps/jarvis/apps/native": {
@@ -3859,6 +3860,8 @@
 
     "@jarvis/core/@jarvis/data-local": ["@jarvis/data-local@file:apps/jarvis/packages/data/local", { "dependencies": { "idb": "^8.0.0" } }],
 
+    "@jarvis/web/@jarvis/core": ["@jarvis/core@file:apps/jarvis/packages/core", { "dependencies": { "@jarvis/data-local": "file:../data/local", "@swarm/config": "workspace:*" } }],
+
     "@jarvis/web/@jarvis/data-local": ["@jarvis/data-local@file:apps/jarvis/packages/data/local", { "dependencies": { "idb": "^8.0.0" } }],
 
     "@keyv/bigmap/keyv": ["keyv@5.5.5", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-FA5LmZVF1VziNc0bIdCSA1IoSVnDCqE8HJIZZv2/W8YmoAM50+tnUgJR/gQZwEeIMleuIOnRnHA/UaZRNeV4iQ=="],
@@ -4928,6 +4931,8 @@
     "@isaacs/cliui/strip-ansi/ansi-regex": ["ansi-regex@6.2.2", "", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
 
     "@isaacs/cliui/wrap-ansi/ansi-styles": ["ansi-styles@6.2.3", "", {}, "sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg=="],
+
+    "@jarvis/web/@jarvis/core/@jarvis/data-local": ["@jarvis/data-local@file:apps/jarvis/packages/data/local", {}],
 
     "@modelcontextprotocol/sdk/ajv/json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, "sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug=="],
 
