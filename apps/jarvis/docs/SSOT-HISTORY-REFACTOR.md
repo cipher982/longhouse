@@ -1,8 +1,11 @@
 # Single Source of Truth (SSOT) History Refactor
 
-**Status**: Implementation Plan
+**Status**: Historical (implemented, then superseded)
 **Priority**: High
 **Estimated Scope**: 5 files modified, ~200 lines changed
+
+> **Note (Dec 19, 2025):** SSOT is now server-side (Supervisor/Postgres) in Jarvis web.
+> This plan reflects an earlier IndexedDB SSOT approach and is kept for reference.
 
 ---
 

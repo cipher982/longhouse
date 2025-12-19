@@ -3,13 +3,13 @@
 **Version:** 2.0
 **Date:** December 2025
 **Status:** Simplified Reference
-**Parent Spec:** [super-siri-architecture.md](./super-siri-architecture.md)
+**Parent Spec:** [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md) (supersedes v2.0)
 
 ---
 
 ## Overview
 
-This document covers UI components for supervisor tasks. For full philosophy, see [super-siri-architecture.md](./super-siri-architecture.md).
+This document covers UI components for supervisor tasks. For the current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md).
 
 **Core Principle:** Show what's happening, not how it's implemented.
 
@@ -148,4 +148,4 @@ Already correct in `apps/jarvis/apps/web/lib/supervisor-progress.ts`:
 
 ---
 
-_For full architecture, see [super-siri-architecture.md](./super-siri-architecture.md)._
+_For current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md)._
