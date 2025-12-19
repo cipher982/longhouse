@@ -11,7 +11,6 @@ from typing import Any, Dict, List
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
 
 from zerg.context import get_worker_context
 from zerg.connectors.context import get_credential_resolver
@@ -236,10 +235,16 @@ def agent_memory_get(
 
         with db_session() as db:
             # Case 1: Fetch specific key
-            if key:
+            if key is not None:
+                stripped_key = key.strip()
+                if not stripped_key:
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message="Key cannot be empty or whitespace-only",
+                    )
                 entry = db.query(AgentMemoryKV).filter(
                     AgentMemoryKV.user_id == user_id,
-                    AgentMemoryKV.key == key.strip()
+                    AgentMemoryKV.key == stripped_key
                 ).first()
 
                 if not entry:

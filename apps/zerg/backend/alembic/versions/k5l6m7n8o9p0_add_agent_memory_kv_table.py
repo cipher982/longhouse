@@ -34,9 +34,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('user_id', 'key')
     )
 
-    # Create GIN index for tags array (PostgreSQL only, will be ignored by SQLite)
-    # For SQLite compatibility, we'll create a regular index
-    op.create_index('ix_agent_memory_kv_tags', 'agent_memory_kv', ['tags'], unique=False)
+    # Note: We intentionally do NOT create an index on 'tags' because:
+    # - JSON columns cannot use btree indexes in Postgres
+    # - Tag filtering is done in Python for SQLite compatibility anyway
+    # - The primary key (user_id, key) handles the main lookup path
 
     # Create partial index for expires_at
     # Note: SQLite supports partial indexes starting from version 3.8.0
@@ -53,5 +54,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop agent_memory_kv table."""
     op.drop_index('ix_agent_memory_kv_expires_at', table_name='agent_memory_kv')
-    op.drop_index('ix_agent_memory_kv_tags', table_name='agent_memory_kv')
     op.drop_table('agent_memory_kv')
