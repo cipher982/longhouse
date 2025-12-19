@@ -17,74 +17,41 @@ import { stateManager } from '../../lib/state-manager';
 function generateInstructions(tools: ToolConfig[]): string {
   const enabledTools = tools.filter(t => t.enabled);
 
-  // Build capability list from actual tools
-  const directCapabilities: string[] = [];
+  // Build a capability list for informational display only.
+  const maybeCapabilities: string[] = [];
 
   for (const tool of enabledTools) {
     switch (tool.name) {
       case 'get_current_location':
-        directCapabilities.push('**Location** - Get current GPS coordinates and address via Traccar');
+        maybeCapabilities.push('**Location** - Get current GPS coordinates and address');
         break;
       case 'get_whoop_data':
-        directCapabilities.push('**Health metrics** - WHOOP recovery score, sleep quality, strain data');
+        maybeCapabilities.push('**Health metrics** - WHOOP recovery score, sleep quality, strain data');
         break;
       case 'search_notes':
-        directCapabilities.push('**Notes search** - Query the Obsidian vault for past notes and knowledge');
+        maybeCapabilities.push('**Notes search** - Query notes and knowledge base');
         break;
     }
   }
 
-  const directCapabilityList = directCapabilities.length > 0
-    ? directCapabilities.map(c => `  - ${c}`).join('\n')
-    : '  (No direct tools currently enabled)';
+  const capabilityList = maybeCapabilities.length > 0
+    ? maybeCapabilities.map(c => `  - ${c}`).join('\n')
+    : '  (No tools currently enabled)';
 
-  return `You are Jarvis, a personal AI assistant. You're conversational, concise, and actually useful.
+  return `You are Jarvis. You provide voice I/O (transcription + turn-taking cues).
 
-## Who You Serve
-You serve your user - help them get things done efficiently. They may have servers to manage, health data to track, and notes to search.
+## Architecture (v2.1 One-Brain)
 
-## Your Architecture
-You have two modes of operation:
+- Supervisor (server) is the ONLY brain and generates all assistant responses.
+- This Realtime session is I/O ONLY. Do NOT generate assistant responses.
+- Do NOT call tools from this session.
 
-**1. Direct Tools (instant, < 2 seconds)**
-These you can call immediately:
-${directCapabilityList}
+## Tool Awareness (informational)
 
-**2. Supervisor Delegation (5-60 seconds)**
-For anything requiring server access, investigation, or multi-step work, use \`route_to_supervisor\`. The Supervisor has workers that can:
-  - SSH into the user's configured servers
-  - Check disk space, docker containers, logs, backups
-  - Run shell commands and analyze output
-  - Investigate issues and report findings
+These capabilities may exist server-side (via Supervisor tools) depending on configuration:
+${capabilityList}
 
-## When to Delegate vs Answer Directly
-
-**Use route_to_supervisor for:**
-- Checking servers, disk space, containers, logs
-- "Are my backups working?" → needs to run commands
-- "Why is X slow?" → needs investigation
-- Anything mentioning servers, docker, debugging
-
-**Answer directly for:**
-- Direct tool queries (location, health data, notes)
-- General knowledge, conversation, jokes
-- Time, date, simple facts
-
-## Response Style
-
-**Be conversational and concise.**
-
-**When using tools:**
-1. Say a brief acknowledgment FIRST ("Let me check that", "Looking that up")
-2. THEN call the tool
-3. Never go silent while a tool runs
-
-## What You DON'T Have
-Be honest about limitations. You cannot:
-- Manage calendars or reminders (no tool for this)
-- Control smart home devices (no tool for this)
-
-If asked about something you can't do, say so clearly.`;
+If the user asks for something that requires tools, respond that the request will be handled by Supervisor.`;
 }
 
 /**
@@ -100,28 +67,27 @@ function getInstructions(): string {
   return generateInstructions(toolsConfig);
 }
 
-// Define tools first so we can use them in instruction generation
+// Tool definitions for informational display only (v2.1 Phase 4).
+// Actual tool execution happens server-side via Supervisor.
+// These are listed here so fallback instructions can describe capabilities.
 const toolsConfig: ToolConfig[] = [
   {
     name: 'get_current_location',
     description: 'Get current GPS location with coordinates and address',
     enabled: true,
-    mcpServer: 'traccar-mcp',
-    mcpFunction: 'location.get_current'
+    // Executed by Supervisor via Traccar connector
   },
   {
     name: 'get_whoop_data',
     description: 'Get WHOOP health metrics (recovery, sleep, strain)',
     enabled: true,
-    mcpServer: 'whoop-mcp',
-    mcpFunction: 'whoop.get_health_status'
+    // Executed by Supervisor via WHOOP connector
   },
   {
     name: 'search_notes',
     description: 'Search personal notes and knowledge base',
     enabled: true,
-    mcpServer: 'obsidian-mcp',
-    mcpFunction: 'obsidian.search_vault_smart'
+    // Executed by Supervisor via Runner (Obsidian vault)
   }
 ];
 
@@ -153,7 +119,7 @@ export const personalConfig: VoiceAgentConfig = {
 
   apiEndpoints: {
     tokenMinting: '/session',
-    toolExecution: '/tool'
+    // toolExecution removed in v2.1 - tools execute via Supervisor
   },
 
   sync: {
