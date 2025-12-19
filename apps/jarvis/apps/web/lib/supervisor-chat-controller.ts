@@ -462,6 +462,89 @@ export class SupervisorChatController {
         }
         break;
 
+      // ===== Worker lifecycle events (v2.1) =====
+      case 'worker_spawned':
+        this.petWatchdog(correlationId);
+        logger.info('[SupervisorChat] Worker spawned:', payload.job_id);
+        eventBus.emit('supervisor:worker_spawned', {
+          jobId: payload.job_id || 0,
+          task: payload.task || 'Worker task',
+          timestamp: Date.now(),
+        });
+        break;
+
+      case 'worker_started':
+        this.petWatchdog(correlationId);
+        logger.info('[SupervisorChat] Worker started:', payload.job_id);
+        eventBus.emit('supervisor:worker_started', {
+          jobId: payload.job_id || 0,
+          workerId: payload.worker_id,
+          timestamp: Date.now(),
+        });
+        break;
+
+      case 'worker_complete':
+        this.petWatchdog(correlationId);
+        logger.info('[SupervisorChat] Worker complete:', payload.job_id, payload.status);
+        eventBus.emit('supervisor:worker_complete', {
+          jobId: payload.job_id || 0,
+          workerId: payload.worker_id,
+          status: payload.status || 'unknown',
+          durationMs: payload.duration_ms,
+          timestamp: Date.now(),
+        });
+        break;
+
+      case 'worker_summary_ready':
+        this.petWatchdog(correlationId);
+        logger.info('[SupervisorChat] Worker summary ready:', payload.job_id);
+        eventBus.emit('supervisor:worker_summary', {
+          jobId: payload.job_id || 0,
+          workerId: payload.worker_id,
+          summary: payload.summary || '',
+          timestamp: Date.now(),
+        });
+        break;
+
+      // ===== Worker tool events (v2.1 Activity Ticker) =====
+      case 'worker_tool_started':
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Worker tool started:', payload.tool_name);
+        eventBus.emit('worker:tool_started', {
+          workerId: payload.worker_id || '',
+          toolName: payload.tool_name || '',
+          toolCallId: payload.tool_call_id || '',
+          argsPreview: payload.tool_args_preview,
+          timestamp: Date.now(),
+        });
+        break;
+
+      case 'worker_tool_completed':
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Worker tool completed:', payload.tool_name);
+        eventBus.emit('worker:tool_completed', {
+          workerId: payload.worker_id || '',
+          toolName: payload.tool_name || '',
+          toolCallId: payload.tool_call_id || '',
+          durationMs: payload.duration_ms || 0,
+          resultPreview: payload.result_preview,
+          timestamp: Date.now(),
+        });
+        break;
+
+      case 'worker_tool_failed':
+        this.petWatchdog(correlationId);
+        logger.warn('[SupervisorChat] Worker tool failed:', payload.tool_name, payload.error);
+        eventBus.emit('worker:tool_failed', {
+          workerId: payload.worker_id || '',
+          toolName: payload.tool_name || '',
+          toolCallId: payload.tool_call_id || '',
+          durationMs: payload.duration_ms || 0,
+          error: payload.error || 'Unknown error',
+          timestamp: Date.now(),
+        });
+        break;
+
       default:
         logger.debug('[SupervisorChat] Unknown SSE event type:', { eventType, data });
     }
