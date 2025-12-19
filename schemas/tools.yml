@@ -19,20 +19,96 @@ components:
       type: string
       description: Built-in tool names available in the registry
       enum:
-        - http_request
-        - math_eval
-        - get_current_time
+        - agent_memory_delete
+        - agent_memory_export
+        - agent_memory_get
+        - agent_memory_set
+        - contact_user
+        - container_exec
         - datetime_diff
         - generate_uuid
+        - get_current_time
+        - get_worker_metadata
+        - github_add_comment
+        - github_create_issue
+        - github_get_issue
+        - github_get_pull_request
+        - github_list_issues
+        - github_list_pull_requests
+        - github_list_repositories
+        - grep_workers
+        - http_request
+        - jira_add_comment
+        - jira_create_issue
+        - jira_get_issue
+        - jira_list_issues
+        - jira_transition_issue
+        - jira_update_issue
+        - knowledge_search
+        - linear_add_comment
+        - linear_create_issue
+        - linear_get_issue
+        - linear_list_issues
+        - linear_list_teams
+        - linear_update_issue
+        - list_imessage_messages
+        - list_workers
+        - math_eval
+        - notion_append_blocks
+        - notion_create_page
+        - notion_get_page
+        - notion_query_database
+        - notion_search
+        - notion_update_page
+        - read_worker_file
+        - read_worker_result
+        - refresh_connector_status
+        - runner_create_enroll_token
+        - runner_exec
+        - runner_list
+        - send_discord_webhook
+        - send_email
+        - send_imessage
+        - send_slack_webhook
+        - send_sms
+        - spawn_worker
+        - ssh_exec
+        - task_create
+        - task_delete
+        - task_list
+        - task_update
+        - web_fetch
+        - web_search
 
     ServerName:
       type: string
       description: Server/module names for tools
       enum:
-        - http
-        - math
+        - agent_memory
+        - connector
+        - contact_user
+        - container
         - datetime
+        - discord
+        - email
+        - github
+        - http
+        - imessage
+        - jira
+        - knowledge
+        - linear
+        - math
+        - notion
+        - runner
+        - runner_setup
+        - slack
+        - sms
+        - ssh
+        - supervisor
+        - task
         - uuid
+        - web_fetch
+        - web_search
 
     ToolDefinition:
       type: object
@@ -75,22 +151,187 @@ components:
           type: object
           description: Tool name to server mapping
           properties:
-            http_request:
-              const: http
-            math_eval:
-              const: math
-            get_current_time:
-              const: datetime
+            agent_memory_delete:
+              const: agent_memory
+            agent_memory_export:
+              const: agent_memory
+            agent_memory_get:
+              const: agent_memory
+            agent_memory_set:
+              const: agent_memory
+            contact_user:
+              const: contact_user
+            container_exec:
+              const: container
             datetime_diff:
               const: datetime
             generate_uuid:
               const: uuid
+            get_current_time:
+              const: datetime
+            get_worker_metadata:
+              const: supervisor
+            github_add_comment:
+              const: github
+            github_create_issue:
+              const: github
+            github_get_issue:
+              const: github
+            github_get_pull_request:
+              const: github
+            github_list_issues:
+              const: github
+            github_list_pull_requests:
+              const: github
+            github_list_repositories:
+              const: github
+            grep_workers:
+              const: supervisor
+            http_request:
+              const: http
+            jira_add_comment:
+              const: jira
+            jira_create_issue:
+              const: jira
+            jira_get_issue:
+              const: jira
+            jira_list_issues:
+              const: jira
+            jira_transition_issue:
+              const: jira
+            jira_update_issue:
+              const: jira
+            knowledge_search:
+              const: knowledge
+            linear_add_comment:
+              const: linear
+            linear_create_issue:
+              const: linear
+            linear_get_issue:
+              const: linear
+            linear_list_issues:
+              const: linear
+            linear_list_teams:
+              const: linear
+            linear_update_issue:
+              const: linear
+            list_imessage_messages:
+              const: imessage
+            list_workers:
+              const: supervisor
+            math_eval:
+              const: math
+            notion_append_blocks:
+              const: notion
+            notion_create_page:
+              const: notion
+            notion_get_page:
+              const: notion
+            notion_query_database:
+              const: notion
+            notion_search:
+              const: notion
+            notion_update_page:
+              const: notion
+            read_worker_file:
+              const: supervisor
+            read_worker_result:
+              const: supervisor
+            refresh_connector_status:
+              const: connector
+            runner_create_enroll_token:
+              const: runner_setup
+            runner_exec:
+              const: runner
+            runner_list:
+              const: runner_setup
+            send_discord_webhook:
+              const: discord
+            send_email:
+              const: email
+            send_imessage:
+              const: imessage
+            send_slack_webhook:
+              const: slack
+            send_sms:
+              const: sms
+            spawn_worker:
+              const: supervisor
+            ssh_exec:
+              const: ssh
+            task_create:
+              const: task
+            task_delete:
+              const: task
+            task_list:
+              const: task
+            task_update:
+              const: task
+            web_fetch:
+              const: web_fetch
+            web_search:
+              const: web_search
           required:
-            - http_request
-            - math_eval
-            - get_current_time
+            - agent_memory_delete
+            - agent_memory_export
+            - agent_memory_get
+            - agent_memory_set
+            - contact_user
+            - container_exec
             - datetime_diff
             - generate_uuid
+            - get_current_time
+            - get_worker_metadata
+            - github_add_comment
+            - github_create_issue
+            - github_get_issue
+            - github_get_pull_request
+            - github_list_issues
+            - github_list_pull_requests
+            - github_list_repositories
+            - grep_workers
+            - http_request
+            - jira_add_comment
+            - jira_create_issue
+            - jira_get_issue
+            - jira_list_issues
+            - jira_transition_issue
+            - jira_update_issue
+            - knowledge_search
+            - linear_add_comment
+            - linear_create_issue
+            - linear_get_issue
+            - linear_list_issues
+            - linear_list_teams
+            - linear_update_issue
+            - list_imessage_messages
+            - list_workers
+            - math_eval
+            - notion_append_blocks
+            - notion_create_page
+            - notion_get_page
+            - notion_query_database
+            - notion_search
+            - notion_update_page
+            - read_worker_file
+            - read_worker_result
+            - refresh_connector_status
+            - runner_create_enroll_token
+            - runner_exec
+            - runner_list
+            - send_discord_webhook
+            - send_email
+            - send_imessage
+            - send_slack_webhook
+            - send_sms
+            - spawn_worker
+            - ssh_exec
+            - task_create
+            - task_delete
+            - task_list
+            - task_update
+            - web_fetch
+            - web_search
 
 # ---------------------------------------------------------------------------
 # Contract Validation Messages
