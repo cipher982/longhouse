@@ -63,6 +63,13 @@ def _make_llm(agent_row, tools):
         "api_key": get_settings().openai_api_key,
     }
 
+    # Add reasoning_effort if specified in agent config
+    # Values: "low", "medium", "high". "none" or absent = omit parameter.
+    agent_cfg = getattr(agent_row, "config", {}) or {}
+    reasoning_effort = agent_cfg.get("reasoning_effort")
+    if reasoning_effort and reasoning_effort.lower() not in ("none", ""):
+        kwargs["reasoning_effort"] = reasoning_effort.lower()
+
     # Enforce a maximum completion length if configured (>0)
     try:
         max_toks = int(get_settings().max_output_tokens)

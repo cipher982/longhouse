@@ -590,16 +590,21 @@ export interface paths {
         put?: never;
         /**
          * Fire Trigger Event
-         * @description Webhook endpoint that fires a trigger event.
+         * @description Public webhook endpoint that fires a trigger event.
          *
-         *     Security: the caller must sign the request body using HMAC-SHA256.
+         *     Security: Bearer token authentication using the trigger's unique secret.
          *
-         *     Signature string to hash:
-         *         "{timestamp}.{raw_body}"
+         *     Request format:
+         *         POST /api/triggers/{trigger_id}/events
+         *         Authorization: Bearer <trigger.secret>
+         *         Content-Type: application/json
          *
-         *     where *timestamp* is the same value sent in `X-Zerg-Timestamp` header and
-         *     *raw_body* is the exact JSON body (no whitespace changes).  The hex-encoded
-         *     digest is provided via `X-Zerg-Signature` header.
+         *         {arbitrary json body or empty}
+         *
+         *     Returns:
+         *         202 Accepted: {"status": "accepted"} - triggered successfully
+         *         404 Not Found: invalid token OR unknown trigger (don't leak existence)
+         *         413 Payload Too Large: request body exceeds 256 KiB limit
          */
         post: operations["fire_trigger_event_api_triggers__trigger_id__events_post"];
         delete?: never;
@@ -1429,14 +1434,7 @@ export interface paths {
          *     Validates the session from cookie (preferred) or Authorization header.
          *     Returns 204 if valid, 401 if missing/invalid/expired/user-inactive.
          *
-         *     This endpoint is designed to be called by nginx auth_request to gate
-         *     protected routes like /dashboard and /chat.
-         *
-         *     Security: Performs full validation including:
-         *     - JWT signature verification
-         *     - Token expiry check
-         *     - User existence in database
-         *     - User is_active status
+         *     In development mode (AUTH_DISABLED=1), always returns 204.
          */
         get: operations["verify_session_api_auth_verify_get"];
         put?: never;
@@ -2036,6 +2034,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jarvis/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Chat
+         * @description Text chat endpoint - streams responses from Supervisor.
+         *
+         *     This endpoint provides a simpler alternative to /supervisor for text-only
+         *     chat. It still uses the Supervisor under the hood but returns an SSE stream
+         *     directly instead of requiring a separate connection.
+         *
+         *     Args:
+         *         request: Chat request with user message
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         EventSourceResponse streaming chat responses
+         *
+         *     Example:
+         *         POST /api/jarvis/chat
+         *         {"message": "What's the weather?"}
+         *
+         *         Streams SSE events:
+         *         - supervisor_started: Chat processing started
+         *         - supervisor_thinking: Supervisor analyzing
+         *         - supervisor_complete: Final response with result
+         */
+        post: operations["jarvis_chat_api_jarvis_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jarvis History
+         * @description Get conversation history from Supervisor thread.
+         *
+         *     Returns paginated message history from the user's supervisor thread.
+         *     Only includes user and assistant messages (filters out system messages).
+         *
+         *     Args:
+         *         limit: Maximum number of messages to return (default 50)
+         *         offset: Number of messages to skip (default 0)
+         *         db: Database session
+         *         current_user: Authenticated user
+         *
+         *     Returns:
+         *         JarvisHistoryResponse with messages and total count
+         */
+        get: operations["jarvis_history_api_jarvis_history_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Jarvis Clear History
+         * @description Clear conversation history by creating a new Supervisor thread.
+         *
+         *     This creates a fresh thread for the user's Supervisor agent, effectively
+         *     clearing all conversation history. The old thread is preserved in the
+         *     database but no longer used.
+         *
+         *     Args:
+         *         db: Database session
+         *         current_user: Authenticated user
+         */
+        delete: operations["jarvis_clear_history_api_jarvis_history_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/bootstrap": {
         parameters: {
             query?: never;
@@ -2059,6 +2142,29 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Jarvis Update Preferences
+         * @description Update user's Jarvis preferences.
+         *
+         *     Saves preferences to the user's context in the database.
+         *     Only provided fields are updated; others remain unchanged.
+         */
+        patch: operations["jarvis_update_preferences_api_jarvis_preferences_patch"];
         trace?: never;
     };
     "/api/jarvis/session": {
@@ -3273,6 +3379,13 @@ export interface components {
              * @description User context summary (safe subset)
              */
             user_context: Record<string, never>;
+            /**
+             * Available Models
+             * @description Models available for selection
+             */
+            available_models: components["schemas"]["JarvisModelInfo"][];
+            /** @description User's saved preferences */
+            preferences: components["schemas"]["JarvisPreferences"];
         };
         /**
          * JarvisCancelResponse
@@ -3294,6 +3407,54 @@ export interface components {
              * @description Human-readable status message
              */
             message: string;
+        };
+        /**
+         * JarvisChatMessage
+         * @description Single chat message in history.
+         */
+        JarvisChatMessage: {
+            /**
+             * Role
+             * @description Message role: user or assistant
+             */
+            role: string;
+            /**
+             * Content
+             * @description Message content
+             */
+            content: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             * @description Message timestamp
+             */
+            timestamp: string;
+        };
+        /**
+         * JarvisChatRequest
+         * @description Request for text chat with Supervisor.
+         */
+        JarvisChatRequest: {
+            /**
+             * Message
+             * @description User message text
+             */
+            message: string;
+            /**
+             * Client Correlation Id
+             * @description Client-generated correlation ID
+             */
+            client_correlation_id?: string | null;
+            /**
+             * Model
+             * @description Model to use for this request (e.g., gpt-5.1)
+             */
+            model?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort?: string | null;
         };
         /**
          * JarvisDispatchRequest
@@ -3336,6 +3497,75 @@ export interface components {
              * @description Name of agent being executed
              */
             agent_name: string;
+        };
+        /**
+         * JarvisHistoryResponse
+         * @description Chat history response.
+         */
+        JarvisHistoryResponse: {
+            /**
+             * Messages
+             * @description List of messages
+             */
+            messages: components["schemas"]["JarvisChatMessage"][];
+            /**
+             * Total
+             * @description Total message count
+             */
+            total: number;
+        };
+        /**
+         * JarvisModelInfo
+         * @description Model information for frontend display.
+         */
+        JarvisModelInfo: {
+            /**
+             * Id
+             * @description Model ID (e.g., gpt-5.1)
+             */
+            id: string;
+            /**
+             * Display Name
+             * @description Human-readable name
+             */
+            display_name: string;
+            /**
+             * Description
+             * @description Brief description
+             */
+            description: string;
+        };
+        /**
+         * JarvisPreferences
+         * @description User preferences for Jarvis chat.
+         */
+        JarvisPreferences: {
+            /**
+             * Chat Model
+             * @description Selected model for text chat
+             */
+            chat_model: string;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort: string;
+        };
+        /**
+         * JarvisPreferencesUpdate
+         * @description Request to update user preferences.
+         */
+        JarvisPreferencesUpdate: {
+            /**
+             * Chat Model
+             * @description Model for text chat
+             */
+            chat_model?: string | null;
+            /**
+             * Reasoning Effort
+             * @description Reasoning effort: none, low, medium, high
+             */
+            reasoning_effort?: string | null;
         };
         /**
          * JarvisRunSummary
@@ -5700,9 +5930,8 @@ export interface operations {
             query?: {
                 session_factory?: unknown;
             };
-            header: {
-                "X-Zerg-Timestamp": string;
-                "X-Zerg-Signature": string;
+            header?: {
+                authorization?: string | null;
             };
             path: {
                 trigger_id: number;
@@ -8112,6 +8341,109 @@ export interface operations {
             };
         };
     };
+    jarvis_chat_api_jarvis_chat_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_history_api_jarvis_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_clear_history_api_jarvis_history_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     jarvis_bootstrap_api_jarvis_bootstrap_get: {
         parameters: {
             query?: {
@@ -8132,6 +8464,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JarvisBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_update_preferences_api_jarvis_preferences_patch: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisPreferences"];
                 };
             };
             /** @description Validation Error */

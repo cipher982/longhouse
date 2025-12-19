@@ -21,6 +21,7 @@ Design goals
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 from typing import Dict
 from typing import Sequence
@@ -53,21 +54,65 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Local in-memory cache for compiled LangGraph runnables.
-# Keyed by (agent_id, agent_updated_at, stream_flag) so that any edit to the
+# Keyed by (agent_id, agent_updated_at, stream_flag, model, reasoning_effort) so that any edit to the
 # agent definition automatically busts the cache.  The cache is deliberately
 # **process-local** – workers in a multi-process Gunicorn deployment will each
 # compile their own runnable once on first use which is acceptable given the
 # small cost (~100 ms).
 # ---------------------------------------------------------------------------
 
-_RUNNABLE_CACHE: Dict[Tuple[int, str, bool], Any] = {}
+_RUNNABLE_CACHE: Dict[Tuple[int, str, bool, str, str], Any] = {}
+
+
+def _normalize_reasoning_effort(value: str | None) -> str:
+    if not value:
+        return ""
+    v = value.strip().lower()
+    if v in ("", "none"):
+        return ""
+    return v
+
+
+@dataclass(frozen=True)
+class AgentRuntimeView:
+    """Read-only runtime view of an Agent row.
+
+    IMPORTANT: This avoids mutating the SQLAlchemy-managed Agent ORM object.
+    Per-request overrides (model, reasoning_effort) must not be persisted to DB
+    and must not leak across concurrent runs.
+    """
+
+    id: int
+    owner_id: int
+    updated_at: Any
+    model: str
+    config: dict
+    allowed_tools: Any
 
 
 class AgentRunner:  # noqa: D401 – naming follows project conventions
     """Run one agent turn (async)."""
 
-    def __init__(self, agent_row: AgentModel, *, thread_service: ThreadService | None = None):
-        self.agent = agent_row
+    def __init__(
+        self,
+        agent_row: AgentModel,
+        *,
+        thread_service: ThreadService | None = None,
+        model_override: str | None = None,
+        reasoning_effort: str | None = None,
+    ):
+        runtime_cfg = dict(getattr(agent_row, "config", {}) or {})
+        if reasoning_effort is not None:
+            runtime_cfg["reasoning_effort"] = reasoning_effort
+
+        self.agent = AgentRuntimeView(
+            id=agent_row.id,
+            owner_id=agent_row.owner_id,
+            updated_at=getattr(agent_row, "updated_at", None),
+            model=model_override or agent_row.model,
+            config=runtime_cfg,
+            allowed_tools=getattr(agent_row, "allowed_tools", None),
+        )
         self.thread_service = thread_service or ThreadService
         # Aggregated usage for the last run (provider metadata only)
         self.usage_prompt_tokens: int | None = None
@@ -96,13 +141,19 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # ------------------------------------------------------------------
 
         updated_at_str = agent_row.updated_at.isoformat() if getattr(agent_row, "updated_at", None) else "0"
-        cache_key = (agent_row.id, updated_at_str, self.enable_token_stream)
+        cache_key = (
+            agent_row.id,
+            updated_at_str,
+            self.enable_token_stream,
+            self.agent.model,
+            _normalize_reasoning_effort(self.agent.config.get("reasoning_effort")),
+        )
 
         if cache_key in _RUNNABLE_CACHE:
             self._runnable = _RUNNABLE_CACHE[cache_key]
             logger.debug("AgentRunner: using cached runnable for agent %s", agent_row.id)
         else:
-            self._runnable = zerg_react_agent.get_runnable(agent_row)
+            self._runnable = zerg_react_agent.get_runnable(self.agent)
             _RUNNABLE_CACHE[cache_key] = self._runnable
             logger.debug("AgentRunner: compiled & cached runnable for agent %s", agent_row.id)
 
