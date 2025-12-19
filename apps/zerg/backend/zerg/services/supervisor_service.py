@@ -376,6 +376,8 @@ class SupervisorService:
         task: str,
         run_id: int | None = None,
         timeout: int = 60,
+        model_override: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> SupervisorRunResult:
         """Run the supervisor agent with a task.
 
@@ -391,6 +393,8 @@ class SupervisorService:
             task: The task/question from the user
             run_id: Optional existing run ID (avoids duplicate run creation)
             timeout: Maximum execution time in seconds
+            model_override: Optional model to use instead of agent's default
+            reasoning_effort: Optional reasoning effort (none, low, medium, high)
 
         Returns:
             SupervisorRunResult with run details and result
@@ -495,7 +499,7 @@ class SupervisorService:
             _supervisor_ctx_token = set_supervisor_run_id(run.id)
 
             # Run the agent with timeout
-            runner = AgentRunner(agent)
+            runner = AgentRunner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
             try:
                 created_messages = await asyncio.wait_for(
                     runner.run_thread(self.db, thread),

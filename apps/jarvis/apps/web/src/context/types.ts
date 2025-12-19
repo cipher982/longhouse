@@ -45,6 +45,23 @@ export interface ChatMessage {
 }
 
 /**
+ * Model info from bootstrap
+ */
+export interface ModelInfo {
+  id: string
+  display_name: string
+  description: string
+}
+
+/**
+ * User preferences for chat
+ */
+export interface ChatPreferences {
+  chat_model: string
+  reasoning_effort: 'none' | 'low' | 'medium' | 'high'
+}
+
+/**
  * Global application state
  */
 export interface AppState {
@@ -74,6 +91,10 @@ export interface AppState {
 
   // Media state
   sharedMicStream: MediaStream | null
+
+  // Chat preferences (model selection, reasoning effort)
+  availableModels: ModelInfo[]
+  preferences: ChatPreferences
 }
 
 /**
@@ -98,4 +119,7 @@ export type AppAction =
   | { type: 'SET_JARVIS_CLIENT'; client: unknown }
   | { type: 'SET_CACHED_AGENTS'; agents: unknown[] }
   | { type: 'SET_MIC_STREAM'; stream: MediaStream | null }
+  | { type: 'SET_AVAILABLE_MODELS'; models: ModelInfo[] }
+  | { type: 'SET_PREFERENCES'; preferences: ChatPreferences }
+  | { type: 'UPDATE_PREFERENCE'; key: keyof ChatPreferences; value: string }
   | { type: 'RESET' }

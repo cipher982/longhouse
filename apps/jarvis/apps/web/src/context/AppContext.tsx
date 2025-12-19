@@ -36,6 +36,13 @@ const initialState: AppState = {
 
   // Media
   sharedMicStream: null,
+
+  // Chat preferences
+  availableModels: [],
+  preferences: {
+    chat_model: 'gpt-5.1',
+    reasoning_effort: 'none',
+  },
 }
 
 /**
@@ -92,6 +99,18 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, cachedAgents: action.agents }
     case 'SET_MIC_STREAM':
       return { ...state, sharedMicStream: action.stream }
+    case 'SET_AVAILABLE_MODELS':
+      return { ...state, availableModels: action.models }
+    case 'SET_PREFERENCES':
+      return { ...state, preferences: action.preferences }
+    case 'UPDATE_PREFERENCE':
+      return {
+        ...state,
+        preferences: {
+          ...state.preferences,
+          [action.key]: action.value,
+        },
+      }
     case 'RESET':
       return initialState
     default:

@@ -13,6 +13,23 @@ import type { VoiceAgentConfig } from '../contexts/types';
 export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error';
 
 /**
+ * Model info from bootstrap
+ */
+export interface ModelInfo {
+  id: string;
+  display_name: string;
+  description: string;
+}
+
+/**
+ * User preferences from bootstrap
+ */
+export interface ChatPreferences {
+  chat_model: string;
+  reasoning_effort: 'none' | 'low' | 'medium' | 'high';
+}
+
+/**
  * Bootstrap data from server
  */
 export interface BootstrapData {
@@ -24,6 +41,8 @@ export interface BootstrapData {
     location?: string;
     servers?: Array<{ name: string; purpose: string }>;
   };
+  available_models: ModelInfo[];
+  preferences: ChatPreferences;
 }
 
 /**
@@ -72,7 +91,9 @@ export type StateChangeEvent =
   | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
-  | { type: 'HISTORY_LOADED'; history: any[] };
+  | { type: 'HISTORY_LOADED'; history: any[] }
+  | { type: 'PREFERENCES_CHANGED'; preferences: ChatPreferences }
+  | { type: 'MODELS_LOADED'; models: ModelInfo[] };
 
 /**
  * State change listener
@@ -282,6 +303,35 @@ export class StateManager {
    */
   setBootstrap(data: BootstrapData | null): void {
     this.state.bootstrap = data;
+
+    // Emit events for React to update its state
+    if (data?.available_models) {
+      this.emit({ type: 'MODELS_LOADED', models: data.available_models });
+    }
+    if (data?.preferences) {
+      this.emit({ type: 'PREFERENCES_CHANGED', preferences: data.preferences });
+    }
+  }
+
+  /**
+   * Get current preferences
+   */
+  getPreferences(): ChatPreferences {
+    return this.state.bootstrap?.preferences || { chat_model: 'gpt-5.1', reasoning_effort: 'none' };
+  }
+
+  /**
+   * Update preferences (local state only - caller should persist to server)
+   */
+  updatePreferences(updates: Partial<ChatPreferences>): void {
+    if (this.state.bootstrap) {
+      const existing = (this.state.bootstrap as any).preferences ?? this.getPreferences();
+      (this.state.bootstrap as any).preferences = {
+        ...existing,
+        ...updates,
+      };
+      this.emit({ type: 'PREFERENCES_CHANGED', preferences: (this.state.bootstrap as any).preferences });
+    }
   }
 
   /**
