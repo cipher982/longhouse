@@ -21,7 +21,6 @@ import { feedbackSystem } from './feedback-system';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { SupervisorChatController } from './supervisor-chat-controller';
-import { createContextTools } from './tool-factory';
 import { contextLoader } from '../contexts/context-loader';
 
 export class AppController {
@@ -227,8 +226,9 @@ export class AppController {
         throw new Error('No active context loaded');
       }
 
-      // Create tools using factory
-      const tools = createContextTools(currentContext, null);
+      // v2.1 one-brain architecture: Realtime is I/O only (transcription + VAD).
+      // Do not register any tools with Realtime.
+      const tools: any[] = [];
 
       // 3. Bootstrap session with SSOT history
       // This loads history ONCE and provides it to both UI and Realtime
