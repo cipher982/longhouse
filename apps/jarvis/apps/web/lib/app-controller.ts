@@ -445,40 +445,14 @@ export class AppController {
         voiceController.handleSpeechStop();
       }
 
-      // Streaming Response - handle text deltas from various event types
-      // The OpenAI Agents SDK may emit different event names:
-      // - response.output_text.delta: Text mode responses (SDK naming)
-      // - response.output_audio_transcript.delta: Audio with transcript (actual event from API)
-      // - response.audio_transcript.delta: Voice transcript (alternative naming)
-      // - response.text.delta: Alternative text delta
-      const isTextDelta =
-        t === 'response.output_text.delta' ||
-        t === 'response.output_audio_transcript.delta' ||
-        t === 'response.audio_transcript.delta' ||
-        t === 'response.text.delta';
-
-      if (isTextDelta) {
-        // Prefer transcript field, fall back to delta
-        const text = event.transcript || event.delta || '';
-        if (text && typeof text === 'string') {
-          conversationController.appendStreaming(text);
-          stateManager.setVoiceStatus('speaking');
-        }
-      }
-
-      // Track when audio output starts (for visual feedback)
-      if (t.startsWith('response.output_audio') || t.startsWith('response.audio')) {
-        stateManager.setVoiceStatus('speaking');
-        void audioController.startSpeakerMonitor();
-      }
-
-      // Response Completion - ALWAYS reset status, finalize if streaming
-      if (t === 'response.done') {
-        if (conversationController.isStreaming()) {
-          conversationController.finalizeStreaming();
-        }
-        // Always reset to ready when response is complete
-        stateManager.setVoiceStatus('ready');
+      // v2.1 Architecture: Realtime is I/O only - Supervisor is the "one brain"
+      // Defense-in-depth: Ignore any response.* events from Realtime.
+      // With create_response=false, these shouldn't occur, but if they do, don't render them.
+      const isRealtimeResponse = t.startsWith('response.');
+      if (isRealtimeResponse) {
+        logger.warn(`[v2.1] Ignoring Realtime response event (Supervisor is the only brain): ${t}`);
+        // Do not render or process these events - Supervisor output is the only source of truth
+        return;
       }
 
       // Item handling
