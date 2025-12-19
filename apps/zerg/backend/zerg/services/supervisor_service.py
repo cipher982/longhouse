@@ -121,6 +121,10 @@ class SupervisorService:
                     "knowledge_search",
                     "web_search",
                     "web_fetch",
+                    # Personal tools (Phase 4 v2.1)
+                    "get_current_location",
+                    "get_whoop_data",
+                    "search_notes",
                 ]
                 if agent.allowed_tools != supervisor_tools:
                     agent.allowed_tools = supervisor_tools
@@ -172,6 +176,10 @@ class SupervisorService:
             # V1.2: web research capabilities
             "web_search",
             "web_fetch",
+            # V2.1 Phase 4: Personal tools (location, health, notes)
+            "get_current_location",
+            "get_whoop_data",
+            "search_notes",
         ]
 
         agent = crud.create_agent(
