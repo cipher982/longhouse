@@ -4,6 +4,11 @@ from pathlib import Path
 # Set *before* any project imports so backend skips background services
 os.environ["TESTING"] = "1"
 
+# Crypto – provide deterministic Fernet key for tests *before* any zerg imports.
+# (Some modules import zerg.utils.crypto at import time.)
+if not os.environ.get("FERNET_SECRET"):
+    os.environ["FERNET_SECRET"] = "Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw="
+
 import asyncio
 import sys
 from unittest.mock import MagicMock
@@ -63,18 +68,8 @@ if "cryptography" not in sys.modules:  # guard in case real package installed
 os.environ["LANGCHAIN_API_KEY"] = ""
 
 # ---------------------------------------------------------------------------
-# Crypto – provide deterministic Fernet key for the test suite so refresh
-# tokens are encrypted at rest while keeping decryption reproducible.
+# Crypto – note: FERNET_SECRET is set above, before any project imports.
 # ---------------------------------------------------------------------------
-# Key generated via ``cryptography.fernet.Fernet.generate_key()`` once and
-# hard-coded here.  The value is **public** and only used in CI/dev tests –
-# production deployments must override via environment variable.
-
-os.environ.setdefault(
-    "FERNET_SECRET",
-    "Mj7MFJspDPjiFBGHZJ5hnx70XAFJ_En6ofIEhn3BoXw=",
-)
-
 # Mock the LangSmith client to prevent any actual API calls
 mock_langsmith = MagicMock()
 mock_langsmith_client = MagicMock()

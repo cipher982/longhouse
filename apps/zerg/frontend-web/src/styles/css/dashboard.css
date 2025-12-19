@@ -740,3 +740,167 @@
   font-size: var(--font-size-lg);
   text-align: center;
 }
+
+/* -------------------------------------------------------------
+   Usage Widget - LLM cost/token tracking for users
+   ------------------------------------------------------------- */
+
+.usage-widget {
+  background: var(--color-surface-card, #1e1e2e);
+  border: 1px solid var(--color-border-subtle, #2a2a3a);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  max-width: 320px;
+}
+
+.usage-widget-loading,
+.usage-widget-error {
+  opacity: 0.7;
+}
+
+.usage-widget-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.usage-widget-icon {
+  font-size: 16px;
+}
+
+.usage-widget-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary, #e0e0e0);
+}
+
+.usage-widget-loading-text,
+.usage-widget-error-text {
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+}
+
+/* Progress bar */
+.usage-widget-progress-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.usage-widget-progress-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--color-surface-secondary, #2a2a3a);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.usage-widget-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition:
+    width 0.3s ease,
+    background-color 0.3s ease;
+}
+
+.usage-widget-progress-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary, #e0e0e0);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* Cost summary */
+.usage-widget-summary {
+  margin-bottom: 8px;
+}
+
+.usage-widget-cost {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.usage-widget-cost-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary, #e0e0e0);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-widget-cost-label {
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+}
+
+/* Token and run details */
+.usage-widget-details {
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-widget-detail-separator {
+  opacity: 0.5;
+}
+
+/* Warning and exceeded banners */
+.usage-widget-warning,
+.usage-widget-exceeded {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.usage-widget-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.usage-widget-exceeded {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Warning toast styling */
+.usage-warning-toast {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usage-warning-toast strong {
+  font-size: 14px;
+}
+
+.usage-warning-toast p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.usage-warning-dismiss {
+  align-self: flex-end;
+  background: transparent;
+  border: 1px solid #f59e0b;
+  color: #b45309;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.usage-warning-dismiss:hover {
+  background: rgba(245, 158, 11, 0.2);
+}
