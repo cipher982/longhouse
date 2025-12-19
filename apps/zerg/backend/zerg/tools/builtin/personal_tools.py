@@ -23,6 +23,7 @@ from langchain_core.tools import StructuredTool
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
 from zerg.tools.error_envelope import ErrorType, tool_error, tool_success
+from zerg.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
 
@@ -213,24 +214,36 @@ def _refresh_whoop_token(refresh_token: str, client_id: str, client_secret: str,
             return None
 
         token_data = response.json()
-        new_creds = {
-            "access_token": token_data["access_token"],
-            "refresh_token": token_data.get("refresh_token", refresh_token),  # Use new if provided, else keep old
-        }
 
-        # Update credentials in database
+        # IMPORTANT: Preserve client_id/client_secret when updating tokens
+        # Otherwise next refresh will fail due to missing OAuth app credentials
         credential = db.query(AccountConnectorCredential).filter(
             AccountConnectorCredential.owner_id == owner_id,
             AccountConnectorCredential.connector_type == "whoop",
         ).first()
 
         if credential:
+            # Decrypt existing credentials to preserve client_id/secret
+            existing_creds = json.loads(decrypt(credential.encrypted_value))
+
+            # Update tokens while preserving OAuth app credentials
+            new_creds = {
+                "client_id": existing_creds.get("client_id", client_id),
+                "client_secret": existing_creds.get("client_secret", client_secret),
+                "access_token": token_data["access_token"],
+                "refresh_token": token_data.get("refresh_token", refresh_token),
+            }
+
             credential.encrypted_value = encrypt(json.dumps(new_creds))
             credential.test_status = "untested"
             db.commit()
             logger.info(f"WHOOP token refreshed successfully for user {owner_id}")
 
-        return new_creds
+            return new_creds
+
+        # Shouldn't happen, but handle gracefully
+        logger.error(f"WHOOP credential not found for user {owner_id} during refresh")
+        return None
 
     except Exception as e:
         logger.exception(f"Failed to refresh WHOOP token for user {owner_id}")
@@ -501,27 +514,64 @@ def search_notes(
     if not safe_query:
         return tool_error(ErrorType.VALIDATION_ERROR, "Invalid search query")
 
+    # Expand ~ in vault path for shell execution
+    # Note: Runner executes in user's shell, so ~ expands on runner side
+    expanded_vault = vault_path.replace("~", "$HOME")
+
     # Build ripgrep command
     # -i: case insensitive
-    # -l: files with matches (for counting)
     # -C 1: 1 line of context
     # --max-count: limit matches per file
     # --type md: only markdown files
     rg_command = (
         f'rg -i -C 1 --max-count 3 --type md '
-        f'"{safe_query}" "{vault_path}" 2>/dev/null | head -n 100'
+        f'"{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
     )
 
     try:
-        # Import runner_exec dynamically to avoid circular imports
-        from zerg.tools.builtin.runner_tools import runner_exec
+        # Execute via runner using supervisor-safe method
+        # runner_exec requires worker context, so we use the dispatcher directly
+        from zerg.database import get_db
+        from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
+        from zerg.crud import runner_crud
 
-        # Execute via runner
-        result = runner_exec(
-            target=runner_name,
-            command=rg_command,
-            timeout_secs=30,
-        )
+        db = next(get_db())
+        try:
+            # Resolve runner by name
+            runner = runner_crud.get_runner_by_name(db, resolver.owner_id, runner_name)
+            if not runner:
+                return tool_error(
+                    ErrorType.VALIDATION_ERROR,
+                    f"Runner '{runner_name}' not found. Is it enrolled and online?",
+                )
+
+            if runner.status == "offline":
+                return tool_error(
+                    ErrorType.EXECUTION_ERROR,
+                    f"Runner '{runner_name}' is offline. Please start the Runner.",
+                )
+
+            if runner.status == "revoked":
+                return tool_error(
+                    ErrorType.VALIDATION_ERROR,
+                    f"Runner '{runner_name}' has been revoked.",
+                )
+
+            # Dispatch job to runner
+            dispatcher = get_runner_job_dispatcher()
+            result = _run_coro_sync(
+                dispatcher.dispatch_job(
+                    db=db,
+                    owner_id=resolver.owner_id,
+                    runner_id=runner.id,
+                    command=rg_command,
+                    timeout_secs=30,
+                    worker_id=None,  # No worker context for Supervisor tools
+                    run_id=None,
+                )
+            )
+        finally:
+            db.close()
 
         if not result.get("ok"):
             error = result.get("error", {})
