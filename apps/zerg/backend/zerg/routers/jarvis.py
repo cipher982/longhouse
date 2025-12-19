@@ -966,6 +966,8 @@ async def _chat_stream_generator(
     """
     queue: asyncio.Queue = asyncio.Queue()
     task_handle: Optional[asyncio.Task] = None
+    pending_workers = 0
+    supervisor_done = False
 
     async def event_handler(event):
         """Filter and queue relevant events."""
@@ -976,6 +978,13 @@ async def _chat_stream_generator(
         # Filter by run_id
         if "run_id" in event and event.get("run_id") != run_id:
             return
+
+        # Tool events MUST have run_id to prevent leaking across runs
+        event_type = event.get("event_type") or event.get("type")
+        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
+            if "run_id" not in event:
+                logger.warning(f"Tool event missing run_id, dropping: {event_type}")
+                return
 
         await queue.put(event)
 
@@ -1014,7 +1023,14 @@ async def _chat_stream_generator(
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
     event_bus.subscribe(EventType.ERROR, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
 
     try:
         # Send initial connection event
@@ -1041,8 +1057,21 @@ async def _chat_stream_generator(
                 event_type = event.get("event_type") or event.get("type") or "event"
                 logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
 
-                # Check for completion
-                if event_type in ("supervisor_complete", "error"):
+                # Track worker lifecycle so we don't close the stream until workers finish
+                if event_type == "worker_spawned":
+                    pending_workers += 1
+                elif event_type == "worker_complete" and pending_workers > 0:
+                    pending_workers -= 1
+                elif event_type == "worker_summary_ready" and pending_workers > 0:
+                    # In rare cases worker_complete may be dropped; treat summary_ready as completion
+                    pending_workers -= 1
+                elif event_type == "supervisor_complete":
+                    supervisor_done = True
+                elif event_type == "error":
+                    complete = True
+
+                # Close once supervisor is done AND all workers for this run have finished
+                if supervisor_done and pending_workers == 0:
                     complete = True
 
                 # Format payload
@@ -1080,7 +1109,14 @@ async def _chat_stream_generator(
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
         event_bus.unsubscribe(EventType.ERROR, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
 
 
 @router.post("/chat")
@@ -1352,14 +1388,15 @@ def jarvis_bootstrap(
     from zerg.models_config import get_all_models, get_default_model_id_str
     from zerg.prompts.composer import build_jarvis_prompt
 
-    # Define all available tools
-    # v2.1 Architecture: route_to_supervisor has been REMOVED.
-    # All user input now goes directly to Supervisor via POST /api/jarvis/chat.
-    # These remaining tools are "direct tools" that Realtime can use for quick operations.
+    # Define all available personal tools (Phase 4 v2.1)
+    # These are now Supervisor-owned tools, NOT Realtime tools.
+    # Realtime has zero tools (I/O only: transcription + VAD).
+    # All user input goes to Supervisor via POST /api/jarvis/chat.
+    # Supervisor can call these tools directly using connector credentials.
     AVAILABLE_TOOLS = {
-        "location": {"name": "get_current_location", "description": "Get current GPS location via Traccar"},
+        "location": {"name": "get_current_location", "description": "Get GPS location via Traccar"},
         "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
-        "obsidian": {"name": "search_notes", "description": "Search notes via Obsidian"},
+        "obsidian": {"name": "search_notes", "description": "Search Obsidian vault via Runner"},
     }
 
     # Get tool configuration from user context (default all enabled)

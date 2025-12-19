@@ -157,6 +157,9 @@ Only investigate metrics when performance seems anomalous. For normal executions
 - `runner_create_enroll_token(ttl_minutes)` - Generate runner setup commands (chat-first onboarding)
 - `send_email(to, subject, body)` - Notifications
 - `knowledge_search(query)` - Search user's knowledge base (docs, infrastructure notes)
+- `web_search(query)` - Search the web for information
+- `web_fetch(url)` - Fetch and extract content from URLs
+- Plus any personal tools configured in your allowlist (check function schemas for details)
 
 **You do NOT directly run shell commands.** Only workers run commands (via runner_exec or ssh_exec).
 
