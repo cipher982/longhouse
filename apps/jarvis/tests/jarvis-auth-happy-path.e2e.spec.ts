@@ -41,34 +41,18 @@ test.describe('Jarvis BFF Integration', () => {
 
     // Should include the core tools
     const toolNames = data.enabled_tools.map((t: any) => t.name);
-    expect(toolNames).toContain('route_to_supervisor');
+    expect(toolNames).toContain('get_current_location');
+    expect(toolNames).not.toContain('route_to_supervisor');
   });
 
-  test('tool proxy rejects unknown tools with 400', async ({ request }) => {
-    const response = await request.post('/api/jarvis/tool', {
-      data: {
-        name: 'unknown.fake_tool',
-        args: {},
-      },
-    });
+  test('history endpoint returns messages structure', async ({ request }) => {
+    const response = await request.get('/api/jarvis/history?limit=5');
 
-    expect(response.status()).toBe(400);
+    expect(response.status()).toBe(200);
 
-    const error = await response.json();
-    expect(error.detail).toContain('Unknown tool');
-  });
-
-  test('tool proxy accepts known tool namespace', async ({ request }) => {
-    const response = await request.post('/api/jarvis/tool', {
-      data: {
-        name: 'location.get_current',
-        args: {},
-      },
-    });
-
-    // Should not be rejected as unknown (400)
-    // May fail for other reasons (e.g. 503 if upstream tool service unavailable)
-    expect(response.status()).not.toBe(400);
+    const data = await response.json();
+    expect(data).toHaveProperty('messages');
+    expect(Array.isArray(data.messages)).toBe(true);
   });
 
   test('session proxy returns OpenAI Realtime session', async ({ request }) => {
@@ -99,14 +83,13 @@ test.describe('Jarvis BFF Integration', () => {
 });
 
 test.describe('Jarvis BFF Error Handling', () => {
-  test('tool proxy handles malformed requests', async ({ request }) => {
-    const response = await request.post('/api/jarvis/tool', {
-      data: 'not json',
+  test('chat endpoint validates request schema', async ({ request }) => {
+    const response = await request.post('/api/jarvis/chat', {
+      data: {},
     });
 
-    // Should return 4xx error, not crash (500)
-    expect(response.status()).toBeGreaterThanOrEqual(400);
-    expect(response.status()).toBeLessThan(500);
+    // Validation error (Pydantic)
+    expect(response.status()).toBe(422);
   });
 
   test('session proxy handles upstream timeout gracefully', async ({ request }) => {

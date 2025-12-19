@@ -12,6 +12,31 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+let capturedRealtimeSessionOptions: any | null = null;
+
+// v2.1 invariant: Realtime is I/O only and must never auto-create responses.
+// We mock the Realtime SDK to capture the session config passed by SessionHandler.
+vi.mock('@openai/agents/realtime', () => {
+  class RealtimeAgent {
+    constructor(_args: any) {}
+  }
+
+  class OpenAIRealtimeWebRTC {
+    constructor(_args: any) {}
+  }
+
+  class RealtimeSession {
+    constructor(_agent: any, options: any) {
+      capturedRealtimeSessionOptions = options;
+    }
+    async connect(_args: any) {}
+    updateHistory(_items: any[]) {}
+    on(_eventName: string, _handler: any) {}
+  }
+
+  return { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC };
+});
+
 describe('One Brain Architecture (v2.1)', () => {
   describe('Session Configuration', () => {
     it('should export SessionHandler and sessionHandler singleton', async () => {
@@ -31,6 +56,22 @@ describe('One Brain Architecture (v2.1)', () => {
       expect(typeof handler.disconnect).toBe('function');
       expect(typeof handler.getCurrent).toBe('function');
       expect(typeof handler.cleanup).toBe('function');
+    });
+
+    it('should set create_response=false in Realtime session config', async () => {
+      const { SessionHandler } = await import('../lib/session-handler');
+      const handler = new SessionHandler();
+
+      capturedRealtimeSessionOptions = null;
+
+      await handler.connectWithHistory({
+        context: { name: 'Jarvis', instructions: 'I/O only' } as any,
+        historyItems: [],
+        onTokenRequest: async () => 'test-token',
+      });
+
+      expect(capturedRealtimeSessionOptions).toBeTruthy();
+      expect(capturedRealtimeSessionOptions.config?.turnDetection?.create_response).toBe(false);
     });
   });
 
@@ -70,6 +111,53 @@ describe('One Brain Architecture (v2.1)', () => {
 
       // Verify the controller has the text routing method
       expect(typeof controller.sendText).toBe('function');
+    });
+
+    it('should route sendText through SupervisorChatController (not Realtime)', async () => {
+      const { AppController } = await import('../lib/app-controller');
+      const { stateManager } = await import('../lib/state-manager');
+
+      const controller = new AppController();
+      const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+      // Inject a fake supervisor chat controller (private field).
+      (controller as any).supervisorChatController = { sendMessage };
+
+      vi.spyOn(stateManager, 'getPreferences').mockReturnValue({
+        chat_model: 'gpt-5.1',
+        reasoning_effort: 'none',
+      } as any);
+
+      await controller.sendText('Hello', 'cid-1');
+
+      expect(sendMessage).toHaveBeenCalledWith('Hello', 'cid-1', {
+        model: 'gpt-5.1',
+        reasoning_effort: 'none',
+      });
+    });
+
+    it('should ignore Realtime response.* events (defense-in-depth)', async () => {
+      const { AppController } = await import('../lib/app-controller');
+      const { logger } = await import('@jarvis/core');
+
+      const controller = new AppController();
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      let transportHandler: any | null = null;
+      const mockSession: any = {
+        on: (eventName: string, handler: any) => {
+          if (eventName === 'transport_event') {
+            transportHandler = handler;
+          }
+        }
+      };
+
+      // Call private method directly for unit-test validation.
+      (controller as any).setupSessionEvents(mockSession);
+      expect(typeof transportHandler).toBe('function');
+
+      await transportHandler({ type: 'response.text.delta', delta: 'hi' });
+      expect(warnSpy).toHaveBeenCalled();
     });
   });
 });
