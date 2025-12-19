@@ -47,7 +47,11 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
 
         engine = default_engine
 
-    db_url = engine.url.render_as_string(hide_password=False)
+    # Some tests pass a lightweight mock Engine; be defensive about URL handling.
+    try:
+        db_url = str(engine.url.render_as_string(hide_password=False))  # type: ignore[union-attr]
+    except Exception:
+        db_url = str(getattr(engine, "url", ""))
 
     # For SQLite databases, use MemorySaver (tests, local dev)
     if "sqlite" in db_url.lower():
