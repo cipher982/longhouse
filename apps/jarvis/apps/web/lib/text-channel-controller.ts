@@ -1,15 +1,18 @@
 /**
- * TextChannelController - Manages text message sending
+ * TextChannelController - Manages text message sending via Realtime
  *
- * Responsibilities:
+ * @deprecated v2.1 Architecture: This controller sends messages through Realtime's
+ * session.sendMessage(), which is no longer the primary path. Text messages now go
+ * through SupervisorChatController → POST /api/jarvis/chat → Supervisor backend.
+ *
+ * This class is kept for backward compatibility but should not be used for new code.
+ * The Supervisor is the "one brain" - all text input should route there directly.
+ *
+ * Previous Responsibilities:
  * - Manage send queue with error handling and retries
  * - Ensure voice controller is muted before sending
  * - Auto-connect to session if needed
  * - Emit events for text activity
- *
- * Usage:
- *   const controller = new TextChannelController(session, voiceController);
- *   await controller.sendText("Hello, assistant!");
  */
 
 import { eventBus } from './event-bus';

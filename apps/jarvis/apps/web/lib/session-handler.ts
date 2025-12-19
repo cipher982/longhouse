@@ -42,6 +42,10 @@ export interface SessionHandlerConfig {
 
 /**
  * Standard session configuration for OpenAI Realtime
+ *
+ * IMPORTANT (v2.1 Architecture): Realtime is I/O only - transcription + VAD.
+ * Supervisor is the "one brain" that generates all assistant responses.
+ * Setting create_response=false prevents Realtime from auto-generating responses.
  */
 const SESSION_CONFIG = {
   inputAudioTranscription: { model: 'whisper-1' as const },
@@ -55,7 +59,9 @@ const SESSION_CONFIG = {
     type: 'server_vad' as const,
     threshold: 0.5,
     prefix_padding_ms: 300,
-    silence_duration_ms: 1500
+    silence_duration_ms: 1500,
+    // v2.1: Prevent Realtime from generating responses - Supervisor is the only brain
+    create_response: false
   }
 };
 
