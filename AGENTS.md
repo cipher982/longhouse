@@ -128,6 +128,13 @@ Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to p
 - Generated OpenAPI types in `src/generated/openapi-types.ts` — do not edit
 - Run `bun run generate:api` to regenerate types from backend schema
 
+### Frontend Styling Conventions (2025 Refactor)
+- **Scope Styles**: CSS must be scoped to a container class (e.g., `.dashboard-container`, `.chat-view-container`) to prevent global collisions.
+- **Layers**: Use `@layer` to control specificity (`tokens`, `base`, `legacy`, `components`, `pages`).
+- **Tokens**: Use `--color-*` and `--space-*` variables from `src/styles/generated/tokens.css`.
+- **No Global Classes**: Avoid generic class names like `.back-button` or `.empty-state` at the root level.
+- **Tools**: `bun run build:tokens` generates tokens; `bun run build` verifies nesting syntax.
+
 ### Jarvis (TypeScript)
 - Web UI: `apps/jarvis/apps/web/`
 - Shared code: `apps/jarvis/packages/core/`
@@ -160,6 +167,8 @@ Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API 
 8. **E2E Test Isolation**: E2E tests run in a separate Docker project (`zerg-e2e`). If tests fail due to "database connection" issues, ensure no other containers are conflicting on the internal network and try `make test-e2e-reset`.
 
 9. **Auth in Tests**: When `AUTH_DISABLED=1` (default for tests), the `/api/auth/verify` endpoint always returns 204. This allows the frontend to proceed without a real login.
+
+10. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
 
 ## Environment Setup
 
