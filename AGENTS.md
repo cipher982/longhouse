@@ -71,6 +71,10 @@ make test-e2e-down   # Cleanup E2E environment
 make generate-sdk  # OpenAPI types
 make regen-ws      # WebSocket contract code
 
+# Seeding (local dev data)
+make seed-agents       # Seed Jarvis agents
+make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidian)
+
 # Validation (CI checks these)
 make validate      # All validation
 ```
@@ -166,6 +170,96 @@ Copy `.env.example` to `.env` and fill in:
 Run `make env-check` to validate your environment before starting.
 
 Dev auth defaults (`AUTH_DISABLED=1`, `VITE_AUTH_ENABLED=false`) are set in compose. For production, set `AUTH_DISABLED=0` and configure Google OAuth credentials.
+
+## Personal Tools & Credentials (v2.1 Phase 4)
+
+Jarvis supports personal integrations for location, health, and notes. These are **Supervisor-owned tools** that use per-user encrypted credentials.
+
+### Available Personal Tools
+
+| Tool | Integration | Purpose |
+|------|-------------|---------|
+| `get_current_location` | Traccar | GPS location from tracking server |
+| `get_whoop_data` | WHOOP | Health metrics (recovery, HRV, sleep, strain) |
+| `search_notes` | Obsidian | Search personal notes via Runner |
+
+### Local Development Setup
+
+**1. Create credentials file:**
+```bash
+cp apps/zerg/backend/scripts/personal_credentials.example.json \
+   apps/zerg/backend/scripts/personal_credentials.local.json
+```
+
+**2. Fill in your credentials** (file is git-ignored):
+```json
+{
+  "traccar": {
+    "url": "http://5.161.97.53:5055",
+    "username": "admin",
+    "password": "your-password",
+    "device_id": "1"
+  },
+  "whoop": {
+    "client_id": "your-oauth-app-client-id",
+    "client_secret": "your-oauth-app-client-secret",
+    "access_token": "from-oauth-flow",
+    "refresh_token": "from-oauth-flow"
+  },
+  "obsidian": {
+    "vault_path": "~/git/obsidian_vault",
+    "runner_name": "laptop"
+  }
+}
+```
+
+**3. Start dev** (auto-seeds on startup):
+```bash
+make dev
+```
+
+Or seed manually:
+```bash
+make seed-credentials
+```
+
+### Production Setup
+
+On production server, seed credentials for your user:
+```bash
+# Via SSH
+python scripts/seed_personal_credentials.py --email your@email.com
+
+# Or create ~/.config/zerg/personal_credentials.json
+# Then run: python scripts/seed_personal_credentials.py
+```
+
+### Credential Security
+
+- ✅ **Local config** (`*.local.json`) is git-ignored
+- ✅ **Database storage** is Fernet-encrypted (AES-GCM)
+- ✅ **No secrets in code** - all credentials come from config files
+- ✅ **Per-user** - stored in `account_connector_credentials` table
+- ⚠️ **Change defaults** - Traccar default password is `admin`
+
+### Seeding Commands
+
+```bash
+make seed-agents       # Seed Jarvis agents (Morning Digest, Health Watch, etc)
+make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidian)
+```
+
+Both are **idempotent** (safe to run multiple times). Use `--force` to overwrite:
+```bash
+make seed-credentials ARGS="--force"
+```
+
+### For More Details
+
+- **Traccar Setup**: See `TRACCAR_QUICKSTART.md` and `apps/zerg/backend/scripts/TRACCAR_SETUP.md`
+- **Test Connection**: `uv run scripts/test_traccar.py`
+- **WHOOP OAuth**: Register app at https://developer.whoop.com
+- **Obsidian**: Requires a Runner on the machine with your vault
 
 ## Production Deployment
 
