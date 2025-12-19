@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel, useRealtimeSession } from './hooks'
-import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner } from './components'
+import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
 import { conversationController } from '../lib/conversation-controller'
 import { stateManager } from '../lib/state-manager'
 import { toSidebarConversations } from '../lib/conversation-list'
@@ -170,10 +170,13 @@ export default function App() {
           onConnect={handleConnect}
         />
 
-        <TextInput
-          onSend={textChannel.sendMessage}
-          disabled={textChannel.isSending}
-        />
+        <div className="input-controls">
+          <ModelSelector />
+          <TextInput
+            onSend={textChannel.sendMessage}
+            disabled={textChannel.isSending}
+          />
+        </div>
       </div>
 
       {/* Supervisor progress container (SupervisorProgressUI will normalize/relocate as needed) */}

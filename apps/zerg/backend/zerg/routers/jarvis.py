@@ -947,9 +947,18 @@ class JarvisChatRequest(BaseModel):
 
     message: str = Field(..., description="User message text")
     client_correlation_id: Optional[str] = Field(None, description="Client-generated correlation ID")
+    model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.1)")
+    reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
 
 
-async def _chat_stream_generator(run_id: int, owner_id: int, message: str, client_correlation_id: Optional[str] = None):
+async def _chat_stream_generator(
+    run_id: int,
+    owner_id: int,
+    message: str,
+    client_correlation_id: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+):
     """Generate SSE events for chat streaming.
 
     Subscribes to supervisor events and streams assistant responses.
@@ -983,6 +992,8 @@ async def _chat_stream_generator(run_id: int, owner_id: int, message: str, clien
                     task=message,
                     run_id=run_id,
                     timeout=120,
+                    model_override=model,
+                    reasoning_effort=reasoning_effort,
                 )
         except Exception as e:
             logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
@@ -1112,6 +1123,32 @@ async def jarvis_chat(
             detail="Tool disabled: supervisor",
         )
 
+    # Determine effective preferences:
+    # - request overrides win
+    # - otherwise fall back to user's saved context.preferences
+    # - otherwise fall back to global default model / "none" effort
+    ctx = current_user.context or {}
+    saved_prefs = (ctx.get("preferences", {}) or {}) if isinstance(ctx, dict) else {}
+
+    from zerg.models_config import get_default_model_id_str, get_model_by_id
+
+    model_to_use = request.model or saved_prefs.get("chat_model") or get_default_model_id_str()
+    model_config = get_model_by_id(model_to_use)
+    if not model_config or model_to_use == "gpt-mock":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid model: {model_to_use}",
+        )
+
+    reasoning_effort = request.reasoning_effort or saved_prefs.get("reasoning_effort") or "none"
+    valid_efforts = {"none", "low", "medium", "high"}
+    if reasoning_effort.lower() not in valid_efforts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid reasoning_effort: {reasoning_effort}",
+        )
+    reasoning_effort = reasoning_effort.lower()
+
     # Get or create supervisor components
     agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
     thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
@@ -1131,13 +1168,20 @@ async def jarvis_chat(
 
     logger.info(
         f"Jarvis chat: created run {run.id} for user {current_user.id}, "
-        f"message: {request.message[:50]}..."
+        f"message: {request.message[:50]}..., model: {model_to_use}, reasoning: {reasoning_effort}"
     )
 
     # Return SSE stream - background task is started inside the generator
     # to avoid race conditions with event subscriptions
     return EventSourceResponse(
-        _chat_stream_generator(run.id, current_user.id, request.message, request.client_correlation_id)
+        _chat_stream_generator(
+            run.id,
+            current_user.id,
+            request.message,
+            request.client_correlation_id,
+            model=model_to_use,
+            reasoning_effort=reasoning_effort,
+        )
     )
 
 
@@ -1269,12 +1313,29 @@ def jarvis_clear_history(
 # ---------------------------------------------------------------------------
 
 
+class JarvisModelInfo(BaseModel):
+    """Model information for frontend display."""
+
+    id: str = Field(..., description="Model ID (e.g., gpt-5.1)")
+    display_name: str = Field(..., description="Human-readable name")
+    description: str = Field(..., description="Brief description")
+
+
+class JarvisPreferences(BaseModel):
+    """User preferences for Jarvis chat."""
+
+    chat_model: str = Field(..., description="Selected model for text chat")
+    reasoning_effort: str = Field(..., description="Reasoning effort: none, low, medium, high")
+
+
 class JarvisBootstrapResponse(BaseModel):
     """Bootstrap response with prompt, tools, and user context."""
 
     prompt: str = Field(..., description="Complete Jarvis system prompt")
     enabled_tools: List[dict] = Field(..., description="List of available tools")
     user_context: dict = Field(..., description="User context summary (safe subset)")
+    available_models: List[JarvisModelInfo] = Field(..., description="Models available for selection")
+    preferences: JarvisPreferences = Field(..., description="User's saved preferences")
 
 
 @router.get("/bootstrap", response_model=JarvisBootstrapResponse)
@@ -1288,6 +1349,7 @@ def jarvis_bootstrap(
 
     This is the single source of truth for Jarvis configuration.
     """
+    from zerg.models_config import get_all_models, get_default_model_id_str
     from zerg.prompts.composer import build_jarvis_prompt
 
     # Define all available tools
@@ -1318,7 +1380,100 @@ def jarvis_bootstrap(
         "servers": [{"name": s.get("name"), "purpose": s.get("purpose")} for s in ctx.get("servers", [])],
     }
 
-    return JarvisBootstrapResponse(prompt=prompt, enabled_tools=enabled_tools, user_context=user_context)
+    # Get available models (exclude mock model)
+    all_models = get_all_models()
+    available_models = [
+        JarvisModelInfo(
+            id=m.id,
+            display_name=m.display_name,
+            description=m.description or "",
+        )
+        for m in all_models
+        if m.id != "gpt-mock"
+    ]
+
+    available_model_ids = {m.id for m in available_models}
+    default_model_id = get_default_model_id_str()
+
+    # Get user preferences (with defaults + validation)
+    prefs = ctx.get("preferences", {}) or {}
+    requested_model = prefs.get("chat_model") or default_model_id
+    if requested_model not in available_model_ids:
+        requested_model = default_model_id if default_model_id in available_model_ids else (available_models[0].id if available_models else default_model_id)
+
+    requested_effort = (prefs.get("reasoning_effort") or "none").lower()
+    if requested_effort not in {"none", "low", "medium", "high"}:
+        requested_effort = "none"
+
+    preferences = JarvisPreferences(chat_model=requested_model, reasoning_effort=requested_effort)
+
+    return JarvisBootstrapResponse(
+        prompt=prompt,
+        enabled_tools=enabled_tools,
+        user_context=user_context,
+        available_models=available_models,
+        preferences=preferences,
+    )
+
+
+class JarvisPreferencesUpdate(BaseModel):
+    """Request to update user preferences."""
+
+    chat_model: Optional[str] = Field(None, description="Model for text chat")
+    reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
+
+
+@router.patch("/preferences", response_model=JarvisPreferences)
+def jarvis_update_preferences(
+    update: JarvisPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> JarvisPreferences:
+    """Update user's Jarvis preferences.
+
+    Saves preferences to the user's context in the database.
+    Only provided fields are updated; others remain unchanged.
+    """
+    from zerg.models_config import get_default_model_id_str, get_model_by_id
+
+    ctx = current_user.context or {}
+    prefs = ctx.get("preferences", {}) or {}
+
+    # Validate and update chat_model
+    if update.chat_model is not None:
+        model = get_model_by_id(update.chat_model)
+        if not model or update.chat_model == "gpt-mock":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid model: {update.chat_model}",
+            )
+        prefs["chat_model"] = update.chat_model
+
+    # Validate and update reasoning_effort
+    if update.reasoning_effort is not None:
+        valid_efforts = {"none", "low", "medium", "high"}
+        if update.reasoning_effort.lower() not in valid_efforts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid reasoning_effort: {update.reasoning_effort}. Must be one of: {valid_efforts}",
+            )
+        prefs["reasoning_effort"] = update.reasoning_effort.lower()
+
+    # Save to user context
+    ctx["preferences"] = prefs
+    current_user.context = ctx
+    db.commit()
+
+    # Return preferences with sensible defaults
+    chat_model = prefs.get("chat_model") or get_default_model_id_str()
+    reasoning = (prefs.get("reasoning_effort") or "none").lower()
+    if reasoning not in {"none", "low", "medium", "high"}:
+        reasoning = "none"
+
+    return JarvisPreferences(
+        chat_model=chat_model,
+        reasoning_effort=reasoning,
+    )
 
 
 @router.get("/session")

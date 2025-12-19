@@ -112,13 +112,13 @@ export class SupervisorChatController {
   /**
    * Send a text message to the Supervisor and handle SSE response stream
    */
-  async sendMessage(text: string, clientCorrelationId?: string): Promise<void> {
+  async sendMessage(text: string, clientCorrelationId?: string, options?: { model?: string; reasoning_effort?: string }): Promise<void> {
     if (!text || text.trim().length === 0) {
       throw new Error('Cannot send empty message');
     }
 
     const trimmedText = text.trim();
-    logger.info(`[SupervisorChat] Sending message (clientCorrelationId=${clientCorrelationId}): ${trimmedText}`);
+    logger.info(`[SupervisorChat] Sending message (clientCorrelationId=${clientCorrelationId}, model=${options?.model}, reasoning=${options?.reasoning_effort}): ${trimmedText}`);
 
     // Cancel any previous stream
     if (this.currentAbortController) {
@@ -140,7 +140,7 @@ export class SupervisorChatController {
 
     try {
       // Start SSE stream
-      await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId);
+      await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId, options);
 
       logger.info('[SupervisorChat] Message sent and stream completed');
     } catch (error) {
@@ -198,10 +198,23 @@ export class SupervisorChatController {
   /**
    * Stream chat response via SSE
    */
-  private async streamChatResponse(message: string, signal: AbortSignal, client_correlation_id?: string): Promise<void> {
+  private async streamChatResponse(
+    message: string,
+    signal: AbortSignal,
+    client_correlation_id?: string,
+    options?: { model?: string; reasoning_effort?: string }
+  ): Promise<void> {
     const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/chat`);
 
     logger.info('[SupervisorChat] Initiating SSE stream to:', url);
+
+    const requestBody: Record<string, unknown> = { message, client_correlation_id };
+    if (options?.model) {
+      requestBody.model = options.model;
+    }
+    if (options?.reasoning_effort) {
+      requestBody.reasoning_effort = options.reasoning_effort;
+    }
 
     const response = await fetch(url, {
       method: 'POST',
@@ -210,7 +223,7 @@ export class SupervisorChatController {
         'Accept': 'text/event-stream',
       },
       credentials: 'include', // Cookie auth
-      body: JSON.stringify({ message, client_correlation_id }),
+      body: JSON.stringify(requestBody),
       signal,
     });
 
