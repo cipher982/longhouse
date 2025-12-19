@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-from zerg.tools.builtin.ssh_tools import ALLOWED_HOSTS
 from zerg.tools.builtin.ssh_tools import MAX_OUTPUT_SIZE
 from zerg.tools.builtin.ssh_tools import _parse_host
 from zerg.tools.builtin.ssh_tools import ssh_exec
@@ -15,44 +14,8 @@ from zerg.tools.builtin.ssh_tools import ssh_exec
 class TestParseHost:
     """Test the _parse_host helper function."""
 
-    def test_parse_known_host_cube(self):
-        """Test parsing 'cube' host alias."""
-        result = _parse_host("cube")
-        assert result is not None
-        user, hostname, port = result
-        assert user == "drose"
-        assert hostname == "100.104.187.47"
-        assert port == "2222"
-
-    def test_parse_known_host_clifford(self):
-        """Test parsing 'clifford' host alias."""
-        result = _parse_host("clifford")
-        assert result is not None
-        user, hostname, port = result
-        assert user == "drose"
-        assert hostname == "REDACTED_IP"
-        assert port == "22"
-
-    def test_parse_known_host_zerg(self):
-        """Test parsing 'zerg' host alias."""
-        result = _parse_host("zerg")
-        assert result is not None
-        user, hostname, port = result
-        assert user == "zerg"
-        assert hostname == "100.120.197.80"
-        assert port == "22"
-
-    def test_parse_known_host_slim(self):
-        """Test parsing 'slim' host alias."""
-        result = _parse_host("slim")
-        assert result is not None
-        user, hostname, port = result
-        assert user == "drose"
-        assert hostname == "100.119.163.83"
-        assert port == "22"
-
-    def test_parse_custom_user_at_hostname(self):
-        """Test parsing custom 'user@hostname' format."""
+    def test_parse_user_at_hostname(self):
+        """Test parsing 'user@hostname' format."""
         result = _parse_host("ubuntu@example.com")
         assert result is not None
         user, hostname, port = result
@@ -60,14 +23,32 @@ class TestParseHost:
         assert hostname == "example.com"
         assert port == "22"
 
-    def test_parse_custom_user_at_ip(self):
-        """Test parsing custom 'user@ip' format."""
+    def test_parse_user_at_ip(self):
+        """Test parsing 'user@ip' format."""
         result = _parse_host("admin@192.168.1.100")
         assert result is not None
         user, hostname, port = result
         assert user == "admin"
         assert hostname == "192.168.1.100"
         assert port == "22"
+
+    def test_parse_user_at_hostname_with_port(self):
+        """Test parsing 'user@hostname:port' format."""
+        result = _parse_host("deploy@server.example.com:2222")
+        assert result is not None
+        user, hostname, port = result
+        assert user == "deploy"
+        assert hostname == "server.example.com"
+        assert port == "2222"
+
+    def test_parse_user_at_ip_with_port(self):
+        """Test parsing 'user@ip:port' format."""
+        result = _parse_host("root@10.0.0.5:2222")
+        assert result is not None
+        user, hostname, port = result
+        assert user == "root"
+        assert hostname == "10.0.0.5"
+        assert port == "2222"
 
     def test_parse_invalid_host_no_at(self):
         """Test parsing invalid host without @ symbol."""
@@ -94,6 +75,16 @@ class TestParseHost:
         result = _parse_host("user@")
         assert result is None
 
+    def test_parse_invalid_host_no_port_after_colon(self):
+        """Test parsing host with colon but no port."""
+        result = _parse_host("user@hostname:")
+        assert result is None
+
+    def test_parse_invalid_host_non_numeric_port(self):
+        """Test parsing host with non-numeric port."""
+        result = _parse_host("user@hostname:abc")
+        assert result is None
+
 
 class TestSshExecValidation:
     """Test validation errors in ssh_exec function."""
@@ -107,35 +98,20 @@ class TestSshExecValidation:
 
     def test_empty_command(self):
         """Test that empty command returns validation error."""
-        result = ssh_exec(host="cube", command="")
+        result = ssh_exec(host="user@host.com", command="")
         assert result["ok"] is False
         assert result["error_type"] == "validation_error"
         assert "command parameter is required" in result["user_message"]
 
-    def test_unknown_host(self):
-        """Test that unknown host returns validation error."""
-        result = ssh_exec(host="unknownserver", command="echo test")
+    def test_invalid_host_format(self):
+        """Test that invalid host format returns validation error."""
+        result = ssh_exec(host="invalidhost", command="echo test")
         assert result["ok"] is False
         assert result["error_type"] == "validation_error"
-        assert "Unknown host: unknownserver" in result["user_message"]
-        assert "cube, clifford, zerg, slim" in result["user_message"]
+        assert "Invalid host format" in result["user_message"]
 
-    def test_all_known_hosts_are_valid(self):
-        """Test that all hosts in ALLOWED_HOSTS pass validation."""
-        for host_alias in ALLOWED_HOSTS.keys():
-            # Mock subprocess to prevent actual SSH
-            with patch("subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    returncode=0,
-                    stdout="test output",
-                    stderr="",
-                )
-                result = ssh_exec(host=host_alias, command="echo test")
-                # Should not get validation error
-                assert result.get("error_type") != "validation_error" or result["ok"] is True
-
-    def test_custom_host_format_passes_validation(self):
-        """Test that custom user@host format passes validation."""
+    def test_valid_user_at_host_format(self):
+        """Test that user@host format passes validation."""
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
@@ -143,8 +119,18 @@ class TestSshExecValidation:
                 stderr="",
             )
             result = ssh_exec(host="testuser@testhost.com", command="echo test")
-            # Should not get validation error for host format
-            assert result.get("error_type") != "validation_error" or result["ok"] is True
+            assert result["ok"] is True
+
+    def test_valid_user_at_host_with_port_format(self):
+        """Test that user@host:port format passes validation."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="test output",
+                stderr="",
+            )
+            result = ssh_exec(host="testuser@testhost.com:2222", command="echo test")
+            assert result["ok"] is True
 
 
 class TestSshExecExecution:
@@ -159,10 +145,10 @@ class TestSshExecExecution:
             stderr="",
         )
 
-        result = ssh_exec(host="cube", command="docker ps")
+        result = ssh_exec(host="deploy@server.example.com", command="docker ps")
 
         assert result["ok"] is True
-        assert result["data"]["host"] == "cube"
+        assert result["data"]["host"] == "deploy@server.example.com"
         assert result["data"]["command"] == "docker ps"
         assert result["data"]["exit_code"] == 0
         assert "abc123" in result["data"]["stdout"]
@@ -179,7 +165,7 @@ class TestSshExecExecution:
             stderr="grep: no matches found",
         )
 
-        result = ssh_exec(host="clifford", command="docker ps | grep nonexistent")
+        result = ssh_exec(host="admin@192.168.1.1", command="docker ps | grep nonexistent")
 
         # Non-zero exit code is NOT an error - command ran successfully
         assert result["ok"] is True
@@ -195,7 +181,7 @@ class TestSshExecExecution:
             stderr="Failed to add the host to the list of known hosts.",
         )
 
-        result = ssh_exec(host="cube", command="df -h")
+        result = ssh_exec(host="user@unreachable.host", command="df -h")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -210,7 +196,7 @@ class TestSshExecExecution:
             stderr="Warning: something happened",
         )
 
-        result = ssh_exec(host="zerg", command="some-command")
+        result = ssh_exec(host="deploy@prod.example.com", command="some-command")
 
         assert result["ok"] is True
         assert result["data"]["exit_code"] == 0
@@ -226,7 +212,7 @@ class TestSshExecExecution:
             stderr="",
         )
 
-        result = ssh_exec(host="cube", command="cat large-file.txt")
+        result = ssh_exec(host="user@server.example.com", command="cat large-file.txt")
 
         assert result["ok"] is True
         assert len(result["data"]["stdout"]) < len(large_output)
@@ -243,18 +229,18 @@ class TestSshExecExecution:
             stderr=large_error,
         )
 
-        result = ssh_exec(host="cube", command="failing-command")
+        result = ssh_exec(host="user@server.example.com", command="failing-command")
 
         assert result["ok"] is True
         assert len(result["data"]["stderr"]) < len(large_error)
         assert "[stderr truncated]" in result["data"]["stderr"]
 
     @patch("subprocess.run")
-    def test_ssh_command_construction_for_cube(self, mock_run):
-        """Test that SSH command is constructed correctly for cube."""
+    def test_ssh_command_construction_default_port(self, mock_run):
+        """Test that SSH command is constructed correctly with default port."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        ssh_exec(host="cube", command="echo test")
+        ssh_exec(host="deploy@server.example.com", command="echo test")
 
         # Verify SSH command was called with correct arguments
         call_args = mock_run.call_args[0][0]
@@ -265,29 +251,29 @@ class TestSshExecExecution:
         assert "UserKnownHostsFile=/tmp/zerg_known_hosts" in call_args
         assert "GlobalKnownHostsFile=/dev/null" in call_args
         assert "-p" in call_args
-        assert "2222" in call_args  # cube uses port 2222
-        assert "drose@100.104.187.47" in call_args
+        assert "22" in call_args  # default port
+        assert "deploy@server.example.com" in call_args
         assert "echo test" in call_args
 
     @patch("subprocess.run")
-    def test_ssh_command_construction_for_zerg(self, mock_run):
-        """Test that SSH command is constructed correctly for zerg (different user)."""
+    def test_ssh_command_construction_custom_port(self, mock_run):
+        """Test that SSH command is constructed correctly with custom port."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        ssh_exec(host="zerg", command="pwd")
+        ssh_exec(host="admin@10.0.0.5:2222", command="pwd")
 
-        # Verify SSH command was called with correct arguments for zerg user
+        # Verify SSH command was called with correct arguments
         call_args = mock_run.call_args[0][0]
-        assert "zerg@100.120.197.80" in call_args
+        assert "admin@10.0.0.5" in call_args
         assert "-p" in call_args
-        assert "22" in call_args
+        assert "2222" in call_args
 
     @patch("subprocess.run")
     def test_custom_timeout(self, mock_run):
         """Test that custom timeout is passed to subprocess."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        ssh_exec(host="cube", command="long-command", timeout_secs=60)
+        ssh_exec(host="user@host.com", command="long-command", timeout_secs=60)
 
         # Verify timeout was passed
         assert mock_run.call_args[1]["timeout"] == 60
@@ -297,7 +283,7 @@ class TestSshExecExecution:
         """Test that timeout returns execution error."""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=30)
 
-        result = ssh_exec(host="cube", command="sleep 100")
+        result = ssh_exec(host="user@host.com", command="sleep 100")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -308,7 +294,7 @@ class TestSshExecExecution:
         """Test that SSH connection failure returns error."""
         mock_run.side_effect = subprocess.CalledProcessError(returncode=255, cmd="ssh")
 
-        result = ssh_exec(host="cube", command="echo test")
+        result = ssh_exec(host="user@host.com", command="echo test")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -318,7 +304,7 @@ class TestSshExecExecution:
         """Test that missing SSH binary returns error."""
         mock_run.side_effect = FileNotFoundError()
 
-        result = ssh_exec(host="cube", command="echo test")
+        result = ssh_exec(host="user@host.com", command="echo test")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -329,51 +315,52 @@ class TestSshExecExecution:
         """Test that unexpected exceptions return error."""
         mock_run.side_effect = RuntimeError("Unexpected error")
 
-        result = ssh_exec(host="cube", command="echo test")
+        result = ssh_exec(host="user@host.com", command="echo test")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
         assert "Unexpected error" in result["user_message"]
 
 
-class TestSshExecHostAllowlist:
-    """Test host allowlist enforcement."""
+class TestSshExecHostValidation:
+    """Test host format validation."""
 
-    @patch("subprocess.run")
-    def test_all_allowed_hosts_work(self, mock_run):
-        """Test that all hosts in allowlist can be used."""
-        mock_run.return_value = MagicMock(returncode=0, stdout="test", stderr="")
-
-        for host_name in ALLOWED_HOSTS.keys():
-            result = ssh_exec(host=host_name, command="echo test")
-            assert result["ok"] is True
-            assert result["data"]["host"] == host_name
-
-    def test_disallowed_hosts_rejected(self):
-        """Test that hosts not in allowlist are rejected."""
-        disallowed_hosts = [
-            "production-server",
+    def test_invalid_hosts_rejected(self):
+        """Test that invalid host formats are rejected."""
+        invalid_hosts = [
+            "production-server",  # No @ symbol
             "database-01",
             "api-gateway",
             "unknown",
+            "@hostname",  # No user
+            "user@",  # No hostname
         ]
 
-        for host in disallowed_hosts:
+        for host in invalid_hosts:
             result = ssh_exec(host=host, command="echo test")
             assert result["ok"] is False
             assert result["error_type"] == "validation_error"
-            assert "Unknown host" in result["user_message"]
+            assert "Invalid host format" in result["user_message"]
 
     @patch("subprocess.run")
-    def test_custom_user_host_format_works(self, mock_run):
-        """Test that custom user@host format bypasses allowlist check."""
+    def test_valid_user_at_host_format_works(self, mock_run):
+        """Test that valid user@host format works."""
         mock_run.return_value = MagicMock(returncode=0, stdout="test", stderr="")
 
-        # Custom format should work (though it may fail to connect in reality)
         result = ssh_exec(host="customuser@custom.host.com", command="echo test")
 
-        # Should not be rejected at validation level
-        assert result["ok"] is True or result["error_type"] != "validation_error"
+        assert result["ok"] is True
+        assert result["data"]["host"] == "customuser@custom.host.com"
+
+    @patch("subprocess.run")
+    def test_valid_user_at_ip_format_works(self, mock_run):
+        """Test that valid user@ip format works."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="test", stderr="")
+
+        result = ssh_exec(host="admin@192.168.1.100", command="echo test")
+
+        assert result["ok"] is True
+        assert result["data"]["host"] == "admin@192.168.1.100"
 
 
 class TestSshExecResponseStructure:
@@ -388,7 +375,7 @@ class TestSshExecResponseStructure:
             stderr="",
         )
 
-        result = ssh_exec(host="cube", command="echo test")
+        result = ssh_exec(host="user@server.example.com", command="echo test")
 
         # Check envelope structure
         assert "ok" in result
@@ -434,7 +421,7 @@ class TestSshExecResponseStructure:
         """Test that duration_ms is a reasonable value."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-        result = ssh_exec(host="cube", command="echo test")
+        result = ssh_exec(host="user@server.example.com", command="echo test")
 
         assert result["ok"] is True
         duration = result["data"]["duration_ms"]

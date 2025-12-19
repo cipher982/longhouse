@@ -350,8 +350,14 @@ def task_update(
                 )
 
             # Apply updates
-            if title:
-                task.title = title.strip()
+            if title is not None:
+                stripped_title = title.strip()
+                if not stripped_title:
+                    return tool_error(
+                        error_type=ErrorType.VALIDATION_ERROR,
+                        user_message="Task title cannot be empty or whitespace-only",
+                    )
+                task.title = stripped_title
             if notes:
                 task.notes = notes.strip()
             if status:
