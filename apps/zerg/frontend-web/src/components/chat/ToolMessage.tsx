@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import clsx from "clsx";
 import { SyntaxHighlighter, oneDark } from '../../lib/syntaxHighlighter';
 import { ThreadMessage } from "../../services/api";
+import { RunnerSetupCard, parseRunnerSetupData } from "./RunnerSetupCard";
 
 interface ToolMessageProps {
   message: ThreadMessage;
@@ -11,6 +12,23 @@ export function ToolMessage({ message }: ToolMessageProps) {
   const [isOpen, setIsOpen] = useState(false);
   const toolName = message.tool_name || "tool";
   const toolCallId = message.tool_call_id || "";
+
+  // Check if this tool result should render as a special card
+  const runnerSetupData = useMemo(() => {
+    if (toolName === "runner_create_enroll_token" && message.content) {
+      return parseRunnerSetupData(message.content);
+    }
+    return null;
+  }, [toolName, message.content]);
+
+  // Render RunnerSetupCard for runner enrollment tool
+  if (runnerSetupData) {
+    return (
+      <div className="tool-message-container tool-message-card" data-tool-call-id={toolCallId}>
+        <RunnerSetupCard data={runnerSetupData} />
+      </div>
+    );
+  }
 
   // Determine status based on content (if content is empty, it might be processing)
   const isProcessing = !message.content && !message.name; // simplistic check
