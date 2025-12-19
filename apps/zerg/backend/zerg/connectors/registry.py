@@ -25,6 +25,10 @@ class ConnectorType(str, Enum):
     LINEAR = "linear"
     NOTION = "notion"
     IMESSAGE = "imessage"
+    # Personal integrations (Phase 4 v2.1)
+    TRACCAR = "traccar"
+    WHOOP = "whoop"
+    OBSIDIAN = "obsidian"
 
 
 class CredentialField(TypedDict):
@@ -236,6 +240,100 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "placeholder": "true",
                 "required": True,
             }
+        ],
+    },
+    # Personal integrations (Phase 4 v2.1)
+    ConnectorType.TRACCAR: {
+        "type": ConnectorType.TRACCAR,
+        "name": "Traccar",
+        "description": "Get GPS location from Traccar tracking server",
+        "category": "personal",
+        "icon": "map-pin",
+        "docs_url": "https://www.traccar.org/api-reference/",
+        "fields": [
+            {
+                "key": "url",
+                "label": "Traccar Server URL",
+                "type": "url",
+                "placeholder": "https://traccar.example.com",
+                "required": True,
+            },
+            {
+                "key": "token",
+                "label": "API Token (or Session)",
+                "type": "password",
+                "placeholder": "session token or API key",
+                "required": True,
+            },
+            {
+                "key": "device_id",
+                "label": "Device ID",
+                "type": "text",
+                "placeholder": "1",
+                "required": False,
+            },
+        ],
+    },
+    ConnectorType.WHOOP: {
+        "type": ConnectorType.WHOOP,
+        "name": "WHOOP",
+        "description": "Get health metrics from WHOOP fitness tracker",
+        "category": "personal",
+        "icon": "activity",
+        "docs_url": "https://developer.whoop.com/docs/introduction",
+        "fields": [
+            {
+                "key": "client_id",
+                "label": "OAuth Client ID",
+                "type": "text",
+                "placeholder": "From WHOOP Developer Portal",
+                "required": True,
+            },
+            {
+                "key": "client_secret",
+                "label": "OAuth Client Secret",
+                "type": "password",
+                "placeholder": "From WHOOP Developer Portal",
+                "required": True,
+            },
+            {
+                "key": "access_token",
+                "label": "Access Token",
+                "type": "password",
+                "placeholder": "OAuth access token",
+                "required": True,
+            },
+            {
+                "key": "refresh_token",
+                "label": "Refresh Token",
+                "type": "password",
+                "placeholder": "OAuth refresh token (enables auto-refresh)",
+                "required": False,
+            },
+        ],
+    },
+    ConnectorType.OBSIDIAN: {
+        "type": ConnectorType.OBSIDIAN,
+        "name": "Obsidian",
+        "description": "Search notes in Obsidian vault (via Runner)",
+        "category": "personal",
+        "icon": "book-open",
+        "docs_url": "https://obsidian.md/",
+        "fields": [
+            {
+                "key": "vault_path",
+                "label": "Vault Path",
+                "type": "text",
+                "placeholder": "~/obsidian_vault",
+                "required": True,
+            },
+            {
+                "key": "runner_name",
+                "label": "Runner Name",
+                "type": "text",
+                "placeholder": "laptop",
+                "required": True,
+            },
         ],
     },
 }
