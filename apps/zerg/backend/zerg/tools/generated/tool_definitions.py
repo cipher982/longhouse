@@ -9,151 +9,160 @@ from typing import Optional
 class ToolName(str, Enum):
     """Built-in tool names available in the registry."""
 
-    HTTP_REQUEST = "http_request"
-    MATH_EVAL = "math_eval"
-    GET_CURRENT_TIME = "get_current_time"
+    AGENT_MEMORY_DELETE = "agent_memory_delete"
+    AGENT_MEMORY_EXPORT = "agent_memory_export"
+    AGENT_MEMORY_GET = "agent_memory_get"
+    AGENT_MEMORY_SET = "agent_memory_set"
+    CONTACT_USER = "contact_user"
+    CONTAINER_EXEC = "container_exec"
     DATETIME_DIFF = "datetime_diff"
     GENERATE_UUID = "generate_uuid"
-    CONTAINER_EXEC = "container_exec"
-    # Notification tools
-    SEND_DISCORD_WEBHOOK = "send_discord_webhook"
-    SEND_SLACK_WEBHOOK = "send_slack_webhook"
-    SEND_EMAIL = "send_email"
-    SEND_SMS = "send_sms"
-    # Connector meta-tools
-    REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
-    # Project management tools
-    GITHUB_LIST_REPOSITORIES = "github_list_repositories"
-    GITHUB_CREATE_ISSUE = "github_create_issue"
-    GITHUB_LIST_ISSUES = "github_list_issues"
-    GITHUB_GET_ISSUE = "github_get_issue"
+    GET_CURRENT_TIME = "get_current_time"
+    GET_WORKER_METADATA = "get_worker_metadata"
     GITHUB_ADD_COMMENT = "github_add_comment"
-    GITHUB_LIST_PULL_REQUESTS = "github_list_pull_requests"
+    GITHUB_CREATE_ISSUE = "github_create_issue"
+    GITHUB_GET_ISSUE = "github_get_issue"
     GITHUB_GET_PULL_REQUEST = "github_get_pull_request"
-    JIRA_CREATE_ISSUE = "jira_create_issue"
-    JIRA_LIST_ISSUES = "jira_list_issues"
-    JIRA_GET_ISSUE = "jira_get_issue"
+    GITHUB_LIST_ISSUES = "github_list_issues"
+    GITHUB_LIST_PULL_REQUESTS = "github_list_pull_requests"
+    GITHUB_LIST_REPOSITORIES = "github_list_repositories"
+    GREP_WORKERS = "grep_workers"
+    HTTP_REQUEST = "http_request"
     JIRA_ADD_COMMENT = "jira_add_comment"
+    JIRA_CREATE_ISSUE = "jira_create_issue"
+    JIRA_GET_ISSUE = "jira_get_issue"
+    JIRA_LIST_ISSUES = "jira_list_issues"
     JIRA_TRANSITION_ISSUE = "jira_transition_issue"
     JIRA_UPDATE_ISSUE = "jira_update_issue"
-    LINEAR_CREATE_ISSUE = "linear_create_issue"
-    LINEAR_LIST_ISSUES = "linear_list_issues"
-    LINEAR_GET_ISSUE = "linear_get_issue"
-    LINEAR_UPDATE_ISSUE = "linear_update_issue"
+    KNOWLEDGE_SEARCH = "knowledge_search"
     LINEAR_ADD_COMMENT = "linear_add_comment"
+    LINEAR_CREATE_ISSUE = "linear_create_issue"
+    LINEAR_GET_ISSUE = "linear_get_issue"
+    LINEAR_LIST_ISSUES = "linear_list_issues"
     LINEAR_LIST_TEAMS = "linear_list_teams"
+    LINEAR_UPDATE_ISSUE = "linear_update_issue"
+    LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
+    LIST_WORKERS = "list_workers"
+    MATH_EVAL = "math_eval"
+    NOTION_APPEND_BLOCKS = "notion_append_blocks"
     NOTION_CREATE_PAGE = "notion_create_page"
     NOTION_GET_PAGE = "notion_get_page"
-    NOTION_UPDATE_PAGE = "notion_update_page"
-    NOTION_SEARCH = "notion_search"
     NOTION_QUERY_DATABASE = "notion_query_database"
-    NOTION_APPEND_BLOCKS = "notion_append_blocks"
-    # iMessage tools (macOS only)
-    SEND_IMESSAGE = "send_imessage"
-    LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
-    # SSH tools
-    SSH_EXEC = "ssh_exec"
-    # Supervisor/worker tools
-    SPAWN_WORKER = "spawn_worker"
-    LIST_WORKERS = "list_workers"
-    READ_WORKER_RESULT = "read_worker_result"
+    NOTION_SEARCH = "notion_search"
+    NOTION_UPDATE_PAGE = "notion_update_page"
     READ_WORKER_FILE = "read_worker_file"
-    GREP_WORKERS = "grep_workers"
-    GET_WORKER_METADATA = "get_worker_metadata"
-    # Knowledge tools
-    KNOWLEDGE_SEARCH = "knowledge_search"
-    # Runner tools
-    RUNNER_LIST = "runner_list"
-    RUNNER_EXEC = "runner_exec"
+    READ_WORKER_RESULT = "read_worker_result"
+    REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
+    RUNNER_EXEC = "runner_exec"
+    RUNNER_LIST = "runner_list"
+    SEND_DISCORD_WEBHOOK = "send_discord_webhook"
+    SEND_EMAIL = "send_email"
+    SEND_IMESSAGE = "send_imessage"
+    SEND_SLACK_WEBHOOK = "send_slack_webhook"
+    SEND_SMS = "send_sms"
+    SPAWN_WORKER = "spawn_worker"
+    SSH_EXEC = "ssh_exec"
+    TASK_CREATE = "task_create"
+    TASK_DELETE = "task_delete"
+    TASK_LIST = "task_list"
+    TASK_UPDATE = "task_update"
+    WEB_FETCH = "web_fetch"
+    WEB_SEARCH = "web_search"
 
 
 class ServerName(str, Enum):
     """Server/module names for tools."""
 
-    HTTP = "http"
-    MATH = "math"
-    DATETIME = "datetime"
-    UUID = "uuid"
-    CONTAINER = "container"
+    AGENT_MEMORY = "agent_memory"
     CONNECTOR = "connector"
+    CONTACT_USER = "contact_user"
+    CONTAINER = "container"
+    DATETIME = "datetime"
     DISCORD = "discord"
-    SLACK = "slack"
     EMAIL = "email"
-    SMS = "sms"
     GITHUB = "github"
-    JIRA = "jira"
-    LINEAR = "linear"
-    NOTION = "notion"
+    HTTP = "http"
     IMESSAGE = "imessage"
+    JIRA = "jira"
+    KNOWLEDGE = "knowledge"
+    LINEAR = "linear"
+    MATH = "math"
+    NOTION = "notion"
+    RUNNER = "runner"
+    RUNNER_SETUP = "runner_setup"
+    SLACK = "slack"
+    SMS = "sms"
     SSH = "ssh"
     SUPERVISOR = "supervisor"
-    KNOWLEDGE = "knowledge"
-    RUNNER = "runner"
+    TASK = "task"
+    UUID = "uuid"
+    WEB_FETCH = "web_fetch"
+    WEB_SEARCH = "web_search"
 
 
 # Tool to server mapping for validation
 TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
-    ToolName.HTTP_REQUEST: ServerName.HTTP,
-    ToolName.MATH_EVAL: ServerName.MATH,
-    ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
+    ToolName.AGENT_MEMORY_DELETE: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_EXPORT: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_GET: ServerName.AGENT_MEMORY,
+    ToolName.AGENT_MEMORY_SET: ServerName.AGENT_MEMORY,
+    ToolName.CONTACT_USER: ServerName.CONTACT_USER,
+    ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
-    ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
-    # Connector meta-tools
-    ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
-    # Notification tools
-    ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
-    ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
-    ToolName.SEND_EMAIL: ServerName.EMAIL,
-    ToolName.SEND_SMS: ServerName.SMS,
-    # GitHub tools
-    ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
-    ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
-    ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
-    ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
+    ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
+    ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
     ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
-    ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
+    ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
+    ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
     ToolName.GITHUB_GET_PULL_REQUEST: ServerName.GITHUB,
-    # Jira tools
-    ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
-    ToolName.JIRA_LIST_ISSUES: ServerName.JIRA,
-    ToolName.JIRA_GET_ISSUE: ServerName.JIRA,
+    ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
+    ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
+    ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
+    ToolName.GREP_WORKERS: ServerName.SUPERVISOR,
+    ToolName.HTTP_REQUEST: ServerName.HTTP,
     ToolName.JIRA_ADD_COMMENT: ServerName.JIRA,
+    ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
+    ToolName.JIRA_GET_ISSUE: ServerName.JIRA,
+    ToolName.JIRA_LIST_ISSUES: ServerName.JIRA,
     ToolName.JIRA_TRANSITION_ISSUE: ServerName.JIRA,
     ToolName.JIRA_UPDATE_ISSUE: ServerName.JIRA,
-    # Linear tools
-    ToolName.LINEAR_CREATE_ISSUE: ServerName.LINEAR,
-    ToolName.LINEAR_LIST_ISSUES: ServerName.LINEAR,
-    ToolName.LINEAR_GET_ISSUE: ServerName.LINEAR,
-    ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
+    ToolName.KNOWLEDGE_SEARCH: ServerName.KNOWLEDGE,
     ToolName.LINEAR_ADD_COMMENT: ServerName.LINEAR,
+    ToolName.LINEAR_CREATE_ISSUE: ServerName.LINEAR,
+    ToolName.LINEAR_GET_ISSUE: ServerName.LINEAR,
+    ToolName.LINEAR_LIST_ISSUES: ServerName.LINEAR,
     ToolName.LINEAR_LIST_TEAMS: ServerName.LINEAR,
-    # Notion tools
+    ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
+    ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
+    ToolName.LIST_WORKERS: ServerName.SUPERVISOR,
+    ToolName.MATH_EVAL: ServerName.MATH,
+    ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
     ToolName.NOTION_CREATE_PAGE: ServerName.NOTION,
     ToolName.NOTION_GET_PAGE: ServerName.NOTION,
-    ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
-    ToolName.NOTION_SEARCH: ServerName.NOTION,
     ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
-    ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
-    # iMessage tools
-    ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
-    ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
-    # SSH tools
-    ToolName.SSH_EXEC: ServerName.SSH,
-    # Supervisor/worker tools
-    ToolName.SPAWN_WORKER: ServerName.SUPERVISOR,
-    ToolName.LIST_WORKERS: ServerName.SUPERVISOR,
-    ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
+    ToolName.NOTION_SEARCH: ServerName.NOTION,
+    ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
     ToolName.READ_WORKER_FILE: ServerName.SUPERVISOR,
-    ToolName.GREP_WORKERS: ServerName.SUPERVISOR,
-    ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
-    # Knowledge tools
-    ToolName.KNOWLEDGE_SEARCH: ServerName.KNOWLEDGE,
-    # Runner tools
-    ToolName.RUNNER_LIST: ServerName.RUNNER,
+    ToolName.READ_WORKER_RESULT: ServerName.SUPERVISOR,
+    ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
+    ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
-    ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER,
+    ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,
+    ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
+    ToolName.SEND_EMAIL: ServerName.EMAIL,
+    ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
+    ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
+    ToolName.SEND_SMS: ServerName.SMS,
+    ToolName.SPAWN_WORKER: ServerName.SUPERVISOR,
+    ToolName.SSH_EXEC: ServerName.SSH,
+    ToolName.TASK_CREATE: ServerName.TASK,
+    ToolName.TASK_DELETE: ServerName.TASK,
+    ToolName.TASK_LIST: ServerName.TASK,
+    ToolName.TASK_UPDATE: ServerName.TASK,
+    ToolName.WEB_FETCH: ServerName.WEB_FETCH,
+    ToolName.WEB_SEARCH: ServerName.WEB_SEARCH,
 }
 
 

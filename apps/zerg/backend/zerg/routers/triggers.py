@@ -8,6 +8,7 @@ and executes the associated agent immediately.
 # typing and forward-ref convenience
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Dict
@@ -22,6 +23,7 @@ from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Path
 from fastapi import Query  # Added Query
+from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
@@ -40,7 +42,6 @@ from zerg.metrics import trigger_fired_total
 # Schemas
 from zerg.schemas.schemas import Trigger as TriggerSchema
 from zerg.schemas.schemas import TriggerCreate
-from zerg.services.scheduler_service import scheduler_service
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,10 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
     return trg
 
 
+# Maximum request body size for webhook events (256 KiB)
+MAX_WEBHOOK_BODY_SIZE = 256 * 1024
+
+
 @router.post(
     "/{trigger_id}/events",
     status_code=status.HTTP_202_ACCEPTED,
@@ -133,8 +138,9 @@ async def create_trigger(trigger_in: TriggerCreate, db: Session = Depends(get_db
 )
 async def fire_trigger_event(
     *,
+    request: Request,
     trigger_id: int = Path(..., gt=0),
-    payload: Dict = Body(default={}),  # Arbitrary JSON body
+    payload: Optional[Dict] = Body(default=None),  # Arbitrary JSON body
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
@@ -154,15 +160,27 @@ async def fire_trigger_event(
         404 Not Found: invalid token OR unknown trigger (don't leak existence)
         413 Payload Too Large: request body exceeds 256 KiB limit
     """
+    # Handle None payload (use empty dict as default)
+    if payload is None:
+        payload = {}
 
-    # 1) Validate body size (256 KiB limit)
-    body_serialised = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    MAX_BODY_SIZE = 256 * 1024  # 256 KiB
-    if len(body_serialised.encode()) > MAX_BODY_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Request body too large (max 256 KiB)",
-        )
+    # 1) Validate body size via Content-Length header (best-effort).
+    # Note: Content-Length may be missing (e.g. chunked transfer encoding), so
+    # this should be paired with an upstream proxy limit (e.g. nginx
+    # `client_max_body_size`) for robust enforcement.
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            content_length_int = int(content_length)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+        if content_length_int > MAX_WEBHOOK_BODY_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Request body too large (max 256 KiB)",
+            )
+        if content_length_int < 0:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
 
     # 2) Extract bearer token from Authorization header
     if not authorization or not authorization.startswith("Bearer "):
@@ -184,20 +202,29 @@ async def fire_trigger_event(
         # Return 404 for invalid token (don't leak trigger existence)
         raise HTTPException(status_code=404, detail="Not found")
 
-    # 4) Publish event on internal bus
-    await event_bus.publish(
-        EventType.TRIGGER_FIRED,
-        {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload, "trigger_type": "webhook"},
+    # 4) Publish event on internal bus (non-blocking)
+    # The SchedulerService subscribes to TRIGGER_FIRED and executes the agent.
+    # We use create_task to avoid blocking the HTTP response on agent execution.
+    task = asyncio.create_task(
+        event_bus.publish(
+            EventType.TRIGGER_FIRED,
+            {"trigger_id": trg.id, "agent_id": trg.agent_id, "payload": payload, "trigger_type": "webhook"},
+        )
     )
+
+    def _log_publish_result(t: asyncio.Task) -> None:
+        try:
+            t.result()
+        except Exception:  # noqa: BLE001
+            logger.exception("TRIGGER_FIRED publish failed")
+
+    task.add_done_callback(_log_publish_result)
 
     # Metrics -----------------------------------------------------------
     try:
         trigger_fired_total.inc()
     except Exception:  # pragma: no cover – guard against misconfig
         pass
-
-    # 5) Fire agent immediately (non-blocking)
-    await scheduler_service.run_agent_task(trg.agent_id, trigger="webhook")  # type: ignore[arg-type]
 
     return {"status": "accepted"}
 

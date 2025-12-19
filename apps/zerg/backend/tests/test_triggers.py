@@ -1,12 +1,13 @@
 """Tests for the trigger system using bearer token authentication."""
 
 import time
+from unittest.mock import AsyncMock, patch
 
-from zerg.services.scheduler_service import scheduler_service
+from zerg.events import EventType
 
 
 def test_webhook_trigger_flow(client):
-    """Creating a trigger and firing it should invoke run_agent_task."""
+    """Creating a trigger and firing it should publish TRIGGER_FIRED event."""
 
     # 1. Create an agent first
     agent_payload = {
@@ -28,36 +29,32 @@ def test_webhook_trigger_flow(client):
     trigger_id = trigger_data["id"]
     trigger_secret = trigger_data["secret"]
 
-    # 3. Monkey-patch SchedulerService.run_agent_task so we can assert it was called
-    called = {"flag": False, "agent_id": None, "trigger": None}
+    # 3. Track TRIGGER_FIRED events
+    published_events = []
 
-    async def _stub_run_agent_task(agent_id: int, trigger: str = "schedule"):  # type: ignore
-        called["flag"] = True
-        called["agent_id"] = agent_id
-        called["trigger"] = trigger
+    async def mock_publish(event_type, data):
+        published_events.append({"event_type": event_type, "data": data})
 
-    original = scheduler_service.run_agent_task  # Save original
-    scheduler_service.run_agent_task = _stub_run_agent_task  # type: ignore
-
-    try:
+    with patch("zerg.routers.triggers.event_bus.publish", new=mock_publish):
         # 4. Fire the trigger via webhook using bearer token authentication
         event_body = {"some": "payload"}
-
         headers = {"Authorization": f"Bearer {trigger_secret}"}
 
         fire_resp = client.post(f"/api/triggers/{trigger_id}/events", json=event_body, headers=headers)
         assert fire_resp.status_code == 202, fire_resp.text
 
-        # Give the event-loop running inside TestClient a brief moment to
-        # execute the `asyncio.create_task` that the trigger handler spawned.
-        time.sleep(0.01)
+        # Give the event-loop a brief moment to process the create_task
+        time.sleep(0.05)
 
-        assert called["flag"], "run_agent_task should have been invoked by trigger"
-        assert called["agent_id"] == agent_id
-        assert called["trigger"] == "webhook", "Webhook trigger should pass trigger='webhook'"
-    finally:
-        # Restore original coroutine to avoid cross-test contamination
-        scheduler_service.run_agent_task = original  # type: ignore
+    # 5. Verify TRIGGER_FIRED event was published
+    trigger_fired_events = [e for e in published_events if e["event_type"] == EventType.TRIGGER_FIRED]
+    assert len(trigger_fired_events) == 1, f"Expected 1 TRIGGER_FIRED event, got {len(trigger_fired_events)}"
+
+    event_data = trigger_fired_events[0]["data"]
+    assert event_data["trigger_id"] == trigger_id
+    assert event_data["agent_id"] == agent_id
+    assert event_data["payload"] == event_body
+    assert event_data["trigger_type"] == "webhook"
 
 
 def test_webhook_trigger_invalid_token(client):
