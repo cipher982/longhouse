@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-single test-zerg generate-sdk seed-agents validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-single test-zerg generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -287,6 +287,16 @@ seed-agents: ## Seed baseline Zerg agents for Jarvis
 	fi
 	@docker exec $$BACKEND uv run python scripts/seed_jarvis_agents.py
 	@echo "✅ Agents seeded"
+
+seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
+	@echo "🔑 Seeding personal credentials..."
+	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
+	if [ -z "$$BACKEND" ]; then \
+		echo "❌ Backend not running. Start with 'make dev' or 'make zerg'"; \
+		exit 1; \
+	fi
+	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
+	@echo "✅ Credentials seeded"
 
 # ---------------------------------------------------------------------------
 # Validation
