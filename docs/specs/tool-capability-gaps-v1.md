@@ -913,6 +913,6 @@ Some competitor features don't align with Zerg's philosophy:
 ## References
 
 - Competitor analysis: Session 2025-12-17
-- Zerg architecture: `docs/specs/super-siri-architecture.md`
+- Zerg architecture (current): `docs/specs/jarvis-supervisor-unification-v2.1.md` (historical: `docs/specs/super-siri-architecture.md`)
 - Tool registry: `apps/zerg/backend/zerg/services/tool_registry.py`
 - Existing tools: `apps/zerg/backend/zerg/tools/builtin/`

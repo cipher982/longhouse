@@ -1,3 +1,7 @@
+> **Note (Dec 19, 2025):** This doc is historical and reflects a local-first/IndexedDB-centric Jarvis direction.
+> Current direction is Supervisor SSOT + all tools, with Realtime optional I/O-only:
+> `docs/specs/jarvis-supervisor-unification-v2.1.md`
+
 Architecture Alignment – Jarvis (Sept 13, 2025)
 
 Status summary
