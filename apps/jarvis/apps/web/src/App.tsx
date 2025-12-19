@@ -161,21 +161,23 @@ export default function App() {
           userTranscriptPreview={state.userTranscriptPreview}
         />
 
-        <VoiceControls
-          mode={state.voiceMode}
-          status={voiceStatusMap[state.voiceStatus] || 'idle'}
-          onModeToggle={handleModeToggle}
-          onVoiceButtonPress={handleVoiceButtonPress}
-          onVoiceButtonRelease={handleVoiceButtonRelease}
-          onConnect={handleConnect}
-        />
-
-        <div className="input-controls">
-          <ModelSelector />
-          <TextInput
-            onSend={textChannel.sendMessage}
-            disabled={textChannel.isSending}
+        <div className="bottom-controls">
+          <VoiceControls
+            mode={state.voiceMode}
+            status={voiceStatusMap[state.voiceStatus] || 'idle'}
+            onModeToggle={handleModeToggle}
+            onVoiceButtonPress={handleVoiceButtonPress}
+            onVoiceButtonRelease={handleVoiceButtonRelease}
+            onConnect={handleConnect}
           />
+
+          <div className="input-controls">
+            <ModelSelector />
+            <TextInput
+              onSend={textChannel.sendMessage}
+              disabled={textChannel.isSending}
+            />
+          </div>
         </div>
       </div>
 
