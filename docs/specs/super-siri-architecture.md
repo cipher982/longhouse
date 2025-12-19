@@ -2,8 +2,12 @@
 
 **Version:** 2.0
 **Date:** December 2025
-**Status:** Implementation Complete
+**Status:** Archived (superseded by v2.1)
 **Philosophy:** Trust the AI. Remove scaffolding that limits capability.
+
+> **Archived:** This doc describes the v2.0 design where Jarvis (OpenAI Realtime) is a decision-making agent that can call `route_to_supervisor`.
+> We are moving to a stricter “one brain” architecture (Supervisor SSOT + all tools; Realtime optional I/O-only) in:
+> `docs/specs/jarvis-supervisor-unification-v2.1.md`
 
 ---
 

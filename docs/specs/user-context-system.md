@@ -2,7 +2,11 @@
 
 **Version:** 1.0
 **Date:** December 2025
-**Status:** Ready for Implementation
+**Status:** Implemented core; prompt sections being revised for v2.1
+
+> **Note:** The user context storage model (JSONB on `users.context`) remains the source of truth.
+> The Jarvis “two modes” / `route_to_supervisor` prompt language in this doc is **superseded** by:
+> `docs/specs/jarvis-supervisor-unification-v2.1.md`
 
 ---
 
