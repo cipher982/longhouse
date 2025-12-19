@@ -1,17 +1,27 @@
 /**
  * Tool Factory
  * Creates and configures tools for the agent based on context
+ *
+ * v2.1 Architecture Note:
+ * The route_to_supervisor tool has been REMOVED. In the one-brain architecture,
+ * all user input (text and voice transcripts) goes directly to Supervisor via
+ * SupervisorChatController → POST /api/jarvis/chat. There is no delegation tool.
+ *
+ * The remaining tools here are "direct tools" that can be called by Realtime for
+ * quick operations (location, health data, notes search). In the future, these
+ * should also move to Supervisor-owned tools (Phase 4 of v2.1 spec).
  */
 
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 import { CONFIG, toAbsoluteUrl } from './config';
-import type { SessionManager, SupervisorEvent } from '@jarvis/core';
+import type { SessionManager } from '@jarvis/core';
 import { stateManager } from './state-manager';
-import { eventBus } from './event-bus';
 
 // ---------------------------------------------------------------------------
-// Standard Tools
+// Standard Tools (Direct Tools)
+// These remain as Realtime tools for backward compatibility.
+// Phase 4 of v2.1 spec will move these to Supervisor-owned tools.
 // ---------------------------------------------------------------------------
 
 function buildJsonHeaders(): HeadersInit {
@@ -134,204 +144,6 @@ const searchNotesTool = tool({
 });
 
 // ---------------------------------------------------------------------------
-// Supervisor Tool - Routes complex tasks to Zerg Supervisor
-// ---------------------------------------------------------------------------
-
-/**
- * Route to Supervisor Tool
- *
- * This tool allows OpenAI Realtime to delegate complex tasks to the Zerg Supervisor.
- * The supervisor can spawn workers to investigate, research, and execute multi-step tasks.
- *
- * Intent Detection Keywords (from Super Siri architecture):
- * - Supervisor triggers: "check", "investigate", "research", "why", "debug", "analyze"
- * - Quick mode: "what", "when", "tell me", simple facts
- */
-export const routeToSupervisorTool = tool({
-  name: 'route_to_supervisor',
-  description: `Delegate a complex task to the Zerg Supervisor for investigation. Use this for tasks that require:
-- Checking servers, services, or infrastructure health
-- Running commands on remote systems
-- Multi-step investigations or debugging
-- Research that requires external data gathering
-- Any task that might take more than a few seconds
-- Tasks with keywords like: check, investigate, research, why, debug, analyze
-
-Do NOT use this for simple questions like "what time is it" or "tell me a joke".
-
-The supervisor will spawn workers as needed and synthesize a final answer.`,
-  parameters: z.object({
-    task: z.string().describe('The task to delegate to the supervisor (natural language description of what needs to be done)'),
-    reason: z.string().optional().nullable().describe('Brief reason why this needs supervisor delegation (for logging/debugging)')
-  }),
-  async execute({ task, reason }) {
-    console.log(`🎯 route_to_supervisor called: "${task}" (reason: ${reason || 'none'})`);
-
-    try {
-      const jarvisClient = stateManager.getJarvisClient();
-
-      if (!jarvisClient) {
-        console.error('❌ JarvisClient not available');
-        return 'Sorry, I cannot connect to the backend right now. Please try again later.';
-      }
-
-      if (!jarvisClient.isAuthenticated()) {
-        console.error('❌ JarvisClient not authenticated');
-        return 'Sorry, I am not authenticated with the backend. Please reconnect and try again.';
-      }
-
-      console.log('🚀 Dispatching task to supervisor...');
-
-      // Track run_id for UI so "complete" can reference the correct run.
-      let uiRunId = 0;
-
-      // Ensure the supervisor actually performs work. The tool payload is authored by the realtime model
-      // and may omit the user's original "call a worker" intent; include an explicit directive here.
-      const delegatedTask = [
-        task,
-        '',
-        'IMPORTANT:',
-        '- You MUST use spawn_worker(...) to run commands (e.g. ssh_exec) when the task involves checking a server.',
-        '- Only skip spawning a new worker if you can cite a very recent worker result that fully answers the question (include job_id/worker_id).',
-      ].join('\n');
-
-      // Execute the supervisor task and wait for completion
-      // The executeSupervisorTask method handles SSE subscription internally
-      const result = await jarvisClient.executeSupervisorTask(delegatedTask, {
-        timeout: 120000, // 2 minute timeout for complex tasks
-        onProgress: (event: SupervisorEvent) => {
-          // Log progress events for debugging
-          console.log(`📡 Supervisor progress: ${event.type}`, event.payload);
-
-          // Emit events for UI progress display
-          const timestamp = Date.now();
-          switch (event.type) {
-            case 'supervisor_started':
-              if (typeof event.payload?.run_id === 'number') {
-                uiRunId = event.payload.run_id;
-              }
-              eventBus.emit('supervisor:started', {
-                runId: event.payload?.run_id || 0,
-                task: event.payload?.task || task,
-                timestamp,
-              });
-              break;
-            case 'supervisor_thinking':
-              eventBus.emit('supervisor:thinking', {
-                message: event.payload?.message || 'Analyzing...',
-                timestamp,
-              });
-              break;
-            case 'worker_spawned':
-              eventBus.emit('supervisor:worker_spawned', {
-                jobId: event.payload?.job_id || 0,
-                task: event.payload?.task || 'Worker task',
-                timestamp,
-              });
-              break;
-            case 'worker_started':
-              eventBus.emit('supervisor:worker_started', {
-                jobId: event.payload?.job_id || 0,
-                workerId: event.payload?.worker_id,
-                timestamp,
-              });
-              break;
-            case 'worker_complete':
-              eventBus.emit('supervisor:worker_complete', {
-                jobId: event.payload?.job_id || 0,
-                workerId: event.payload?.worker_id,
-                status: event.payload?.status || 'unknown',
-                durationMs: event.payload?.duration_ms,
-                timestamp,
-              });
-              break;
-            case 'worker_summary_ready':
-              eventBus.emit('supervisor:worker_summary', {
-                jobId: event.payload?.job_id || 0,
-                workerId: event.payload?.worker_id,
-                summary: event.payload?.summary || '',
-                timestamp,
-              });
-              break;
-            // Worker tool events (Phase 2: Activity Ticker)
-            case 'worker_tool_started':
-              eventBus.emit('worker:tool_started', {
-                workerId: event.payload?.worker_id || '',
-                toolName: event.payload?.tool_name || '',
-                toolCallId: event.payload?.tool_call_id || '',
-                argsPreview: event.payload?.tool_args_preview,
-                timestamp,
-              });
-              break;
-            case 'worker_tool_completed':
-              eventBus.emit('worker:tool_completed', {
-                workerId: event.payload?.worker_id || '',
-                toolName: event.payload?.tool_name || '',
-                toolCallId: event.payload?.tool_call_id || '',
-                durationMs: event.payload?.duration_ms || 0,
-                resultPreview: event.payload?.result_preview,
-                timestamp,
-              });
-              break;
-            case 'worker_tool_failed':
-              eventBus.emit('worker:tool_failed', {
-                workerId: event.payload?.worker_id || '',
-                toolName: event.payload?.tool_name || '',
-                toolCallId: event.payload?.tool_call_id || '',
-                durationMs: event.payload?.duration_ms || 0,
-                error: event.payload?.error || 'Unknown error',
-                timestamp,
-              });
-              break;
-          }
-        }
-      });
-
-      // Emit completion event
-      eventBus.emit('supervisor:complete', {
-        runId: uiRunId,
-        result,
-        status: 'success',
-        timestamp: Date.now(),
-      });
-
-      console.log('✅ Supervisor task completed');
-      return result;
-
-    } catch (error) {
-      console.error('❌ Supervisor task failed:', error);
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-
-      // Emit error event for UI
-      eventBus.emit('supervisor:error', {
-        message: errorMsg,
-        timestamp: Date.now(),
-      });
-
-      // Provide user-friendly error messages
-      if (errorMsg.includes('timeout')) {
-        return 'The investigation took too long. Please try a more specific request.';
-      } else if (errorMsg.includes('Not authenticated')) {
-        return 'I lost connection to the backend. Please reconnect and try again.';
-      } else if (errorMsg.includes('SSE stream error')) {
-        return 'Lost connection while processing. Please try again.';
-      } else {
-        return `I encountered an issue while investigating: ${errorMsg}`;
-      }
-    }
-  }
-});
-
-/**
- * Create the route_to_supervisor tool
- *
- * This is called by createContextTools when supervisor delegation is enabled
- */
-export function createSupervisorTool(): typeof routeToSupervisorTool {
-  return routeToSupervisorTool;
-}
-
-// ---------------------------------------------------------------------------
 // Tool Factory Functions
 // ---------------------------------------------------------------------------
 
@@ -426,8 +238,9 @@ function createRAGTool(toolConfig: any, sessionManager: SessionManager | null): 
 /**
  * Create all tools for a given context configuration
  *
- * Always includes the route_to_supervisor tool for complex task delegation.
- * Additional tools are created based on the context configuration.
+ * v2.1 Architecture: route_to_supervisor has been REMOVED.
+ * All user input now goes directly to Supervisor via SupervisorChatController.
+ * Only direct tools (location, whoop, notes) are registered with Realtime.
  */
 export function createContextTools(config: any, sessionManager: SessionManager | null): any[] {
   const tools: any[] = [];
@@ -440,17 +253,18 @@ export function createContextTools(config: any, sessionManager: SessionManager |
     ? new Set<string>(bootstrap.enabled_tools.map((t: any) => t?.name).filter(Boolean))
     : null;
 
-  // Supervisor tool is optional and must be enabled by server bootstrap when present.
-  if (!enabledToolNames || enabledToolNames.has('route_to_supervisor')) {
-    tools.push(routeToSupervisorTool);
-    console.log('🔧 Added route_to_supervisor tool');
-  } else {
-    console.log('🔧 Skipping route_to_supervisor (disabled by server)');
-  }
+  // v2.1: route_to_supervisor is REMOVED - Supervisor receives input directly via /api/jarvis/chat
+  // No delegation tool needed since Realtime doesn't generate responses (create_response=false)
 
   // Add context-specific tools from config
   for (const toolConfig of config.tools) {
     if (!toolConfig.enabled) continue;
+
+    // Skip route_to_supervisor if it somehow appears in config (v2.1 cleanup)
+    if (toolConfig.name === 'route_to_supervisor') {
+      console.log('🔧 Skipping route_to_supervisor (removed in v2.1)');
+      continue;
+    }
 
     if (enabledToolNames && !enabledToolNames.has(toolConfig.name)) {
       console.log(`🔧 Skipping ${toolConfig.name} (disabled by server)`);
@@ -469,6 +283,6 @@ export function createContextTools(config: any, sessionManager: SessionManager |
     }
   }
 
-  console.log(`🔧 Created ${tools.length} tools total`);
+  console.log(`🔧 Created ${tools.length} tools for Realtime session`);
   return tools;
 }

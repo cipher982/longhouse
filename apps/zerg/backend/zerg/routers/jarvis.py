@@ -1353,11 +1353,13 @@ def jarvis_bootstrap(
     from zerg.prompts.composer import build_jarvis_prompt
 
     # Define all available tools
+    # v2.1 Architecture: route_to_supervisor has been REMOVED.
+    # All user input now goes directly to Supervisor via POST /api/jarvis/chat.
+    # These remaining tools are "direct tools" that Realtime can use for quick operations.
     AVAILABLE_TOOLS = {
         "location": {"name": "get_current_location", "description": "Get current GPS location via Traccar"},
         "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
         "obsidian": {"name": "search_notes", "description": "Search notes via Obsidian"},
-        "supervisor": {"name": "route_to_supervisor", "description": "Delegate complex tasks to supervisor agent"},
     }
 
     # Get tool configuration from user context (default all enabled)

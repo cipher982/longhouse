@@ -453,8 +453,9 @@ class TestBuildJarvisPrompt:
             }
         )
 
+        # v2.1: route_to_supervisor removed - use other tools
         enabled_tools = [
-            {"name": "route_to_supervisor", "description": "Delegate complex tasks"},
+            {"name": "get_current_location", "description": "Get current GPS location"},
             {"name": "get_current_time", "description": "Get the current time"},
         ]
 
@@ -463,8 +464,8 @@ class TestBuildJarvisPrompt:
         # Check user context
         assert "Dana" in prompt
 
-        # Check tools appear in prompt
-        assert "route_to_supervisor" in prompt
+        # Check tools appear in prompt (v2.1: route_to_supervisor removed)
+        assert "get_current_location" in prompt
         assert "get_current_time" in prompt
 
         # Check server names appear

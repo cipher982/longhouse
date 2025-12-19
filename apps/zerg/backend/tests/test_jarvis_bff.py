@@ -52,10 +52,9 @@ class TestBootstrapEndpoint:
         # Check prompt contains user context
         assert "David" in data["prompt"]
 
-        # Check tools list
+        # Check tools list (v2.1: route_to_supervisor removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
-        assert "route_to_supervisor" in tool_names
 
         # Check user context is redacted (no IPs)
         assert data["user_context"]["display_name"] == "David"
@@ -79,13 +78,13 @@ class TestBootstrapEndpoint:
 
     def test_bootstrap_filters_disabled_tools(self, client, test_user, db_session):
         """Bootstrap respects user tool configuration."""
+        # v2.1: route_to_supervisor has been removed, only 3 tools remain
         test_user.context = {
             "display_name": "David",
             "tools": {
                 "location": True,
                 "whoop": False,  # Disabled
                 "obsidian": False,  # Disabled
-                "supervisor": True,
             },
         }
         db_session.add(test_user)
@@ -96,13 +95,12 @@ class TestBootstrapEndpoint:
         assert response.status_code == 200
         data = response.json()
 
-        # Check only enabled tools are returned
+        # Check only enabled tools are returned (v2.1: route_to_supervisor removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
-        assert "route_to_supervisor" in tool_names
         assert "get_whoop_data" not in tool_names
         assert "search_notes" not in tool_names
-        assert len(data["enabled_tools"]) == 2
+        assert len(data["enabled_tools"]) == 1
 
     def test_bootstrap_defaults_to_all_tools_enabled(self, client, test_user, db_session):
         """Bootstrap enables all tools by default if not configured."""
@@ -118,13 +116,12 @@ class TestBootstrapEndpoint:
         assert response.status_code == 200
         data = response.json()
 
-        # Should have all 4 tools
+        # Should have all 3 tools (v2.1: route_to_supervisor removed)
         tool_names = [t["name"] for t in data["enabled_tools"]]
         assert "get_current_location" in tool_names
         assert "get_whoop_data" in tool_names
         assert "search_notes" in tool_names
-        assert "route_to_supervisor" in tool_names
-        assert len(data["enabled_tools"]) == 4
+        assert len(data["enabled_tools"]) == 3
 
 
 class TestSessionEndpoint:
@@ -220,9 +217,10 @@ class TestBootstrapPromptIntegration:
         data = response.json()
         tool_names = {t["name"] for t in data["enabled_tools"]}
 
-        # Should have the expected tools
+        # Should have the expected tools (v2.1: route_to_supervisor removed)
         assert "get_current_location" in tool_names
-        assert "route_to_supervisor" in tool_names
+        assert "get_whoop_data" in tool_names
+        assert "search_notes" in tool_names
 
 
 class TestChatEndpoint:
