@@ -5,9 +5,9 @@ import tempfile
 
 import pytest
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio
@@ -125,7 +125,8 @@ async def test_multiple_workers(db_session, test_user):
 @pytest.mark.asyncio
 async def test_worker_with_error(db_session, test_user):
     """Test that worker errors are captured properly."""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
 
     with tempfile.TemporaryDirectory() as tmpdir:
         artifact_store = WorkerArtifactStore(base_path=tmpdir)
@@ -134,9 +135,7 @@ async def test_worker_with_error(db_session, test_user):
         # Mock AgentRunner to raise an error
         with patch("zerg.services.worker_runner.AgentRunner") as mock_runner_class:
             mock_instance = AsyncMock()
-            mock_instance.run_thread.side_effect = RuntimeError(
-                "Test error: agent failure"
-            )
+            mock_instance.run_thread.side_effect = RuntimeError("Test error: agent failure")
             mock_runner_class.return_value = mock_instance
 
             result = await worker_runner.run_worker(
@@ -198,9 +197,7 @@ async def test_supervisor_can_read_worker_results(db_session, test_user):
             assert result_text is not None
 
             # Supervisor can also drill into specific artifacts
-            thread_content = artifact_store.read_worker_file(
-                worker_id, "thread.jsonl"
-            )
+            thread_content = artifact_store.read_worker_file(worker_id, "thread.jsonl")
             assert len(thread_content) > 0
 
 

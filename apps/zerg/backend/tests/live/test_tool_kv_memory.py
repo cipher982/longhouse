@@ -1,5 +1,5 @@
 import time
-import pytest
+
 
 def test_kv_memory_lifecycle(supervisor_client):
     """Test creating, reading, and verifying a KV memory entry."""
@@ -9,9 +9,7 @@ def test_kv_memory_lifecycle(supervisor_client):
     value = f"secret_value_{timestamp}"
 
     # 1. Store
-    run_id = supervisor_client.dispatch(
-        f"Use your memory tool to save the value '{value}' under the key '{key}'."
-    )
+    run_id = supervisor_client.dispatch(f"Use your memory tool to save the value '{value}' under the key '{key}'.")
     result = supervisor_client.wait_for_completion(run_id)
     # Ideally we check result for confirmation, but retrieving it is the real test.
 

@@ -11,7 +11,9 @@ import json
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
+from typing import List
+from typing import Optional
 
 
 class ModelProvider(str, Enum):
@@ -102,6 +104,7 @@ def _ensure_loaded() -> None:
     _MODELS = _TEXT_CONFIG["models"]
     _USE_CASES = _CONFIG["useCases"]["text"]
     _DEFAULTS = _CONFIG["defaults"]["text"]
+
 
 # =============================================================================
 # TIER ACCESSORS - Use these for semantic model selection (lazy-loaded)
@@ -281,6 +284,7 @@ def __getattr__(name: str):
         _build_models_cache()
         return _DEFAULT_MODEL
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # =============================================================================
 # API FUNCTIONS - For use by routers and services

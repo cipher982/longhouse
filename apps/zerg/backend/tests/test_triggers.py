@@ -1,7 +1,7 @@
 """Tests for the trigger system using bearer token authentication."""
 
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from zerg.events import EventType
 

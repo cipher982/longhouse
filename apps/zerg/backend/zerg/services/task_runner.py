@@ -45,9 +45,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def execute_agent_task(
-    db: Session, agent: AgentModel, *, thread_type: str = "manual", trigger: str | None = None
-) -> ThreadModel:
+async def execute_agent_task(db: Session, agent: AgentModel, *, thread_type: str = "manual", trigger: str | None = None) -> ThreadModel:
     """Run *agent.task_instructions* exactly once and return the created thread.
 
     Parameters
@@ -241,9 +239,7 @@ async def execute_agent_task(
                     prices = get_usd_prices_per_1k(agent.model)
                     if prices is not None:
                         in_price, out_price = prices
-                        total_cost_usd = (
-                            (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
-                        ) / 1000.0
+                        total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
                 # Mark run as finished (summary auto-extracted if not provided)
                 finished_run = crud.mark_finished(

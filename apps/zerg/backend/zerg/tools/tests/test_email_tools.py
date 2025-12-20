@@ -16,7 +16,7 @@ class TestSendEmail:
             from_email="test@example.com",
             to="recipient@example.com",
             subject="Test",
-            text="Test message"
+            text="Test message",
         )
         assert result["ok"] is False
         assert "Invalid API key format" in result["user_message"]
@@ -28,31 +28,20 @@ class TestSendEmail:
             from_email="not-an-email",
             to="recipient@example.com",
             subject="Test",
-            text="Test message"
+            text="Test message",
         )
         assert result["ok"] is False
         assert "Invalid" in result["user_message"]
 
     def test_invalid_to_email(self):
         """Test that invalid to email is rejected."""
-        result = send_email(
-            api_key="re_test_key",
-            from_email="test@example.com",
-            to="not-an-email",
-            subject="Test",
-            text="Test message"
-        )
+        result = send_email(api_key="re_test_key", from_email="test@example.com", to="not-an-email", subject="Test", text="Test message")
         assert result["ok"] is False
         assert "Invalid" in result["user_message"]
 
     def test_missing_content(self):
         """Test that either text or html is required."""
-        result = send_email(
-            api_key="re_test_key",
-            from_email="test@example.com",
-            to="recipient@example.com",
-            subject="Test"
-        )
+        result = send_email(api_key="re_test_key", from_email="test@example.com", to="recipient@example.com", subject="Test")
         assert result["ok"] is False
         assert "text or html" in result["user_message"].lower()
 
@@ -69,7 +58,7 @@ class TestSendEmail:
             from_email="test@example.com",
             to="recipient@example.com",
             subject="Test Subject",
-            text="Test message body"
+            text="Test message body",
         )
 
         assert result["ok"] is True
@@ -88,7 +77,7 @@ class TestSendEmail:
             from_email="test@example.com",
             to="recipient@example.com",
             subject="Test",
-            text="Test message"
+            text="Test message",
         )
 
         assert result["ok"] is False
@@ -108,7 +97,7 @@ class TestSendEmail:
             from_email="test@example.com",
             to="recipient@example.com",
             subject="Test HTML Email",
-            html="<h1>Hello!</h1>"
+            html="<h1>Hello!</h1>",
         )
 
         assert result["ok"] is True
@@ -135,7 +124,7 @@ class TestSendEmail:
             subject="Test",
             text="Test message",
             cc="cc@example.com",
-            bcc="bcc@example.com"
+            bcc="bcc@example.com",
         )
 
         assert result["ok"] is True
@@ -153,7 +142,7 @@ class TestSendEmail:
             from_email="test@example.com",
             to="recipient@example.com",
             subject="Test",
-            text="Test message"
+            text="Test message",
         )
 
         assert result["ok"] is False

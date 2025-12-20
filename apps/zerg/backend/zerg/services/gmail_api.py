@@ -318,8 +318,7 @@ def get_message_metadata(access_token: str, msg_id: str) -> Dict[str, Any]:  # n
     """
 
     url = (
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
-        f"{msg_id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject"
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages/" f"{msg_id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject"
     )
 
     try:

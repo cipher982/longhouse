@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import contextvars
 import threading
-from typing import Dict, Optional
+from typing import Dict
+from typing import Optional
 
 # Context variable holding the current supervisor run ID
 # Set by SupervisorService before invoking the agent, read by spawn_worker

@@ -4,7 +4,8 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
+
+from tests.conftest import TEST_WORKER_MODEL
 
 
 @pytest.fixture()
@@ -47,25 +48,25 @@ def test_invoke_calls_llm(agent_row):
     # Patch ChatOpenAI so we don't hit real LLM
     # Note: No need to patch checkpointer - it will use MemorySaver in tests automatically
     with patch("zerg.agents_def.zerg_react_agent.ChatOpenAI") as mock_llm_cls:
-            mock_instance = MagicMock()
-            # When llm_with_tools.invoke is called, return AIMessage("hi")
-            from unittest.mock import AsyncMock
+        mock_instance = MagicMock()
+        # When llm_with_tools.invoke is called, return AIMessage("hi")
+        from unittest.mock import AsyncMock
 
-            from langchain_core.messages import AIMessage
+        from langchain_core.messages import AIMessage
 
-            mock_instance.bind_tools.return_value.invoke.return_value = AIMessage(content="hi")
-            # Fix: The runtime now awaits ainvoke() inside _call_model_async
-            mock_instance.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
-            mock_llm_cls.return_value = mock_instance
+        mock_instance.bind_tools.return_value.invoke.return_value = AIMessage(content="hi")
+        # Fix: The runtime now awaits ainvoke() inside _call_model_async
+        mock_instance.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
+        mock_llm_cls.return_value = mock_instance
 
-            runnable = mod.get_runnable(agent_row)
+        runnable = mod.get_runnable(agent_row)
 
-            # We don't patch the whole graph – the real runnable should work with
-            # our stubbed LLM. It should append an AIMessage("hi").
+        # We don't patch the whole graph – the real runnable should work with
+        # our stubbed LLM. It should append an AIMessage("hi").
 
-            # Provide config with thread_id required by checkpointer
-            config = {"configurable": {"thread_id": "test-thread-123"}}
-            res = runnable.invoke([], config=config)
+        # Provide config with thread_id required by checkpointer
+        config = {"configurable": {"thread_id": "test-thread-123"}}
+        res = runnable.invoke([], config=config)
 
-            # The runnable returns list of messages; last one should be AIMessage("hi")
-            assert res[-1].content == "hi"
+        # The runnable returns list of messages; last one should be AIMessage("hi")
+        assert res[-1].content == "hi"

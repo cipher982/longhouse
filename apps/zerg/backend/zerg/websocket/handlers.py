@@ -138,9 +138,7 @@ async def handle_ops_subscription(client_id: str, message_id: str, db: Session) 
 
     user = crud.get_user(db, int(user_id))
     if not user or getattr(user, "role", "USER") != "ADMIN":
-        return await send_subscribe_error(
-            client_id, message_id, "Admin privileges required", [topic], send_to_client, "FORBIDDEN"
-        )
+        return await send_subscribe_error(client_id, message_id, "Admin privileges required", [topic], send_to_client, "FORBIDDEN")
 
     await topic_manager.subscribe_to_topic(client_id, topic)
     await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
@@ -172,6 +170,7 @@ async def _subscribe_ops_events(client_id: str, message_id: str, db: Session) ->
 # ---------------------------------------------------------------------------
 # Core message sending utilities
 # ---------------------------------------------------------------------------
+
 
 async def send_to_client(
     client_id: str,
@@ -380,7 +379,9 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
                     await send_subscribe_error(client_id, message_id, f"Unknown topic type: {prefix}", [topic], send_to_client, "UNKNOWN")
 
             except (ValueError, IndexError):
-                await send_subscribe_error(client_id, message_id, f"Invalid topic format: {topic}", [topic], send_to_client, "INVALID_FORMAT")
+                await send_subscribe_error(
+                    client_id, message_id, f"Invalid topic format: {topic}", [topic], send_to_client, "INVALID_FORMAT"
+                )
 
     except ValidationError as e:
         logger.error(f"Invalid subscription data: {e}")
@@ -599,9 +600,7 @@ async def dispatch_message(client_id: str, message: Dict[str, Any], db: Session)
             # These handlers expect Envelope objects
             if envelope is None:
                 # Create envelope for legacy messages
-                envelope = Envelope.create(
-                    message_type=message_type, topic="system", data=message_data, req_id=message.get("message_id")
-                )
+                envelope = Envelope.create(message_type=message_type, topic="system", data=message_data, req_id=message.get("message_id"))
             await handler(client_id, envelope, db)
         else:
             # Legacy handlers expect dict messages

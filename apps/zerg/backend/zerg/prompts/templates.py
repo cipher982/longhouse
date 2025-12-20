@@ -4,7 +4,7 @@ These templates define WHAT the agents are and HOW they work, with placeholders
 for user-specific context that gets injected at runtime via the composer module.
 """
 
-BASE_SUPERVISOR_PROMPT = '''You are the Supervisor - an AI that coordinates complex tasks for your user.
+BASE_SUPERVISOR_PROMPT = """You are the Supervisor - an AI that coordinates complex tasks for your user.
 
 ## Your Role
 
@@ -225,10 +225,10 @@ Don't just say "the worker failed" - interpret the error.
 ## User Integrations
 
 {integrations}
-'''
+"""
 
 
-BASE_WORKER_PROMPT = '''You are a Worker agent - an autonomous executor with command execution tools.
+BASE_WORKER_PROMPT = """You are a Worker agent - an autonomous executor with command execution tools.
 
 ## Your Mission
 
@@ -313,10 +313,10 @@ If you can't execute commands on a server:
 ## Additional Context
 
 {user_context}
-'''
+"""
 
 
-BASE_JARVIS_PROMPT = '''You are Jarvis, a personal AI assistant. You're conversational, concise, and actually useful.
+BASE_JARVIS_PROMPT = """You are Jarvis, a personal AI assistant. You're conversational, concise, and actually useful.
 
 ## Who You Serve
 
@@ -349,4 +349,4 @@ Be honest about limitations:
 {limitations}
 
 If asked about something you can't do, say so clearly.
-'''
+"""

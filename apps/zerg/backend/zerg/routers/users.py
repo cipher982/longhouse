@@ -7,7 +7,9 @@ dependency to supply the active user.
 
 import json
 from copy import deepcopy
-from typing import Any, Dict, Literal
+from typing import Any
+from typing import Dict
+from typing import Literal
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -16,7 +18,8 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import UploadFile
 from fastapi import status
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
@@ -59,11 +62,7 @@ def deep_merge(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
     """
     result = deepcopy(base)
     for key, value in update.items():
-        if (
-            key in result
-            and isinstance(result[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             # Recursively merge nested dicts
             result[key] = deep_merge(result[key], value)
         else:
@@ -223,7 +222,7 @@ async def update_user_context(
 
     # Validate size limit on merged result (64KB)
     context_json = json.dumps(merged)
-    if len(context_json.encode('utf-8')) > 65536:
+    if len(context_json.encode("utf-8")) > 65536:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Merged context too large (max 64KB)",
@@ -266,7 +265,7 @@ async def replace_user_context(
 
     # Validate size limit (64KB)
     context_json = json.dumps(update.context)
-    if len(context_json.encode('utf-8')) > 65536:
+    if len(context_json.encode("utf-8")) > 65536:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Context too large (max 64KB)",

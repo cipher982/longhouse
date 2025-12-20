@@ -1,11 +1,9 @@
 """Tests for tool result utilities (error detection, redaction, previews)."""
 
-from zerg.tools.result_utils import (
-    check_tool_error,
-    redact_sensitive_args,
-    safe_preview,
-    SENSITIVE_KEYS,
-)
+from zerg.tools.result_utils import SENSITIVE_KEYS
+from zerg.tools.result_utils import check_tool_error
+from zerg.tools.result_utils import redact_sensitive_args
+from zerg.tools.result_utils import safe_preview
 
 
 class TestErrorDetection:

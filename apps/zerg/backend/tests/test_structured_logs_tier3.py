@@ -1,4 +1,5 @@
 """Test to verify Tier 3 (Dev Telemetry) - structured logging functionality."""
+
 import logging
 from datetime import datetime
 from datetime import timezone

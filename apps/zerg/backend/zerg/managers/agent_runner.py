@@ -177,12 +177,11 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # ------------------------------------------------------------------
         if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
             from langchain_core.messages import SystemMessage
+
             protocols = get_connector_protocols()
             original_system_content = original_msgs[0].content
             # Prepend protocols to system message
-            enhanced_system_message = SystemMessage(
-                content=f"{protocols}\n\n{original_system_content}"
-            )
+            enhanced_system_message = SystemMessage(content=f"{protocols}\n\n{original_system_content}")
             original_msgs = [enhanced_system_message] + original_msgs[1:]
             logger.debug(
                 "[AgentRunner] Prepended connector protocols to system message for agent %s",
@@ -212,9 +211,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # unless the user explicitly asks about integrations
             from langchain_core.messages import SystemMessage
 
-            context_system_msg = SystemMessage(
-                content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}"
-            )
+            context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
 
             # Insert after main system message (index 0) if it exists
             if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
@@ -323,9 +320,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             if isinstance(msg, AIMessage):
                 meta = getattr(msg, "response_metadata", None) or {}
                 addl = getattr(msg, "additional_kwargs", None) or {}
-                usage = (
-                    meta.get("token_usage") or meta.get("usage") or addl.get("token_usage") or addl.get("usage") or {}
-                )
+                usage = meta.get("token_usage") or meta.get("usage") or addl.get("token_usage") or addl.get("usage") or {}
                 try:
                     p = int(usage.get("prompt_tokens", 0))
                     c = int(usage.get("completion_tokens", 0))

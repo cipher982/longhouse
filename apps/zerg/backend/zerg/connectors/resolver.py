@@ -242,19 +242,13 @@ class CredentialResolver:
         from zerg.models.models import ConnectorCredential
 
         # Get agent-level credentials
-        agent_creds = (
-            self.db.query(ConnectorCredential.connector_type)
-            .filter(ConnectorCredential.agent_id == self.agent_id)
-            .all()
-        )
+        agent_creds = self.db.query(ConnectorCredential.connector_type).filter(ConnectorCredential.agent_id == self.agent_id).all()
         types = {c.connector_type for c in agent_creds}
 
         # Get account-level credentials if owner_id is available
         if self.owner_id is not None:
             account_creds = (
-                self.db.query(AccountConnectorCredential.connector_type)
-                .filter(AccountConnectorCredential.owner_id == self.owner_id)
-                .all()
+                self.db.query(AccountConnectorCredential.connector_type).filter(AccountConnectorCredential.owner_id == self.owner_id).all()
             )
             types.update(c.connector_type for c in account_creds)
 

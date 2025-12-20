@@ -4,11 +4,9 @@ This module takes base templates (generic agent behavior) and injects user-speci
 context (servers, integrations, preferences) to create complete system prompts.
 """
 
-from zerg.prompts.templates import (
-    BASE_SUPERVISOR_PROMPT,
-    BASE_WORKER_PROMPT,
-    BASE_JARVIS_PROMPT,
-)
+from zerg.prompts.templates import BASE_JARVIS_PROMPT
+from zerg.prompts.templates import BASE_SUPERVISOR_PROMPT
+from zerg.prompts.templates import BASE_WORKER_PROMPT
 
 
 def format_user_context(ctx: dict) -> str:
@@ -22,16 +20,16 @@ def format_user_context(ctx: dict) -> str:
     """
     parts = []
 
-    if name := ctx.get('display_name'):
-        role = ctx.get('role', 'user')
-        location = ctx.get('location')
+    if name := ctx.get("display_name"):
+        role = ctx.get("role", "user")
+        location = ctx.get("location")
         loc_str = f" based in {location}" if location else ""
         parts.append(f"{name} - {role}{loc_str}")
 
-    if desc := ctx.get('description'):
+    if desc := ctx.get("description"):
         parts.append(desc)
 
-    if instructions := ctx.get('custom_instructions'):
+    if instructions := ctx.get("custom_instructions"):
         parts.append(f"\nUser preferences: {instructions}")
 
     return "\n".join(parts) if parts else "(No user context configured)"
@@ -51,11 +49,11 @@ def format_servers(servers: list[dict]) -> str:
 
     lines = []
     for s in servers:
-        name = s.get('name', 'unknown')
-        ip = s.get('ip', '')
-        purpose = s.get('purpose', '')
-        platform = s.get('platform', '')
-        notes = s.get('notes', '')
+        name = s.get("name", "unknown")
+        ip = s.get("ip", "")
+        purpose = s.get("purpose", "")
+        platform = s.get("platform", "")
+        notes = s.get("notes", "")
 
         line = f"**{name}**"
         if ip:
@@ -83,7 +81,7 @@ def format_server_names(servers: list[dict]) -> str:
     """
     if not servers:
         return "no servers configured"
-    return ", ".join(s.get('name', 'unknown') for s in servers)
+    return ", ".join(s.get("name", "unknown") for s in servers)
 
 
 def format_integrations(integrations: dict) -> str:
@@ -118,8 +116,8 @@ def build_supervisor_prompt(user) -> str:
 
     return BASE_SUPERVISOR_PROMPT.format(
         user_context=format_user_context(ctx),
-        servers=format_servers(ctx.get('servers', [])),
-        integrations=format_integrations(ctx.get('integrations', {})),
+        servers=format_servers(ctx.get("servers", [])),
+        integrations=format_integrations(ctx.get("integrations", {})),
     )
 
 
@@ -135,7 +133,7 @@ def build_worker_prompt(user) -> str:
     ctx = user.context or {}
 
     return BASE_WORKER_PROMPT.format(
-        servers=format_servers(ctx.get('servers', [])),
+        servers=format_servers(ctx.get("servers", [])),
         user_context=format_user_context(ctx),
     )
 
@@ -161,16 +159,16 @@ def build_jarvis_prompt(user, enabled_tools: list[dict]) -> str:
 
     # Format limitations based on what's NOT available
     limitations = []
-    tool_names = [t['name'] for t in enabled_tools]
-    if 'calendar' not in tool_names:
+    tool_names = [t["name"] for t in enabled_tools]
+    if "calendar" not in tool_names:
         limitations.append("- Calendar/reminders (no tool configured)")
-    if 'smart_home' not in tool_names:
+    if "smart_home" not in tool_names:
         limitations.append("- Smart home control (no tool configured)")
     limitations_str = "\n".join(limitations) if limitations else "None currently"
 
     return BASE_JARVIS_PROMPT.format(
         user_context=format_user_context(ctx),
         direct_tools=direct_tools,
-        server_names=format_server_names(ctx.get('servers', [])),
+        server_names=format_server_names(ctx.get("servers", [])),
         limitations=limitations_str,
     )

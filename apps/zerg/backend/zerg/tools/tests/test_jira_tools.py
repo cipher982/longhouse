@@ -22,7 +22,7 @@ class TestJiraCreateIssue:
             api_token="test_token",
             project_key="TEST",
             issue_type="Task",
-            summary="Test Issue"
+            summary="Test Issue",
         )
         assert result["ok"] is False
 
@@ -34,7 +34,7 @@ class TestJiraCreateIssue:
             api_token="test_token",
             project_key="TEST",
             issue_type="Task",
-            summary="Test Issue"
+            summary="Test Issue",
         )
         assert result["ok"] is False
 
@@ -46,7 +46,7 @@ class TestJiraCreateIssue:
             api_token="test_token",
             project_key="TEST",
             issue_type="Task",
-            summary=""
+            summary="",
         )
         assert result["ok"] is False
 
@@ -58,7 +58,7 @@ class TestJiraCreateIssue:
         mock_response.json.return_value = {
             "id": "10001",
             "key": "TEST-123",
-            "self": "https://test.atlassian.net/rest/api/3/issue/10001"
+            "self": "https://test.atlassian.net/rest/api/3/issue/10001",
         }
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
@@ -69,7 +69,7 @@ class TestJiraCreateIssue:
             project_key="TEST",
             issue_type="Task",
             summary="Test Issue",
-            description="Test description"
+            description="Test description",
         )
 
         assert result["ok"] is True
@@ -90,7 +90,7 @@ class TestJiraCreateIssue:
             api_token="invalid_token",
             project_key="TEST",
             issue_type="Task",
-            summary="Test Issue"
+            summary="Test Issue",
         )
 
         assert result["ok"] is False
@@ -109,17 +109,12 @@ class TestJiraListIssues:
             "total": 2,
             "issues": [
                 {"key": "TEST-1", "fields": {"summary": "Issue 1"}},
-                {"key": "TEST-2", "fields": {"summary": "Issue 2"}}
-            ]
+                {"key": "TEST-2", "fields": {"summary": "Issue 2"}},
+            ],
         }
         mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
-        result = jira_list_issues(
-            domain="test.atlassian.net",
-            email="test@example.com",
-            api_token="test_token",
-            project_key="TEST"
-        )
+        result = jira_list_issues(domain="test.atlassian.net", email="test@example.com", api_token="test_token", project_key="TEST")
 
         assert result["ok"] is True
         assert result["data"]["total"] == 2
@@ -138,7 +133,7 @@ class TestJiraListIssues:
             email="test@example.com",
             api_token="test_token",
             project_key="TEST",
-            jql="status = 'In Progress'"
+            jql="status = 'In Progress'",
         )
 
         assert result["ok"] is True
@@ -159,17 +154,12 @@ class TestJiraGetIssue:
                 "summary": "Test Issue",
                 "status": {"name": "Open"},
                 "issuetype": {"name": "Task"},
-                "description": {"content": []}
-            }
+                "description": {"content": []},
+            },
         }
         mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
-        result = jira_get_issue(
-            domain="test.atlassian.net",
-            email="test@example.com",
-            api_token="test_token",
-            issue_key="TEST-123"
-        )
+        result = jira_get_issue(domain="test.atlassian.net", email="test@example.com", api_token="test_token", issue_key="TEST-123")
 
         assert result["ok"] is True
         assert result["data"]["issue"]["key"] == "TEST-123"
@@ -183,12 +173,7 @@ class TestJiraGetIssue:
         mock_response.json.return_value = {"errorMessages": ["Issue Does Not Exist"]}
         mock_client.return_value.__enter__.return_value.get.return_value = mock_response
 
-        result = jira_get_issue(
-            domain="test.atlassian.net",
-            email="test@example.com",
-            api_token="test_token",
-            issue_key="TEST-999"
-        )
+        result = jira_get_issue(domain="test.atlassian.net", email="test@example.com", api_token="test_token", issue_key="TEST-999")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -200,11 +185,7 @@ class TestJiraAddComment:
     def test_empty_body(self):
         """Test that empty comment body is rejected."""
         result = jira_add_comment(
-            domain="test.atlassian.net",
-            email="test@example.com",
-            api_token="test_token",
-            issue_key="TEST-123",
-            body=""
+            domain="test.atlassian.net", email="test@example.com", api_token="test_token", issue_key="TEST-123", body=""
         )
         assert result["ok"] is False
 
@@ -221,7 +202,7 @@ class TestJiraAddComment:
             email="test@example.com",
             api_token="test_token",
             issue_key="TEST-123",
-            body="This is a test comment"
+            body="This is a test comment",
         )
 
         assert result["ok"] is True
@@ -243,7 +224,7 @@ class TestJiraTransitionIssue:
             email="test@example.com",
             api_token="test_token",
             issue_key="TEST-123",
-            transition_id="21"
+            transition_id="21",
         )
 
         assert result["ok"] is True
@@ -261,7 +242,7 @@ class TestJiraTransitionIssue:
             email="test@example.com",
             api_token="test_token",
             issue_key="TEST-123",
-            transition_id="999"
+            transition_id="999",
         )
 
         assert result["ok"] is False
@@ -282,7 +263,7 @@ class TestJiraUpdateIssue:
             email="test@example.com",
             api_token="test_token",
             issue_key="TEST-123",
-            fields={"summary": "Updated Summary"}
+            fields={"summary": "Updated Summary"},
         )
 
         assert result["ok"] is True

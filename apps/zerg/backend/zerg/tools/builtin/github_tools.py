@@ -98,7 +98,7 @@ def _make_github_request(
                 json=data,
                 params=params,
                 timeout=timeout,
-                follow_redirects=True
+                follow_redirects=True,
             )
 
         # Check for rate limit
@@ -209,20 +209,24 @@ def github_list_repositories(
     repos = result.get("data", [])
     formatted_repos = []
     for repo in repos:
-        formatted_repos.append({
-            "name": repo.get("full_name"),
-            "description": repo.get("description"),
-            "url": repo.get("html_url"),
-            "private": repo.get("private"),
-            "language": repo.get("language"),
-            "stars": repo.get("stargazers_count"),
-            "updated_at": repo.get("updated_at"),
-        })
+        formatted_repos.append(
+            {
+                "name": repo.get("full_name"),
+                "description": repo.get("description"),
+                "url": repo.get("html_url"),
+                "private": repo.get("private"),
+                "language": repo.get("language"),
+                "stars": repo.get("stargazers_count"),
+                "updated_at": repo.get("updated_at"),
+            }
+        )
 
-    return tool_success({
-        "repositories": formatted_repos,
-        "count": len(formatted_repos),
-    })
+    return tool_success(
+        {
+            "repositories": formatted_repos,
+            "count": len(formatted_repos),
+        }
+    )
 
 
 def github_create_issue(
@@ -287,13 +291,15 @@ def github_create_issue(
     # Simplify response for agent consumption
     if result.get("ok") and "data" in result:
         issue_data = result["data"]
-        return tool_success({
-            "number": issue_data.get("number"),
-            "title": issue_data.get("title"),
-            "state": issue_data.get("state"),
-            "html_url": issue_data.get("html_url"),
-            "created_at": issue_data.get("created_at")
-        })
+        return tool_success(
+            {
+                "number": issue_data.get("number"),
+                "title": issue_data.get("title"),
+                "state": issue_data.get("state"),
+                "html_url": issue_data.get("html_url"),
+                "created_at": issue_data.get("created_at"),
+            }
+        )
 
     return result
 
@@ -351,10 +357,7 @@ def github_list_issues(
         )
 
     endpoint = f"/repos/{owner}/{repo}/issues"
-    params = {
-        "state": state,
-        "per_page": per_page
-    }
+    params = {"state": state, "per_page": per_page}
 
     if labels:
         params["labels"] = labels
@@ -372,14 +375,11 @@ def github_list_issues(
                     "state": issue.get("state"),
                     "html_url": issue.get("html_url"),
                     "labels": [label.get("name") for label in issue.get("labels", [])],
-                    "created_at": issue.get("created_at")
+                    "created_at": issue.get("created_at"),
                 }
                 for issue in issues_data
             ]
-            return tool_success({
-                "issues": formatted_issues,
-                "count": len(formatted_issues)
-            })
+            return tool_success({"issues": formatted_issues, "count": len(formatted_issues)})
 
     return result
 
@@ -429,16 +429,18 @@ def github_get_issue(
     # Simplify response for agent consumption
     if result.get("ok") and "data" in result:
         issue_data = result["data"]
-        return tool_success({
-            "number": issue_data.get("number"),
-            "title": issue_data.get("title"),
-            "body": issue_data.get("body"),
-            "state": issue_data.get("state"),
-            "html_url": issue_data.get("html_url"),
-            "labels": [label.get("name") for label in issue_data.get("labels", [])],
-            "created_at": issue_data.get("created_at"),
-            "updated_at": issue_data.get("updated_at")
-        })
+        return tool_success(
+            {
+                "number": issue_data.get("number"),
+                "title": issue_data.get("title"),
+                "body": issue_data.get("body"),
+                "state": issue_data.get("state"),
+                "html_url": issue_data.get("html_url"),
+                "labels": [label.get("name") for label in issue_data.get("labels", [])],
+                "created_at": issue_data.get("created_at"),
+                "updated_at": issue_data.get("updated_at"),
+            }
+        )
 
     return result
 
@@ -500,12 +502,14 @@ def github_add_comment(
     # Simplify response for agent consumption
     if result.get("ok") and "data" in result:
         comment_data = result["data"]
-        return tool_success({
-            "id": comment_data.get("id"),
-            "body": comment_data.get("body"),
-            "html_url": comment_data.get("html_url"),
-            "created_at": comment_data.get("created_at")
-        })
+        return tool_success(
+            {
+                "id": comment_data.get("id"),
+                "body": comment_data.get("body"),
+                "html_url": comment_data.get("html_url"),
+                "created_at": comment_data.get("created_at"),
+            }
+        )
 
     return result
 
@@ -560,10 +564,7 @@ def github_list_pull_requests(
         )
 
     endpoint = f"/repos/{owner}/{repo}/pulls"
-    params = {
-        "state": state,
-        "per_page": per_page
-    }
+    params = {"state": state, "per_page": per_page}
 
     result = _make_github_request(resolved_token, "GET", endpoint, params=params)
 
@@ -579,14 +580,11 @@ def github_list_pull_requests(
                     "html_url": pr.get("html_url"),
                     "created_at": pr.get("created_at"),
                     "head": pr.get("head", {}).get("ref"),
-                    "base": pr.get("base", {}).get("ref")
+                    "base": pr.get("base", {}).get("ref"),
                 }
                 for pr in prs_data
             ]
-            return tool_success({
-                "pull_requests": formatted_prs,
-                "count": len(formatted_prs)
-            })
+            return tool_success({"pull_requests": formatted_prs, "count": len(formatted_prs)})
 
     return result
 
@@ -636,19 +634,21 @@ def github_get_pull_request(
     # Simplify response for agent consumption
     if result.get("ok") and "data" in result:
         pr_data = result["data"]
-        return tool_success({
-            "number": pr_data.get("number"),
-            "title": pr_data.get("title"),
-            "body": pr_data.get("body"),
-            "state": pr_data.get("state"),
-            "html_url": pr_data.get("html_url"),
-            "head": pr_data.get("head", {}).get("ref"),
-            "base": pr_data.get("base", {}).get("ref"),
-            "mergeable": pr_data.get("mergeable"),
-            "merged": pr_data.get("merged"),
-            "created_at": pr_data.get("created_at"),
-            "updated_at": pr_data.get("updated_at")
-        })
+        return tool_success(
+            {
+                "number": pr_data.get("number"),
+                "title": pr_data.get("title"),
+                "body": pr_data.get("body"),
+                "state": pr_data.get("state"),
+                "html_url": pr_data.get("html_url"),
+                "head": pr_data.get("head", {}).get("ref"),
+                "base": pr_data.get("base", {}).get("ref"),
+                "mergeable": pr_data.get("mergeable"),
+                "merged": pr_data.get("merged"),
+                "created_at": pr_data.get("created_at"),
+                "updated_at": pr_data.get("updated_at"),
+            }
+        )
 
     return result
 

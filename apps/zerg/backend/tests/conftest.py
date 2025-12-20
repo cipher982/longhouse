@@ -26,6 +26,7 @@ def pytest_addoption(parser):
     parser.addoption("--live-url", action="store", default="http://localhost:8000", help="Base URL for live server")
     parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
 
+
 import zerg.database as _db_mod
 import zerg.routers.websocket as _ws_router
 from zerg.database import Base
@@ -205,8 +206,8 @@ class _StubLlm:
         # If so, return a plain text response (task complete)
         has_tool_response = False
         for msg in messages:
-            msg_type = getattr(msg, 'type', None)
-            if msg_type == 'tool':
+            msg_type = getattr(msg, "type", None)
+            if msg_type == "tool":
                 has_tool_response = True
                 break
 
@@ -217,10 +218,10 @@ class _StubLlm:
         # Look for the last human message (the actual user request, not system context)
         user_content = ""
         for msg in reversed(messages):
-            if hasattr(msg, 'content') and hasattr(msg, 'type') and msg.type == 'human':
+            if hasattr(msg, "content") and hasattr(msg, "type") and msg.type == "human":
                 content = msg.content
                 # Skip system context injection (starts with <current_time>)
-                if content and not content.strip().startswith('<current_time>'):
+                if content and not content.strip().startswith("<current_time>"):
                     user_content = content
                     break
 
@@ -229,8 +230,8 @@ class _StubLlm:
         if self._tools:
             import re
 
-            tool_names = [t.name if hasattr(t, 'name') else str(t) for t in self._tools]
-            supervisor_tools = {'spawn_worker', 'list_workers', 'read_worker_result'}
+            tool_names = [t.name if hasattr(t, "name") else str(t) for t in self._tools]
+            supervisor_tools = {"spawn_worker", "list_workers", "read_worker_result"}
 
             # Only make tool calls if agent has ALL supervisor tools (tool integration tests)
             if supervisor_tools.issubset(set(tool_names)) and user_content:
@@ -238,12 +239,12 @@ class _StubLlm:
 
                 # Select tool based on keywords in user message
                 tool_name = None
-                if any(kw in user_lower for kw in ['list', 'show', 'recent']):
-                    tool_name = 'list_workers'
-                elif any(kw in user_lower for kw in ['read', 'result', 'job']):
-                    tool_name = 'read_worker_result'
-                elif any(kw in user_lower for kw in ['spawn', 'calculate', 'delegate', 'create']):
-                    tool_name = 'spawn_worker'
+                if any(kw in user_lower for kw in ["list", "show", "recent"]):
+                    tool_name = "list_workers"
+                elif any(kw in user_lower for kw in ["read", "result", "job"]):
+                    tool_name = "read_worker_result"
+                elif any(kw in user_lower for kw in ["spawn", "calculate", "delegate", "create"]):
+                    tool_name = "spawn_worker"
 
                 if tool_name:
                     tool_args = {}
@@ -252,16 +253,18 @@ class _StubLlm:
                     elif tool_name == "list_workers":
                         tool_args = {"limit": 10}
                     elif tool_name == "read_worker_result":
-                        match = re.search(r'job (\d+)', user_lower)
+                        match = re.search(r"job (\d+)", user_lower)
                         tool_args = {"job_id": int(match.group(1)) if match else 1}
 
                     return AIMessage(
                         content="",
-                        tool_calls=[{
-                            "id": "stub-tool-call-1",
-                            "name": tool_name,
-                            "args": tool_args,
-                        }]
+                        tool_calls=[
+                            {
+                                "id": "stub-tool-call-1",
+                                "name": tool_name,
+                                "args": tool_args,
+                            }
+                        ],
                     )
 
         return AIMessage(content="stub-response")
@@ -479,6 +482,7 @@ def db_session():
             # Reset the sequence so next auto-generated ID starts at 2
             # This prevents conflicts when tests create users without specifying IDs
             from sqlalchemy import text
+
             db.execute(text("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users))"))
             db.commit()
     except Exception:
@@ -570,15 +574,9 @@ def test_session_factory(db_session):
 # ---------------------------------------------------------------------------
 # Model fixtures - centralized model constants for tests
 # ---------------------------------------------------------------------------
-from zerg.models_config import (
-    DEFAULT_MODEL_ID,
-    DEFAULT_WORKER_MODEL_ID,
-    TEST_MODEL_ID,
-    TIER_1,
-    TIER_2,
-    TIER_3,
-    MOCK_MODEL,
-)
+from zerg.models_config import DEFAULT_MODEL_ID
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.models_config import TEST_MODEL_ID
 
 # Re-export as module-level constants for tests that need direct import
 TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.1" - for tests needing best quality
@@ -810,6 +808,7 @@ def _shutdown_email_trigger_service():
 
     # Cancel poll loop if still running (ignore event-loop already closed)
     try:
+
         async def _stop_email_service():
             await email_trigger_service.stop()
 

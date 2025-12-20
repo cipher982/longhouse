@@ -124,17 +124,13 @@ async def sync_github_repo_source(db: Session, source: KnowledgeSource) -> None:
             logger.info(f"Found {len(files_to_sync)} files to sync from {owner}/{repo}")
 
             # Precompute expected doc paths (used for cleanup)
-            expected_paths = {
-                f"https://github.com/{owner}/{repo}/blob/{branch}/{f['path']}" for f in files_to_sync
-            }
+            expected_paths = {f"https://github.com/{owner}/{repo}/blob/{branch}/{f['path']}" for f in files_to_sync}
 
             # 7. Build map of existing docs for incremental sync (by path -> sha)
             existing_sha_by_path: dict[str, str] = {}
             offset = 0
             while True:
-                batch = knowledge_crud.get_knowledge_documents(
-                    db, owner_id=source.owner_id, source_id=source.id, skip=offset, limit=500
-                )
+                batch = knowledge_crud.get_knowledge_documents(db, owner_id=source.owner_id, source_id=source.id, skip=offset, limit=500)
                 if not batch:
                     break
                 for doc in batch:
@@ -296,6 +292,7 @@ async def sync_url_source(db: Session, source: KnowledgeSource) -> None:
 
         # Extract title from URL (last path segment or hostname)
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         title = parsed.path.strip("/").split("/")[-1] if parsed.path.strip("/") else parsed.hostname
 
@@ -406,11 +403,13 @@ async def sync_all_sources(db: Session, owner_id: int) -> dict:
             stats["success"] += 1
         except Exception as exc:
             stats["failed"] += 1
-            stats["errors"].append({
-                "source_id": source.id,
-                "source_name": source.name,
-                "error": str(exc),
-            })
+            stats["errors"].append(
+                {
+                    "source_id": source.id,
+                    "source_name": source.name,
+                    "error": str(exc),
+                }
+            )
             logger.error(f"Failed to sync source {source.id}: {exc}")
 
     logger.info(f"Synced {stats['success']}/{stats['total']} sources for user {owner_id}")

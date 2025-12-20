@@ -1,7 +1,6 @@
 """Tests for web_fetch tool."""
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from zerg.tools.builtin.web_fetch import web_fetch
 

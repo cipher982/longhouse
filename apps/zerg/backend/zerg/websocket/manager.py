@@ -186,9 +186,7 @@ class TopicConnectionManager:
             self.client_queues[client_id] = asyncio.Queue(maxsize=queue_size)
 
             # Start writer task for this client
-            self.writer_tasks[client_id] = asyncio.create_task(
-                self._writer(client_id, websocket, self.client_queues[client_id])
-            )
+            self.writer_tasks[client_id] = asyncio.create_task(self._writer(client_id, websocket, self.client_queues[client_id]))
 
         # Auto-subscribe the socket to its personal topic so profile updates
         # propagate across tabs/devices without requiring an explicit

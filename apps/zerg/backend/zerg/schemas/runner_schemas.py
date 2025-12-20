@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-
 # ---------------------------------------------------------------------------
 # Runner Enrollment
 # ---------------------------------------------------------------------------

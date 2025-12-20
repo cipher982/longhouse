@@ -296,8 +296,7 @@ def test_read_thread_messages_ordered_by_id(client: TestClient, sample_thread: T
 
     # Verify strict ID-ascending order
     message_ids = [m["id"] for m in test_messages]
-    assert message_ids == sorted(message_ids), \
-        f"Messages must be ordered by ID ascending, but got: {message_ids}"
+    assert message_ids == sorted(message_ids), f"Messages must be ordered by ID ascending, but got: {message_ids}"
 
     # Verify first message has the minimum ID (not necessarily the earliest timestamp)
     assert test_messages[0]["id"] == min_id
@@ -567,30 +566,42 @@ def test_automation_threads_separated_from_chat(client: TestClient, sample_agent
     separately for display in different sections.
     """
     # Create 2 chat threads
-    client.post("/api/threads", json={
-        "title": "Chat 1",
-        "agent_id": sample_agent.id,
-        "thread_type": "chat",
-    })
-    client.post("/api/threads", json={
-        "title": "Chat 2",
-        "agent_id": sample_agent.id,
-        "thread_type": "chat",
-    })
+    client.post(
+        "/api/threads",
+        json={
+            "title": "Chat 1",
+            "agent_id": sample_agent.id,
+            "thread_type": "chat",
+        },
+    )
+    client.post(
+        "/api/threads",
+        json={
+            "title": "Chat 2",
+            "agent_id": sample_agent.id,
+            "thread_type": "chat",
+        },
+    )
 
     # Create 1 scheduled thread
-    client.post("/api/threads", json={
-        "title": "Scheduled",
-        "agent_id": sample_agent.id,
-        "thread_type": "scheduled",
-    })
+    client.post(
+        "/api/threads",
+        json={
+            "title": "Scheduled",
+            "agent_id": sample_agent.id,
+            "thread_type": "scheduled",
+        },
+    )
 
     # Create 1 manual thread
-    client.post("/api/threads", json={
-        "title": "Manual",
-        "agent_id": sample_agent.id,
-        "thread_type": "manual",
-    })
+    client.post(
+        "/api/threads",
+        json={
+            "title": "Manual",
+            "agent_id": sample_agent.id,
+            "thread_type": "manual",
+        },
+    )
 
     # Fetch chat threads only
     chat_response = client.get(f"/api/threads?agent_id={sample_agent.id}&thread_type=chat")

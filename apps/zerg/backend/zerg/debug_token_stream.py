@@ -158,6 +158,7 @@ def check_layer_3_settings_object() -> dict:
 
         # Manually evaluate the _truthy logic
         from zerg.config import _truthy
+
         manual_truthy = _truthy(current_env_value)
         print_result("_truthy(os.environ value)", manual_truthy)
 
@@ -182,6 +183,7 @@ def check_layer_3_settings_object() -> dict:
     except Exception as e:
         print(f"  ERROR importing or using settings: {e}")
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
 
@@ -204,11 +206,11 @@ def check_layer_4_constants_module() -> dict:
         print("\n  Internal _settings object:")
         print_result("_settings object", repr(constants._settings))
         print_result("_settings.llm_token_stream", constants._settings.llm_token_stream)
-        print_result("_settings._llm_token_stream_default",
-                     constants._settings._llm_token_stream_default)
+        print_result("_settings._llm_token_stream_default", constants._settings._llm_token_stream_default)
 
         # Check if constant matches settings
         from zerg.config import get_settings
+
         current_settings = get_settings()
 
         print("\n  Comparison with fresh settings:")
@@ -226,6 +228,7 @@ def check_layer_4_constants_module() -> dict:
     except Exception as e:
         print(f"  ERROR importing constants: {e}")
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
 
@@ -266,6 +269,7 @@ def check_layer_5_agent_runner() -> dict:
 
         # Show what get_settings() returned during __init__
         from zerg.config import get_settings
+
         current_settings = get_settings()
 
         print("\n  Comparison:")
@@ -288,6 +292,7 @@ def check_layer_5_agent_runner() -> dict:
     except Exception as e:
         print(f"  ERROR creating AgentRunner: {e}")
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
 
@@ -363,7 +368,7 @@ def check_layer_6_llm_creation() -> dict:
                         value = getattr(actual_llm, attr)
                         if not callable(value):
                             print_result(f"  {attr}", value)
-                    except:
+                    except Exception:
                         pass
 
             return {
@@ -376,12 +381,14 @@ def check_layer_6_llm_creation() -> dict:
         except Exception as e:
             print(f"  ERROR creating LLM: {e}")
             import traceback
+
             traceback.print_exc()
             return {"error": str(e)}
 
     except Exception as e:
         print(f"  ERROR in layer 6: {e}")
         import traceback
+
         traceback.print_exc()
         return {"error": str(e)}
 

@@ -5,12 +5,10 @@ import pytest
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.models.models import UserTask
-from zerg.tools.builtin.task_tools import (
-    task_create,
-    task_delete,
-    task_list,
-    task_update,
-)
+from zerg.tools.builtin.task_tools import task_create
+from zerg.tools.builtin.task_tools import task_delete
+from zerg.tools.builtin.task_tools import task_list
+from zerg.tools.builtin.task_tools import task_update
 
 
 @pytest.fixture

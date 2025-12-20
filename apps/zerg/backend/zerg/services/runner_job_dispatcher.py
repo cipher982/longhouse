@@ -15,7 +15,6 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
-from zerg.models.models import Runner
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 
 logger = logging.getLogger(__name__)
@@ -154,9 +153,7 @@ class RunnerJobDispatcher:
                 # Failed to send message, clean up
                 self._pending_jobs.pop(job.id, None)
                 self.clear_active_job(runner_id)
-                runner_crud.update_job_error(
-                    db, job.id, "Failed to send command to runner"
-                )
+                runner_crud.update_job_error(db, job.id, "Failed to send command to runner")
                 return {
                     "ok": False,
                     "error": {

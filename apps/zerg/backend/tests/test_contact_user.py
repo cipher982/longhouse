@@ -1,9 +1,13 @@
 """Tests for contact_user tool."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
 import pytest
 
-from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+from zerg.context import WorkerContext
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
 from zerg.tools.builtin.contact_user import contact_user
 from zerg.tools.error_envelope import ErrorType
 
@@ -37,11 +41,12 @@ class TestContactUser:
 
     def test_successful_notification(self, mock_worker_context, mock_user):
         """Test successful user notification."""
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud, \
-             patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+            patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email,
+        ):
             # Setup mocks
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
@@ -104,10 +109,11 @@ class TestContactUser:
 
     def test_user_not_found(self, mock_worker_context):
         """Test behavior when user does not exist."""
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+        ):
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
             mock_crud.get_user.return_value = None
@@ -128,10 +134,11 @@ class TestContactUser:
         user.id = 1
         user.email = None
 
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+        ):
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
             mock_crud.get_user.return_value = user
@@ -148,11 +155,12 @@ class TestContactUser:
 
     def test_email_send_failure(self, mock_worker_context, mock_user):
         """Test behavior when email sending fails."""
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud, \
-             patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+            patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email,
+        ):
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
             mock_crud.get_user.return_value = mock_user
@@ -200,11 +208,12 @@ class TestContactUser:
         priorities = ["low", "normal", "high", "urgent"]
 
         for priority in priorities:
-            with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-                 patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-                 patch("zerg.tools.builtin.contact_user.crud") as mock_crud, \
-                 patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email:
-
+            with (
+                patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+                patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+                patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+                patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email,
+            ):
                 mock_get_ctx.return_value = mock_worker_context
                 mock_db_session.return_value.__enter__.return_value = MagicMock()
                 mock_crud.get_user.return_value = mock_user
@@ -235,11 +244,12 @@ class TestContactUser:
 
     def test_markdown_in_message(self, mock_worker_context, mock_user):
         """Test that markdown is properly converted to HTML."""
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud, \
-             patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+            patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email,
+        ):
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
             mock_crud.get_user.return_value = mock_user
@@ -263,11 +273,12 @@ class TestContactUser:
 
     def test_subject_prefix(self, mock_worker_context, mock_user):
         """Test that subject gets Swarmlet prefix."""
-        with patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx, \
-             patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session, \
-             patch("zerg.tools.builtin.contact_user.crud") as mock_crud, \
-             patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email:
-
+        with (
+            patch("zerg.tools.builtin.contact_user.get_worker_context") as mock_get_ctx,
+            patch("zerg.tools.builtin.contact_user.db_session") as mock_db_session,
+            patch("zerg.tools.builtin.contact_user.crud") as mock_crud,
+            patch("zerg.tools.builtin.contact_user.send_email") as mock_send_email,
+        ):
             mock_get_ctx.return_value = mock_worker_context
             mock_db_session.return_value.__enter__.return_value = MagicMock()
             mock_crud.get_user.return_value = mock_user

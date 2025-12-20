@@ -3,10 +3,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import TEST_MODEL
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.models import Agent
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture

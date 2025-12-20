@@ -42,8 +42,7 @@ async def perform_startup_agent_recovery() -> List[int]:
                 db.query(Agent)
                 .outerjoin(
                     AgentRun,
-                    (Agent.id == AgentRun.agent_id)
-                    & (AgentRun.status.in_([RunStatus.RUNNING.value, RunStatus.QUEUED.value])),
+                    (Agent.id == AgentRun.agent_id) & (AgentRun.status.in_([RunStatus.RUNNING.value, RunStatus.QUEUED.value])),
                 )
                 .filter(
                     Agent.status.in_(["running", "RUNNING"]),  # Agent shows as running

@@ -235,9 +235,7 @@ class GmailProvider:  # noqa: D101 – obvious from context
         # (unused in current implementation)
 
         with db_session() as session:
-            conn: ConnectorModel | None = (
-                session.query(ConnectorModel).filter(ConnectorModel.id == connector_id).first()
-            )
+            conn: ConnectorModel | None = session.query(ConnectorModel).filter(ConnectorModel.id == connector_id).first()
             if not conn:
                 logger.warning("connector-missing", connector_id=connector_id)
                 return
@@ -343,9 +341,7 @@ class GmailProvider:  # noqa: D101 – obvious from context
                     # Update metrics
                     from zerg.metrics import gmail_connector_history_id
 
-                    gmail_connector_history_id.labels(connector_id=str(connector_id), owner_id=str(conn.owner_id)).set(
-                        max_hid
-                    )
+                    gmail_connector_history_id.labels(connector_id=str(connector_id), owner_id=str(conn.owner_id)).set(max_hid)
                 except Exception:
                     pass
                 session.add(conn)

@@ -2,12 +2,12 @@
 
 import json
 
-import pytest
 from sqlalchemy.orm import Session
 
-from zerg.models.models import AccountConnectorCredential, User
-from zerg.utils.crypto import decrypt, encrypt
-
+from zerg.models.models import AccountConnectorCredential
+from zerg.models.models import User
+from zerg.utils.crypto import decrypt
+from zerg.utils.crypto import encrypt
 
 # ---------------------------------------------------------------------------
 # Credential Seeding Tests
@@ -16,7 +16,11 @@ from zerg.utils.crypto import decrypt, encrypt
 
 def test_seed_credentials_script_imports():
     """Verify seed script can be imported."""
-    from scripts.seed_personal_credentials import main, load_credentials, find_user, seed_credential
+    from scripts.seed_personal_credentials import find_user
+    from scripts.seed_personal_credentials import load_credentials
+    from scripts.seed_personal_credentials import main
+    from scripts.seed_personal_credentials import seed_credential
+
     assert callable(main)
     assert callable(load_credentials)
     assert callable(find_user)
@@ -36,10 +40,14 @@ def test_seed_credential_creates_new(db_session: Session, test_user: User):
     db_session.commit()
 
     # Verify credential was created
-    credential = db_session.query(AccountConnectorCredential).filter(
-        AccountConnectorCredential.owner_id == test_user.id,
-        AccountConnectorCredential.connector_type == "traccar",
-    ).first()
+    credential = (
+        db_session.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == test_user.id,
+            AccountConnectorCredential.connector_type == "traccar",
+        )
+        .first()
+    )
 
     assert credential is not None
     assert credential.display_name == "Personal Traccar"
@@ -90,9 +98,7 @@ def test_seed_credential_overwrites_with_force(db_session: Session, test_user: U
     db_session.commit()
 
     # Verify credential was updated (same ID)
-    credential = db_session.query(AccountConnectorCredential).filter(
-        AccountConnectorCredential.id == old_id
-    ).first()
+    credential = db_session.query(AccountConnectorCredential).filter(AccountConnectorCredential.id == old_id).first()
 
     assert credential is not None
     # Decrypt and verify it was updated
@@ -102,7 +108,8 @@ def test_seed_credential_overwrites_with_force(db_session: Session, test_user: U
 
 def test_seed_all_personal_connectors(db_session: Session, test_user: User):
     """Test seeding all three personal connectors."""
-    from scripts.seed_personal_credentials import seed_credential, PERSONAL_CONNECTORS
+    from scripts.seed_personal_credentials import PERSONAL_CONNECTORS
+    from scripts.seed_personal_credentials import seed_credential
 
     creds_map = {
         "traccar": {"url": "https://traccar.test", "token": "tk1"},
@@ -117,9 +124,9 @@ def test_seed_all_personal_connectors(db_session: Session, test_user: User):
     db_session.commit()
 
     # Verify all were created
-    count = db_session.query(AccountConnectorCredential).filter(
-        AccountConnectorCredential.owner_id == test_user.id
-    ).count()
+    count = (
+        db_session.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == test_user.id).count()
+    )
     assert count == 3
 
 
@@ -137,10 +144,14 @@ def test_credential_encryption_roundtrip(db_session: Session, test_user: User):
     db_session.commit()
 
     # Retrieve and decrypt
-    credential = db_session.query(AccountConnectorCredential).filter(
-        AccountConnectorCredential.owner_id == test_user.id,
-        AccountConnectorCredential.connector_type == "traccar",
-    ).first()
+    credential = (
+        db_session.query(AccountConnectorCredential)
+        .filter(
+            AccountConnectorCredential.owner_id == test_user.id,
+            AccountConnectorCredential.connector_type == "traccar",
+        )
+        .first()
+    )
 
     assert credential is not None
 

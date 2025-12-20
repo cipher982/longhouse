@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-
 from zerg.tools.builtin import imessage_tools
 from zerg.tools.builtin.imessage_tools import list_imessage_messages
 from zerg.tools.builtin.imessage_tools import send_imessage
@@ -147,9 +146,7 @@ class TestListImessageMessages:
         ).lastrowid
 
         def insert_message(text: str, is_from_me: int, minutes_offset: int, handle: int) -> int:
-            timestamp = imessage_tools._to_apple_timestamp(
-                datetime.now(tz=timezone.utc) - timedelta(minutes=minutes_offset)
-            )
+            timestamp = imessage_tools._to_apple_timestamp(datetime.now(tz=timezone.utc) - timedelta(minutes=minutes_offset))
             message_id = conn.execute(
                 """
                 INSERT INTO message (text, is_from_me, date, date_read, handle_id, service)

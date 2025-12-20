@@ -70,6 +70,7 @@ class TestUserUsageEndpoint:
         resp = client.get("/api/users/me/usage?period=invalid")
         assert resp.status_code == 422
 
+
 class TestUsageService:
     """Unit tests for the usage service."""
 

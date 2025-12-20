@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from zerg.config import get_settings
@@ -34,34 +37,47 @@ settings = get_settings()
 # Valid event types for client-side tracking
 VALID_EVENTS = {
     # Page lifecycle
-    "page_view",       # Page HTML loaded
-    "js_loaded",       # JavaScript executed
+    "page_view",  # Page HTML loaded
+    "js_loaded",  # JavaScript executed
     "human_detected",  # Mouse/scroll/key detected
-
     # CTA funnel
-    "cta_clicked",     # Clicked Start Free or other CTA
-
+    "cta_clicked",  # Clicked Start Free or other CTA
     # Auth funnel
     "signup_modal_opened",  # Auth modal opened
-    "signup_submitted",     # Google OAuth initiated
-    "signup_completed",     # User landed on dashboard
-
+    "signup_submitted",  # Google OAuth initiated
+    "signup_completed",  # User landed on dashboard
     # Engagement
-    "pricing_viewed",       # Pricing page loaded
-    "scroll_25",           # Scrolled 25% of page
-    "scroll_50",           # Scrolled 50%
-    "scroll_75",           # Scrolled 75%
-    "scroll_100",          # Scrolled to bottom
+    "pricing_viewed",  # Pricing page loaded
+    "scroll_25",  # Scrolled 25% of page
+    "scroll_50",  # Scrolled 50%
+    "scroll_75",  # Scrolled 75%
+    "scroll_100",  # Scrolled to bottom
 }
 
 # Known bot user-agent patterns (lowercase)
 KNOWN_BOT_PATTERNS = [
-    'bot', 'crawler', 'spider', 'scraper',
-    'bingbot', 'googlebot', 'ahrefsbot', 'semrushbot',
-    'duckduckbot', 'amazonbot', 'seznambot', 'mj12bot',
-    'headlesschrome', 'puppeteer', 'phantomjs',
-    'curl', 'wget', 'python-requests', 'httpx',
-    'palo alto', 'nessus', 'qualys',
+    "bot",
+    "crawler",
+    "spider",
+    "scraper",
+    "bingbot",
+    "googlebot",
+    "ahrefsbot",
+    "semrushbot",
+    "duckduckbot",
+    "amazonbot",
+    "seznambot",
+    "mj12bot",
+    "headlesschrome",
+    "puppeteer",
+    "phantomjs",
+    "curl",
+    "wget",
+    "python-requests",
+    "httpx",
+    "palo alto",
+    "nessus",
+    "qualys",
 ]
 
 
@@ -134,6 +150,7 @@ except Exception as e:
 @dataclass
 class FunnelEvent:
     """A single funnel event."""
+
     event_type: str
     visitor_id: str
     user_id: Optional[str]
@@ -167,17 +184,20 @@ def record_event(
     now_iso = _iso(now)
 
     # Insert event
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO funnel_events (event_type, visitor_id, user_id, page_path, created_at, metadata)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        event_type,
-        visitor_id,
-        user_id,
-        page_path,
-        now_iso,
-        json.dumps(metadata or {}),
-    ))
+    """,
+        (
+            event_type,
+            visitor_id,
+            user_id,
+            page_path,
+            now_iso,
+            json.dumps(metadata or {}),
+        ),
+    )
 
     conn.commit()
     conn.close()
@@ -207,10 +227,7 @@ def get_funnel_stats(
 
     rows = cur.execute(query, (since_iso, until_iso)).fetchall()
 
-    events = {row["event_type"]: {
-        "count": row["count"],
-        "unique": row["unique_visitors"]
-    } for row in rows}
+    events = {row["event_type"]: {"count": row["count"], "unique": row["unique_visitors"]} for row in rows}
 
     # Calculate key funnel metrics
     page_views = events.get("page_view", {}).get("unique", 0)
@@ -245,7 +262,7 @@ def get_funnel_stats(
             "modal_to_submit": _safe_pct(signups_submitted, modal_opens),
             "submit_to_complete": _safe_pct(signups_completed, signups_submitted),
             "overall_conversion": _safe_pct(signups_completed, page_views),
-        }
+        },
     }
 
 
@@ -276,11 +293,14 @@ def stitch_visitor_to_user(visitor_id: str, user_id: str) -> int:
     cur = conn.cursor()
 
     # Update funnel_events
-    cur.execute("""
+    cur.execute(
+        """
         UPDATE funnel_events
         SET user_id = ?
         WHERE visitor_id = ? AND user_id IS NULL
-    """, (user_id, visitor_id))
+    """,
+        (user_id, visitor_id),
+    )
     events_updated = cur.rowcount
 
     conn.commit()
@@ -289,6 +309,7 @@ def stitch_visitor_to_user(visitor_id: str, user_id: str) -> int:
 
 
 # ==================== API ENDPOINTS ====================
+
 
 def _is_valid_origin(request: Request) -> bool:
     """Check if request is from our domain (basic spoofing protection)."""
@@ -445,20 +466,18 @@ async def get_attribution(request: Request, hours: int = 72):
             "utm_campaign": row["utm_campaign"],
             "visitors": row["visitors"],
             "signups": row["signups"],
-            "conversion_rate": _safe_pct(row["signups"], row["visitors"])
+            "conversion_rate": _safe_pct(row["signups"], row["visitors"]),
         }
         for row in rows
     ]
 
     conn.close()
 
-    return JSONResponse({
-        "period": {
-            "start": since_iso,
-            "end": _iso(_utcnow()),
-            "hours": hours
-        },
-        "attribution": attribution_data,
-        "total_visitors": sum(row["visitors"] for row in attribution_data),
-        "total_signups": sum(row["signups"] for row in attribution_data)
-    })
+    return JSONResponse(
+        {
+            "period": {"start": since_iso, "end": _iso(_utcnow()), "hours": hours},
+            "attribution": attribution_data,
+            "total_visitors": sum(row["visitors"] for row in attribution_data),
+            "total_signups": sum(row["signups"] for row in attribution_data),
+        }
+    )

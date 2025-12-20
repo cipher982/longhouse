@@ -189,9 +189,7 @@ class WatchRenewalService:
                 "Watch renewed successfully",
                 extra={
                     "connector_id": connector.id,
-                    "new_expiry": datetime.fromtimestamp(
-                        watch_info["watch_expiry"] / 1000, tz=timezone.utc
-                    ).isoformat(),
+                    "new_expiry": datetime.fromtimestamp(watch_info["watch_expiry"] / 1000, tz=timezone.utc).isoformat(),
                 },
             )
 

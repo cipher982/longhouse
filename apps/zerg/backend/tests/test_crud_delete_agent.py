@@ -1,6 +1,11 @@
 from zerg.crud import crud
-from zerg.models.enums import RunStatus, RunTrigger
-from zerg.models.models import Agent, AgentRun, Thread, ThreadMessage, WorkerJob
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.models import Agent
+from zerg.models.models import AgentRun
+from zerg.models.models import Thread
+from zerg.models.models import ThreadMessage
+from zerg.models.models import WorkerJob
 
 
 def test_delete_agent_deletes_dependents_and_nulls_worker_jobs(db_session):

@@ -93,13 +93,9 @@ def _get_namespace_uuid(namespace: str) -> uuid.UUID:
     try:
         return uuid.UUID(namespace)
     except ValueError:
-        raise ValueError(
-            f"Invalid namespace '{namespace}'. Must be one of {list(predefined.keys())} or a valid UUID string"
-        )
+        raise ValueError(f"Invalid namespace '{namespace}'. Must be one of {list(predefined.keys())} or a valid UUID string")
 
 
 TOOLS: List[StructuredTool] = [
-    StructuredTool.from_function(
-        func=generate_uuid, name="generate_uuid", description="Generate a universally unique identifier (UUID)"
-    ),
+    StructuredTool.from_function(func=generate_uuid, name="generate_uuid", description="Generate a universally unique identifier (UUID)"),
 ]

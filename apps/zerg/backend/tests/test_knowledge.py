@@ -1,15 +1,15 @@
 """Tests for Knowledge Base (Phase 0)."""
-import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, patch
+
+from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import httpx
+import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud import knowledge_crud
-from zerg.models.models import KnowledgeDocument, KnowledgeSource, User
+from zerg.models.models import User
 from zerg.services import knowledge_sync_service
-
 
 # ---------------------------------------------------------------------------
 # CRUD Tests
@@ -705,9 +705,7 @@ class TestKnowledgeAPI:
         with patch("zerg.routers.knowledge.knowledge_sync_service.sync_knowledge_source") as mock_sync:
             mock_sync.side_effect = Exception("Connection refused")
             # Manually update status as the service would on failure
-            knowledge_crud.update_source_sync_status(
-                db_session, source.id, status="failed", error="Connection refused"
-            )
+            knowledge_crud.update_source_sync_status(db_session, source.id, status="failed", error="Connection refused")
 
             response = client.post(f"/api/knowledge/sources/{source.id}/sync")
 
@@ -734,7 +732,9 @@ class TestKnowledgeSearchToolContext:
 
     def test_knowledge_search_with_worker_context(self, db_session: Session, _dev_user: User):
         """Test knowledge_search resolves owner_id from WorkerContext."""
-        from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+        from zerg.context import WorkerContext
+        from zerg.context import reset_worker_context
+        from zerg.context import set_worker_context
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
         # Create a source with documents
@@ -789,7 +789,9 @@ class TestKnowledgeSearchToolContext:
 
     def test_knowledge_search_no_results(self, db_session: Session, _dev_user: User):
         """Test knowledge_search with no matching documents."""
-        from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+        from zerg.context import WorkerContext
+        from zerg.context import reset_worker_context
+        from zerg.context import set_worker_context
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
         # Create a source but no matching documents
@@ -834,7 +836,8 @@ class TestKnowledgeSearchToolContext:
         V1.1: This tests the fallback to CredentialResolver when WorkerContext is not set,
         which is the case for Supervisor runs (AgentRunner sets CredentialResolver, not WorkerContext).
         """
-        from zerg.connectors.context import set_credential_resolver, reset_credential_resolver
+        from zerg.connectors.context import reset_credential_resolver
+        from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
         from zerg.tools.builtin.knowledge_tools import knowledge_search
 
@@ -883,11 +886,14 @@ class TestKnowledgeSearchToolContext:
         V1.1: When both contexts are available (edge case), WorkerContext should take precedence.
         Uses different owner_ids to prove WorkerContext is actually used.
         """
-        from zerg.context import WorkerContext, set_worker_context, reset_worker_context
-        from zerg.connectors.context import set_credential_resolver, reset_credential_resolver
+        from zerg.connectors.context import reset_credential_resolver
+        from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.tools.builtin.knowledge_tools import knowledge_search
+        from zerg.context import WorkerContext
+        from zerg.context import reset_worker_context
+        from zerg.context import set_worker_context
         from zerg.models.models import User as UserModel
+        from zerg.tools.builtin.knowledge_tools import knowledge_search
 
         # Create a second user to prove WorkerContext takes precedence
         other_user = UserModel(

@@ -6,7 +6,6 @@ Summary extraction enables supervisors to scan 50+ workers without context overf
 - status is system-determined (not from LLM)
 """
 
-import json
 import tempfile
 from datetime import datetime
 from datetime import timezone
@@ -16,9 +15,9 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -128,9 +127,7 @@ class TestExtractSummary:
         """Falls back to truncation when LLM fails."""
         with patch("zerg.services.worker_runner.AsyncOpenAI") as mock_openai:
             mock_client = AsyncMock()
-            mock_client.chat.completions.create = AsyncMock(
-                side_effect=Exception("API rate limit exceeded")
-            )
+            mock_client.chat.completions.create = AsyncMock(side_effect=Exception("API rate limit exceeded"))
             mock_openai.return_value = mock_client
 
             result_text = "Full result with lots of details about what happened"
@@ -150,9 +147,7 @@ class TestExtractSummary:
 
         with patch("zerg.services.worker_runner.AsyncOpenAI") as mock_openai:
             mock_client = AsyncMock()
-            mock_client.chat.completions.create = AsyncMock(
-                side_effect=Exception("Timeout")
-            )
+            mock_client.chat.completions.create = AsyncMock(side_effect=Exception("Timeout"))
             mock_openai.return_value = mock_client
 
             summary, meta = await worker_runner._extract_summary("Task", long_result)

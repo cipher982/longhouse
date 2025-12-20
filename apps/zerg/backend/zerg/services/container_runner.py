@@ -67,9 +67,7 @@ class ContainerRunner:
             self._docker = docker.from_env()
             self._api = self._docker.api
         except Exception as exc:  # pragma: no cover – environment dependent
-            raise ContainerRunnerError(
-                "Docker client not available. Install docker SDK and ensure daemon is running."
-            ) from exc
+            raise ContainerRunnerError("Docker client not available. Install docker SDK and ensure daemon is running.") from exc
 
     def run(
         self,
@@ -124,9 +122,7 @@ class ContainerRunner:
                 volumes=volumes,
                 stdin_open=False,
                 detach=True,
-                host_config=self._api.create_host_config(
-                    **{k: v for k, v in host_config_kwargs.items() if v is not None}
-                ),
+                host_config=self._api.create_host_config(**{k: v for k, v in host_config_kwargs.items() if v is not None}),
             )
             container.start()
 
@@ -134,11 +130,7 @@ class ContainerRunner:
             res = container.wait(timeout=timeout)
             exit_code = int(res.get("StatusCode", 1))
             logs_bytes = container.logs(stdout=True, stderr=True)
-            logs = (
-                logs_bytes.decode(errors="replace")
-                if isinstance(logs_bytes, (bytes, bytearray))
-                else str(logs_bytes)
-            )
+            logs = logs_bytes.decode(errors="replace") if isinstance(logs_bytes, (bytes, bytearray)) else str(logs_bytes)
 
             duration_ms = int((time.time() - start_ts) * 1000)
             return {

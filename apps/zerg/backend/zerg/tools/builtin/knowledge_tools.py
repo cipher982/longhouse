@@ -4,7 +4,8 @@ import logging
 from typing import List
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
             }
         ]
     """
-    from zerg.context import get_worker_context
     from zerg.connectors.context import get_credential_resolver
+    from zerg.context import get_worker_context
     from zerg.crud import knowledge_crud
     from zerg.database import db_session
 
@@ -67,9 +68,7 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
             owner_id = resolver.owner_id
 
     if owner_id is None:
-        return [{
-            "error": "No user context available. knowledge_search requires authenticated execution context."
-        }]
+        return [{"error": "No user context available. knowledge_search requires authenticated execution context."}]
 
     # Search documents
     with db_session() as db:
@@ -81,9 +80,7 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
         )
 
     if not results:
-        return [{
-            "message": f"No results found for '{query}' in your knowledge base."
-        }]
+        return [{"message": f"No results found for '{query}' in your knowledge base."}]
 
     # Format results
     formatted_results = []
@@ -91,15 +88,17 @@ def knowledge_search(query: str, limit: int = 5) -> List[dict]:
         # Extract snippets containing the query
         snippets = extract_snippets(doc.content_text, query, max_snippets=3)
 
-        formatted_results.append({
-            "source": source.name,
-            "source_id": source.id,
-            "document_id": doc.id,
-            "path": doc.path,
-            "title": doc.title,
-            "snippets": snippets,
-            "score": 1.0,  # Phase 0: no relevance scoring
-        })
+        formatted_results.append(
+            {
+                "source": source.name,
+                "source_id": source.id,
+                "document_id": doc.id,
+                "path": doc.path,
+                "title": doc.title,
+                "snippets": snippets,
+                "score": 1.0,  # Phase 0: no relevance scoring
+            }
+        )
 
     return formatted_results
 
@@ -154,7 +153,7 @@ def extract_snippets(text: str, query: str, max_snippets: int = 3, context_chars
 
     # Fallback: return first N characters if still no snippets
     if not snippets:
-        snippets.append(text[:context_chars * 2] + "...")
+        snippets.append(text[: context_chars * 2] + "...")
 
     return snippets
 

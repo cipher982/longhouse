@@ -4,15 +4,16 @@ import tempfile
 
 import pytest
 
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import crud
 from zerg.managers.agent_runner import AgentRunner
 from zerg.services.thread_service import ThreadService
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.tools.registry import ImmutableToolRegistry
 from zerg.tools.builtin import BUILTIN_TOOLS
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
+from zerg.tools.registry import ImmutableToolRegistry
 
 
 @pytest.fixture
@@ -54,9 +55,7 @@ def supervisor_agent(db_session, test_user):
 
 
 @pytest.mark.asyncio
-async def test_supervisor_spawns_worker_via_tool(
-    supervisor_agent, db_session, test_user, temp_artifact_path
-):
+async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
     """Test that a supervisor agent can use spawn_worker tool (queues job)."""
     from zerg.models.models import WorkerJob
 
@@ -79,9 +78,7 @@ async def test_supervisor_spawns_worker_via_tool(
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(
-        agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id
-    )
+    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
@@ -106,9 +103,7 @@ async def test_supervisor_spawns_worker_via_tool(
         assert spawn_worker_called, "Supervisor should have called spawn_worker"
 
         # Verify a worker JOB was queued (not executed synchronously)
-        jobs = db_session.query(WorkerJob).filter(
-            WorkerJob.owner_id == test_user.id
-        ).all()
+        jobs = db_session.query(WorkerJob).filter(WorkerJob.owner_id == test_user.id).all()
         assert len(jobs) >= 1, "At least one worker job should have been queued"
 
         # Verify job is queued
@@ -122,12 +117,12 @@ async def test_supervisor_spawns_worker_via_tool(
 
 
 @pytest.mark.asyncio
-async def test_supervisor_can_list_workers(
-    supervisor_agent, db_session, test_user, temp_artifact_path
-):
+async def test_supervisor_can_list_workers(supervisor_agent, db_session, test_user, temp_artifact_path):
     """Test that a supervisor can use list_workers tool."""
+    from datetime import datetime
+    from datetime import timezone
+
     from zerg.models.models import WorkerJob
-    from datetime import datetime, timezone
 
     # Create a WorkerJob record (simulating a queued job)
     worker_job = WorkerJob(
@@ -159,9 +154,7 @@ async def test_supervisor_can_list_workers(
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(
-        agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id
-    )
+    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
@@ -192,13 +185,13 @@ async def test_supervisor_can_list_workers(
 
 
 @pytest.mark.asyncio
-async def test_supervisor_reads_worker_result(
-    supervisor_agent, db_session, test_user, temp_artifact_path
-):
+async def test_supervisor_reads_worker_result(supervisor_agent, db_session, test_user, temp_artifact_path):
     """Test that a supervisor can read worker results."""
+    from datetime import datetime
+    from datetime import timezone
+
     from zerg.models.models import WorkerJob
     from zerg.services.worker_runner import WorkerRunner
-    from datetime import datetime, timezone
 
     # First spawn a worker directly via WorkerRunner (creates artifacts)
     artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
@@ -249,9 +242,7 @@ async def test_supervisor_reads_worker_result(
     )
 
     # Set up credential resolver context
-    resolver = CredentialResolver(
-        agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id
-    )
+    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
@@ -269,9 +260,7 @@ async def test_supervisor_reads_worker_result(
                         read_worker_result_called = True
                         break
 
-        assert (
-            read_worker_result_called
-        ), "Supervisor should have called read_worker_result"
+        assert read_worker_result_called, "Supervisor should have called read_worker_result"
 
     finally:
         set_credential_resolver(None)
@@ -297,22 +286,19 @@ async def test_tools_registered_in_builtin(db_session):
 
 
 @pytest.mark.asyncio
-async def test_read_worker_result_includes_duration(
-    supervisor_agent, db_session, test_user, temp_artifact_path
-):
+async def test_read_worker_result_includes_duration(supervisor_agent, db_session, test_user, temp_artifact_path):
     """Test that read_worker_result returns duration_ms from completed workers (Tier 1 visibility)."""
-    from zerg.models.models import WorkerJob
-    from zerg.services.worker_runner import WorkerRunner
-    from zerg.tools.builtin.supervisor_tools import read_worker_result
+    from datetime import datetime
+    from datetime import timezone
+
     from zerg.connectors.context import set_credential_resolver
     from zerg.connectors.resolver import CredentialResolver
-    from datetime import datetime, timezone
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_runner import WorkerRunner
 
     # Create and run a worker directly via WorkerRunner
     # Set up credential resolver context FIRST (needed for worker execution)
-    resolver = CredentialResolver(
-        agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id
-    )
+    resolver = CredentialResolver(agent_id=supervisor_agent.id, db=db_session, owner_id=test_user.id)
     set_credential_resolver(resolver)
 
     try:
@@ -347,6 +333,7 @@ async def test_read_worker_result_includes_duration(
 
         # Call read_worker_result_async directly (to preserve context in same async loop)
         from zerg.tools.builtin.supervisor_tools import read_worker_result_async
+
         result_text = await read_worker_result_async(str(job_id))
 
         # Verify the result includes duration_ms
@@ -356,6 +343,7 @@ async def test_read_worker_result_includes_duration(
         # Verify the duration_ms is actually a number
         # Extract the duration using a simple pattern
         import re
+
         duration_match = re.search(r"Execution time: (\d+)ms", result_text)
         assert duration_match is not None, "Should find duration in result"
         duration_value = int(duration_match.group(1))

@@ -8,15 +8,16 @@ This test suite verifies:
 5. Full delegation flow works end-to-end
 """
 
-import json
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock
+from unittest.mock import patch
 
+import pytest
+
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud
 from zerg.models.enums import AgentStatus
 from zerg.prompts.supervisor_prompt import get_supervisor_prompt
-from zerg.services.worker_runner import WorkerResult
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 class TestSupervisorConfiguration:
@@ -122,8 +123,8 @@ class TestSupervisorDelegation:
     @pytest.mark.asyncio
     async def test_spawn_worker_integration(self, db_session, test_user, tmp_path):
         """Test that supervisor can spawn a worker and get result."""
-        from zerg.services.worker_runner import WorkerRunner
         from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.services.worker_runner import WorkerRunner
 
         # Create supervisor agent
         supervisor = crud.create_agent(
@@ -180,8 +181,8 @@ class TestSupervisorDelegation:
 
     def test_spawn_worker_tool_basic(self, db_session, test_user):
         """Test spawn_worker tool is callable and validates context."""
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
         from zerg.connectors.context import set_credential_resolver
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
 
         # Without context, should return error
         set_credential_resolver(None)
@@ -191,8 +192,8 @@ class TestSupervisorDelegation:
 
     def test_list_workers_tool_basic(self, db_session, test_user):
         """Test list_workers tool is callable and validates context."""
-        from zerg.tools.builtin.supervisor_tools import list_workers
         from zerg.connectors.context import set_credential_resolver
+        from zerg.tools.builtin.supervisor_tools import list_workers
 
         # Without context, should return error
         set_credential_resolver(None)
@@ -202,8 +203,8 @@ class TestSupervisorDelegation:
 
     def test_read_worker_result_tool_basic(self, db_session, test_user):
         """Test read_worker_result tool is callable and validates context."""
-        from zerg.tools.builtin.supervisor_tools import read_worker_result
         from zerg.connectors.context import set_credential_resolver
+        from zerg.tools.builtin.supervisor_tools import read_worker_result
 
         # Without context, should return error
         set_credential_resolver(None)
@@ -218,10 +219,10 @@ class TestSupervisorEndToEnd:
     @pytest.mark.asyncio
     async def test_full_delegation_flow(self, db_session, test_user, tmp_path):
         """Test complete flow: create supervisor → spawn worker → retrieve result."""
-        from zerg.services.worker_runner import WorkerRunner
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.services.worker_runner import WorkerRunner
 
         # 1. Create supervisor agent
         supervisor = crud.create_agent(
@@ -311,9 +312,7 @@ class TestSupervisorEndToEnd:
         with patch.object(
             artifact_store,
             "get_worker_metadata",
-            side_effect=lambda worker_id, owner_id: (
-                other_user_metadata if owner_id == other_user.id else None
-            ),
+            side_effect=lambda worker_id, owner_id: (other_user_metadata if owner_id == other_user.id else None),
         ):
             # Try to access other user's worker
             result = artifact_store.get_worker_metadata("other-worker-123", owner_id=test_user.id)

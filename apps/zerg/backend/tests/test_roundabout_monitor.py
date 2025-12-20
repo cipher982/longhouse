@@ -1,20 +1,20 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 
 import pytest
 
-from zerg.events import EventType, event_bus
-from zerg.models.models import WorkerJob
 import zerg.services.roundabout_monitor as rm
-from zerg.services.roundabout_monitor import (
-    DecisionContext,
-    RoundaboutDecision,
-    RoundaboutMonitor,
-    ToolActivity,
-    make_heuristic_decision,
-)
-from zerg.services.worker_artifact_store import WorkerArtifactStore
 from tests.conftest import TEST_WORKER_MODEL
+from zerg.events import EventType
+from zerg.events import event_bus
+from zerg.models.models import WorkerJob
+from zerg.services.roundabout_monitor import DecisionContext
+from zerg.services.roundabout_monitor import RoundaboutDecision
+from zerg.services.roundabout_monitor import RoundaboutMonitor
+from zerg.services.roundabout_monitor import ToolActivity
+from zerg.services.roundabout_monitor import make_heuristic_decision
+from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 
 @pytest.mark.asyncio
@@ -178,9 +178,7 @@ class TestMakeHeuristicDecision:
 
     def test_exit_on_final_answer_pattern(self):
         """Should return EXIT when final answer pattern detected in output."""
-        ctx = self._make_context(
-            status="running", last_tool_output="Result: The disk is 78% full."
-        )
+        ctx = self._make_context(status="running", last_tool_output="Result: The disk is 78% full.")
         decision, reason = make_heuristic_decision(ctx)
 
         assert decision == RoundaboutDecision.EXIT
@@ -423,9 +421,11 @@ async def test_roundabout_correlates_events_by_job_id(monkeypatch, db_session, t
 # Phase 5: LLM-Gated Decision Tests
 # ============================================================================
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
-from zerg.services.llm_decider import DecisionMode, LLMDecisionResult
+from zerg.services.llm_decider import DecisionMode
+from zerg.services.llm_decider import LLMDecisionResult
 
 
 class TestRoundaboutDecisionModes:

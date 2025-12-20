@@ -116,10 +116,28 @@ class StructuredFormatter(logging.Formatter):
 
         # Add structured fields if present (skip standard LogRecord attributes)
         BUILTIN_ATTRS = {
-            "name", "msg", "args", "created", "filename", "funcName", "levelname",
-            "levelno", "lineno", "module", "msecs", "message", "pathname", "process",
-            "processName", "relativeCreated", "thread", "threadName", "exc_info",
-            "exc_text", "stack_info", "event",  # 'event' is message content, not separate field
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "event",  # 'event' is message content, not separate field
         }
 
         # Collect extra fields for structured output
@@ -204,9 +222,7 @@ async def lifespan(app: FastAPI):
         try:
             from zerg.database import default_engine
 
-            if (
-                not _settings.testing and default_engine.dialect.name != "postgresql"
-            ):  # pragma: no cover - caught in tests via conftest
+            if not _settings.testing and default_engine.dialect.name != "postgresql":  # pragma: no cover - caught in tests via conftest
                 raise RuntimeError("PostgreSQL is required to run the backend (advisory locks, concurrency).")
         except Exception as _e:
             logger.error(str(_e))
@@ -223,6 +239,7 @@ async def lifespan(app: FastAPI):
 
         # Start shared async runner
         from zerg.utils.async_runner import get_shared_runner
+
         get_shared_runner().start()
 
         # Start core background services
@@ -312,6 +329,7 @@ async def lifespan(app: FastAPI):
 
         # Stop shared async runner
         from zerg.utils.async_runner import get_shared_runner
+
         get_shared_runner().stop()
 
         # Shutdown websocket manager

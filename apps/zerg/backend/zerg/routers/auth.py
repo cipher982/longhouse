@@ -113,9 +113,7 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
 
         logger = logging.getLogger(__name__)
         logger.error(f"Google token validation failed: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid Google token: {str(exc)}"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid Google token: {str(exc)}") from exc
 
 
 def _issue_access_token(
@@ -262,9 +260,7 @@ def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
     Also sets swarmlet_session cookie for browser auth.
     """
     if not _settings.auth_disabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dev login only available when AUTH_DISABLED=1")
 
     # Get or create dev@local user
     user = crud.get_user_by_email(db, "dev@local")
@@ -327,9 +323,7 @@ def google_sign_in(response: Response, body: dict[str, str], db: Session = Depen
                 total = 0
             if settings.max_users and total >= settings.max_users:
                 # Explicit 403 so frontend can show a friendly message
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN, detail="Sign-ups disabled: user limit reached"
-                )
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sign-ups disabled: user limit reached")
 
         # Create user; grant ADMIN role if email is in admin list
         role = "ADMIN" if is_admin else "USER"

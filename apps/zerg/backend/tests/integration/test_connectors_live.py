@@ -13,7 +13,6 @@ Only run these when you intentionally want to test the full integration.
 """
 
 
-
 class TestDiscordIntegration:
     """Live Discord webhook tests."""
 
@@ -21,10 +20,7 @@ class TestDiscordIntegration:
         """Test sending a simple message to Discord."""
         from zerg.tools.builtin.discord_tools import send_discord_webhook
 
-        result = send_discord_webhook(
-            webhook_url=discord_webhook_url,
-            content="🧪 Integration test - simple message"
-        )
+        result = send_discord_webhook(webhook_url=discord_webhook_url, content="🧪 Integration test - simple message")
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
         assert result["data"]["status_code"] == 204
@@ -36,14 +32,14 @@ class TestDiscordIntegration:
         result = send_discord_webhook(
             webhook_url=discord_webhook_url,
             content="",
-            embeds=[{
-                "title": "🧪 Integration Test",
-                "description": "This is an automated integration test",
-                "color": 3066993,  # Green
-                "fields": [
-                    {"name": "Status", "value": "Testing", "inline": True}
-                ]
-            }]
+            embeds=[
+                {
+                    "title": "🧪 Integration Test",
+                    "description": "This is an automated integration test",
+                    "color": 3066993,  # Green
+                    "fields": [{"name": "Status", "value": "Testing", "inline": True}],
+                }
+            ],
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
@@ -56,10 +52,7 @@ class TestSlackIntegration:
         """Test sending a simple message to Slack."""
         from zerg.tools.builtin.slack_tools import send_slack_webhook
 
-        result = send_slack_webhook(
-            webhook_url=slack_webhook_url,
-            text="🧪 Integration test - simple message"
-        )
+        result = send_slack_webhook(webhook_url=slack_webhook_url, text="🧪 Integration test - simple message")
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
@@ -70,13 +63,15 @@ class TestSlackIntegration:
         result = send_slack_webhook(
             webhook_url=slack_webhook_url,
             text="Integration test",
-            blocks=[{
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "🧪 *Integration Test*\nThis is an automated test with Block Kit"
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "🧪 *Integration Test*\nThis is an automated test with Block Kit",
+                    },
                 }
-            }]
+            ],
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
@@ -94,7 +89,7 @@ class TestEmailIntegration:
             from_email=resend_from_email,
             to=resend_to_email,
             subject="🧪 Integration Test - Text Email",
-            text="This is an automated integration test email."
+            text="This is an automated integration test email.",
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
@@ -109,7 +104,7 @@ class TestEmailIntegration:
             from_email=resend_from_email,
             to=resend_to_email,
             subject="🧪 Integration Test - HTML Email",
-            html="<h1>Integration Test</h1><p>This is an automated test.</p>"
+            html="<h1>Integration Test</h1><p>This is an automated test.</p>",
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
@@ -130,7 +125,7 @@ class TestSmsIntegration:
             auth_token=twilio_auth_token,
             from_number=twilio_from_number,
             to_number=twilio_to_number,
-            message="🧪 Zerg integration test"
+            message="🧪 Zerg integration test",
         )
 
         assert result["ok"] is True, f"Failed: {result.get('error_message', result.get('user_message'))}"
@@ -146,12 +141,7 @@ class TestGitHubIntegration:
 
         owner, repo = github_test_repo.split("/")
 
-        result = github_list_issues(
-            token=github_token,
-            owner=owner,
-            repo=repo,
-            per_page=5
-        )
+        result = github_list_issues(token=github_token, owner=owner, repo=repo, per_page=5)
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
         assert "data" in result
@@ -170,7 +160,7 @@ class TestGitHubIntegration:
             repo=repo,
             title="🧪 Integration Test Issue - Auto Delete",
             body="This is an automated integration test. This issue can be safely deleted.",
-            labels=["test", "automated"]
+            labels=["test", "automated"],
         )
 
         assert create_result["ok"] is True, f"Create failed: {create_result.get('user_message')}"
@@ -182,7 +172,7 @@ class TestGitHubIntegration:
             owner=owner,
             repo=repo,
             issue_number=issue_number,
-            body="🤖 Automated comment from integration test"
+            body="🤖 Automated comment from integration test",
         )
 
         assert comment_result["ok"] is True, f"Comment failed: {comment_result.get('user_message')}"
@@ -196,11 +186,7 @@ class TestJiraIntegration:
         from zerg.tools.builtin.jira_tools import jira_list_issues
 
         result = jira_list_issues(
-            domain=jira_domain,
-            email=jira_email,
-            api_token=jira_api_token,
-            project_key=jira_project_key,
-            max_results=5
+            domain=jira_domain, email=jira_email, api_token=jira_api_token, project_key=jira_project_key, max_results=5
         )
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
@@ -222,10 +208,7 @@ class TestLinearIntegration:
         """Test listing issues from Linear."""
         from zerg.tools.builtin.linear_tools import linear_list_issues
 
-        result = linear_list_issues(
-            api_key=linear_api_key,
-            first=5
-        )
+        result = linear_list_issues(api_key=linear_api_key, first=5)
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
@@ -237,10 +220,7 @@ class TestNotionIntegration:
         """Test searching Notion workspace."""
         from zerg.tools.builtin.notion_tools import notion_search
 
-        result = notion_search(
-            api_key=notion_api_key,
-            query="test"
-        )
+        result = notion_search(api_key=notion_api_key, query="test")
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"
 
@@ -248,9 +228,6 @@ class TestNotionIntegration:
         """Test getting a Notion page."""
         from zerg.tools.builtin.notion_tools import notion_get_page
 
-        result = notion_get_page(
-            api_key=notion_api_key,
-            page_id=notion_test_page_id
-        )
+        result = notion_get_page(api_key=notion_api_key, page_id=notion_test_page_id)
 
         assert result["ok"] is True, f"Failed: {result.get('user_message')}"

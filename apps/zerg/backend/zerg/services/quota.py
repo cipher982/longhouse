@@ -111,19 +111,13 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
         budget_usd = budget_cents / 100.0
         percent = (used_usd / budget_usd) * 100.0 if budget_usd > 0 else 0.0
         if used_usd >= budget_usd:
-            msg = (
-                f"Daily {scope} budget exhausted "
-                f"(${used_usd:.2f}/${budget_usd:.2f}). "
-                "Try again tomorrow or contact admin."
-            )
+            msg = f"Daily {scope} budget exhausted " f"(${used_usd:.2f}/${budget_usd:.2f}). " "Try again tomorrow or contact admin."
             # Fire-and-forget notifications; ignore failures
             try:
                 import asyncio
 
                 # Discord alert at 100%
-                asyncio.create_task(
-                    send_budget_alert(scope, 100.0, used_usd, budget_cents, getattr(user, "email", None))
-                )
+                asyncio.create_task(send_budget_alert(scope, 100.0, used_usd, budget_cents, getattr(user, "email", None)))
 
                 # Publish ops ticker event with captured values
                 async def _emit(frame):  # pragma: no cover - tiny helper
@@ -154,9 +148,7 @@ def assert_can_start_run(db: Session, *, user: UserModel) -> None:
             try:
                 import asyncio
 
-                asyncio.create_task(
-                    send_budget_alert(scope, percent, used_usd, budget_cents, getattr(user, "email", None))
-                )
+                asyncio.create_task(send_budget_alert(scope, percent, used_usd, budget_cents, getattr(user, "email", None)))
             except Exception:  # pragma: no cover
                 pass
 

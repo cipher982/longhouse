@@ -8,7 +8,6 @@ restrictions both server-side (routing) and runner-side (execution gate).
 from __future__ import annotations
 
 import logging
-import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -23,83 +22,81 @@ class CommandValidator:
     """
 
     # Shell metacharacters that indicate complex/dangerous commands
-    FORBIDDEN_CHARS = {';', '|', '&', '>', '<', '$', '(', ')', '`', '\n', '\\'}
+    FORBIDDEN_CHARS = {";", "|", "&", ">", "<", "$", "(", ")", "`", "\n", "\\"}
 
     # Allowlist for exec.readonly (argv[0] patterns)
     READONLY_ALLOWLIST = {
         # System read-only commands
-        'uname',
-        'uptime',
-        'date',
-        'whoami',
-        'id',
-        'df',
-        'du',
-        'free',
-        'ps',
-        'top',
-        'hostname',
-        'cat',
-        'head',
-        'tail',
-        'ls',
-        'pwd',
-        'env',
-        'printenv',
-        'echo',  # safe read-only command for testing/debugging
-        'false',  # safe command (exits with 1)
-        'true',  # safe command (exits with 0)
+        "uname",
+        "uptime",
+        "date",
+        "whoami",
+        "id",
+        "df",
+        "du",
+        "free",
+        "ps",
+        "top",
+        "hostname",
+        "cat",
+        "head",
+        "tail",
+        "ls",
+        "pwd",
+        "env",
+        "printenv",
+        "echo",  # safe read-only command for testing/debugging
+        "false",  # safe command (exits with 1)
+        "true",  # safe command (exits with 0)
         # Commands requiring subcommand validation
-        'systemctl',  # only 'status' subcommand
-        'journalctl',  # only with --no-pager
-        'docker',  # only if docker capability, only read-only subcommands
+        "systemctl",  # only 'status' subcommand
+        "journalctl",  # only with --no-pager
+        "docker",  # only if docker capability, only read-only subcommands
     }
 
     # Docker read-only subcommands
     DOCKER_READONLY_SUBCOMMANDS = {
-        'ps',
-        'logs',
-        'stats',
-        'inspect',
-        'images',
-        'info',
-        'version',
+        "ps",
+        "logs",
+        "stats",
+        "inspect",
+        "images",
+        "info",
+        "version",
     }
 
     # Explicitly denied commands (blocklist)
     DESTRUCTIVE_COMMANDS = {
-        'rm',
-        'rmdir',
-        'mkfs',
-        'dd',
-        'shutdown',
-        'reboot',
-        'halt',
-        'poweroff',
-        'useradd',
-        'userdel',
-        'usermod',
-        'groupadd',
-        'passwd',
-        'chmod',
-        'chown',
-        'chgrp',
-        'iptables',
-        'ip6tables',
-        'ufw',
-        'firewall-cmd',
-        'mount',
-        'umount',
-        'fdisk',
-        'parted',
-        'kill',
-        'killall',
-        'pkill',
+        "rm",
+        "rmdir",
+        "mkfs",
+        "dd",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "useradd",
+        "userdel",
+        "usermod",
+        "groupadd",
+        "passwd",
+        "chmod",
+        "chown",
+        "chgrp",
+        "iptables",
+        "ip6tables",
+        "ufw",
+        "firewall-cmd",
+        "mount",
+        "umount",
+        "fdisk",
+        "parted",
+        "kill",
+        "killall",
+        "pkill",
     }
 
-    def validate(
-        self, command: str, capabilities: list[str]
-    ) -> tuple[bool, Optional[str]]:
+    def validate(self, command: str, capabilities: list[str]) -> tuple[bool, Optional[str]]:
         """Validate command against capabilities.
 
         Args:
@@ -113,7 +110,7 @@ class CommandValidator:
         """
         # exec.full allows everything
         if "exec.full" in capabilities:
-            logger.debug(f"Command allowed via exec.full capability")
+            logger.debug("Command allowed via exec.full capability")
             return (True, None)
 
         # exec.readonly requires strict validation
@@ -151,9 +148,7 @@ class CommandValidator:
 
         return base_cmd
 
-    def _validate_readonly(
-        self, command: str, capabilities: list[str]
-    ) -> tuple[bool, Optional[str]]:
+    def _validate_readonly(self, command: str, capabilities: list[str]) -> tuple[bool, Optional[str]]:
         """Validate against exec.readonly allowlist.
 
         Args:
@@ -167,8 +162,7 @@ class CommandValidator:
         if self._has_shell_metacharacters(command):
             return (
                 False,
-                "Command contains shell metacharacters (pipes, redirects, etc). "
-                "These are not allowed in exec.readonly mode.",
+                "Command contains shell metacharacters (pipes, redirects, etc). " "These are not allowed in exec.readonly mode.",
             )
 
         # Extract base command
@@ -187,8 +181,7 @@ class CommandValidator:
         if argv0 not in self.READONLY_ALLOWLIST:
             return (
                 False,
-                f"Command '{argv0}' is not in the readonly allowlist. "
-                "Grant exec.full capability to run arbitrary commands.",
+                f"Command '{argv0}' is not in the readonly allowlist. " "Grant exec.full capability to run arbitrary commands.",
             )
 
         # Special validation for specific commands

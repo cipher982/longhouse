@@ -56,35 +56,33 @@ def check_tool_error(result_content: Any) -> tuple[bool, str | None]:
         # Check if parsed dict indicates error
         if isinstance(parsed, dict) and parsed.get("ok") is False:
             # Extract user_message if available, else use error_type
-            error_msg = (
-                parsed.get("user_message")
-                or parsed.get("error_type")
-                or "Tool returned ok=false"
-            )
+            error_msg = parsed.get("user_message") or parsed.get("error_type") or "Tool returned ok=false"
             return True, error_msg
 
     return False, None
 
 
 # Keys that should be redacted from event payloads to prevent secret leakage
-SENSITIVE_KEYS = frozenset({
-    "key",
-    "api_key",
-    "apikey",
-    "token",
-    "secret",
-    "password",
-    "passwd",
-    "credential",
-    "credentials",
-    "auth",
-    "authorization",
-    "bearer",
-    "private_key",
-    "privatekey",
-    "access_token",
-    "refresh_token",
-})
+SENSITIVE_KEYS = frozenset(
+    {
+        "key",
+        "api_key",
+        "apikey",
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "credential",
+        "credentials",
+        "auth",
+        "authorization",
+        "bearer",
+        "private_key",
+        "privatekey",
+        "access_token",
+        "refresh_token",
+    }
+)
 
 
 def redact_sensitive_args(args: Any) -> Any:

@@ -1,7 +1,8 @@
 import logging
 import os
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
+from typing import Optional
 
 # FastAPI helpers
 from fastapi import APIRouter
@@ -26,10 +27,12 @@ from zerg.database import get_session_factory
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
+from zerg.schemas.usage import AdminUserDetailResponse
+from zerg.schemas.usage import AdminUsersResponse
 
 # Usage service
-from zerg.services.usage_service import get_all_users_usage, get_user_usage_detail
-from zerg.schemas.usage import AdminUserDetailResponse, AdminUsersResponse
+from zerg.services.usage_service import get_all_users_usage
+from zerg.services.usage_service import get_user_usage_detail
 
 router = APIRouter(
     prefix="/admin",
@@ -187,27 +190,19 @@ async def reset_database(request: DatabaseResetRequest, current_user=Depends(req
         # Require password confirmation in production
         if not settings.db_reset_password:
             logger.error("DB_RESET_PASSWORD not configured for production environment")
-            raise HTTPException(
-                status_code=500, detail="Database reset not properly configured for production environment"
-            )
+            raise HTTPException(status_code=500, detail="Database reset not properly configured for production environment")
 
         if not request.confirmation_password:
-            raise HTTPException(
-                status_code=400, detail="Password confirmation required for database reset in production"
-            )
+            raise HTTPException(status_code=400, detail="Password confirmation required for database reset in production")
 
         if request.confirmation_password != settings.db_reset_password:
-            logger.warning(
-                f"Failed database reset attempt by {getattr(current_user, 'email', 'unknown')} " f"- incorrect password"
-            )
+            logger.warning(f"Failed database reset attempt by {getattr(current_user, 'email', 'unknown')} - incorrect password")
             raise HTTPException(status_code=403, detail="Incorrect confirmation password")
 
     # Allow in development/testing environments without password
     if not settings.testing and not is_production and (settings.environment or "") not in ["development", ""]:
         logger.warning("Attempted to reset database in unsupported environment")
-        raise HTTPException(
-            status_code=403, detail="Database reset is only available in development and production environments"
-        )
+        raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
 
     try:
         # Obtain the *current* engine – respects Playwright worker isolation

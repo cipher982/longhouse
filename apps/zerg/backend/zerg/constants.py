@@ -50,8 +50,7 @@ else:
         TRIGGER_SIGNING_SECRET = "super-secret-hex"  # noqa: S105 – test only
     else:
         raise KeyError(
-            "TRIGGER_SIGNING_SECRET is not set. This secret is required for "
-            "secure webhook triggering in production deployments."
+            "TRIGGER_SIGNING_SECRET is not set. This secret is required for " "secure webhook triggering in production deployments."
         )
 
 # Accept ±5 minutes clock skew for HMAC timestamp header

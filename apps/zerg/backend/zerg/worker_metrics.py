@@ -55,9 +55,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Context variable to hold the current metrics collector (if any)
-_metrics_collector: ContextVar["MetricsCollector | None"] = ContextVar(
-    "metrics_collector", default=None
-)
+_metrics_collector: ContextVar["MetricsCollector | None"] = ContextVar("metrics_collector", default=None)
 
 
 class MetricsCollector:

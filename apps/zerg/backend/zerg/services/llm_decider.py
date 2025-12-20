@@ -20,12 +20,13 @@ Default is safe: on any LLM failure, returns "wait" to continue monitoring.
 import asyncio
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from zerg.services.roundabout_monitor import DecisionContext, ToolActivity
+    from zerg.services.roundabout_monitor import DecisionContext
 
 logger = logging.getLogger(__name__)
 
@@ -160,9 +161,7 @@ class LLMDeciderStats:
         if self.calls_made > 0:
             result["llm_calls"] = self.calls_made
             result["llm_calls_succeeded"] = self.calls_succeeded
-            result["llm_avg_response_ms"] = round(
-                self.total_response_time_ms / self.calls_made, 1
-            )
+            result["llm_avg_response_ms"] = round(self.total_response_time_ms / self.calls_made, 1)
 
         # Include non-zero counts (even if no calls were made)
         if self.calls_timed_out > 0:
@@ -353,9 +352,7 @@ async def call_llm_decider(
             rationale = f"Invalid LLM response '{raw_response}', defaulting to wait"
             was_fallback = True
 
-        logger.debug(
-            f"LLM decider for job {payload.job_id}: {action} ({elapsed_ms:.0f}ms)"
-        )
+        logger.debug(f"LLM decider for job {payload.job_id}: {action} ({elapsed_ms:.0f}ms)")
         return LLMDecisionResult(
             action=action,
             rationale=rationale,
@@ -365,9 +362,7 @@ async def call_llm_decider(
 
     except asyncio.TimeoutError:
         elapsed_ms = (time.perf_counter() - start) * 1000
-        logger.warning(
-            f"LLM decider timeout for job {payload.job_id} after {elapsed_ms:.0f}ms"
-        )
+        logger.warning(f"LLM decider timeout for job {payload.job_id} after {elapsed_ms:.0f}ms")
         return LLMDecisionResult(
             action="wait",
             rationale=f"LLM timeout after {elapsed_ms:.0f}ms, defaulting to wait",

@@ -20,9 +20,10 @@ from typing import Optional
 
 from zerg.crud import crud
 from zerg.database import db_session
-from zerg.events import EventType, event_bus
-from zerg.services.worker_runner import WorkerRunner
+from zerg.events import EventType
+from zerg.events import event_bus
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+from zerg.services.worker_runner import WorkerRunner
 
 logger = logging.getLogger(__name__)
 

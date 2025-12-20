@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime
 from datetime import timedelta
 from typing import Any
 from typing import Optional
@@ -20,7 +19,6 @@ from zerg.models.models import Runner
 from zerg.models.models import RunnerEnrollToken
 from zerg.models.models import RunnerJob
 from zerg.utils.time import utc_now_naive
-
 
 # ---------------------------------------------------------------------------
 # Token/Secret Helpers

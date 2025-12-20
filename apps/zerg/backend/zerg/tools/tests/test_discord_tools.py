@@ -11,37 +11,26 @@ class TestSendDiscordWebhook:
 
     def test_invalid_webhook_url_empty(self):
         """Test that empty webhook URL is rejected."""
-        result = send_discord_webhook(
-            webhook_url="",
-            content="Test message"
-        )
+        result = send_discord_webhook(webhook_url="", content="Test message")
         assert result["ok"] is False
         assert "user_message" in result
 
     def test_invalid_webhook_url_wrong_format(self):
         """Test that non-Discord URLs are rejected."""
-        result = send_discord_webhook(
-            webhook_url="https://example.com/webhook",
-            content="Test message"
-        )
+        result = send_discord_webhook(webhook_url="https://example.com/webhook", content="Test message")
         assert result["ok"] is False
         assert "user_message" in result
 
     def test_no_content_or_embeds(self):
         """Test that at least content or embeds must be provided."""
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc"
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc")
         assert result["ok"] is False
         assert "Must provide either 'content' or 'embeds'" in result["user_message"]
 
     def test_content_too_long(self):
         """Test that content over 2000 characters is rejected."""
         long_content = "x" * 2001
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            content=long_content
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", content=long_content)
         assert result["ok"] is False
         assert "exceeds 2000 character limit" in result["user_message"]
 
@@ -49,7 +38,7 @@ class TestSendDiscordWebhook:
         """Test that embeds must be a list."""
         result = send_discord_webhook(
             webhook_url="https://discord.com/api/webhooks/123/abc",
-            embeds={"title": "Invalid"}  # Should be a list, not dict
+            embeds={"title": "Invalid"},  # Should be a list, not dict
         )
         assert result["ok"] is False
         assert "Embeds must be a list" in result["user_message"]
@@ -57,30 +46,21 @@ class TestSendDiscordWebhook:
     def test_too_many_embeds(self):
         """Test that maximum of 10 embeds is enforced."""
         too_many_embeds = [{"title": f"Embed {i}"} for i in range(11)]
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            embeds=too_many_embeds
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", embeds=too_many_embeds)
         assert result["ok"] is False
         assert "Maximum of 10 embeds" in result["user_message"]
 
     def test_embed_title_too_long(self):
         """Test that embed title length limit is enforced."""
         embeds = [{"title": "x" * 257}]
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            embeds=embeds
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", embeds=embeds)
         assert result["ok"] is False
         assert "title exceeds 256 character limit" in result["user_message"]
 
     def test_embed_description_too_long(self):
         """Test that embed description length limit is enforced."""
         embeds = [{"description": "x" * 4097}]
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            embeds=embeds
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", embeds=embeds)
         assert result["ok"] is False
         assert "description exceeds 4096 character limit" in result["user_message"]
 
@@ -92,10 +72,7 @@ class TestSendDiscordWebhook:
         mock_response.status_code = 204
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            content="Test message"
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", content="Test message")
 
         assert result["ok"] is True
         assert result["data"]["status_code"] == 204
@@ -109,10 +86,7 @@ class TestSendDiscordWebhook:
         mock_response.json.return_value = {"retry_after": 5.0}
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            content="Test message"
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", content="Test message")
 
         assert result["ok"] is False
         assert result["error_type"] == "rate_limited"
@@ -131,16 +105,18 @@ class TestSendDiscordWebhook:
             content="Test message",
             username="Test Bot",
             avatar_url="https://example.com/avatar.png",
-            embeds=[{
-                "title": "Test Embed",
-                "description": "Test description",
-                "color": 5814783,
-                "fields": [
-                    {"name": "Field 1", "value": "Value 1", "inline": True},
-                    {"name": "Field 2", "value": "Value 2", "inline": True}
-                ]
-            }],
-            tts=True
+            embeds=[
+                {
+                    "title": "Test Embed",
+                    "description": "Test description",
+                    "color": 5814783,
+                    "fields": [
+                        {"name": "Field 1", "value": "Value 1", "inline": True},
+                        {"name": "Field 2", "value": "Value 2", "inline": True},
+                    ],
+                }
+            ],
+            tts=True,
         )
 
         assert result["ok"] is True
@@ -165,10 +141,7 @@ class TestSendDiscordWebhook:
         mock_response.json.return_value = {"message": "Invalid payload"}
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_discord_webhook(
-            webhook_url="https://discord.com/api/webhooks/123/abc",
-            content="Test message"
-        )
+        result = send_discord_webhook(webhook_url="https://discord.com/api/webhooks/123/abc", content="Test message")
 
         assert result["ok"] is False
         assert result["error_type"] == "validation_error"

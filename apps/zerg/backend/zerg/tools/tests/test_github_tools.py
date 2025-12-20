@@ -16,23 +16,13 @@ class TestGitHubCreateIssue:
 
     def test_empty_token(self):
         """Test that empty token is rejected."""
-        result = github_create_issue(
-            token="",
-            owner="octocat",
-            repo="hello-world",
-            title="Test Issue"
-        )
+        result = github_create_issue(token="", owner="octocat", repo="hello-world", title="Test Issue")
         assert result["ok"] is False
         assert result["error_type"] == "connector_not_configured"
 
     def test_empty_title(self):
         """Test that empty title is rejected."""
-        result = github_create_issue(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            title=""
-        )
+        result = github_create_issue(token="ghp_test_token", owner="octocat", repo="hello-world", title="")
         assert result["ok"] is False
         assert "title is required" in result["user_message"]
 
@@ -46,7 +36,7 @@ class TestGitHubCreateIssue:
             "title": "Test Issue",
             "state": "open",
             "html_url": "https://github.com/octocat/hello-world/issues/42",
-            "created_at": "2025-11-29T00:00:00Z"
+            "created_at": "2025-11-29T00:00:00Z",
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
@@ -57,7 +47,7 @@ class TestGitHubCreateIssue:
             title="Test Issue",
             body="This is a test",
             labels=["bug", "enhancement"],
-            assignees=["octocat"]
+            assignees=["octocat"],
         )
 
         assert result["ok"] is True
@@ -70,19 +60,11 @@ class TestGitHubCreateIssue:
         """Test rate limit handling."""
         mock_response = Mock()
         mock_response.status_code = 403
-        mock_response.headers = {
-            "x-ratelimit-remaining": "0",
-            "x-ratelimit-reset": "1732800000"
-        }
+        mock_response.headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1732800000"}
         mock_response.json.return_value = {"message": "API rate limit exceeded"}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_create_issue(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            title="Test Issue"
-        )
+        result = github_create_issue(token="ghp_test_token", owner="octocat", repo="hello-world", title="Test Issue")
 
         assert result["ok"] is False
         assert result["error_type"] == "rate_limited"
@@ -96,12 +78,7 @@ class TestGitHubCreateIssue:
         mock_response.json.return_value = {"message": "Bad credentials"}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_create_issue(
-            token="invalid_token",
-            owner="octocat",
-            repo="hello-world",
-            title="Test Issue"
-        )
+        result = github_create_issue(token="invalid_token", owner="octocat", repo="hello-world", title="Test Issue")
 
         assert result["ok"] is False
         assert result["error_type"] == "invalid_credentials"
@@ -113,23 +90,13 @@ class TestGitHubListIssues:
 
     def test_invalid_state(self):
         """Test that invalid state values are rejected."""
-        result = github_list_issues(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            state="invalid"
-        )
+        result = github_list_issues(token="ghp_test_token", owner="octocat", repo="hello-world", state="invalid")
         assert result["ok"] is False
         assert "State must be" in result["user_message"]
 
     def test_invalid_per_page(self):
         """Test that invalid per_page values are rejected."""
-        result = github_list_issues(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            per_page=101
-        )
+        result = github_list_issues(token="ghp_test_token", owner="octocat", repo="hello-world", per_page=101)
         assert result["ok"] is False
         assert "per_page must be between" in result["user_message"]
 
@@ -145,7 +112,7 @@ class TestGitHubListIssues:
                 "state": "open",
                 "html_url": "https://github.com/octocat/hello-world/issues/1",
                 "labels": [{"name": "bug"}],
-                "created_at": "2025-11-29T00:00:00Z"
+                "created_at": "2025-11-29T00:00:00Z",
             },
             {
                 "number": 2,
@@ -153,17 +120,12 @@ class TestGitHubListIssues:
                 "state": "open",
                 "html_url": "https://github.com/octocat/hello-world/issues/2",
                 "labels": [],
-                "created_at": "2025-11-29T01:00:00Z"
-            }
+                "created_at": "2025-11-29T01:00:00Z",
+            },
         ]
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_list_issues(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            state="open"
-        )
+        result = github_list_issues(token="ghp_test_token", owner="octocat", repo="hello-world", state="open")
 
         assert result["ok"] is True
         assert result["data"]["count"] == 2
@@ -177,12 +139,7 @@ class TestGitHubGetIssue:
 
     def test_invalid_issue_number(self):
         """Test that invalid issue numbers are rejected."""
-        result = github_get_issue(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=-1
-        )
+        result = github_get_issue(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=-1)
         assert result["ok"] is False
         assert "positive integer" in result["user_message"]
 
@@ -199,16 +156,11 @@ class TestGitHubGetIssue:
             "html_url": "https://github.com/octocat/hello-world/issues/42",
             "labels": [{"name": "bug"}, {"name": "priority-high"}],
             "created_at": "2025-11-29T00:00:00Z",
-            "updated_at": "2025-11-29T01:00:00Z"
+            "updated_at": "2025-11-29T01:00:00Z",
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_get_issue(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=42
-        )
+        result = github_get_issue(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=42)
 
         assert result["ok"] is True
         assert result["data"]["number"] == 42
@@ -225,12 +177,7 @@ class TestGitHubGetIssue:
         mock_response.json.return_value = {"message": "Not Found"}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_get_issue(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=999
-        )
+        result = github_get_issue(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=999)
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -242,25 +189,13 @@ class TestGitHubAddComment:
 
     def test_empty_comment_body(self):
         """Test that empty comment body is rejected."""
-        result = github_add_comment(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=42,
-            body=""
-        )
+        result = github_add_comment(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=42, body="")
         assert result["ok"] is False
         assert "body is required" in result["user_message"]
 
     def test_invalid_issue_number(self):
         """Test that invalid issue numbers are rejected."""
-        result = github_add_comment(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=0,
-            body="Test comment"
-        )
+        result = github_add_comment(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=0, body="Test comment")
         assert result["ok"] is False
         assert "positive integer" in result["user_message"]
 
@@ -273,17 +208,11 @@ class TestGitHubAddComment:
             "id": 12345,
             "body": "Test comment",
             "html_url": "https://github.com/octocat/hello-world/issues/42#issuecomment-12345",
-            "created_at": "2025-11-29T00:00:00Z"
+            "created_at": "2025-11-29T00:00:00Z",
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_add_comment(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            issue_number=42,
-            body="Test comment"
-        )
+        result = github_add_comment(token="ghp_test_token", owner="octocat", repo="hello-world", issue_number=42, body="Test comment")
 
         assert result["ok"] is True
         assert result["data"]["id"] == 12345
@@ -295,12 +224,7 @@ class TestGitHubListPullRequests:
 
     def test_invalid_state(self):
         """Test that invalid state values are rejected."""
-        result = github_list_pull_requests(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            state="invalid"
-        )
+        result = github_list_pull_requests(token="ghp_test_token", owner="octocat", repo="hello-world", state="invalid")
         assert result["ok"] is False
         assert "State must be" in result["user_message"]
 
@@ -317,17 +241,12 @@ class TestGitHubListPullRequests:
                 "html_url": "https://github.com/octocat/hello-world/pull/10",
                 "head": {"ref": "feature-branch"},
                 "base": {"ref": "main"},
-                "created_at": "2025-11-29T00:00:00Z"
+                "created_at": "2025-11-29T00:00:00Z",
             }
         ]
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_list_pull_requests(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            state="open"
-        )
+        result = github_list_pull_requests(token="ghp_test_token", owner="octocat", repo="hello-world", state="open")
 
         assert result["ok"] is True
         assert result["data"]["count"] == 1
@@ -341,12 +260,7 @@ class TestGitHubGetPullRequest:
 
     def test_invalid_pr_number(self):
         """Test that invalid PR numbers are rejected."""
-        result = github_get_pull_request(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            pr_number=-1
-        )
+        result = github_get_pull_request(token="ghp_test_token", owner="octocat", repo="hello-world", pr_number=-1)
         assert result["ok"] is False
         assert "positive integer" in result["user_message"]
 
@@ -366,16 +280,11 @@ class TestGitHubGetPullRequest:
             "mergeable": True,
             "merged": False,
             "created_at": "2025-11-29T00:00:00Z",
-            "updated_at": "2025-11-29T01:00:00Z"
+            "updated_at": "2025-11-29T01:00:00Z",
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = github_get_pull_request(
-            token="ghp_test_token",
-            owner="octocat",
-            repo="hello-world",
-            pr_number=10
-        )
+        result = github_get_pull_request(token="ghp_test_token", owner="octocat", repo="hello-world", pr_number=10)
 
         assert result["ok"] is True
         assert result["data"]["number"] == 10

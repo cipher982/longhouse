@@ -15,14 +15,15 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
-from typing import Any, AsyncIterator
 
 from sqlalchemy.orm import Session
 
 from zerg.crud import crud
-from zerg.events import EventType, event_bus
+from zerg.events import EventType
+from zerg.events import event_bus
 from zerg.managers.agent_runner import AgentRunner
-from zerg.models.enums import AgentStatus, RunStatus, ThreadType
+from zerg.models.enums import RunStatus
+from zerg.models.enums import ThreadType
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
 from zerg.models.models import Thread as ThreadModel
@@ -189,8 +190,7 @@ class SupervisorService:
             name="Supervisor",
             model=DEFAULT_MODEL_ID,
             system_instructions=build_supervisor_prompt(user),
-            task_instructions="You are helping the user accomplish their goals. "
-            "Analyze their request and decide how to handle it.",
+            task_instructions="You are helping the user accomplish their goals. " "Analyze their request and decide how to handle it.",
             config=supervisor_config,
         )
         # Set allowed_tools (not supported in crud.create_agent)
@@ -201,9 +201,7 @@ class SupervisorService:
         logger.info(f"Created supervisor agent {agent.id} for user {owner_id}")
         return agent
 
-    def get_or_create_supervisor_thread(
-        self, owner_id: int, agent: AgentModel | None = None
-    ) -> ThreadModel:
+    def get_or_create_supervisor_thread(self, owner_id: int, agent: AgentModel | None = None) -> ThreadModel:
         """Get or create the long-lived supervisor thread for a user.
 
         Each user has exactly ONE supervisor thread that persists across sessions.
@@ -223,9 +221,7 @@ class SupervisorService:
         threads = crud.get_threads(self.db, agent_id=agent.id)
         for thread in threads:
             if thread.thread_type == SUPERVISOR_THREAD_TYPE:
-                logger.debug(
-                    f"Found existing supervisor thread {thread.id} for user {owner_id}"
-                )
+                logger.debug(f"Found existing supervisor thread {thread.id} for user {owner_id}")
                 return thread
 
         # Create new supervisor thread
@@ -293,7 +289,9 @@ class SupervisorService:
             if job_created.tzinfo is None:
                 job_created = job_created.replace(tzinfo=timezone.utc)
             elapsed = datetime.now(timezone.utc) - job_created
-            elapsed_str = f"{int(elapsed.total_seconds() / 60)}m ago" if elapsed.total_seconds() >= 60 else f"{int(elapsed.total_seconds())}s ago"
+            elapsed_str = (
+                f"{int(elapsed.total_seconds() / 60)}m ago" if elapsed.total_seconds() >= 60 else f"{int(elapsed.total_seconds())}s ago"
+            )
 
             # Get summary from artifact store if available
             summary = None
@@ -335,6 +333,7 @@ class SupervisorService:
             Number of messages deleted.
         """
         from datetime import timedelta
+
         from zerg.models.models import ThreadMessage
 
         age_cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
@@ -432,6 +431,7 @@ class SupervisorService:
         else:
             # Create run record (fallback for direct calls)
             from zerg.models.enums import RunTrigger
+
             run = AgentRun(
                 agent_id=agent.id,
                 thread_id=thread.id,
@@ -443,9 +443,7 @@ class SupervisorService:
             self.db.refresh(run)
             logger.info(f"Created new supervisor run {run.id}")
 
-        logger.info(
-            f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}..."
-        )
+        logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...")
 
         # Emit supervisor started event
         await event_bus.publish(
@@ -501,10 +499,9 @@ class SupervisorService:
             )
 
             # Set supervisor run context so spawn_worker can correlate workers
-            from zerg.services.supervisor_context import (
-                set_supervisor_run_id,
-                reset_supervisor_run_id,
-            )
+            from zerg.services.supervisor_context import reset_supervisor_run_id
+            from zerg.services.supervisor_context import set_supervisor_run_id
+
             _supervisor_ctx_token = set_supervisor_run_id(run.id)
 
             # Run the agent with timeout

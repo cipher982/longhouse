@@ -2,13 +2,14 @@
 
 import hashlib
 from datetime import datetime
-from typing import List, Optional
+from typing import List
+from typing import Optional
 
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from zerg.models.models import KnowledgeDocument, KnowledgeSource
+from zerg.models.models import KnowledgeDocument
+from zerg.models.models import KnowledgeSource
 from zerg.utils.time import utc_now_naive
-
 
 # ---------------------------------------------------------------------------
 # KnowledgeSource CRUD
@@ -193,11 +194,7 @@ def get_sources_due_for_sync(db: Session) -> List[KnowledgeSource]:
     """
     # For Phase 0, just return all sources with a schedule
     # In production, we'd check APScheduler or compute next run time
-    return (
-        db.query(KnowledgeSource)
-        .filter(KnowledgeSource.sync_schedule.isnot(None))
-        .all()
-    )
+    return db.query(KnowledgeSource).filter(KnowledgeSource.sync_schedule.isnot(None)).all()
 
 
 # ---------------------------------------------------------------------------
@@ -312,13 +309,7 @@ def get_knowledge_documents(
     if source_id is not None:
         query = query.filter(KnowledgeDocument.source_id == source_id)
 
-    return (
-        query
-        .order_by(KnowledgeDocument.fetched_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    return query.order_by(KnowledgeDocument.fetched_at.desc()).offset(skip).limit(limit).all()
 
 
 def delete_knowledge_document(db: Session, document_id: int) -> bool:

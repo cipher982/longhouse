@@ -4,8 +4,10 @@ Tests the proxy endpoints and bootstrap endpoint that make zerg-backend
 the single API surface for Jarvis.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
 import httpx
 
 
@@ -278,8 +280,8 @@ class TestHistoryEndpoint:
 
     def test_history_returns_messages(self, client, test_user, db_session):
         """History endpoint returns conversation messages."""
-        from zerg.services.supervisor_service import SupervisorService
         from zerg.crud import crud
+        from zerg.services.supervisor_service import SupervisorService
 
         # Create supervisor thread with messages
         supervisor_service = SupervisorService(db_session)
@@ -323,8 +325,8 @@ class TestHistoryEndpoint:
 
     def test_history_pagination(self, client, test_user, db_session):
         """History endpoint supports pagination."""
-        from zerg.services.supervisor_service import SupervisorService
         from zerg.crud import crud
+        from zerg.services.supervisor_service import SupervisorService
 
         # Create supervisor thread with multiple messages
         supervisor_service = SupervisorService(db_session)
@@ -365,8 +367,8 @@ class TestHistoryEndpoint:
 
     def test_history_filters_system_messages(self, client, test_user, db_session):
         """History endpoint only returns user and assistant messages."""
-        from zerg.services.supervisor_service import SupervisorService
         from zerg.crud import crud
+        from zerg.services.supervisor_service import SupervisorService
 
         # Create supervisor thread (has system message by default)
         supervisor_service = SupervisorService(db_session)

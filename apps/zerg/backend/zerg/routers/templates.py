@@ -67,9 +67,7 @@ def list_templates(
     Set my_templates=true to see your own templates (public and private).
     """
     if my_templates:
-        return crud.get_workflow_templates(
-            db=db, category=category, skip=skip, limit=limit, created_by=current_user.id, public_only=False
-        )
+        return crud.get_workflow_templates(db=db, category=category, skip=skip, limit=limit, created_by=current_user.id, public_only=False)
     else:
         return crud.get_workflow_templates(db=db, category=category, skip=skip, limit=limit, public_only=True)
 

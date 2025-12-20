@@ -10,17 +10,12 @@ not the actual LLM decision-making.
 """
 
 import asyncio
-import json
 import tempfile
-import threading
-import time
-from unittest.mock import patch, MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
 
-from zerg.events import EventType, event_bus
-from zerg.models.enums import RunStatus
+from zerg.events import EventType
+from zerg.events import event_bus
 from zerg.services.supervisor_service import SupervisorService
 
 
@@ -34,9 +29,7 @@ class TestSupervisorE2EFlow:
             monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
             yield tmpdir
 
-    def test_supervisor_dispatch_returns_stream_url(
-        self, client, db_session, test_user, temp_artifact_path
-    ):
+    def test_supervisor_dispatch_returns_stream_url(self, client, db_session, test_user, temp_artifact_path):
         """Test POST /api/jarvis/supervisor returns run_id and stream_url."""
         response = client.post(
             "/api/jarvis/supervisor",
@@ -55,9 +48,7 @@ class TestSupervisorE2EFlow:
         # Stream URL should point to events endpoint
         assert f"/api/jarvis/supervisor/events?run_id={data['run_id']}" in data["stream_url"]
 
-    def test_supervisor_creates_one_brain_per_user(
-        self, client, db_session, test_user, temp_artifact_path
-    ):
+    def test_supervisor_creates_one_brain_per_user(self, client, db_session, test_user, temp_artifact_path):
         """Test that multiple dispatches use the same supervisor thread."""
         # First dispatch
         response1 = client.post(
@@ -79,12 +70,8 @@ class TestSupervisorE2EFlow:
         # But run IDs should be different
         assert data1["run_id"] != data2["run_id"]
 
-    @pytest.mark.skip(
-        reason="TestClient doesn't support SSE streaming - use Playwright tests instead"
-    )
-    def test_supervisor_sse_stream_connects(
-        self, client, db_session, test_user, temp_artifact_path
-    ):
+    @pytest.mark.skip(reason="TestClient doesn't support SSE streaming - use Playwright tests instead")
+    def test_supervisor_sse_stream_connects(self, client, db_session, test_user, temp_artifact_path):
         """Test SSE stream connects and receives initial event.
 
         NOTE: This test is skipped because:
@@ -113,9 +100,7 @@ class TestSupervisorE2EFlow:
             if first_line:
                 assert "connected" in first_line or "event" in first_line
 
-    def test_cancel_endpoint_works(
-        self, client, db_session, test_user, temp_artifact_path
-    ):
+    def test_cancel_endpoint_works(self, client, db_session, test_user, temp_artifact_path):
         """Test that cancel endpoint stops a running supervisor."""
         # Create a run
         response = client.post(
@@ -145,9 +130,7 @@ class TestSupervisorServiceDirect:
             yield tmpdir
 
     @pytest.mark.asyncio
-    async def test_run_supervisor_completes(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    async def test_run_supervisor_completes(self, db_session, test_user, temp_artifact_path):
         """Test that run_supervisor executes and returns result."""
         service = SupervisorService(db_session)
 
@@ -168,9 +151,7 @@ class TestSupervisorServiceDirect:
         assert str(result.run_id) in result.debug_url
 
     @pytest.mark.asyncio
-    async def test_run_supervisor_emits_events(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    async def test_run_supervisor_emits_events(self, db_session, test_user, temp_artifact_path):
         """Test that supervisor emits SSE events during execution."""
         service = SupervisorService(db_session)
 
@@ -197,9 +178,7 @@ class TestSupervisorServiceDirect:
 
             # Should have received SUPERVISOR_STARTED at minimum
             event_types = [e.get("event_type") for e in events_received]
-            assert EventType.SUPERVISOR_STARTED in event_types or any(
-                "SUPERVISOR" in str(et) for et in event_types
-            )
+            assert EventType.SUPERVISOR_STARTED in event_types or any("SUPERVISOR" in str(et) for et in event_types)
 
         finally:
             # Unsubscribe
@@ -208,9 +187,7 @@ class TestSupervisorServiceDirect:
             event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, capture_event)
 
     @pytest.mark.asyncio
-    async def test_supervisor_thread_persists_across_calls(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    async def test_supervisor_thread_persists_across_calls(self, db_session, test_user, temp_artifact_path):
         """Test that supervisor thread accumulates context."""
         service = SupervisorService(db_session)
 
@@ -245,15 +222,13 @@ class TestWorkerSpawning:
             monkeypatch.setenv("SWARMLET_DATA_PATH", tmpdir)
             yield tmpdir
 
-    def test_spawn_worker_creates_job(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_spawn_worker_creates_job(self, db_session, test_user, temp_artifact_path):
         """Test that spawn_worker tool creates a WorkerJob."""
+        from tests.conftest import TEST_WORKER_MODEL
         from zerg.connectors.context import set_credential_resolver
         from zerg.connectors.resolver import CredentialResolver
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
         from zerg.models.models import WorkerJob
-        from tests.conftest import TEST_WORKER_MODEL
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
 
         # Set up credential context
         resolver = CredentialResolver(agent_id=1, db=db_session, owner_id=test_user.id)
@@ -268,9 +243,7 @@ class TestWorkerSpawning:
             assert "queued successfully" in result
 
             # Verify job was created
-            job = db_session.query(WorkerJob).filter(
-                WorkerJob.task == "Check disk usage on cube"
-            ).first()
+            job = db_session.query(WorkerJob).filter(WorkerJob.task == "Check disk usage on cube").first()
 
             assert job is not None
             assert job.status == "queued"
@@ -280,13 +253,11 @@ class TestWorkerSpawning:
             set_credential_resolver(None)
 
     @pytest.mark.asyncio
-    async def test_worker_job_has_correct_tools(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    async def test_worker_job_has_correct_tools(self, db_session, test_user, temp_artifact_path):
         """Test that worker agents are created with infrastructure tools."""
-        from zerg.services.worker_runner import WorkerRunner
-        from zerg.services.worker_artifact_store import WorkerArtifactStore
         from tests.conftest import TEST_WORKER_MODEL
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.services.worker_runner import WorkerRunner
 
         store = WorkerArtifactStore(base_path=temp_artifact_path)
         runner = WorkerRunner(artifact_store=store)
@@ -307,5 +278,6 @@ class TestWorkerSpawning:
         finally:
             # Clean up
             from zerg.crud import crud
+
             crud.delete_agent(db_session, temp_agent.id)
             db_session.commit()

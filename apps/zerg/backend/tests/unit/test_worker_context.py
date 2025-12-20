@@ -139,6 +139,7 @@ class TestContextVarAsyncPropagation:
         token = set_worker_context(ctx)
 
         try:
+
             def check_in_thread():
                 thread_ctx = get_worker_context()
                 assert thread_ctx is not None

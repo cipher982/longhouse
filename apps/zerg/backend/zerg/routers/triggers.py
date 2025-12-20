@@ -9,7 +9,6 @@ and executes the associated agent immediately.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Dict
 from typing import List
@@ -27,7 +26,6 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg import constants
 from zerg.crud import crud
 from zerg.database import get_db
 

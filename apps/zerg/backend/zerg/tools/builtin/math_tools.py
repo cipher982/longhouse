@@ -140,7 +140,5 @@ def math_eval(expression: str) -> Union[int, float]:
 
 
 TOOLS: List[StructuredTool] = [
-    StructuredTool.from_function(
-        func=math_eval, name="math_eval", description="Safely evaluate mathematical expressions"
-    ),
+    StructuredTool.from_function(func=math_eval, name="math_eval", description="Safely evaluate mathematical expressions"),
 ]

@@ -1,164 +1,96 @@
-# Apply to all files without committing:
-#   pre-commit run --all-files
-# Update this file:
-#   pre-commit autoupdate
+# Pre-commit configuration for Zerg/Swarmlet
+#
+# Philosophy: Fast, comprehensive guardrails for AI agents
+# - Tier 1 (pre-commit): < 15s, catches type errors and format issues
+# - Tier 2 (make validate): < 30s, full contract validation
+# - Tier 3 (CI): Full test suite
+#
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
 
 repos:
+  # =========================================================================
+  # Generic file hygiene (fast, universal)
+  # =========================================================================
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
-      - id: fix-byte-order-marker
-      - id: check-case-conflict
-      - id: check-executables-have-shebangs
       - id: check-json
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
 
+  # =========================================================================
+  # Python: ruff for lint + format (fast, replaces black/isort/flake8)
+  # Only targets main source code, not alembic migrations or test scripts
+  # =========================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
+    rev: v0.8.4
     hooks:
       - id: ruff
-        args: ["--fix"]
-        files: ^backend/
+        args: [--fix, --exit-non-zero-on-fix, --config=apps/zerg/backend/pyproject.toml]
+        files: ^apps/zerg/backend/zerg/
+        exclude: ^apps/zerg/backend/zerg/generated/
       - id: ruff-format
-        files: ^backend/
+        args: [--config=apps/zerg/backend/pyproject.toml]
+        files: ^apps/zerg/backend/zerg/
+        exclude: ^apps/zerg/backend/zerg/generated/
 
-# ---------------------------------------------------------------------------
-# Local hooks – Rust lint and DOM-ID prefix guard (frontend)
-# ---------------------------------------------------------------------------
-
+  # =========================================================================
+  # Local hooks for project-specific checks
+  # =========================================================================
   - repo: local
     hooks:
-      # CRITICAL: Frontend Contract Validation (prevents API mismatches)
-      - id: frontend-contract-validation
-        name: Frontend API Contract Validation
-        entry: bash -c 'cd frontend-web && npm run validate:contracts'
+      # -----------------------------------------------------------------------
+      # TypeScript type checking (catches most AI errors)
+      # -----------------------------------------------------------------------
+      - id: typescript-typecheck
+        name: TypeScript type check
+        entry: bash -c 'cd apps/zerg/frontend-web && bun run validate:types'
         language: system
-        files: ^(frontend-web/src/.*\.(ts|tsx)|backend/zerg/routers/.*\.py|openapi\.json)$
+        files: ^apps/zerg/frontend-web/src/.*\.(ts|tsx)$
         pass_filenames: false
 
-      - id: empty-schema-detection
-        name: Empty OpenAPI Schema Detection
-        entry: scripts/check-empty-schemas.sh
+      # -----------------------------------------------------------------------
+      # Frontend lint (ESLint) - warn only, don't block on existing warnings
+      # -----------------------------------------------------------------------
+      - id: frontend-lint
+        name: Frontend lint
+        entry: bash -c 'cd apps/zerg/frontend-web && bun run lint --max-warnings 100'
         language: system
-        files: ^openapi\.json$
+        files: ^apps/zerg/frontend-web/src/.*\.(ts|tsx|js|jsx)$
         pass_filenames: false
 
-      - id: rust-clippy
-        name: "rust-clippy (frontend)"
+      # -----------------------------------------------------------------------
+      # WebSocket contract drift guard
+      # -----------------------------------------------------------------------
+      - id: ws-contract-drift
+        name: WebSocket contract drift check
+        entry: make validate-ws
         language: system
-        # Run Clippy but **do not** fail the commit on warnings.
-        entry: bash -c 'cd frontend && cargo clippy --quiet'
-        files: ^frontend/
-
-      - id: dom-id-prefix-check
-        name: "DOM id prefix rule"
-        language: system
-        entry: >-
-          bash -c "grep -R --line-number --perl-regexp 'id=\"(?!agent-|workflow-|global-|dashboard-|canvas-|profile-|chat-|auth-|user-|modal-|node-|tabs-)\"' frontend/src | if read var; then echo '✖ Non-namespaced DOM id detected:'; echo \"$var\"; exit 1; fi"
+        files: ^(schemas/ws-protocol.*|apps/zerg/backend/zerg/generated/ws_messages\.py|apps/zerg/frontend-web/src/generated/ws-messages\.ts)$
         pass_filenames: false
-        files: ^asyncapi/
 
-
-
-      - id: contract-field-validation
-        name: "Contract field name validation"
-        language: system
-        entry: >-
-          bash -c "
-          echo '🔍 Checking for forbidden field name transformations...';
-          if grep -r --include='*.rs' -n '\"from\":\|\"to\":' frontend/src/; then
-            echo '❌ FORBIDDEN: Found old field names (from/to) in Rust code.';
-            echo 'Use from_node_id/to_node_id instead for contract compliance.';
-            exit 1;
-          fi;
-          if grep -r --include='*.rs' -n 'from.*edge\.' frontend/src/ | grep -v from_node_id; then
-            echo '❌ FORBIDDEN: Found potential field name transformation.';
-            echo 'Use consistent field naming (from_node_id/to_node_id) throughout.';
-            exit 1;
-          fi;
-          echo '✅ Contract field validation passed';
-          "
-        pass_filenames: false
-        files: ^frontend/
-
-# ---------------------------------------------------------------------------
-# CSS lint & formatting hooks (local – use project’s Node deps; no external mirror)
-# ---------------------------------------------------------------------------
-
-  - repo: local
-    hooks:
-#      - id: stylelint
-#        name: stylelint (CSS)
-#        language: system
-#        entry: npx --no-install stylelint --config config/.stylelintrc.json --fix
-#        files: \.(css|scss)$
-#        pass_filenames: true
-
-      - id: prettier
-        name: prettier (CSS/Markdown)
-        language: system
-        entry: npx --no-install prettier --write
-        files: \.(css|scss|md|markdown)$
-
-# ---------------------------------------------------------------------------
-# AsyncAPI validation – ensures spec stays syntactically correct
-# ---------------------------------------------------------------------------
-
-  - repo: local
-    hooks:
+      # -----------------------------------------------------------------------
+      # AsyncAPI spec validation
+      # -----------------------------------------------------------------------
       - id: asyncapi-validate
         name: AsyncAPI spec validation
-        language: system
         entry: scripts/validate-asyncapi.sh
-        pass_filenames: false
-        files: ^asyncapi/
-
-# ---------------------------------------------------------------------------
-# Tool contract validation – ensures tool schema matches backend registry
-# ---------------------------------------------------------------------------
-
-      - id: tool-contract-validation
-        name: Tool contract validation
-        language: python
-        entry: scripts/validate_tool_contracts.py
-        additional_dependencies:
-          - pyyaml
-        pass_filenames: false
-        files: ^(asyncapi/tools\.yml|backend/zerg/tools/builtin/.*\.py|frontend/src/components/node_palette\.rs)$
-
-      - id: pact-contract-coverage
-        name: Pact WebSocket contract coverage validation
         language: system
-        entry: bash -c 'cd frontend && ./check_pact_coverage.sh'
+        files: ^schemas/ws-protocol-asyncapi\.yml$
         pass_filenames: false
-        files: ^(frontend/src/network/ws_schema\.rs|frontend/src/bin/contract_capture\.rs|backend/zerg/websocket/).*$
 
-      - id: prod-config-guard
-        name: Production config guard (no localhost override)
-        language: python
-        entry: scripts/validate_prod_frontend_config.py
-        pass_filenames: false
-        files: ^frontend/(build-only\.sh|build-debug\.sh)$
-
+      # -----------------------------------------------------------------------
+      # Legacy trigger key guard (prevents regression)
+      # -----------------------------------------------------------------------
       - id: forbid-legacy-trigger-keys
-        name: "Forbid legacy trigger keys in source"
-        language: system
+        name: Forbid legacy trigger keys in source
         entry: scripts/check_legacy_triggers.sh
-        pass_filenames: false
-        files: ^frontend/src/
-
-      - id: forbid-direct-node-config-assignment
-        name: "Forbid direct node.config = … outside constructors"
         language: system
-        entry: >-
-          bash -c '
-          echo "🔍 Checking for direct node.config assignment…";
-          if rg -n --color never "node\\.config\\s*=" frontend/src | rg -v "models\\.rs|node_builder\\.rs|generated"; then
-            echo "❌ Direct assignment to node.config detected. Update specific fields or use constructors.";
-            exit 1;
-          fi;
-          echo "✅ No forbidden node.config assignments found";
-          '
+        files: ^apps/zerg/frontend-web/src/
         pass_filenames: false
-        files: ^frontend/src/

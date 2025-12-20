@@ -1,15 +1,17 @@
 import json
-import os
 import time
+from typing import Dict
+
 import pytest
 import requests
-from typing import Generator, Dict, Any, Optional
 
 # Note: pytest_addoption is defined in root conftest.py
+
 
 @pytest.fixture(scope="session")
 def base_url(request):
     return request.config.getoption("--live-url")
+
 
 @pytest.fixture(scope="session")
 def auth_headers(request):
@@ -19,6 +21,7 @@ def auth_headers(request):
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
     return headers
 
+
 class SupervisorClient:
     def __init__(self, base_url: str, headers: Dict[str, str]):
         self.base_url = base_url
@@ -27,10 +30,7 @@ class SupervisorClient:
     def dispatch(self, task: str) -> int:
         """Dispatches a task and returns the run_id."""
         resp = requests.post(
-            f"{self.base_url}/api/jarvis/supervisor",
-            json={"task": task},
-            headers=self.headers,
-            timeout=10
+            f"{self.base_url}/api/jarvis/supervisor", json={"task": task}, headers=self.headers, timeout=10
         )
         resp.raise_for_status()
         return resp.json()["run_id"]
@@ -103,6 +103,7 @@ class SupervisorClient:
                         raise RuntimeError(f"Supervisor Error: {data}")
 
         return ""
+
 
 @pytest.fixture(scope="session")
 def supervisor_client(base_url, auth_headers):

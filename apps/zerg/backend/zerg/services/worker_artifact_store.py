@@ -105,9 +105,7 @@ class WorkerArtifactStore:
         if selected_path is None:
             # Fail fast with actionable error messages for explicit paths
             if explicit_path:
-                raise last_error or PermissionError(
-                    f"WorkerArtifactStore: base_path '{base_path}' is not writable"
-                )
+                raise last_error or PermissionError(f"WorkerArtifactStore: base_path '{base_path}' is not writable")
 
             if env_path:
                 raise PermissionError(
@@ -300,9 +298,7 @@ class WorkerArtifactStore:
         logger.info(f"Created worker directory: {worker_id}")
         return worker_id
 
-    def save_tool_output(
-        self, worker_id: str, tool_name: str, output: str, sequence: int
-    ) -> str:
+    def save_tool_output(self, worker_id: str, tool_name: str, output: str, sequence: int) -> str:
         """Save tool output to a file.
 
         Parameters
@@ -370,9 +366,7 @@ class WorkerArtifactStore:
 
         logger.info(f"Saved worker result: {worker_id}")
 
-    def complete_worker(
-        self, worker_id: str, status: str = "success", error: str | None = None
-    ) -> None:
+    def complete_worker(self, worker_id: str, status: str = "success", error: str | None = None) -> None:
         """Mark worker as complete and update metadata.
 
         Parameters
@@ -571,11 +565,7 @@ class WorkerArtifactStore:
             # Note: older workers might not have owner_id, they are effectively "public" or "orphan"
             # For strict security, we might want to exclude them, but for now we filter only if they have an ID
             # that doesn't match.
-            filtered = [
-                w
-                for w in filtered
-                if w.get("config", {}).get("owner_id") == owner_id
-            ]
+            filtered = [w for w in filtered if w.get("config", {}).get("owner_id") == owner_id]
 
         if status:
             filtered = [w for w in filtered if w.get("status") == status]
@@ -683,9 +673,7 @@ class WorkerArtifactStore:
 
         self._write_index(index)
 
-    def update_summary(
-        self, worker_id: str, summary: str, summary_meta: dict[str, Any]
-    ) -> None:
+    def update_summary(self, worker_id: str, summary: str, summary_meta: dict[str, Any]) -> None:
         """Update worker metadata with extracted summary.
 
         Called after worker completes. Safe to fail - summary is derived data.

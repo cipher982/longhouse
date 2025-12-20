@@ -5,12 +5,10 @@ import pytest
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.models.models import AgentMemoryKV
-from zerg.tools.builtin.agent_memory_tools import (
-    agent_memory_delete,
-    agent_memory_export,
-    agent_memory_get,
-    agent_memory_set,
-)
+from zerg.tools.builtin.agent_memory_tools import agent_memory_delete
+from zerg.tools.builtin.agent_memory_tools import agent_memory_export
+from zerg.tools.builtin.agent_memory_tools import agent_memory_get
+from zerg.tools.builtin.agent_memory_tools import agent_memory_set
 
 
 @pytest.fixture
@@ -41,10 +39,11 @@ def test_memory_set_basic(credential_context, db_session):
     assert "updated_at" in data
 
     # Verify in database
-    entry = db_session.query(AgentMemoryKV).filter(
-        AgentMemoryKV.user_id == credential_context.owner_id,
-        AgentMemoryKV.key == "test_key"
-    ).first()
+    entry = (
+        db_session.query(AgentMemoryKV)
+        .filter(AgentMemoryKV.user_id == credential_context.owner_id, AgentMemoryKV.key == "test_key")
+        .first()
+    )
     assert entry is not None
     assert entry.value == {"data": "test_value"}
     assert entry.user_id == credential_context.owner_id
@@ -125,11 +124,7 @@ def test_memory_set_empty_key(credential_context):
 
 def test_memory_set_invalid_expiration(credential_context):
     """Test that invalid expiration date is rejected."""
-    result = agent_memory_set(
-        key="test_key",
-        value="test",
-        expires_at="not-a-date"
-    )
+    result = agent_memory_set(key="test_key", value="test", expires_at="not-a-date")
 
     assert result["ok"] is False
     assert result["error_type"] == "validation_error"
@@ -271,10 +266,11 @@ def test_memory_delete_by_key(credential_context, db_session):
     assert data["key"] == "delete_me"
 
     # Verify it's gone
-    entry = db_session.query(AgentMemoryKV).filter(
-        AgentMemoryKV.user_id == credential_context.owner_id,
-        AgentMemoryKV.key == "delete_me"
-    ).first()
+    entry = (
+        db_session.query(AgentMemoryKV)
+        .filter(AgentMemoryKV.user_id == credential_context.owner_id, AgentMemoryKV.key == "delete_me")
+        .first()
+    )
     assert entry is None
 
 
@@ -301,9 +297,7 @@ def test_memory_delete_by_tags(credential_context, db_session):
     assert data["deleted_count"] == 2
 
     # Verify correct entries were deleted
-    remaining = db_session.query(AgentMemoryKV).filter(
-        AgentMemoryKV.user_id == credential_context.owner_id
-    ).all()
+    remaining = db_session.query(AgentMemoryKV).filter(AgentMemoryKV.user_id == credential_context.owner_id).all()
     assert len(remaining) == 1
     assert remaining[0].key == "keep1"
 

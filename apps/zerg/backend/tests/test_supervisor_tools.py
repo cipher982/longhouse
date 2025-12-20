@@ -1,22 +1,19 @@
 """Tests for supervisor tools."""
 
 import tempfile
-from pathlib import Path
 
 import pytest
 
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.tools.builtin.supervisor_tools import (
-    get_worker_metadata,
-    grep_workers,
-    list_workers,
-    read_worker_file,
-    read_worker_result,
-    spawn_worker,
-)
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
+from zerg.tools.builtin.supervisor_tools import get_worker_metadata
+from zerg.tools.builtin.supervisor_tools import grep_workers
+from zerg.tools.builtin.supervisor_tools import list_workers
+from zerg.tools.builtin.supervisor_tools import read_worker_file
+from zerg.tools.builtin.supervisor_tools import read_worker_result
+from zerg.tools.builtin.supervisor_tools import spawn_worker
 
 
 @pytest.fixture
@@ -47,6 +44,7 @@ def test_spawn_worker_success(credential_context, temp_artifact_path, db_session
 
     # Extract job_id from result
     import re
+
     job_id_match = re.search(r"Worker job (\d+)", result)
     assert job_id_match, f"Could not find job ID in result: {result}"
     job_id = int(job_id_match.group(1))
@@ -54,6 +52,7 @@ def test_spawn_worker_success(credential_context, temp_artifact_path, db_session
 
     # Verify job record exists in database
     from zerg.models.models import WorkerJob
+
     job = db_session.query(WorkerJob).filter(WorkerJob.id == job_id).first()
     assert job is not None
     assert job.status == "queued"
@@ -169,9 +168,7 @@ def test_security_read_access(credential_context, temp_artifact_path, db_session
     assert "No matches found" in res_grep
 
 
-def test_list_workers_with_status_filter(
-    credential_context, temp_artifact_path, db_session
-):
+def test_list_workers_with_status_filter(credential_context, temp_artifact_path, db_session):
     """Test listing workers with status filter."""
     # Spawn workers (gets queued)
     spawn_worker(task="Queued task", model=TEST_WORKER_MODEL)
@@ -183,9 +180,7 @@ def test_list_workers_with_status_filter(
     assert "QUEUED" in result
 
 
-def test_list_workers_with_time_filter(
-    credential_context, temp_artifact_path, db_session
-):
+def test_list_workers_with_time_filter(credential_context, temp_artifact_path, db_session):
     """Test listing workers with time filter."""
     # Spawn a worker
     spawn_worker(task="Recent task", model=TEST_WORKER_MODEL)
@@ -201,9 +196,7 @@ def test_list_workers_with_time_filter(
     # May or may not find it depending on timing, just check no error
 
 
-def test_read_worker_result_success(
-    credential_context, temp_artifact_path, db_session
-):
+def test_read_worker_result_success(credential_context, temp_artifact_path, db_session):
     """Test reading a worker's result (queued jobs not yet executed)."""
     import re
 
@@ -230,9 +223,7 @@ def test_read_worker_result_not_found(temp_artifact_path):
     assert "no credential context" in result
 
 
-def test_read_worker_file_metadata(
-    credential_context, temp_artifact_path, db_session
-):
+def test_read_worker_file_metadata(credential_context, temp_artifact_path, db_session):
     """Test reading worker file (queued job not yet executed)."""
     import re
 
@@ -286,9 +277,7 @@ def test_read_worker_file_not_found(credential_context, temp_artifact_path, db_s
     assert "Error" in result
 
 
-def test_read_worker_file_path_traversal(
-    credential_context, temp_artifact_path, db_session
-):
+def test_read_worker_file_path_traversal(credential_context, temp_artifact_path, db_session):
     """Test that path traversal is blocked."""
     import re
 
@@ -304,9 +293,7 @@ def test_read_worker_file_path_traversal(
     assert "Error" in result
 
 
-def test_get_worker_metadata_success(
-    credential_context, temp_artifact_path, db_session
-):
+def test_get_worker_metadata_success(credential_context, temp_artifact_path, db_session):
     """Test getting worker metadata (queued job)."""
     import re
 
@@ -343,9 +330,7 @@ def test_grep_workers_no_matches(temp_artifact_path):
     assert "no credential context" in result
 
 
-def test_grep_workers_with_matches(
-    credential_context, temp_artifact_path, db_session
-):
+def test_grep_workers_with_matches(credential_context, temp_artifact_path, db_session):
     """Test grepping workers for a pattern."""
     # Spawn a worker with distinctive text
     spawn_worker(task="Find the word UNICORN in this task", model=TEST_WORKER_MODEL)
@@ -357,9 +342,7 @@ def test_grep_workers_with_matches(
     assert "match" in result.lower() or "found" in result.lower()
 
 
-def test_grep_workers_case_insensitive(
-    credential_context, temp_artifact_path, db_session
-):
+def test_grep_workers_case_insensitive(credential_context, temp_artifact_path, db_session):
     """Test that grep is case-insensitive."""
     # Spawn a worker
     spawn_worker(task="This task has UPPERCASE text", model=TEST_WORKER_MODEL)
@@ -393,9 +376,7 @@ def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_se
     assert "No matches" in grep_result or "match" in grep_result.lower()
 
 
-def test_spawn_worker_with_different_models(
-    credential_context, temp_artifact_path, db_session
-):
+def test_spawn_worker_with_different_models(credential_context, temp_artifact_path, db_session):
     """Test spawning workers with different models."""
     # Test with worker model (gpt-5-mini)
     result1 = spawn_worker(task="Test with mini", model=TEST_WORKER_MODEL)

@@ -57,6 +57,7 @@ def _validate_url_scheme(url: str) -> None:
             detail=f"Invalid URL format: {e}",
         )
 
+
 router = APIRouter(
     prefix="/knowledge",
     tags=["knowledge"],
@@ -84,8 +85,7 @@ async def create_source(
     if source_in.source_type not in ALLOWED_SOURCE_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported source_type: {source_in.source_type}. "
-            f"Supported types: {', '.join(sorted(ALLOWED_SOURCE_TYPES))}",
+            detail=f"Unsupported source_type: {source_in.source_type}. " f"Supported types: {', '.join(sorted(ALLOWED_SOURCE_TYPES))}",
         )
 
     # Validate URL source config

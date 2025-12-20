@@ -161,9 +161,7 @@ class MCPClient:
 
             if attempt < self.config.max_retries - 1:
                 wait_time = 2**attempt  # Exponential backoff
-                logger.debug(
-                    f"Retrying request to {url} in {wait_time}s (attempt {attempt + 1}/{self.config.max_retries})"
-                )
+                logger.debug(f"Retrying request to {url} in {wait_time}s (attempt {attempt + 1}/{self.config.max_retries})")
                 await asyncio.sleep(wait_time)
 
         raise MCPConnectionError(self.config.name, self.config.url, last_exception)
@@ -183,9 +181,7 @@ class MCPClient:
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the MCP server."""
         try:
-            response = await self._request_with_retry(
-                "POST", "/tools/call", json={"name": tool_name, "arguments": arguments}
-            )
+            response = await self._request_with_retry("POST", "/tools/call", json={"name": tool_name, "arguments": arguments})
             result = response.json()
 
             # Extract content from MCP response format
@@ -252,9 +248,7 @@ class MCPToolAdapter:
                             description=tool_spec.get("description", f"MCP tool {tool_name}"),
                         )
                         ToolRegistry().register(tool)
-                        logger.info(
-                            "Registered MCP tool: %s", f"{self.tool_prefix}{tool_name}"
-                        )
+                        logger.info("Registered MCP tool: %s", f"{self.tool_prefix}{tool_name}")
                     except Exception as reg_err:  # noqa: BLE001
                         logger.error("Failed to register MCP tool %s: %s", tool_name, reg_err)
                         # Continue with others
@@ -357,6 +351,7 @@ class MCPManager:
     def run_in_loop(self, coro):
         """Run a coroutine using the shared async runner."""
         from zerg.utils.async_runner import run_in_shared_loop
+
         return run_in_shared_loop(coro)
 
     def _is_encrypted_token(self, token: str) -> bool:
@@ -459,9 +454,7 @@ class MCPManager:
                         auth_token = crypto.decrypt(auth_token)
                     except Exception as e:
                         logger.error(f"Failed to decrypt auth token: {e}")
-                        raise MCPAuthenticationError(
-                            normalized_config["name"], "Failed to decrypt authentication token"
-                        )
+                        raise MCPAuthenticationError(normalized_config["name"], "Failed to decrypt authentication token")
 
                 cfg = MCPServerConfig(
                     name=normalized_config["name"],
@@ -493,7 +486,6 @@ class MCPManager:
             return PRESET_MCP_SERVERS
         except ImportError:  # pragma: no cover – missing optional file
             return {}
-
 
 
 # ---------------------------------------------------------------------------

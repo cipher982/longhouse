@@ -53,7 +53,5 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=get_current_time, name="get_current_time", description="Get the current date and time in ISO-8601 format"
     ),
-    StructuredTool.from_function(
-        func=datetime_diff, name="datetime_diff", description="Calculate the difference between two dates/times"
-    ),
+    StructuredTool.from_function(func=datetime_diff, name="datetime_diff", description="Calculate the difference between two dates/times"),
 ]

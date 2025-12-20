@@ -4,7 +4,8 @@
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
+
+from tests.conftest import TEST_WORKER_MODEL
 
 
 def test_globally_mocked_chatOpenAI_behavior():

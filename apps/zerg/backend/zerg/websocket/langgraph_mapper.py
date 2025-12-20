@@ -173,9 +173,7 @@ class LangGraphMapper:
         if not completed_nodes and not node_outputs:
             return None
 
-        logger.debug(
-            f"[LangGraphMapper] Workflow progress: {len(completed_nodes)} completed, {len(node_outputs)} outputs"
-        )
+        logger.debug(f"[LangGraphMapper] Workflow progress: {len(completed_nodes)} completed, {len(node_outputs)} outputs")
 
         return {
             "event_type": EventType.WORKFLOW_PROGRESS,

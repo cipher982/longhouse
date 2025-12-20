@@ -88,7 +88,7 @@ async def spawn_worker_async(
             supervisor_run_id=supervisor_run_id,  # Correlate with supervisor run
             task=task,
             model=worker_model,
-            status="queued"
+            status="queued",
         )
         db.add(worker_job)
         db.commit()
@@ -155,6 +155,7 @@ def spawn_worker(
 ) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds, decision_mode))
 
 
@@ -244,6 +245,7 @@ def list_workers(
 ) -> str:
     """Sync wrapper for list_workers_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(list_workers_async(limit, status, since_hours))
 
 
@@ -290,10 +292,7 @@ async def read_worker_result_async(job_id: str) -> str:
         job_id_int = int(job_id)
 
         # Get job record
-        job = db.query(crud.WorkerJob).filter(
-            crud.WorkerJob.id == job_id_int,
-            crud.WorkerJob.owner_id == resolver.owner_id
-        ).first()
+        job = db.query(crud.WorkerJob).filter(crud.WorkerJob.id == job_id_int, crud.WorkerJob.owner_id == resolver.owner_id).first()
 
         if not job:
             return f"Error: Worker job {job_id} not found"
@@ -329,6 +328,7 @@ async def read_worker_result_async(job_id: str) -> str:
 def read_worker_result(job_id: str) -> str:
     """Sync wrapper for read_worker_result_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(read_worker_result_async(job_id))
 
 
@@ -364,10 +364,7 @@ async def read_worker_file_async(job_id: str, file_path: str) -> str:
         job_id_int = int(job_id)
 
         # Get job record
-        job = db.query(crud.WorkerJob).filter(
-            crud.WorkerJob.id == job_id_int,
-            crud.WorkerJob.owner_id == resolver.owner_id
-        ).first()
+        job = db.query(crud.WorkerJob).filter(crud.WorkerJob.id == job_id_int, crud.WorkerJob.owner_id == resolver.owner_id).first()
 
         if not job:
             return f"Error: Worker job {job_id} not found"
@@ -399,6 +396,7 @@ async def read_worker_file_async(job_id: str, file_path: str) -> str:
 def read_worker_file(job_id: str, file_path: str) -> str:
     """Sync wrapper for read_worker_file_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(read_worker_file_async(job_id, file_path))
 
 
@@ -427,7 +425,7 @@ async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
         query = db.query(crud.WorkerJob).filter(
             crud.WorkerJob.owner_id == resolver.owner_id,
             crud.WorkerJob.worker_id.isnot(None),
-            crud.WorkerJob.status.in_(["success", "failed"])
+            crud.WorkerJob.status.in_(["success", "failed"]),
         )
 
         if since_hours:
@@ -438,6 +436,7 @@ async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
 
         # Use case-insensitive regex
         import re
+
         case_insensitive_pattern = f"(?i){re.escape(pattern)}"
 
         # Search across artifacts for each job
@@ -447,7 +446,7 @@ async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
                 matches = artifact_store.search_workers(
                     pattern=case_insensitive_pattern,
                     file_glob="**/*.txt",
-                    worker_ids=[job.worker_id]  # Only search this worker
+                    worker_ids=[job.worker_id],  # Only search this worker
                 )
                 # Add job_id to each match
                 for match in matches:
@@ -469,9 +468,7 @@ async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
             line_num = match.get("line", 0)
             content = match.get("content", "")
 
-            lines.append(
-                f"\nJob {job_id} (worker {worker_id})/{file_name}:{line_num}\n" f"  {content[:200]}"
-            )
+            lines.append(f"\nJob {job_id} (worker {worker_id})/{file_name}:{line_num}\n  {content[:200]}")
 
         if len(all_matches) > 50:
             lines.append(f"\n... and {len(all_matches) - 50} more matches (truncated)")
@@ -486,6 +483,7 @@ async def grep_workers_async(pattern: str, since_hours: int = 24) -> str:
 def grep_workers(pattern: str, since_hours: int = 24) -> str:
     """Sync wrapper for grep_workers_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(grep_workers_async(pattern, since_hours))
 
 
@@ -512,10 +510,7 @@ async def get_worker_metadata_async(job_id: str) -> str:
         job_id_int = int(job_id)
 
         # Get job record
-        job = db.query(crud.WorkerJob).filter(
-            crud.WorkerJob.id == job_id_int,
-            crud.WorkerJob.owner_id == resolver.owner_id
-        ).first()
+        job = db.query(crud.WorkerJob).filter(crud.WorkerJob.id == job_id_int, crud.WorkerJob.owner_id == resolver.owner_id).first()
 
         if not job:
             return f"Error: Worker job {job_id} not found"
@@ -562,6 +557,7 @@ async def get_worker_metadata_async(job_id: str) -> str:
 def get_worker_metadata(job_id: str) -> str:
     """Sync wrapper for get_worker_metadata_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
+
     return run_async_safely(get_worker_metadata_async(job_id))
 
 

@@ -175,9 +175,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         llm_with_tools = _make_llm(agent_row, tools)
         return llm_with_tools.invoke(messages)
 
-    async def _call_model_async(
-        messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"
-    ):
+    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"):
         """Run the LLM call with optional token streaming via callbacks.
 
         Parameters
@@ -204,13 +202,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             callback = WsTokenCallback()
             # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
             # ainvoke() returns the complete message while callbacks stream tokens
-            result = await llm_with_tools.ainvoke(
-                messages,
-                config={"callbacks": [callback]}
-            )
+            result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
         else:
             # For non-streaming, use sync invoke wrapped in thread
             import asyncio
+
             result = await asyncio.to_thread(_call_model_sync, messages, False)
 
         end_time = datetime.now(timezone.utc)
@@ -218,6 +214,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Record metrics if collector is available
         from zerg.worker_metrics import get_metrics_collector
+
         collector = get_metrics_collector()
         if collector:
             # Extract token usage from result
@@ -246,6 +243,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
             try:
                 from zerg.context import get_worker_context
+
                 ctx = get_worker_context()
                 log_extra = {
                     "phase": phase,
@@ -398,6 +396,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             try:
                 import ast
                 import json
+
                 parsed = None
                 try:
                     parsed = json.loads(error_content)
@@ -486,6 +485,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Record metrics if collector is available
         from zerg.worker_metrics import get_metrics_collector
+
         metrics_collector = get_metrics_collector()
         if metrics_collector:
             metrics_collector.record_tool_call(
@@ -629,10 +629,10 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 logger.warning(f"Worker {ctx.worker_id} stopping due to critical error: {ctx.critical_error_message}")
                 # Create final assistant message explaining the failure
                 from langchain_core.messages import AIMessage as FinalAIMessage
+
                 error_response = FinalAIMessage(
                     content=(
-                        f"I encountered a critical error that prevents me from completing this task:\n\n"
-                        f"{ctx.critical_error_message}"
+                        f"I encountered a critical error that prevents me from completing this task:\n\n" f"{ctx.critical_error_message}"
                     )
                 )
                 final_messages = add_messages(current_messages, [error_response])
@@ -661,9 +661,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         from zerg.utils.async_runner import run_in_shared_loop
 
-        return run_in_shared_loop(
-            _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
-        )
+        return run_in_shared_loop(_agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream))
 
     # ------------------------------------------------------------------
     # Expose BOTH sync & async entrypoints to LangGraph
@@ -680,13 +678,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # callers can use ``.ainvoke`` while tests and legacy code continue to use
     # the blocking ``.invoke`` API.
 
-    async def _agent_executor_async_wrapper(
-        messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None
-    ):
+    async def _agent_executor_async_wrapper(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
         enable_token_stream = get_settings().llm_token_stream
-        return await _agent_executor_async(
-            messages, previous=previous, enable_token_stream=enable_token_stream
-        )
+        return await _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     agent_executor.afunc = _agent_executor_async_wrapper  # type: ignore[attr-defined]
 

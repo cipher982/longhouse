@@ -12,6 +12,7 @@ from typing import Any
 from typing import Dict
 
 from apscheduler.triggers.cron import CronTrigger
+
 from zerg.crud import crud
 from zerg.database import get_session_factory
 from zerg.services.scheduler_service import scheduler_service
@@ -26,9 +27,7 @@ class WorkflowScheduler:
     def __init__(self):
         self.session_factory = get_session_factory()
 
-    async def schedule_workflow(
-        self, workflow_id: int, cron_expression: str, trigger_config: Dict[str, Any] = None
-    ) -> bool:
+    async def schedule_workflow(self, workflow_id: int, cron_expression: str, trigger_config: Dict[str, Any] = None) -> bool:
         """
         Schedule a workflow to run according to a cron expression.
 
@@ -100,9 +99,7 @@ class WorkflowScheduler:
         try:
             # Add trigger context to indicate this is a scheduled execution
             # This allows the workflow engine to track the execution source
-            execution_id = await workflow_engine.execute_workflow(
-                workflow_id, trigger_type="schedule", trigger_config=trigger_config
-            )
+            execution_id = await workflow_engine.execute_workflow(workflow_id, trigger_type="schedule", trigger_config=trigger_config)
 
             logger.info(f"Scheduled workflow {workflow_id} execution started with ID: {execution_id}")
 

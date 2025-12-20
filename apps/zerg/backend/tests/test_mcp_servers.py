@@ -4,10 +4,10 @@ import pytest
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud
 from zerg.models.models import Agent
 from zerg.models.models import User
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -62,6 +62,7 @@ class TestMCPServers:
         assert encrypted_token != "ghp_test_token"
 
         from zerg.utils import crypto
+
         assert crypto.decrypt(encrypted_token) == "ghp_test_token"
 
     def test_add_custom_mcp_server(self, client, auth_headers, test_agent, db):
@@ -93,6 +94,7 @@ class TestMCPServers:
         assert encrypted_token != "custom_token"
 
         from zerg.utils import crypto
+
         assert crypto.decrypt(encrypted_token) == "custom_token"
 
         assert server_config["allowed_tools"] == ["tool1", "tool2"]

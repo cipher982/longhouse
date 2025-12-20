@@ -24,7 +24,6 @@ from typing import Optional
 # Single, canonical import – the stack always includes langchain-core.
 # Fallbacks are deliberately avoided to keep behaviour deterministic.
 from langchain_core.callbacks.base import AsyncCallbackHandler  # type: ignore
-
 from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import StreamChunkData
 from zerg.websocket.manager import topic_manager

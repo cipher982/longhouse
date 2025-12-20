@@ -3,6 +3,7 @@
 All tools should use these helpers to return consistent error/success responses
 that the agent can interpret using the <error_handling> protocol.
 """
+
 from enum import Enum
 from typing import Any
 from typing import TypedDict
@@ -10,6 +11,7 @@ from typing import TypedDict
 
 class ErrorType(str, Enum):
     """Standard error types for tool failures."""
+
     CONNECTOR_NOT_CONFIGURED = "connector_not_configured"
     INVALID_CREDENTIALS = "invalid_credentials"
     RATE_LIMITED = "rate_limited"
@@ -20,6 +22,7 @@ class ErrorType(str, Enum):
 
 class ToolErrorResponse(TypedDict, total=False):
     """Structured error response from a tool."""
+
     ok: bool
     error_type: str
     user_message: str
@@ -29,6 +32,7 @@ class ToolErrorResponse(TypedDict, total=False):
 
 class ToolSuccessResponse(TypedDict):
     """Structured success response from a tool."""
+
     ok: bool
     data: Any
 

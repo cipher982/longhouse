@@ -4,18 +4,13 @@ Tests the prompt composer module that builds complete system prompts
 from base templates and user context.
 """
 
-import pytest
-
-from zerg.prompts.composer import (
-    format_user_context,
-    format_servers,
-    format_server_names,
-    format_integrations,
-    build_supervisor_prompt,
-    build_worker_prompt,
-    build_jarvis_prompt,
-)
-
+from zerg.prompts.composer import build_jarvis_prompt
+from zerg.prompts.composer import build_supervisor_prompt
+from zerg.prompts.composer import build_worker_prompt
+from zerg.prompts.composer import format_integrations
+from zerg.prompts.composer import format_server_names
+from zerg.prompts.composer import format_servers
+from zerg.prompts.composer import format_user_context
 
 # ---------------------------------------------------------------------------
 # Mock User object for tests

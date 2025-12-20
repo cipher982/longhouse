@@ -23,9 +23,7 @@ class NodeMetadata(BaseModel):
     # Required fields for all nodes
     node_type: Literal["tool", "agent", "trigger", "conditional"] = Field(description="Type of node that was executed")
     phase: Literal["waiting", "running", "finished"] = Field(description="Current execution phase")
-    result: Optional[Literal["success", "failure", "cancelled"]] = Field(
-        None, description="Execution outcome (when phase=finished)"
-    )
+    result: Optional[Literal["success", "failure", "cancelled"]] = Field(None, description="Execution outcome (when phase=finished)")
     execution_time_ms: Optional[int] = Field(None, description="Execution time in milliseconds")
     started_at: Optional[datetime] = Field(None, description="When execution started")
     finished_at: Optional[datetime] = Field(None, description="When execution finished")
@@ -96,8 +94,8 @@ class NodeOutputEnvelope(BaseModel):
     model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat() if v else None})
 
     value: Any = Field(description="Primary result value from node execution")
-    meta: Union[ToolNodeMetadata, AgentNodeMetadata, ConditionalNodeMetadata, TriggerNodeMetadata, NodeMetadata] = (
-        Field(description="Execution metadata and context")
+    meta: Union[ToolNodeMetadata, AgentNodeMetadata, ConditionalNodeMetadata, TriggerNodeMetadata, NodeMetadata] = Field(
+        description="Execution metadata and context"
     )
 
 

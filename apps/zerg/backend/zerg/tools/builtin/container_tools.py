@@ -56,8 +56,7 @@ TOOLS = [
         _container_exec,
         name="container_exec",
         description=(
-            "Execute a read-only shell command inside a hardened container. "
-            "Args: command: str, timeout_secs: int (default 20)."
+            "Execute a read-only shell command inside a hardened container. " "Args: command: str, timeout_secs: int (default 20)."
         ),
     )
 ]

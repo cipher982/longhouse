@@ -74,11 +74,7 @@ class WorkflowValidator:
                     langgraph_errors = self._validate_with_langgraph(canvas)
                     errors.extend(langgraph_errors)
                 except Exception as e:
-                    errors.append(
-                        ValidationError(
-                            code="LANGGRAPH_COMPILATION_FAILED", message=f"LangGraph compilation failed: {str(e)}"
-                        )
-                    )
+                    errors.append(ValidationError(code="LANGGRAPH_COMPILATION_FAILED", message=f"LangGraph compilation failed: {str(e)}"))
 
             # Layer 3: Business logic validation
             business_warnings = self._validate_business_logic(canvas)
@@ -86,9 +82,7 @@ class WorkflowValidator:
 
         except Exception as e:
             logger.exception("Unexpected error during workflow validation")
-            errors.append(
-                ValidationError(code="VALIDATION_EXCEPTION", message=f"Validation failed with exception: {str(e)}")
-            )
+            errors.append(ValidationError(code="VALIDATION_EXCEPTION", message=f"Validation failed with exception: {str(e)}"))
 
         return ValidationResult(is_valid=len(errors) == 0, errors=errors, warnings=warnings)
 
@@ -133,11 +127,7 @@ class WorkflowValidator:
         for node in canvas.nodes:
             # Check for duplicate node IDs
             if node.node_id in node_ids:
-                errors.append(
-                    ValidationError(
-                        code="DUPLICATE_NODE_ID", message=f"Duplicate node ID: {node.node_id}", node_id=node.node_id
-                    )
-                )
+                errors.append(ValidationError(code="DUPLICATE_NODE_ID", message=f"Duplicate node ID: {node.node_id}", node_id=node.node_id))
             node_ids.add(node.node_id)
 
             # Validate node type using clean NodeTypeHelper
@@ -165,11 +155,7 @@ class WorkflowValidator:
 
         tool_name = tool_config.get("tool_name")
         if not tool_name:
-            errors.append(
-                ValidationError(
-                    code="MISSING_TOOL_NAME", message=f"Tool node {node_id} missing tool_name", node_id=node_id
-                )
-            )
+            errors.append(ValidationError(code="MISSING_TOOL_NAME", message=f"Tool node {node_id} missing tool_name", node_id=node_id))
             return errors
 
         # Validate tool exists using tool contracts
@@ -181,11 +167,7 @@ class WorkflowValidator:
 
         tool_name = tool_config.tool_name
         if not tool_name:
-            errors.append(
-                ValidationError(
-                    code="MISSING_TOOL_NAME", message=f"Tool node {node_id} missing tool_name", node_id=node_id
-                )
-            )
+            errors.append(ValidationError(code="MISSING_TOOL_NAME", message=f"Tool node {node_id} missing tool_name", node_id=node_id))
             return errors
 
         # Validate tool exists using tool contracts
@@ -227,9 +209,7 @@ class WorkflowValidator:
 
         if not agent_id:
             errors.append(
-                ValidationError(
-                    code="MISSING_AGENT_ID", message=f"Agent node {node_id} missing required agent_id", node_id=node_id
-                )
+                ValidationError(code="MISSING_AGENT_ID", message=f"Agent node {node_id} missing required agent_id", node_id=node_id)
             )
 
         return errors
@@ -241,18 +221,10 @@ class WorkflowValidator:
 
         for edge in canvas.edges:
             if edge.from_node_id not in node_ids:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_EDGE_SOURCE", message=f"Edge source node '{edge.from_node_id}' does not exist"
-                    )
-                )
+                errors.append(ValidationError(code="INVALID_EDGE_SOURCE", message=f"Edge source node '{edge.from_node_id}' does not exist"))
 
             if edge.to_node_id not in node_ids:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_EDGE_TARGET", message=f"Edge target node '{edge.to_node_id}' does not exist"
-                    )
-                )
+                errors.append(ValidationError(code="INVALID_EDGE_TARGET", message=f"Edge target node '{edge.to_node_id}' does not exist"))
 
         return errors
 
@@ -284,9 +256,7 @@ class WorkflowValidator:
             workflow.compile(checkpointer=checkpointer)
 
         except Exception as e:
-            errors.append(
-                ValidationError(code="LANGGRAPH_VALIDATION_FAILED", message=f"LangGraph validation failed: {str(e)}")
-            )
+            errors.append(ValidationError(code="LANGGRAPH_VALIDATION_FAILED", message=f"LangGraph validation failed: {str(e)}"))
 
         return errors
 
