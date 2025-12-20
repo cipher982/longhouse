@@ -35,6 +35,48 @@ declare global {
   }
 }
 
+function normalizeApiPathname(pathname: string): string {
+  const trimmed = pathname.replace(/\/+$/, "");
+  if (!trimmed) {
+    return "/api";
+  }
+  if (/\/api(\/|$)/.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}/api`.replace(/\/+/g, "/");
+}
+
+function normalizeApiBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (!trimmed.startsWith("http")) {
+    const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    const withoutTrailing = prefixed.replace(/\/+$/, "");
+    if (!withoutTrailing) {
+      return "/api";
+    }
+    if (/\/api(\/|$)/.test(withoutTrailing)) {
+      return withoutTrailing;
+    }
+    return `${withoutTrailing}/api`.replace(/\/+/g, "/");
+  }
+
+  const url = new URL(trimmed);
+
+  // Fail fast: reject Docker internal hostnames in browser
+  if (typeof window !== "undefined" && url.hostname === "backend") {
+    throw new Error(
+      `FATAL: API_BASE_URL='${trimmed}' uses Docker hostname unreachable from browser. Set to '/api' instead.`
+    );
+  }
+
+  const normalizedPath = normalizeApiPathname(url.pathname || "/");
+  return `${url.origin}${normalizedPath}`;
+}
+
 // Load configuration from environment variables
 function loadConfig(): AppConfig {
   const isDevelopment = import.meta.env.MODE === 'development';
@@ -59,6 +101,8 @@ function loadConfig(): AppConfig {
       wsBaseUrl = 'ws://127.0.0.1:47300';
     }
   }
+
+  apiBaseUrl = normalizeApiBaseUrl(apiBaseUrl);
 
   // Validate required config in production
   if (isProduction) {
