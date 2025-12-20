@@ -78,15 +78,12 @@ class EventBus:
             event_type: The type of event being published
             data: Event payload data
         """
-        # Debug: Always log subscriber count
         subscriber_count = len(self._subscribers.get(event_type, set()))
-        print(f"🔥🔥🔥 EVENT_BUS.publish({event_type}): {subscriber_count} subscribers", flush=True)
-
-        if event_type not in self._subscribers:
-            print(f"❌ NO SUBSCRIBERS for {event_type}", flush=True)
+        if subscriber_count == 0:
+            logger.debug("No subscribers for %s", event_type)
             return
 
-        logger.debug("Publishing event %s with data: %s", event_type, data)
+        logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
 
         # ------------------------------------------------------------------
         # Fan-out **concurrently** so that a slow subscriber can no longer
@@ -96,24 +93,17 @@ class EventBus:
 
         import asyncio
 
-        print(f"📞 Calling {len(self._subscribers[event_type])} handler(s) for {event_type}", flush=True)
         tasks = [callback(data) for callback in self._subscribers[event_type]]
 
         if not tasks:
-            print(f"⚠️ No tasks created for {event_type}", flush=True)
             return
 
-        print(f"🚀 Awaiting {len(tasks)} task(s) for {event_type}", flush=True)
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        print(f"✅ gather() completed for {event_type}, {len(results)} results", flush=True)
 
         # Log any exceptions that were captured by gather()
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                print(f"❌ Handler {i} for {event_type} raised: {result}", flush=True)
-                logger.error("Error in event handler for %s: %s", event_type, result)
-            else:
-                print(f"✅ Handler {i} for {event_type} completed successfully", flush=True)
+                logger.error("Error in event handler %s for %s", i, event_type, exc_info=result)
 
     def subscribe(self, event_type: EventType, callback: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
         """Subscribe to an event type.
