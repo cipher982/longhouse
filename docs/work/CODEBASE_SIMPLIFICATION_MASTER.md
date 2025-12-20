@@ -22,7 +22,7 @@ Rules for this effort:
 ## Phase 0 — Tracking + Guardrails (Start Here)
 
 - [x] Add/maintain this master checklist (this file).
-- [ ] Ensure `make validate`/`make test-zerg` do not rely on dead scripts/paths.
+- [x] Ensure `make validate`/`make test-zerg` do not rely on dead scripts/paths.
 
 ---
 
@@ -136,3 +136,4 @@ Format:
 - 2025-12-20: remove backend print spam (event bus / ws manager / db) — commits `f69bb07`, `7c38576`, `ddb5c30`
 - 2025-12-20: migrate + delete legacy WS schema module — commits `5e17151`, `e1fc369`
 - 2025-12-20: unify frontend API base URL resolution — commits `eec399a`, `743b035`
+- 2025-12-20: fix `make validate` by updating `.PHONY` list — commit `620aa60`
