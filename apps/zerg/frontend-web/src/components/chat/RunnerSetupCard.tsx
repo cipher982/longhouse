@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchRunners, type Runner } from "../../services/api";
+import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 
 interface RunnerSetupData {
   enroll_token: string;
@@ -11,18 +12,24 @@ interface RunnerSetupData {
 
 interface RunnerSetupCardProps {
   data: RunnerSetupData;
+  rawContent?: string; // For debugging: show raw JSON output
 }
 
 type ConnectionStatus = "waiting" | "connected" | "expired";
 
-export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
+export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("waiting");
   const [connectedRunner, setConnectedRunner] = useState<Runner | null>(null);
   const [timeRemaining, setTimeRemaining] = useState("");
-  const [baselineOnlineRunnerIds, setBaselineOnlineRunnerIds] = useState<Set<number> | null>(null);
+  const [baselineRunnerIds, setBaselineRunnerIds] = useState<Set<number> | null>(null);
+  const [showRawOutput, setShowRawOutput] = useState(false);
   const queryClient = useQueryClient();
+
+  // Track when the token was generated (card render time).
+  // Used to verify runners were enrolled via THIS token, not pre-existing.
+  const tokenCreatedAt = useRef(new Date());
 
   const copyToClipboard = async (text: string): Promise<boolean> => {
     try {
@@ -82,28 +89,40 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
   useEffect(() => {
     if (status !== "waiting") return;
 
-    // Capture baseline online runner IDs on first poll.
-    // We want to detect either:
-    // - a brand-new runner ID that comes online
-    // - an existing runner that transitions from offline -> online
+    // Capture baseline of ALL runner IDs on first poll.
+    // To detect the runner enrolled via THIS token, we check:
+    // 1. Runner ID is NOT in the baseline (brand new runner)
+    // 2. Runner was created AFTER the token was generated
+    // 3. Runner is currently online
+    // This prevents false positives from existing runners reconnecting.
     const pollForNewRunner = async () => {
       try {
         const runners = await fetchRunners();
-        const currentOnlineIds = new Set(runners.filter((r) => r.status === "online").map((r) => r.id));
 
-        if (baselineOnlineRunnerIds === null) {
-          // First poll - capture baseline online runners
-          setBaselineOnlineRunnerIds(currentOnlineIds);
+        if (baselineRunnerIds === null) {
+          // First poll - capture ALL runner IDs as baseline
+          const allIds = new Set(runners.map((r) => r.id));
+          setBaselineRunnerIds(allIds);
           return;
         }
 
-        // Find newly-online runner relative to initial baseline
-        const newOnlineRunner = runners.find(
-          (r) => r.status === "online" && !baselineOnlineRunnerIds.has(r.id)
-        );
+        // Find runner that:
+        // - Is online
+        // - Is NOT in baseline (brand new)
+        // - Was created AFTER the token was generated
+        const newEnrolledRunner = runners.find((r) => {
+          if (r.status !== "online") return false;
+          if (baselineRunnerIds.has(r.id)) return false;
 
-        if (newOnlineRunner) {
-          setConnectedRunner(newOnlineRunner);
+          // Verify runner was created after token generation
+          const runnerCreatedAt = new Date(r.created_at);
+          if (runnerCreatedAt < tokenCreatedAt.current) return false;
+
+          return true;
+        });
+
+        if (newEnrolledRunner) {
+          setConnectedRunner(newEnrolledRunner);
           setStatus("connected");
           // Invalidate runners query to refresh the list
           queryClient.invalidateQueries({ queryKey: ["runners"] });
@@ -117,7 +136,7 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
     pollForNewRunner();
     const interval = setInterval(pollForNewRunner, 3000);
     return () => clearInterval(interval);
-  }, [status, baselineOnlineRunnerIds, queryClient]);
+  }, [status, baselineRunnerIds, queryClient]);
 
   const handleCopy = async () => {
     setCopyError(null);
@@ -212,6 +231,30 @@ export function RunnerSetupCard({ data }: RunnerSetupCardProps) {
             </span>
           )}
         </div>
+
+        {rawContent && (
+          <div className="runner-setup-raw">
+            <button
+              type="button"
+              className="runner-setup-raw-toggle"
+              onClick={() => setShowRawOutput(!showRawOutput)}
+            >
+              {showRawOutput ? "▼ Hide raw output" : "▶ Show raw output"}
+            </button>
+            {showRawOutput && (
+              <div className="runner-setup-raw-content">
+                <SyntaxHighlighter
+                  language="json"
+                  style={oneDark}
+                  customStyle={{ margin: 0, borderRadius: "4px", fontSize: "12px" }}
+                  wrapLongLines={true}
+                >
+                  {rawContent}
+                </SyntaxHighlighter>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
