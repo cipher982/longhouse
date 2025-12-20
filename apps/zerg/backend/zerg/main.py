@@ -356,16 +356,14 @@ def custom_openapi():
 
     # Export schema to file for CI consumption
     try:
-        # Write to backend directory and repo root
-        backend_schema_path = Path(__file__).parent.parent / "openapi.json"
-        root_schema_path = Path(__file__).parent.parent.parent / "openapi.json"
+        # Single source of truth: apps/zerg/openapi.json (used by frontend typegen + CI checks)
+        schema_path = Path(__file__).parent.parent.parent / "openapi.json"
 
-        with open(backend_schema_path, "w") as f:
+        with open(schema_path, "w") as f:
             json.dump(openapi_schema, f, indent=2)
-        with open(root_schema_path, "w") as f:
-            json.dump(openapi_schema, f, indent=2)
+            f.write("\n")
 
-        print(f"✅ OpenAPI schema exported to {backend_schema_path} and {root_schema_path}")
+        print(f"✅ OpenAPI schema exported to {schema_path}")
     except Exception as e:
         print(f"⚠️  Could not export OpenAPI schema: {e}")
 
