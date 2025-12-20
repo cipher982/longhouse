@@ -12,15 +12,11 @@ Generates:
 
 import asyncio
 import json
-import os
-import subprocess
 import sys
-import yaml
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+from typing import Any, Dict, List
 
-
+import yaml
 class ModernProtocolGenerator:
     def __init__(self, schema_path: str):
         """Initialize with AsyncAPI 3.0 schema path."""
@@ -96,7 +92,7 @@ class ModernProtocolGenerator:
         code += self._generate_python_validation()
 
         with open(output_path, 'w') as f:
-            f.write(code)
+            f.write(code.rstrip() + "\n")
 
         print(f"✅ Python types: {output_path}")
 
@@ -115,14 +111,14 @@ class ModernProtocolGenerator:
         # Type guards removed - unused in codebase, simple type === 'foo' checks are clearer
 
         with open(output_path, 'w') as f:
-            f.write(code)
+            f.write(code.rstrip() + "\n")
 
         print(f"✅ TypeScript types: {output_path}")
 
     def _generate_typescript_header(self) -> str:
         """Generate TypeScript file header."""
         return f'''// AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from {self.schema_path.name} at {datetime.utcnow().isoformat()}Z
+// Generated from {self.schema_path.name}
 // Using AsyncAPI 3.0 + TypeScript Code Generation
 //
 // This file contains strongly-typed WebSocket message definitions.
@@ -287,6 +283,7 @@ export interface Envelope<T = unknown> {
 
         with open(output_path, 'w') as f:
             json.dump(json_schema, f, indent=2)
+            f.write("\n")
 
         print(f"✅ JSON Schema: {output_path}")
 
@@ -297,7 +294,6 @@ export interface Envelope<T = unknown> {
 
         contract = {
             "version": 1,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
             "asyncapi_version": self.schema.get("asyncapi", "3.0.0"),
             "info": self.schema.get("info", {}),
             "channels": self._extract_channel_contracts(),
@@ -310,6 +306,7 @@ export interface Envelope<T = unknown> {
 
         with open(output_path, 'w') as f:
             json.dump(contract, f, indent=2)
+            f.write("\n")
 
         print(f"✅ Contract JSON: {output_path}")
 
@@ -351,7 +348,7 @@ export interface Envelope<T = unknown> {
     def _generate_python_header(self) -> str:
         """Generate Python file header with modern imports."""
         return f'''# AUTO-GENERATED FILE - DO NOT EDIT
-# Generated from {self.schema_path.name} at {datetime.utcnow().isoformat()}Z
+# Generated from {self.schema_path.name}
 # Using AsyncAPI 3.0 + Modern Python Code Generation
 #
 # This file contains strongly-typed WebSocket message definitions.
@@ -362,9 +359,6 @@ import jsonschema
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union, Literal, Protocol
 from pydantic import BaseModel, Field, ValidationError
-from pydantic.json_schema import GenerateJsonSchema
-
-import jsonschema
 
 
 '''
