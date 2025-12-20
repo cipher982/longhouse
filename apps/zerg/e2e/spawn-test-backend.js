@@ -11,6 +11,7 @@ import { spawn } from 'child_process';
 import { join } from 'path';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,14 +47,23 @@ const { BACKEND_PORT } = getPortsFromEnv();
 
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
+// If specific workerId is set, run single process. Otherwise (global backend mode), scale workers.
+const uvicornWorkers = workerId ? 1 : (process.env.CI ? 4 : os.cpus().length);
+
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
 } else {
-    console.log(`[spawn-backend] Starting single backend on port ${port} (per-worker DB isolation via header)`);
+    console.log(`[spawn-backend] Starting single backend on port ${port} with ${uvicornWorkers} workers (per-worker DB isolation via header)`);
 }
 
 // Spawn the test backend with E2E configuration
-const backend = spawn('uv', ['run', 'python', '-m', 'uvicorn', 'zerg.main:app', `--host=127.0.0.1`, `--port=${port}`, '--log-level=warning'], {
+const backend = spawn('uv', [
+    'run', 'python', '-m', 'uvicorn', 'zerg.main:app',
+    `--host=127.0.0.1`,
+    `--port=${port}`,
+    `--workers=${uvicornWorkers}`,
+    '--log-level=warning'
+], {
     env: {
         ...process.env,
         ENVIRONMENT: 'test:e2e',  // Use E2E test config for real models
@@ -66,7 +76,7 @@ const backend = spawn('uv', ['run', 'python', '-m', 'uvicorn', 'zerg.main:app', 
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
     },
     cwd: join(__dirname, '..', 'backend'),
-    stdio: 'inherit'
+    stdio: process.env.VERBOSE_BACKEND ? 'inherit' : 'ignore'
 });
 
 // Handle backend process events
