@@ -8,7 +8,7 @@ Why do we need it?
 
 - Chat agents struggle with the exact shell incantation needed to run tests
   because our repository relies on **`uv run`**, has its tests inside a nested
-  `backend/` folder, and sometimes requires passing a _specific_ test path.
+  `apps/zerg/backend/` folder, and sometimes requires passing a _specific_ test path.
 - By delegating the work to an MCP server we hide those details and give the
   agent a single structured call that _always works_.
 
@@ -23,7 +23,7 @@ Why do we need it?
 
 ```bash
 # From the repository root
-python tools/mcp_test_runner/server.py
+python scripts/mcp_test_runner/server.py
 
 # You should immediately see the header:
 # mcp:1
@@ -31,7 +31,7 @@ python tools/mcp_test_runner/server.py
 # 👉  The process now waits for newline-delimited JSON requests on stdin.  For
 # a manual test you could open another terminal and do:
 # simple stdin test:
-echo '{"id":"1","tool":"run_backend_tests","params":{}}' | python tools/mcp_test_runner/server.py
+echo '{"id":"1","tool":"run_backend_tests","params":{}}' | python scripts/mcp_test_runner/server.py
 ```
 
 In practice you **never** have to talk to the server by hand – modern IDEs
