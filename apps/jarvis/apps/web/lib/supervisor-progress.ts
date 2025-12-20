@@ -52,6 +52,7 @@ export class SupervisorProgressUI {
   private container: HTMLElement | null = null;
   private isActive = false;
   private currentRunId: number | null = null;
+  private supervisorDone = false;
   private workers: Map<number, WorkerState> = new Map();
   private workersByWorkerId: Map<string, WorkerState> = new Map(); // Index for tool event lookups
   private unsubscribers: Array<() => void> = [];
@@ -198,6 +199,7 @@ export class SupervisorProgressUI {
 
     this.isActive = true;
     this.currentRunId = runId;
+    this.supervisorDone = false;
     this.phase = 'thinking'; // Start minimal - upgrade on worker spawn
     this.workers.clear();
     this.workersByWorkerId.clear();
@@ -243,6 +245,9 @@ export class SupervisorProgressUI {
    * Upgrades from 'thinking' to 'delegating' phase on first worker
    */
   private handleWorkerSpawned(jobId: number, task: string): void {
+    // A worker spawning means this run is still active; cancel any pending clear
+    this.cancelPendingClear();
+
     // Upgrade to full modal on first worker spawn
     if (this.phase === 'thinking') {
       this.phase = 'delegating';
@@ -291,6 +296,7 @@ export class SupervisorProgressUI {
     }
     console.log(`[SupervisorProgress] Worker complete: ${jobId} (${status}, ${durationMs}ms)`);
     this.render();
+    this.maybeScheduleClear();
   }
 
   /**
@@ -303,6 +309,7 @@ export class SupervisorProgressUI {
     }
     console.log(`[SupervisorProgress] Worker summary: ${jobId} - ${summary}`);
     this.render();
+    this.maybeScheduleClear();
   }
 
   /**
@@ -348,6 +355,11 @@ export class SupervisorProgressUI {
       return;
     }
 
+    // Tool activity implies the run is still active.
+    if (!this.isActive) {
+      this.isActive = true;
+    }
+
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
     worker.toolCalls.set(toolCallId, {
       toolCallId,
@@ -367,6 +379,11 @@ export class SupervisorProgressUI {
     if (!workerId) {
       console.warn('[SupervisorProgress] Dropping tool_completed with empty workerId');
       return;
+    }
+
+    // Tool activity implies the run is still active.
+    if (!this.isActive) {
+      this.isActive = true;
     }
 
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
@@ -394,6 +411,7 @@ export class SupervisorProgressUI {
     toolCall.completedAt = Date.now();
     console.log(`[SupervisorProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
     this.render();
+    this.maybeScheduleClear();
   }
 
   /**
@@ -403,6 +421,11 @@ export class SupervisorProgressUI {
     if (!workerId) {
       console.warn('[SupervisorProgress] Dropping tool_failed with empty workerId');
       return;
+    }
+
+    // Tool activity implies the run is still active.
+    if (!this.isActive) {
+      this.isActive = true;
     }
 
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
@@ -430,6 +453,25 @@ export class SupervisorProgressUI {
     toolCall.completedAt = Date.now();
     console.log(`[SupervisorProgress] Tool failed: ${toolCall.toolName} - ${error}`);
     this.render();
+    this.maybeScheduleClear();
+  }
+
+  private hasPendingWorkers(): boolean {
+    return Array.from(this.workers.values()).some((w) => w.status === 'spawned' || w.status === 'running');
+  }
+
+  private maybeScheduleClear(): void {
+    if (!this.supervisorDone) return;
+    if (this.hasPendingWorkers()) return;
+
+    // No pending workers. If we never saw any workers, clear quickly (thinking-only run).
+    if (this.workers.size === 0) {
+      this.scheduleClear(150);
+      return;
+    }
+
+    // Workers finished; keep the delegating UI briefly so user can read status.
+    this.scheduleClear(2000);
   }
 
   /**
@@ -439,14 +481,10 @@ export class SupervisorProgressUI {
    */
   private handleComplete(runId: number, result: string, status: string): void {
     console.log(`[SupervisorProgress] Complete: ${runId} (${status}, phase: ${this.phase})`);
+    this.supervisorDone = true;
 
-    if (this.phase === 'thinking') {
-      // Quick response with no workers - clear immediately
-      this.clear();
-    } else {
-      // Delegating phase - let user see final state for a moment
-      this.scheduleClear(2000);
-    }
+    // If no workers are involved, clear fast; otherwise wait for workers to finish.
+    this.maybeScheduleClear();
   }
 
   /**
@@ -476,6 +514,7 @@ export class SupervisorProgressUI {
     this.cancelPendingClear();
     this.isActive = false;
     this.currentRunId = null;
+    this.supervisorDone = false;
     this.phase = 'thinking'; // Reset phase for next run
     this.workers.clear();
     this.workersByWorkerId.clear();
@@ -525,13 +564,19 @@ export class SupervisorProgressUI {
       return;
     }
 
-    // Container is reserved for worker delegation progress (top of chat).
-    // In the 'thinking' phase we render nothing here; React renders an in-chat typing bubble.
     if (this.phase === 'thinking') {
-      this.container.innerHTML = '';
-      this.container.style.display = 'none';
+      this.container.style.display = 'block';
       this.container.classList.remove('supervisor-progress--delegating');
       this.container.classList.add('supervisor-progress--thinking');
+      this.container.innerHTML = `
+        <div class="supervisor-thinking-indicator" aria-label="Supervisor thinking">
+          <div class="thinking-dots">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+          </div>
+        </div>
+      `;
       return;
     }
 
