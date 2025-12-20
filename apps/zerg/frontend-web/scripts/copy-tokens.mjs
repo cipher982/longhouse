@@ -23,6 +23,12 @@ const possibleSources = [
 const files = ['core.css', 'theme-solid.css', 'legacy-aliases.css', 'tokens.ts']
 
 async function copyTokens() {
+  // Check if tokens already exist in destination (e.g., copied in Docker build)
+  if (existsSync(resolve(tokensDir, 'core.css'))) {
+    console.log('✅ Design tokens already present in src/styles/tokens/')
+    return
+  }
+
   // Find valid source directory
   let sourceDir = null
   for (const dir of possibleSources) {
