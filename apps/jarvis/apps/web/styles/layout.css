@@ -126,6 +126,99 @@
   50% { opacity: 0.7; transform: scale(1.1); }
 }
 
+/* Brand link wrapper */
+.brand-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-decoration: none;
+  color: inherit;
+}
+
+.brand-link:hover .brand-logo {
+  filter: drop-shadow(0 0 12px rgb(99 102 241 / 60%));
+}
+
+/* Global Navigation - Cyber Tabs */
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.nav-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border-radius: var(--radius-md);
+  transition: all 0.25s ease;
+}
+
+.nav-tab:hover {
+  color: var(--color-text-secondary);
+  background: rgb(255 255 255 / 4%);
+}
+
+.nav-tab--active {
+  color: var(--color-text-primary);
+}
+
+.nav-tab--active:hover {
+  background: transparent;
+}
+
+/* Active indicator - glowing underline */
+.nav-tab-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-neon-primary) 20%,
+    var(--color-neon-cyan) 50%,
+    var(--color-neon-primary) 80%,
+    transparent 100%
+  );
+  border-radius: 1px;
+  box-shadow:
+    0 0 8px var(--color-neon-primary),
+    0 0 16px rgb(99 102 241 / 40%);
+  animation: indicator-glow 2s ease-in-out infinite;
+}
+
+@keyframes indicator-glow {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
+}
+
+/* Responsive: hide nav labels on smaller screens */
+@media (width <= 900px) {
+  .header-nav {
+    gap: 0;
+  }
+
+  .nav-tab {
+    padding: var(--space-2);
+    font-size: 12px;
+  }
+}
+
+@media (width <= 640px) {
+  .header-nav {
+    display: none;
+  }
+}
+
 .main-header h1 {
   font-size: var(--font-size-xl);
   font-weight: 700;
