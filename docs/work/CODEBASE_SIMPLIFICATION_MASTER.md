@@ -85,7 +85,7 @@ Rules for this effort:
 
 ### 3.1 Single-source config for API/WS base URLs
 
-- [ ] Remove duplicate API base resolution in `apps/zerg/frontend-web/src/services/api.ts` and depend on `apps/zerg/frontend-web/src/lib/config.ts`.
+- [x] Remove duplicate API base resolution in `apps/zerg/frontend-web/src/services/api.ts` and depend on `apps/zerg/frontend-web/src/lib/config.ts`.
 
 ### 3.2 Legacy CSS + legacy selectors removal (later, after tests are stable)
 
@@ -135,3 +135,4 @@ Format:
 - 2025-12-20: export OpenAPI schema to a single canonical location — commit `e6dfeab`
 - 2025-12-20: remove backend print spam (event bus / ws manager / db) — commits `f69bb07`, `7c38576`, `ddb5c30`
 - 2025-12-20: migrate + delete legacy WS schema module — commits `5e17151`, `e1fc369`
+- 2025-12-20: unify frontend API base URL resolution — commits `eec399a`, `743b035`
