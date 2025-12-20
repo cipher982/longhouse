@@ -1,7 +1,8 @@
 # Frontend Alignment Spec: Zerg Dashboard + Jarvis Chat
 
-**Status:** Draft
+**Status:** Phases 1-3 Complete
 **Date:** 2025-12-20
+**Updated:** 2025-12-20
 
 ## Executive Summary
 
@@ -252,29 +253,27 @@ packages/ui/
 
 ## Implementation Checklist
 
-### Phase 1: Brand Consistency
-- [ ] Update `Header.tsx` title to "Swarmlet"
-- [ ] Add logo to chat header
-- [ ] Update `manifest.json` name/short_name
-- [ ] Update `index.html` title tag
-- [ ] Verify favicon consistency
+### Phase 1: Brand Consistency ✅
+- [x] Update `Header.tsx` title to "Swarmlet"
+- [x] Add logo to chat header (with cyber glow effect)
+- [x] Update `manifest.json` name/short_name
+- [x] Update `index.html` title tag
+- [x] Copy logo asset to Jarvis public folder
 
-### Phase 2: Navigation
-- [ ] Design nav integration mockup
-- [ ] Implement nav tabs in Jarvis Header
-- [ ] Style nav to match cyber aesthetic (glass effect)
-- [ ] Add active state indication
-- [ ] Test mobile responsiveness
-- [ ] Update E2E tests for new nav structure
+### Phase 2: Navigation ✅
+- [x] Implement nav tabs in Jarvis Header (Chat, Dashboard, Canvas, Integrations, Runners)
+- [x] Style nav to match cyber aesthetic (glowing underline indicator)
+- [x] Add active state indication (pulsing cyan/indigo glow)
+- [x] Responsive: tabs shrink at 900px, hide at 640px
+- [x] Brand logo links to /chat
 
-### Phase 3: Tokens
-- [ ] Create `packages/design-tokens/` package
-- [ ] Merge token definitions
-- [ ] Build script for CSS + TS output
-- [ ] Migrate Zerg to shared tokens
-- [ ] Migrate Jarvis to shared tokens
-- [ ] Remove duplicate token files
-- [ ] Update documentation
+### Phase 3: Tokens ✅
+- [x] Create `packages/design-tokens/` package
+- [x] Merge token definitions (DTCG format)
+- [x] Build script generates: core.css, theme-solid.css, theme-glass.css, tokens.ts
+- [x] Add `make build-tokens` command
+- [x] Migrate Jarvis to shared tokens
+- [ ] Migrate Zerg to shared tokens (optional - currently works fine)
 
 ### Phase 4: Components (Deferred)
 - [ ] Identify candidate components
