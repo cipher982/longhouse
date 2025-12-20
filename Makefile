@@ -195,16 +195,16 @@ test: ## Run ALL tests (Jarvis + Zerg + integration)
 
 test-jarvis: ## Run Jarvis tests only
 	@echo "🧪 Running Jarvis tests..."
-	cd apps/jarvis/apps/web && bun vitest run --reporter=basic --silent
+	cd apps/jarvis/apps/web && bun run test -- --reporter=basic --silent
 
 # Granular Jarvis test targets (for faster iteration)
 test-jarvis-unit: ## Run Jarvis unit tests (no Docker)
 	@echo "🧪 Running Jarvis unit tests (fast)..."
-	cd apps/jarvis/apps/web && npm test -- --run
+	cd apps/jarvis/apps/web && bun run test
 
 test-jarvis-watch: ## Run Jarvis unit tests in watch mode (TDD)
 	@echo "🧪 Running Jarvis unit tests in watch mode..."
-	cd apps/jarvis/apps/web && npm test -- --watch
+	cd apps/jarvis/apps/web && bun run test:watch
 
 test-jarvis-e2e: ## Run Jarvis E2E tests (isolated Docker environment)
 	@echo "🧪 Running Jarvis E2E tests (isolated)..."
