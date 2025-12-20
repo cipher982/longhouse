@@ -1,0 +1,688 @@
+/* Voice Button - Reactor Core Edition
+   ====================================
+   Pure CSS sci-fi voice button with rotating reactor rings.
+   All effects are CSS-only, GPU-accelerated.
+*/
+
+.voice-controls {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  position: relative;
+  background: linear-gradient(0deg, var(--color-void) 0%, transparent 100%);
+  animation: unfold-vertical 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: bottom center;
+}
+
+/* ============================
+   Reactor Core Container
+   ============================ */
+
+.voice-button-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 120px;
+}
+
+/* ============================
+   Reactor Rings
+   ============================ */
+
+.reactor-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  pointer-events: none;
+  /* GPU acceleration */
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* Outer Ring - Largest, slowest */
+.reactor-ring-outer {
+  width: 112px;
+  height: 112px;
+  border: 2px dashed rgb(99 102 241 / 30%);
+  animation: ring-rotate 12s linear infinite;
+}
+
+/* Middle Ring - Counter-rotation */
+.reactor-ring-middle {
+  width: 96px;
+  height: 96px;
+  border: 1.5px solid rgb(99 102 241 / 20%);
+  border-top-color: rgb(99 102 241 / 60%);
+  border-right-color: transparent;
+  border-bottom-color: rgb(99 102 241 / 60%);
+  border-left-color: transparent;
+  animation: ring-rotate-reverse 8s linear infinite;
+}
+
+/* Inner Ring - Closest to button, fastest */
+.reactor-ring-inner {
+  width: 82px;
+  height: 82px;
+  border: 1px dotted rgb(99 102 241 / 25%);
+  animation: ring-rotate 5s linear infinite;
+}
+
+/* Ring rotation animations */
+@keyframes ring-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-rotate-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+/* ============================
+   State-Based Ring Behavior
+   ============================ */
+
+/* Idle - Slow, subtle */
+.voice-button-wrapper.idle .reactor-ring-outer {
+  animation-duration: 20s;
+  opacity: 0.5;
+}
+
+.voice-button-wrapper.idle .reactor-ring-middle {
+  animation-duration: 15s;
+  opacity: 0.4;
+}
+
+.voice-button-wrapper.idle .reactor-ring-inner {
+  animation-duration: 10s;
+  opacity: 0.3;
+}
+
+/* Connecting - Speed up, pulse */
+.voice-button-wrapper.connecting .reactor-ring {
+  animation-duration: 3s;
+  opacity: 0.8;
+}
+
+.voice-button-wrapper.connecting .reactor-ring-outer {
+  border-color: rgb(99 102 241 / 50%);
+  animation:
+    ring-rotate 3s linear infinite,
+    ring-pulse 1.5s ease-in-out infinite;
+}
+
+.voice-button-wrapper.connecting .reactor-ring-middle {
+  border-top-color: var(--color-neon-primary);
+  border-bottom-color: var(--color-neon-primary);
+}
+
+/* Ready - Gentle glow, green tint */
+.voice-button-wrapper.ready .reactor-ring-outer {
+  border-color: rgb(34 197 94 / 30%);
+  animation-duration: 15s;
+}
+
+.voice-button-wrapper.ready .reactor-ring-middle {
+  border-top-color: rgb(34 197 94 / 50%);
+  border-bottom-color: rgb(34 197 94 / 50%);
+  animation-duration: 10s;
+}
+
+.voice-button-wrapper.ready .reactor-ring-inner {
+  border-color: rgb(34 197 94 / 20%);
+  animation-duration: 8s;
+}
+
+/* Listening - Fast, cyan energy burst */
+.voice-button-wrapper.listening .reactor-ring {
+  opacity: 1;
+}
+
+.voice-button-wrapper.listening .reactor-ring-outer {
+  border-color: rgb(6 182 212 / 50%);
+  animation: ring-rotate 4s linear infinite;
+  box-shadow: 0 0 20px rgb(6 182 212 / 30%);
+}
+
+.voice-button-wrapper.listening .reactor-ring-middle {
+  border-top-color: var(--color-neon-cyan);
+  border-bottom-color: var(--color-neon-cyan);
+  animation: ring-rotate-reverse 2.5s linear infinite;
+  box-shadow: 0 0 15px rgb(6 182 212 / 40%);
+}
+
+.voice-button-wrapper.listening .reactor-ring-inner {
+  border-color: rgb(6 182 212 / 40%);
+  animation: ring-rotate 1.5s linear infinite;
+  box-shadow: 0 0 10px rgb(6 182 212 / 30%);
+}
+
+/* Speaking - Pink energy pulse */
+.voice-button-wrapper.speaking .reactor-ring-outer {
+  border-color: rgb(236 72 153 / 40%);
+  animation:
+    ring-rotate 6s linear infinite,
+    ring-pulse-pink 1s ease-in-out infinite;
+}
+
+.voice-button-wrapper.speaking .reactor-ring-middle {
+  border-top-color: var(--color-neon-pink);
+  border-bottom-color: var(--color-neon-pink);
+  animation: ring-rotate-reverse 4s linear infinite;
+}
+
+.voice-button-wrapper.speaking .reactor-ring-inner {
+  border-color: rgb(236 72 153 / 30%);
+  animation: ring-rotate 2s linear infinite;
+}
+
+/* Processing - Rainbow cycle */
+.voice-button-wrapper.processing .reactor-ring {
+  animation:
+    ring-rotate 2s linear infinite,
+    ring-color-cycle 2s linear infinite;
+}
+
+/* Error - Red warning */
+.voice-button-wrapper.error .reactor-ring {
+  border-color: rgb(239 68 68 / 40%);
+  animation:
+    ring-rotate 3s linear infinite,
+    ring-shake 0.5s ease-in-out infinite;
+}
+
+/* Ring animation variants */
+@keyframes ring-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(180deg) scale(1.02);
+  }
+}
+
+@keyframes ring-pulse-pink {
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgb(236 72 153 / 20%);
+  }
+  50% {
+    box-shadow: 0 0 30px rgb(236 72 153 / 50%);
+  }
+}
+
+@keyframes ring-color-cycle {
+  0% {
+    border-color: var(--color-neon-primary);
+  }
+  25% {
+    border-color: var(--color-neon-cyan);
+  }
+  50% {
+    border-color: var(--color-neon-pink);
+  }
+  75% {
+    border-color: var(--color-neon-secondary);
+  }
+  100% {
+    border-color: var(--color-neon-primary);
+  }
+}
+
+@keyframes ring-shake {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(2deg);
+  }
+  75% {
+    transform: rotate(-2deg);
+  }
+}
+
+/* ============================
+   The Core Button
+   ============================ */
+
+.voice-button {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #1e1e2e 0%, #0a0a12 70%);
+  border: 2px solid rgb(99 102 241 / 30%);
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 10;
+  box-shadow:
+    inset 0 0 20px rgb(0 0 0 / 60%),
+    inset 0 2px 4px rgb(255 255 255 / 5%),
+    0 6px 20px rgb(0 0 0 / 50%),
+    0 0 0 1px rgb(255 255 255 / 5%),
+    0 0 20px rgb(99 102 241 / 15%);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Icon */
+.voice-icon {
+  width: 20px;
+  height: 20px;
+  color: rgb(255 255 255 / 50%);
+  transition: all 0.3s ease;
+  filter: drop-shadow(0 0 3px rgb(255 255 255 / 20%));
+}
+
+/* ============================
+   Button State Styling
+   ============================ */
+
+/* Idle */
+.voice-button.idle {
+  animation: button-idle-pulse 4s ease-in-out infinite;
+}
+
+.voice-button.idle .voice-icon {
+  color: rgb(255 255 255 / 60%);
+}
+
+/* Connecting */
+.voice-button.connecting {
+  border-color: rgb(99 102 241 / 50%);
+  animation: button-connecting 1.5s ease-in-out infinite;
+}
+
+.voice-button.connecting .voice-icon {
+  color: var(--color-neon-primary);
+  animation: icon-blink 1s steps(2, start) infinite;
+}
+
+/* Ready */
+.voice-button.ready {
+  border-color: rgb(34 197 94 / 40%);
+  box-shadow:
+    inset 0 0 30px rgb(0 0 0 / 60%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 1px rgb(34 197 94 / 20%),
+    0 0 40px rgb(34 197 94 / 15%);
+  animation: button-ready-breathe 3s ease-in-out infinite;
+}
+
+.voice-button.ready .voice-icon {
+  color: #22c55e;
+  filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
+}
+
+/* Listening */
+.voice-button.listening {
+  border-color: var(--color-neon-cyan);
+  background: radial-gradient(circle at 30% 30%, #0f2027 0%, #0a1015 70%);
+  transform: scale(1.05);
+  box-shadow:
+    inset 0 0 40px rgb(6 182 212 / 15%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(6 182 212 / 40%),
+    0 0 60px rgb(6 182 212 / 30%),
+    0 0 100px rgb(6 182 212 / 15%);
+  animation: button-listening 1.5s ease-in-out infinite;
+}
+
+.voice-button.listening .voice-icon {
+  color: var(--color-neon-cyan);
+  filter: drop-shadow(0 0 10px var(--color-neon-cyan));
+  animation: icon-float 2s ease-in-out infinite;
+}
+
+/* Processing */
+.voice-button.processing {
+  border-color: var(--color-neon-secondary);
+  animation: button-processing 2s linear infinite;
+}
+
+.voice-button.processing .voice-icon {
+  color: var(--color-neon-secondary);
+  filter: drop-shadow(0 0 8px var(--color-neon-secondary));
+}
+
+/* Speaking */
+.voice-button.speaking {
+  border-color: var(--color-neon-pink);
+  background: radial-gradient(circle at 30% 30%, #1a0a15 0%, #0f050a 70%);
+  box-shadow:
+    inset 0 0 40px rgb(236 72 153 / 15%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(236 72 153 / 40%),
+    0 0 50px rgb(236 72 153 / 25%);
+  animation: button-speaking 1s ease-in-out infinite;
+}
+
+.voice-button.speaking .voice-icon {
+  color: var(--color-neon-pink);
+  filter: drop-shadow(0 0 8px var(--color-neon-pink));
+}
+
+/* Error */
+.voice-button.error {
+  border-color: var(--color-intent-error);
+  box-shadow:
+    inset 0 0 30px rgb(239 68 68 / 10%),
+    0 8px 30px rgb(0 0 0 / 50%),
+    0 0 0 2px rgb(239 68 68 / 30%),
+    0 0 30px rgb(239 68 68 / 20%);
+}
+
+.voice-button.error .voice-icon {
+  color: var(--color-intent-error);
+}
+
+/* Disabled */
+.voice-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(50%);
+}
+
+/* Hover */
+.voice-button:hover:not(.disabled):not(.listening) {
+  transform: scale(1.02);
+  border-color: var(--color-neon-primary);
+}
+
+.voice-button:hover:not(.disabled) .voice-icon {
+  color: #fff;
+}
+
+/* Active */
+.voice-button:active:not(.disabled) {
+  transform: scale(0.98);
+}
+
+/* ============================
+   Button Animations
+   ============================ */
+
+@keyframes button-idle-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(255 255 255 / 5%),
+      0 0 30px rgb(99 102 241 / 15%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(255 255 255 / 8%),
+      0 0 50px rgb(99 102 241 / 25%);
+  }
+}
+
+@keyframes button-connecting {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 0 rgb(99 102 241 / 40%),
+      0 0 30px rgb(99 102 241 / 20%);
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 15px rgb(99 102 241 / 0%),
+      0 0 60px rgb(99 102 241 / 40%);
+  }
+}
+
+@keyframes button-ready-breathe {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 1px rgb(34 197 94 / 20%),
+      0 0 40px rgb(34 197 94 / 15%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 30px rgb(0 0 0 / 60%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 3px rgb(34 197 94 / 30%),
+      0 0 60px rgb(34 197 94 / 25%);
+  }
+}
+
+@keyframes button-listening {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 40px rgb(6 182 212 / 15%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 2px rgb(6 182 212 / 40%),
+      0 0 60px rgb(6 182 212 / 30%);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 50px rgb(6 182 212 / 25%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 4px rgb(6 182 212 / 50%),
+      0 0 80px rgb(6 182 212 / 40%);
+  }
+}
+
+@keyframes button-processing {
+  0% {
+    border-color: var(--color-neon-secondary);
+  }
+  25% {
+    border-color: var(--color-neon-primary);
+  }
+  50% {
+    border-color: var(--color-neon-cyan);
+  }
+  75% {
+    border-color: var(--color-neon-pink);
+  }
+  100% {
+    border-color: var(--color-neon-secondary);
+  }
+}
+
+@keyframes button-speaking {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 40px rgb(236 72 153 / 15%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 2px rgb(236 72 153 / 40%),
+      0 0 50px rgb(236 72 153 / 25%);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 50px rgb(236 72 153 / 25%),
+      0 8px 30px rgb(0 0 0 / 50%),
+      0 0 0 4px rgb(236 72 153 / 50%),
+      0 0 70px rgb(236 72 153 / 35%);
+    transform: scale(1.02);
+  }
+}
+
+@keyframes icon-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes icon-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+/* ============================
+   Status Text
+   ============================ */
+
+.voice-status {
+  text-align: center;
+  animation: slide-up-fade 0.4s ease-out 0.2s backwards;
+  min-width: 120px;
+}
+
+.voice-status-text {
+  font-family: var(--font-family-mono);
+  font-size: 0.7rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+  transition: color 0.3s ease;
+}
+
+/* Status text color by state */
+.voice-button.connecting ~ .voice-status .voice-status-text {
+  color: var(--color-neon-primary);
+}
+
+.voice-button.ready ~ .voice-status .voice-status-text {
+  color: #22c55e;
+}
+
+.voice-button.listening ~ .voice-status .voice-status-text {
+  color: var(--color-neon-cyan);
+}
+
+.voice-button.speaking ~ .voice-status .voice-status-text,
+.voice-button.processing ~ .voice-status .voice-status-text {
+  color: var(--color-neon-pink);
+}
+
+/* ============================
+   Mode Toggle - Cyber Switch
+   ============================ */
+
+.mode-toggle-container {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: rgb(255 255 255 / 3%);
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--color-border-muted);
+  backdrop-filter: blur(8px);
+  animation: slide-up-fade 0.4s ease-out 0.3s backwards;
+  transition: all 0.3s ease;
+  min-width: 120px;
+  justify-content: center;
+}
+
+.mode-toggle-container:hover {
+  background: rgb(255 255 255 / 5%);
+  border-color: rgb(255 255 255 / 15%);
+}
+
+.mode-toggle {
+  width: 40px;
+  height: 20px;
+  background: rgb(0 0 0 / 60%);
+  border-radius: 20px;
+  position: relative;
+  cursor: pointer;
+  border: 1px solid rgb(255 255 255 / 10%);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow:
+    inset 0 2px 4px rgb(0 0 0 / 30%),
+    0 1px 0 rgb(255 255 255 / 5%);
+}
+
+.mode-toggle[aria-checked="true"] {
+  background: linear-gradient(
+    135deg,
+    rgb(99 102 241 / 40%) 0%,
+    rgb(6 182 212 / 40%) 100%
+  );
+  border-color: var(--color-neon-cyan);
+  box-shadow:
+    inset 0 2px 4px rgb(0 0 0 / 20%),
+    0 0 15px rgb(6 182 212 / 30%);
+}
+
+.mode-toggle-slider {
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow:
+    0 2px 6px rgb(0 0 0 / 30%),
+    0 0 0 1px rgb(255 255 255 / 10%);
+}
+
+.mode-toggle[aria-checked="true"] .mode-toggle-slider {
+  transform: translateX(20px);
+  background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #22d3ee 100%);
+  box-shadow:
+    0 2px 8px rgb(6 182 212 / 50%),
+    0 0 12px var(--color-neon-cyan);
+}
+
+.mode-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+  transition: color 0.3s ease;
+}
+
+.mode-toggle-container:hover .mode-label {
+  color: var(--color-text-secondary);
+}
+
+/* Disabled toggle */
+.mode-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mode-toggle:disabled + .mode-label {
+  opacity: 0.4;
+}
