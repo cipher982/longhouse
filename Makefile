@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
-.PHONY: help dev dev-bg zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -38,7 +38,7 @@ env-check: ## Validate required environment variables
 	echo "🔍 Checking environment variables..."; \
 	\
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
-		if [ -z "$$(eval echo \$$$$var)" ]; then \
+		if [ -z "$$(printenv $$var)" ]; then \
 			echo "❌ Missing required: $$var"; \
 			missing=1; \
 		fi; \
@@ -69,7 +69,7 @@ env-check-prod: ## Validate production environment variables
 	           JWT_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
 	           GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
 	           OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
-		if [ -z "$$(eval echo \$$$$var)" ]; then \
+		if [ -z "$$(printenv $$var)" ]; then \
 			echo "❌ Missing required for prod: $$var"; \
 			missing=1; \
 		fi; \
@@ -111,14 +111,6 @@ zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "✅ Backend:  http://localhost:$${BACKEND_PORT:-47300}"
 	@echo "✅ Frontend: http://localhost:$${FRONTEND_PORT:-47200}"
 
-jarvis: ## Start Jarvis standalone (native, no Docker)
-	@echo "🤖 Starting Jarvis (native mode)..."
-	@echo "   For Docker mode, use 'make dev'"
-	cd apps/jarvis && $(MAKE) start
-
-jarvis-stop: ## Stop native Jarvis processes (for 'make jarvis')
-	@cd apps/jarvis && $(MAKE) stop
-
 stop: ## Stop all Docker services
 	@./scripts/stop-docker.sh
 
@@ -144,7 +136,7 @@ logs: ## View logs from running services
 
 logs-app: ## View logs for app services (excludes Postgres)
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed jarvis-web; \
+		$(COMPOSE_DEV) logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed; \
 	else \
 		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
 		exit 1; \
@@ -167,7 +159,7 @@ doctor: ## Print quick diagnostics for dev stack
 	@test -f .env && echo "  ✅ .env exists" || (echo "  ❌ missing .env" && exit 1)
 	@missing=0; \
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
-		if [ -z "$$(eval echo \$$$$var)" ]; then \
+		if [ -z "$$(printenv $$var)" ]; then \
 			echo "  ❌ $$var is empty"; \
 			missing=1; \
 		else \
@@ -197,22 +189,8 @@ reset: ## Reset database (destroys all data)
 
 test: ## Run ALL tests (Jarvis + Zerg + integration)
 	@echo "🧪 Running ALL tests (Jarvis + Zerg)..."
-	$(MAKE) test-jarvis
 	$(MAKE) test-zerg
 	@echo "✅ All tests complete"
-
-test-jarvis: ## Run Jarvis tests only
-	@echo "🧪 Running Jarvis tests..."
-	cd apps/jarvis/apps/web && bun run test -- --reporter=basic --silent
-
-# Granular Jarvis test targets (for faster iteration)
-test-jarvis-unit: ## Run Jarvis unit tests (no Docker)
-	@echo "🧪 Running Jarvis unit tests (fast)..."
-	cd apps/jarvis/apps/web && bun run test
-
-test-jarvis-watch: ## Run Jarvis unit tests in watch mode (TDD)
-	@echo "🧪 Running Jarvis unit tests in watch mode..."
-	cd apps/jarvis/apps/web && bun run test:watch
 
 test-jarvis-e2e: ## Run Jarvis E2E tests (isolated Docker environment)
 	@echo "🧪 Running Jarvis E2E tests (isolated)..."

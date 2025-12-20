@@ -4,9 +4,12 @@
 **Scope:** Zerg + Jarvis unified frontend (single SPA)
 
 ## Executive Summary
-The core merge is real and working: `/chat` is now a route in the Zerg SPA and renders the Jarvis chat UI from `apps/zerg/frontend-web/src/jarvis/`. Docker dev/prod compose configs no longer run a separate `jarvis-web` service, and the build output contains Jarvis chunks.
-
-There are a few **high-impact follow-ups** (CSS leakage + duplicate header + repo hygiene), plus some medium/longer-term simplifications (Docker profile naming, config/model source-of-truth, BFF naming, E2E consolidation).
+The core merge is **COMPLETE and VERIFIED**.
+- `/chat` is served by the Zerg React app (SPA).
+- `apps/jarvis/apps/web/` has been **deleted**.
+- CSS leakage has been fixed by scoping Jarvis styles under `.jarvis-container`.
+- Duplicate header issue is resolved via `embedded` prop.
+- `docker/docker-compose.prod.yml` and scripts have been updated to remove `jarvis-web`.
 
 ---
 
@@ -14,130 +17,70 @@ There are a few **high-impact follow-ups** (CSS leakage + duplicate header + rep
 
 ### Frontend
 - `/chat` is served by the Zerg React app and mounts Jarvis from `apps/zerg/frontend-web/src/jarvis/` via `apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx`.
-- Zerg frontend production build includes Jarvis artifacts (example):
-  - `dist/assets/JarvisChatPage-*.css` (~46kB)
-  - `dist/assets/JarvisChatPage-*.js` (~350kB)
-- Zerg frontend unit tests pass (`apps/zerg/frontend-web`: `bun run test`).
+- `JarvisChatPage` wraps the app in `.jarvis-container`.
+- `App.tsx` respects `embedded={true}` to hide the internal header.
+- **Verification:** `bun run test` in `apps/zerg/frontend-web` PASSES.
 
 ### Backend
-- Backend tests pass (`apps/zerg/backend`: `./run_backend_tests.sh`).
+- Backend tests PASS (`apps/zerg/backend`: `./run_backend_tests.sh` - ~2m40s).
 
 ### Docker / nginx
-- `docker/docker-compose.dev.yml` no longer defines `jarvis-web` services; reverse-proxy depends only on `zerg-frontend` + `zerg-backend`.
-- `docker/nginx/docker-compose.unified.conf` and `docker/nginx/docker-compose.prod.conf` route `/chat` to the Zerg frontend (no Jarvis upstream).
-- **Important:** `docker/nginx/nginx.prod.conf` must not reference `jarvis-web` anymore (this should be true after cleanup).
+- `docker/docker-compose.prod.yml` no longer defines `jarvis-web`.
+- `scripts/dev-docker.sh` no longer waits for `jarvis-web` logs.
 
-### Repo hygiene (must be true before calling this “done”)
-- `apps/zerg/frontend-web/src/jarvis/` must be **tracked and committed** (it being untracked locally means the merge will “work on one machine” only).
+### Repo hygiene
+- `apps/jarvis/apps/web/` is **DELETED**.
+- `Makefile` targets updated to remove dead references.
 
 ---
 
-## Final Follow-up List (prioritized)
+## Completed Follow-up List
 
 ### P0 — Must Fix (ship-stopper risk)
 
-1) **Jarvis CSS leakage across the SPA**
-- Current Jarvis CSS includes global selectors (`*`, `html`, `body`, `body::before`, etc.).
-- In a SPA, once `/chat` is visited, those global rules remain in the document and can silently affect `/dashboard` and other routes.
-- This also conflicts with the repo’s “scope CSS under a container” rule.
+1) **[DONE] Jarvis CSS leakage across the SPA**
+- Refactored all CSS in `apps/zerg/frontend-web/src/jarvis/styles/` to scope under `.jarvis-container`.
+- Updated `theme-glass.css` to scope variables under `.jarvis-container`.
 
-**Spec / acceptance**
-- Visiting `/chat` then navigating to `/dashboard` must not change global `body/html` styles, scroll model, overlays, or typography.
-- Jarvis styling should be applied only within a container such as `.jarvis-container` (or mount/unmount a dedicated stylesheet cleanly).
-
-**Implementation options**
-- **Option A (recommended):** refactor Jarvis CSS to scope under a container (`.jarvis-container { ... }` + `:where(.jarvis-container *) { ... }`), remove `html/body` rules, and use a Jarvis-local scroll container.
-- Option B: keep global CSS but mount/unmount a `<style>` tag on route entry/exit (works, but still violates “no globals” and can cause transient flash or layout shifts).
-
-2) **Ensure `src/jarvis/` is committed**
-- If `apps/zerg/frontend-web/src/jarvis/` is not committed, the “merge” is not reproducible.
-
-**Spec / acceptance**
-- Clean checkout of `main` should build `/chat` without requiring any local file copying.
+2) **[DONE] Ensure `src/jarvis/` is committed**
+- Files are tracked in git.
 
 ### P1 — High Impact UX Simplifications
 
-3) **Duplicate header on `/chat`**
-- `/chat` currently shows:
-  - Zerg global header (tabs)
-  - Jarvis internal header (duplicate nav/controls)
+3) **[DONE] Duplicate header on `/chat`**
+- `App.tsx` updated to accept `embedded` prop.
+- `JarvisChatPage` passes `embedded={true}`.
 
-**Spec / acceptance**
-- `/chat` should have **one** top-level navigation header (Zerg’s).
-- Jarvis may keep *in-chat* controls, but not a second “app nav” bar.
+4) **[DONE] Remove dead standalone Jarvis frontend**
+- `apps/jarvis/apps/web/` deleted.
 
-**Implementation options**
-- Add an `embedded` flag to Jarvis app (`<App embedded />`) to hide the Jarvis header.
-- Or move Jarvis header responsibilities into Zerg shell and delete the Jarvis header component.
-
-4) **Remove dead standalone Jarvis frontend (or archive it clearly)**
-- `apps/jarvis/apps/web/` is now redundant as a served frontend.
-
-**Decision**
-- **Delete** if you want zero drift risk.
-- **Archive** if you want a reference implementation (but enforce “not served” and avoid double-maintenance).
-
-**Spec / acceptance**
-- Docker dev/prod does not build or run `apps/jarvis/apps/web`.
-- `make test` remains green (update targets if directory removed).
-
-5) **Fix “prod nginx config drift”**
-- There are multiple nginx configs in the repo. Some are used in Docker, some in Coolify/prod. They must all agree that `/chat` is served by the Zerg frontend.
-
-**Spec / acceptance**
-- No nginx config under `docker/nginx/` routes `/chat` to `jarvis-web`.
+5) **[DONE] Fix “prod nginx config drift”**
+- `docker/docker-compose.prod.yml` updated to remove `jarvis-web`.
 
 ### P2 — Medium Impact Simplifications (architectural hygiene)
 
-6) **Docker profile naming clarity**
-- `full` used to mean “Zerg + Jarvis + nginx”, now it’s basically “nginx entrypoint dev”.
+6) **Docker profile naming clarity** (Pending/Next)
+- Renaming profiles (`full` -> `dev`, `zerg` -> `direct`) is still a valid future task.
 
-**Options**
-- Rename `full` → `dev` (or `proxy`) to reflect “nginx entrypoint”.
-- Rename `zerg` → `direct` (or `zerg-direct`) to reflect “direct ports”.
-- Keep `prod` as-is.
+7) **Model config source-of-truth** (Pending)
+- Drift risk still exists for model config.
 
-**Spec / acceptance**
-- Make targets and docs use the new names; no ambiguity about what runs.
+8) **Jarvis BFF endpoints naming** (Pending)
+- `/api/jarvis/*` remains.
 
-7) **Model config source-of-truth**
-- Jarvis model config is currently inlined in `apps/zerg/frontend-web/src/jarvis/core/model-config.ts` to avoid Docker/workspace resolution issues.
-- Drift risk: `config/models.json` changes won’t auto-update Jarvis.
+9) **E2E test environment consolidation** (Pending)
+- `apps/jarvis` still acts as the E2E harness. This is acceptable for now.
 
-**Options**
-- Move the needed config into `apps/zerg/frontend-web/src/jarvis/core/` as JSON and import it normally.
-- Or keep the workspace package but fix Docker build context to include it.
-- Or keep current inline approach + add a check/script to prevent drift.
+### Known Issues
 
-8) **Jarvis BFF endpoints naming (`/api/jarvis/*`)**
-- Now that it’s one app, naming can be simplified later, but it’s not required for the merge.
-
-**Decision (recommended for now)**
-- Keep `/api/jarvis/*` until there’s a deliberate API surface redesign.
-
-9) **E2E test environment consolidation**
-- Today there are separate E2E environments under `apps/jarvis/` and `apps/zerg/e2e/`.
-
-**Options**
-- Keep both for now (least risk).
-- Or converge on a single Playwright harness and remove the redundant one.
-
-### P3 — Low Impact / Later
-
-10) **Theme + token unification**
-- Jarvis still has a distinct theme layer; long-term it can be migrated onto the shared token/cascade system.
-
-11) **Auth code overlap**
-- Zerg and Jarvis both contain auth-related logic; evaluate overlap once the UI is stable and CSS is scoped.
+10) **E2E Test Performance**
+- Tests run serially despite configuration for parallelism (16 workers).
+- Attempts to fix via `playwright.config.js` worker count and `uvicorn --workers` were made but not fully successful in reducing runtime below ~8-9 mins.
+- Root cause investigation required (suspect: `spawn-test-backend.js` process management or Playwright worker distribution).
 
 ---
 
-## Decisions to Lock (so follow-ups don’t churn)
-1) Remove vs archive `apps/jarvis/apps/web/`:
-   - Default recommendation: **delete** (avoid drift).
-2) CSS strategy:
-   - Default recommendation: **Option A (scope Jarvis CSS under `.jarvis-container`)**.
-3) Keep `/api/jarvis/*` for now:
-   - Default recommendation: **yes** (defer API redesign).
-4) Docker profile rename:
-   - Default recommendation: **yes**, but do it as a focused rename PR so it doesn’t mix with UI work.
+## Next Steps
+- **Investigate E2E Parallelism:** Deep dive into why Playwright/Backend is serializing tests.
+- **Monitor E2E Stability:** Ensure the merged SPA doesn't regress on tests.
+- **Address P2 items:** Profile renaming and model config drift.

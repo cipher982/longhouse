@@ -1,6 +1,6 @@
 /* THIS FILE IS AUTO-GENERATED. DO NOT EDIT DIRECTLY. */
 @layer theme-glass {
-  :root {
+  .jarvis-container {
     --color-void: #030305;
     --color-void-light: #0a0a12;
     --color-surface-page: #030305;

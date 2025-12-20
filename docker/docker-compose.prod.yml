@@ -85,33 +85,6 @@ services:
           memory: 512M
           cpus: '0.25'
 
-  # Jarvis Web UI (Chat interface) - Production build with nginx
-  jarvis-web:
-    build:
-      context: .
-      dockerfile: apps/jarvis/apps/web/Dockerfile.prod
-      target: production
-      args:
-        VITE_UMAMI_WEBSITE_ID: ${VITE_UMAMI_WEBSITE_ID}
-        VITE_UMAMI_SCRIPT_SRC: ${VITE_UMAMI_SCRIPT_SRC}
-        VITE_UMAMI_DOMAINS: ${VITE_UMAMI_DOMAINS}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - zerg-network
-    logging: *default-logging
-    # Security: read-only root filesystem
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx:noexec,nosuid,size=50m
-      - /var/log/nginx:noexec,nosuid,size=10m
-      - /var/run:noexec,nosuid,size=10m
-
   # Frontend Service - React UI (switched from Rust/WASM)
   frontend:
     build:
@@ -160,7 +133,6 @@ services:
     depends_on:
       - frontend
       - backend
-      - jarvis-web
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
       interval: 30s

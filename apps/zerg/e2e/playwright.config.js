@@ -1,6 +1,7 @@
 // Simple, clean Playwright configuration - just read ports from .env
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { devices } from '@playwright/test';
 
@@ -29,7 +30,8 @@ const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
 // Define workers count first so we can use it later
-const workers = process.env.CI ? 4 : 2;
+// In CI, cap at 4. Locally, use all available cores for maximum speed.
+const workers = process.env.CI ? 4 : os.cpus().length;
 
 const frontendServer = {
   // React dev server for Playwright runs
