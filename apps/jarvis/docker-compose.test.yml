@@ -76,7 +76,7 @@ services:
       VITE_JARVIS_DEVICE_SECRET: test-device-secret
       VITE_OPENAI_API_KEY: ${OPENAI_API_KEY}
       # Model configuration - Vite env vars need VITE_ prefix
-      VITE_JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
+      VITE_JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-false}
       VITE_JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
       VITE_JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
     volumes:
@@ -134,7 +134,7 @@ services:
       # Flag to skip WebRTC tests (they don't work in headless Docker)
       SKIP_WEBRTC_TESTS: "true"
       # Model configuration - pass through for test assertions
-      JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-true}
+      JARVIS_USE_MINI_MODEL: ${JARVIS_USE_MINI_MODEL:-false}
       JARVIS_REALTIME_MODEL: ${JARVIS_REALTIME_MODEL:-}
       JARVIS_REALTIME_MODEL_MINI: ${JARVIS_REALTIME_MODEL_MINI:-}
       # Test JWT for auth tests (must match what zerg-backend accepts)

@@ -29,6 +29,10 @@ test.describe('History Hydration E2E', () => {
                            process.env.CI ||
                            !process.env.OPENAI_API_KEY;
 
+  // In the Docker E2E environment we intentionally skip WebRTC-based tests.
+  // Use a *describe-level* skip so hooks (beforeEach) don't run and fail first.
+  test.skip(skipRealApiTests, 'Requires real OpenAI connection (WebRTC + microphone)');
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/chat/');
     await page.waitForSelector('#transcript');

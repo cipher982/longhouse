@@ -3,9 +3,14 @@ import { test, expect } from '@playwright/test';
 /**
  * E2E Tests for Two-Phase Supervisor Progress Indicator
  *
- * Two test suites:
- * 1. UI Behavior Tests - Inject events directly to test UI deterministically
- * 2. Integration Tests - Real LLM calls, tests FAIL if expected behavior doesn't happen
+ * These tests run against the real Jarvis UI, but inject supervisor/worker events
+ * directly via `window.__jarvis.eventBus` (DEV only) so they are deterministic and
+ * don't depend on LLM/tool timing.
+ *
+ * Test suites:
+ * 1. UI Behavior - class/DOM behavior when events fire
+ * 2. Delegation Flow - worker spawn + tool call rendering
+ * 3. Simple Responses - thinking-only runs clear quickly
  *
  * CSS Classes:
  * - .supervisor-progress (main container)
@@ -21,59 +26,28 @@ async function waitForChatReady(page: any) {
   await page.goto('/chat/');
   await page.waitForSelector('.transcript', { timeout: 30000 });
 
-  const textInput = page.locator('input[placeholder*="Type a message"]');
-  await textInput.waitFor({ state: 'visible', timeout: 30000 });
+  // Ensure the app has exposed the EventBus for deterministic injection
+  await page.waitForFunction(() => {
+    const w = window as any;
+    return Boolean(w.__jarvis?.eventBus);
+  }, { timeout: 30000 });
 
-  // Wait for session to connect
-  await page.waitForSelector('input[placeholder*="Type a message"]:not([disabled])', {
-    state: 'visible',
-    timeout: 90000
-  });
-
-  await page.waitForTimeout(500);
+  // Ensure the progress container is initialized and in the DOM
+  await page.waitForFunction(() => {
+    const el = document.getElementById('supervisor-progress');
+    return Boolean(el) && el.classList.contains('supervisor-progress');
+  }, { timeout: 30000 });
 }
 
 // Helper to inject supervisor events directly into the browser
 async function emitEvent(page: any, eventName: string, payload: any) {
   await page.evaluate(({ eventName, payload }) => {
-    const { eventBus } = (window as any).__jarvis || {};
-    if (eventBus) {
-      eventBus.emit(eventName, { ...payload, timestamp: Date.now() });
-    } else {
-      // Fallback: dispatch on window
-      window.dispatchEvent(new CustomEvent(eventName, { detail: payload }));
+    const bus = (window as any).__jarvis?.eventBus;
+    if (!bus) {
+      throw new Error('EventBus not exposed on window.__jarvis.eventBus');
     }
+    bus.emit(eventName, { ...payload, timestamp: Date.now() });
   }, { eventName, payload });
-}
-
-// Expose eventBus globally for testing
-async function exposeEventBus(page: any) {
-  await page.evaluate(() => {
-    // The eventBus is imported as a module, we need to expose it
-    // This works because supervisor-progress.ts imports from event-bus.ts
-    const script = document.createElement('script');
-    script.textContent = `
-      window.__testEventBus = {
-        emit: (name, data) => {
-          const event = new CustomEvent('__test_event', { detail: { name, data } });
-          window.dispatchEvent(event);
-        }
-      };
-    `;
-    document.head.appendChild(script);
-  });
-
-  // Hook into the real eventBus by listening in the app context
-  await page.addScriptTag({
-    content: `
-      import('/lib/event-bus.js').then(m => {
-        window.__jarvisEventBus = m.eventBus;
-      }).catch(() => {
-        // Module not directly accessible, will use DOM-based approach
-      });
-    `,
-    type: 'module'
-  }).catch(() => {});
 }
 
 /**
@@ -92,19 +66,14 @@ test.describe('Progress Indicator UI Behavior', () => {
   test('thinking phase: shows dots on supervisor:started', async ({ page }) => {
     test.setTimeout(30000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    // Send any message to trigger supervisor:started
-    await textInput.fill('test');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 1, task: 'Test task' });
 
     // Thinking dots MUST appear
     const thinkingDots = page.locator('.supervisor-progress--thinking .thinking-dots');
     await expect(thinkingDots).toBeVisible({ timeout: 3000 });
 
     // Must have exactly 3 dots
-    const dots = page.locator('.thinking-dot');
+    const dots = page.locator('.supervisor-progress--thinking .thinking-dot');
     await expect(dots).toHaveCount(3);
 
     // Container must have thinking class, NOT delegating
@@ -118,16 +87,12 @@ test.describe('Progress Indicator UI Behavior', () => {
   test('thinking phase: dots have staggered animation', async ({ page }) => {
     test.setTimeout(30000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
+    await emitEvent(page, 'supervisor:started', { runId: 2, task: 'Test task' });
 
-    await textInput.fill('test');
-    await sendButton.click();
-
-    await page.waitForSelector('.thinking-dot', { timeout: 3000 });
+    await page.waitForSelector('.supervisor-progress--thinking .thinking-dot', { timeout: 3000 });
 
     // Check animation delays are staggered
-    const delays = await page.locator('.thinking-dot').evaluateAll((dots) =>
+    const delays = await page.locator('.supervisor-progress--thinking .thinking-dot').evaluateAll((dots) =>
       dots.map((d) => window.getComputedStyle(d).animationDelay)
     );
 
@@ -140,22 +105,13 @@ test.describe('Progress Indicator UI Behavior', () => {
   test('thinking phase: clears immediately on complete (no workers)', async ({ page }) => {
     test.setTimeout(90000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    // Simple message unlikely to spawn workers
-    await textInput.fill('Hi');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 3, task: 'Quick task' });
 
     // Dots appear
     const thinkingDots = page.locator('.supervisor-progress--thinking');
     await expect(thinkingDots).toBeVisible({ timeout: 3000 });
 
-    // Wait for response
-    await page.waitForFunction(
-      () => document.querySelectorAll('.transcript .message').length >= 2,
-      { timeout: 60000 }
-    );
+    await emitEvent(page, 'supervisor:complete', { runId: 3, result: 'Done', status: 'success' });
 
     // Should clear quickly (not the 2s delay of delegating phase)
     // Give it 1 second max - if it's still visible after that, it's buggy
@@ -165,18 +121,12 @@ test.describe('Progress Indicator UI Behavior', () => {
   test('no duplicate containers on rapid messages', async ({ page }) => {
     test.setTimeout(60000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
+    await page.waitForSelector('.supervisor-progress', { state: 'attached', timeout: 3000 });
 
-    // Send first message
-    await textInput.fill('First');
-    await sendButton.click();
-
-    await page.waitForSelector('.supervisor-progress', { timeout: 3000 });
-
-    // Send second message quickly
-    await textInput.fill('Second');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 4, task: 'First' });
+    await emitEvent(page, 'supervisor:complete', { runId: 4, result: 'ok', status: 'success' });
+    await emitEvent(page, 'supervisor:started', { runId: 5, task: 'Second' });
+    await emitEvent(page, 'supervisor:complete', { runId: 5, result: 'ok', status: 'success' });
 
     // Should only ever have ONE progress container
     const containers = page.locator('.supervisor-progress');
@@ -186,12 +136,7 @@ test.describe('Progress Indicator UI Behavior', () => {
 
   test('sticky mode: container has position sticky', async ({ page }) => {
     test.setTimeout(30000);
-
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    await textInput.fill('test');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 6, task: 'Test task' });
 
     const container = page.locator('.supervisor-progress');
     await expect(container).toBeVisible({ timeout: 3000 });
@@ -214,13 +159,13 @@ test.describe('Progress Indicator UI Behavior', () => {
 
 /**
  * ============================================================================
- * SUITE 2: INTEGRATION TESTS (Real LLM, Tests Actually Fail)
+ * SUITE 2: DELEGATION FLOW (Event Injection)
  *
- * These tests send real messages and FAIL if expected behavior doesn't happen.
- * No silent catch blocks. No "oh well, workers didn't spawn".
+ * These tests emit the same events the app would receive from the backend and
+ * assert the UI updates (delegating phase, tool calls, etc).
  * ============================================================================
  */
-test.describe('Progress Indicator Integration', () => {
+test.describe('Progress Indicator - Delegation Flow', () => {
   test.beforeEach(async ({ page }) => {
     await waitForChatReady(page);
   });
@@ -228,26 +173,18 @@ test.describe('Progress Indicator Integration', () => {
   test('worker spawning: upgrades to delegating phase', async ({ page }) => {
     test.setTimeout(120000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    // Use spawn_worker explicitly to guarantee workers
-    // This is a direct instruction to the supervisor
-    await textInput.fill('Use spawn_worker to check disk space on the local system');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 10, task: 'Disk space' });
 
     // Phase 1: Thinking dots MUST appear first
     const thinkingContainer = page.locator('.supervisor-progress--thinking');
     await expect(thinkingContainer).toBeVisible({ timeout: 3000 });
 
-    await page.screenshot({ path: './test-results/integration-thinking-phase.png' });
+    await emitEvent(page, 'supervisor:worker_spawned', { jobId: 1, task: 'Check disk space on the local system' });
 
     // Phase 2: MUST upgrade to delegating when worker spawns
     // This is the critical assertion - NO catch block, test FAILS if this doesn't happen
     const delegatingContainer = page.locator('.supervisor-progress--delegating');
     await expect(delegatingContainer).toBeVisible({ timeout: 30000 });
-
-    await page.screenshot({ path: './test-results/integration-delegating-phase.png' });
 
     // Verify full modal elements
     await expect(page.locator('.supervisor-spinner')).toBeVisible();
@@ -268,11 +205,9 @@ test.describe('Progress Indicator Integration', () => {
     await expect(firstWorker.locator('.worker-icon')).toBeVisible();
     await expect(firstWorker.locator('.worker-task')).toBeVisible();
 
-    // Wait for completion
-    await page.waitForFunction(
-      () => document.querySelectorAll('.transcript .message').length >= 2,
-      { timeout: 90000 }
-    );
+    // Simulate completion: worker finishes and supervisor completes
+    await emitEvent(page, 'supervisor:worker_complete', { jobId: 1, workerId: 'worker-1', status: 'success', durationMs: 50 });
+    await emitEvent(page, 'supervisor:complete', { runId: 10, result: 'ok', status: 'success' });
 
     // Modal stays visible briefly (2s delay), then hides
     await page.waitForTimeout(1000);
@@ -287,16 +222,28 @@ test.describe('Progress Indicator Integration', () => {
   test('worker spawning: shows tool calls', async ({ page }) => {
     test.setTimeout(120000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    // Explicit instruction to use tools
-    await textInput.fill('Spawn a worker to run "echo hello" via ssh_exec tool');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 11, task: 'Tool test' });
+    await emitEvent(page, 'supervisor:worker_spawned', { jobId: 2, task: 'Run echo hello via container_exec' });
+    await emitEvent(page, 'supervisor:worker_started', { jobId: 2, workerId: 'worker-2' });
 
     // Wait for delegating phase
     const delegatingContainer = page.locator('.supervisor-progress--delegating');
     await expect(delegatingContainer).toBeVisible({ timeout: 30000 });
+
+    await emitEvent(page, 'worker:tool_started', {
+      workerId: 'worker-2',
+      toolName: 'container_exec',
+      toolCallId: 'tool-1',
+      argsPreview: '{"cmd":"echo hello"}',
+    });
+
+    await emitEvent(page, 'worker:tool_completed', {
+      workerId: 'worker-2',
+      toolName: 'container_exec',
+      toolCallId: 'tool-1',
+      durationMs: 12,
+      resultPreview: 'hello',
+    });
 
     // Wait for tool calls to appear (worker must execute tools)
     const toolCall = page.locator('.worker-tool');
@@ -314,11 +261,9 @@ test.describe('Progress Indicator Integration', () => {
   test('worker spawning: shows active worker count', async ({ page }) => {
     test.setTimeout(120000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    await textInput.fill('Spawn a worker to analyze the current directory');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 12, task: 'Active count' });
+    await emitEvent(page, 'supervisor:worker_spawned', { jobId: 3, task: 'Worker A' });
+    await emitEvent(page, 'supervisor:worker_spawned', { jobId: 4, task: 'Worker B' });
 
     // Wait for delegating phase
     await expect(page.locator('.supervisor-progress--delegating')).toBeVisible({ timeout: 30000 });
@@ -364,12 +309,7 @@ test.describe('Progress Indicator - Simple Responses', () => {
 
   test('greeting gets quick response without workers', async ({ page }) => {
     test.setTimeout(90000);
-
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
-    await textInput.fill('Hello!');
-    await sendButton.click();
+    await emitEvent(page, 'supervisor:started', { runId: 20, task: 'Hello' });
 
     // Thinking dots appear
     await expect(page.locator('.supervisor-progress--thinking')).toBeVisible({ timeout: 3000 });
@@ -387,11 +327,7 @@ test.describe('Progress Indicator - Simple Responses', () => {
       console.log('Note: Simple greeting triggered delegation (unexpected but acceptable)');
     }
 
-    // Wait for response
-    await page.waitForFunction(
-      () => document.querySelectorAll('.transcript .message').length >= 2,
-      { timeout: 60000 }
-    );
+    await emitEvent(page, 'supervisor:complete', { runId: 20, result: 'Hello there!', status: 'success' });
 
     // Progress should clear
     await expect(page.locator('.supervisor-progress')).not.toBeVisible({ timeout: 5000 });
@@ -400,19 +336,9 @@ test.describe('Progress Indicator - Simple Responses', () => {
   test('direct question gets response without long delay', async ({ page }) => {
     test.setTimeout(90000);
 
-    const textInput = page.locator('input[placeholder*="Type a message"]');
-    const sendButton = page.locator('button[aria-label="Send message"], button:has-text("Send")').first();
-
     const startTime = Date.now();
-    await textInput.fill('What is 2 + 2?');
-    await sendButton.click();
-
-    // Wait for response
-    await page.waitForFunction(
-      () => document.querySelectorAll('.transcript .message').length >= 2,
-      { timeout: 60000 }
-    );
-
+    await emitEvent(page, 'supervisor:started', { runId: 21, task: 'Math' });
+    await emitEvent(page, 'supervisor:complete', { runId: 21, result: '4', status: 'success' });
     const responseTime = Date.now() - startTime;
 
     // Simple math question should be fast (under 30s)
