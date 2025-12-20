@@ -32,6 +32,7 @@ Rules for this effort:
 
 - [x] Fix `scripts/fast-contract-check.sh` (currently assumes `frontend/` Rust).
 - [x] Fix or remove `scripts/run_all_tests.sh` (assumes `backend/`, `frontend/`, `e2e/`).
+- [x] Fix OpenAPI scripts to use `apps/zerg/openapi.json` (not root `openapi.json`).
 - [ ] Audit and fix any remaining scripts that reference:
   - `backend/` (should be `apps/zerg/backend/`)
   - `frontend/` (should be `apps/zerg/frontend-web/` or `apps/zerg/e2e/`)
@@ -130,3 +131,5 @@ Format:
 - 2025-12-20: canonicalize WebSocket codegen scripts/outputs — commit `36231e3`
 - 2025-12-20: make WebSocket codegen deterministic; `make validate-ws` green — commit `d41a443`
 - 2025-12-20: update stale `scripts/run_all_tests.sh` to call Make targets — commit `608fbb5`
+- 2025-12-20: fix OpenAPI contract scripts to use `apps/zerg/openapi.json` — commit `f6478f1`
+- 2025-12-20: export OpenAPI schema to a single canonical location — commit `e6dfeab`
