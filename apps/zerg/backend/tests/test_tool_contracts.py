@@ -82,6 +82,7 @@ class TestContractBreakageDetection:
         from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
         from zerg.tools.builtin.http_tools import TOOLS as HTTP_TOOLS
         from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
+        from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
         from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS
         from zerg.tools.builtin.supervisor_tools import TOOLS as SUPERVISOR_TOOLS
         from zerg.tools.builtin.uuid_tools import TOOLS as UUID_TOOLS
@@ -100,6 +101,8 @@ class TestContractBreakageDetection:
             actual_mapping[tool.name] = "ssh"
         for tool in SUPERVISOR_TOOLS:
             actual_mapping[tool.name] = "supervisor"
+        for tool in PERSONAL_TOOLS:
+            actual_mapping[tool.name] = "personal"
 
         # Verify against contract
         for tool_name, expected_server in actual_mapping.items():
