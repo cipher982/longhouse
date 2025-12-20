@@ -21,6 +21,11 @@ RUN uv sync --frozen --no-install-project --no-dev
 # Builder stage - application with dependencies
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
+# Install build-time dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv environment variables for optimization
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
@@ -104,6 +109,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     curl \
     openssh-client \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the virtual environment to /opt/venv to avoid volume mount conflicts
