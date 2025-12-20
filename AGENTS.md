@@ -177,6 +177,61 @@ These tests dispatch real tasks to the Supervisor and verify the SSE stream resu
 
 Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API changes.
 
+## Pre-commit (AI Agent Safety)
+
+Pre-commit hooks run automatically on every commit. Agents should be aware of what will block commits.
+
+### What Runs (~5s total)
+
+| Hook | Behavior | Blocks? |
+|------|----------|---------|
+| ruff lint | Auto-fixes Python issues | No (auto-fix) |
+| ruff format | Auto-fixes formatting | No (auto-fix) |
+| TypeScript types | `tsc --noEmit` | **Yes** |
+| ESLint | Frontend lint | Warns only (100 max) |
+| WS drift | Contract sync check | **Yes** |
+| AsyncAPI | Schema validation | **Yes** |
+
+### Common Failures & Fixes
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `bare except` (E722) | Using `except:` | Use `except Exception:` |
+| Unused variable (F841) | Assigned but never used | Prefix with `_` or remove |
+| Line too long (E501) | Ignored in this repo | N/A (disabled) |
+| TypeScript type error | Actual type mismatch | Fix the types |
+| WS drift | Schema out of sync | Run `make regen-ws` |
+
+### Ruff Configuration
+
+Located in `apps/zerg/backend/pyproject.toml`:
+- **Line length**: 140 (generous for descriptive code)
+- **Ignored**: E501 (line length) - prompt templates are intentionally long
+- **Scope**: Only `apps/zerg/backend/zerg/` (excludes alembic, scripts, tests from format enforcement)
+- **Generated files excluded**: `apps/zerg/backend/zerg/generated/`
+
+### Testing Pre-commit Locally
+
+```bash
+# Run all hooks on all files
+pre-commit run --all-files
+
+# Run specific hook
+pre-commit run ruff --all-files
+
+# Skip hooks (escape hatch for WIP commits)
+git commit --no-verify -m "WIP: skip hooks"
+```
+
+### Generated Files — Never Edit
+
+These are excluded from linting and regenerated from schemas:
+- `apps/zerg/backend/zerg/generated/ws_messages.py`
+- `apps/zerg/frontend-web/src/generated/ws-messages.ts`
+- `apps/zerg/frontend-web/src/generated/openapi-types.ts`
+
+If you edit these, your changes will be overwritten by `make regen-ws` or `make generate-sdk`.
+
 ## Gotchas
 
 1. **Docker context**: Jarvis Dockerfiles expect repo root context (paths like `COPY apps/jarvis/...`).
