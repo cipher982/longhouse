@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 
-import { WorkerProgressUI } from '../lib/supervisor-progress';
+import { WorkerProgressUI } from '../lib/worker-progress';
 
 describe('WorkerProgressUI initialize', () => {
   afterEach(() => {
@@ -10,18 +10,18 @@ describe('WorkerProgressUI initialize', () => {
   it('normalizes a pre-rendered placeholder in floating mode', () => {
     document.body.innerHTML = `
       <div class="app-root">
-        <div id="supervisor-progress" class="hidden supervisor-progress-panel"></div>
+        <div id="worker-progress" class="hidden worker-progress-panel"></div>
       </div>
     `;
 
     const ui = new WorkerProgressUI();
-    ui.initialize('supervisor-progress', 'floating');
+    ui.initialize('worker-progress', 'floating');
 
-    const el = document.getElementById('supervisor-progress');
+    const el = document.getElementById('worker-progress');
     expect(el).toBeTruthy();
     expect(el?.classList.contains('hidden')).toBe(false);
-    expect(el?.classList.contains('supervisor-progress')).toBe(true);
-    expect(el?.classList.contains('supervisor-progress--floating')).toBe(true);
+    expect(el?.classList.contains('worker-progress')).toBe(true);
+    expect(el?.classList.contains('worker-progress--floating')).toBe(true);
     expect(el?.parentElement).toBe(document.body);
 
     ui.destroy();

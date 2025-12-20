@@ -6,7 +6,7 @@
  */
 
 /* Main container */
-.supervisor-progress {
+.worker-progress {
   display: none;
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-2);
@@ -16,7 +16,7 @@
   box-shadow: var(--shadow-sm);
 }
 
-.supervisor-progress-content {
+.worker-progress-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -211,7 +211,7 @@
 
 /* Responsive adjustments */
 @media (width <= 768px) {
-  .supervisor-progress {
+  .worker-progress {
     padding: var(--space-3);
     margin: 0 var(--space-2) var(--space-2);
   }
@@ -222,7 +222,7 @@
 }
 
 /* Animation for fade in */
-.supervisor-progress[style*="display: block"] {
+.worker-progress[style*="display: block"] {
   animation: supervisor-fade-in 0.2s ease-out;
 }
 
@@ -242,7 +242,7 @@
 /* Sticky Mode - Sticks to top of chat area (default)                 */
 /* ------------------------------------------------------------------ */
 
-.supervisor-progress--sticky {
+.worker-progress--sticky {
   position: sticky;
   top: 0;
   z-index: 100;
@@ -258,7 +258,7 @@
 }
 
 /* Sticky mode entrance animation */
-.supervisor-progress--sticky[style*="display: block"] {
+.worker-progress--sticky[style*="display: block"] {
   animation: supervisor-sticky-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -276,7 +276,7 @@
 
 /* Mobile adjustments for sticky */
 @media (width <= 768px) {
-  .supervisor-progress--sticky {
+  .worker-progress--sticky {
     margin: 0 0 var(--space-2) 0;
     border-radius: var(--radius-md);
   }
@@ -286,7 +286,7 @@
 /* Floating Mode - Fixed position toast, always visible               */
 /* ------------------------------------------------------------------ */
 
-.supervisor-progress--floating {
+.worker-progress--floating {
   position: fixed;
   bottom: 140px; /* Above voice button controls */
   right: var(--space-5);
@@ -302,7 +302,7 @@
 }
 
 /* Floating mode entrance animation */
-.supervisor-progress--floating[style*="display: block"] {
+.worker-progress--floating[style*="display: block"] {
   animation: supervisor-float-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -320,7 +320,7 @@
 
 /* Mobile: full width at bottom */
 @media (width <= 768px) {
-  .supervisor-progress--floating {
+  .worker-progress--floating {
     left: var(--space-3);
     right: var(--space-3);
     bottom: 120px;
@@ -333,7 +333,7 @@
 /* Attention Animation - Draws user focus when supervisor starts      */
 /* ------------------------------------------------------------------ */
 
-.supervisor-progress--attention {
+.worker-progress--attention {
   animation: supervisor-attention 0.4s ease-out;
 }
 
@@ -359,6 +359,6 @@
 /* Active State - Full modal with workers                              */
 /* ------------------------------------------------------------------ */
 
-.supervisor-progress--active {
+.worker-progress--active {
   /* Active class applied when workers are displayed */
 }

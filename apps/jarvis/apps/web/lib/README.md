@@ -12,7 +12,7 @@ The library layer provides stateful services that React hooks consume:
 | `supervisor-chat-controller.ts` | SSE streaming to Zerg backend        | useTextChannel         |
 | `conversation-controller.ts`    | Streaming text accumulation          | useJarvisApp           |
 | `session-handler.ts`            | OpenAI Realtime session management   | useVoice               |
-| `supervisor-progress.ts`        | Worker progress UI rendering         | App.tsx                |
+| `worker-progress.ts`            | Worker progress UI rendering         | App.tsx                |
 | `config.ts`                     | Environment configuration            | All modules            |
 
 ## Design Philosophy

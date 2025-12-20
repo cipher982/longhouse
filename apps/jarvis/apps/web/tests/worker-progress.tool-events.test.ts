@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { WorkerProgressUI } from '../lib/supervisor-progress';
+import { WorkerProgressUI } from '../lib/worker-progress';
 import { eventBus } from '../lib/event-bus';
 
 describe('WorkerProgressUI tool events', () => {
   let ui: WorkerProgressUI;
 
   beforeEach(() => {
-    document.body.innerHTML = '<div id="supervisor-progress"></div>';
+    document.body.innerHTML = '<div id="worker-progress"></div>';
     ui = new WorkerProgressUI();
-    ui.initialize('supervisor-progress');
+    ui.initialize('worker-progress');
     eventBus.emit('supervisor:started', { runId: 1, task: 'test task', timestamp: Date.now() });
     // Progress UI only renders once workers spawn (isActive becomes true)
     eventBus.emit('supervisor:worker_spawned', { jobId: 1, task: 'worker task', timestamp: Date.now() });
@@ -37,7 +37,7 @@ describe('WorkerProgressUI tool events', () => {
 
     expect(tool.toolName).toBe('ssh_exec');
 
-    const html = document.getElementById('supervisor-progress')?.innerHTML || '';
+    const html = document.getElementById('worker-progress')?.innerHTML || '';
     expect(html).toContain('ssh_exec');
   });
 

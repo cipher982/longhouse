@@ -11,7 +11,7 @@ import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
-import { supervisorProgress } from '../lib/supervisor-progress'
+import { workerProgress } from '../lib/worker-progress'
 
 console.info('[Jarvis] Starting React application')
 
@@ -19,9 +19,9 @@ export default function App() {
   const state = useAppState()
   const dispatch = useAppDispatch()
 
-  // Initialize supervisor progress UI (sticky, stays at top of chat area)
+  // Initialize worker progress UI (shows when supervisor delegates to workers)
   useEffect(() => {
-    supervisorProgress.initialize('supervisor-progress', 'sticky')
+    workerProgress.initialize('worker-progress', 'sticky')
   }, [])
 
   // Main Jarvis app hook - handles initialization, connection, voice
@@ -149,8 +149,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Supervisor progress container (SupervisorProgressUI will normalize/relocate as needed) */}
-      <div id="supervisor-progress"></div>
+      {/* Worker progress container (WorkerProgressUI will normalize/relocate as needed) */}
+      <div id="worker-progress"></div>
 
       {/* Hidden audio element for remote playback */}
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>

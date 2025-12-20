@@ -66,7 +66,7 @@ export class WorkerProgressUI {
    * @param containerId - DOM id for the container element
    * @param mode - Display mode: 'sticky' (default), 'floating', or 'inline'
    */
-  initialize(containerId: string = 'supervisor-progress', mode: DisplayMode = 'sticky'): void {
+  initialize(containerId: string = 'worker-progress', mode: DisplayMode = 'sticky'): void {
     this.displayMode = mode;
     this.container = document.getElementById(containerId);
 
@@ -79,18 +79,18 @@ export class WorkerProgressUI {
     // Normalize container classes so CSS + JS display toggles work.
     // React app may pre-render a placeholder div (sometimes with `hidden`).
     this.container.classList.remove('hidden');
-    this.container.classList.add('supervisor-progress');
-    this.container.classList.remove('supervisor-progress--floating', 'supervisor-progress--sticky');
+    this.container.classList.add('worker-progress');
+    this.container.classList.remove('worker-progress--floating', 'worker-progress--sticky');
 
     if (mode === 'floating') {
       // Floating mode: ensure it's attached to <body> so it stays visible even if chat scrolls.
-      this.container.classList.add('supervisor-progress--floating');
+      this.container.classList.add('worker-progress--floating');
       if (this.container.parentElement !== document.body) {
         document.body.appendChild(this.container);
       }
     } else if (mode === 'sticky') {
       // Sticky mode: place inside .transcript as first child, sticks to top while scrolling.
-      this.container.classList.add('supervisor-progress--sticky');
+      this.container.classList.add('worker-progress--sticky');
       const transcript = document.querySelector('.transcript');
       if (transcript && this.container.parentElement !== transcript) {
         transcript.insertBefore(this.container, transcript.firstChild);
@@ -217,9 +217,9 @@ export class WorkerProgressUI {
   private pulseAttention(): void {
     if (!this.container) return;
 
-    this.container.classList.add('supervisor-progress--attention');
+    this.container.classList.add('worker-progress--attention');
     setTimeout(() => {
-      this.container?.classList.remove('supervisor-progress--attention');
+      this.container?.classList.remove('worker-progress--attention');
     }, 1500);
   }
 
@@ -550,19 +550,19 @@ export class WorkerProgressUI {
     if (!this.isActive) {
       this.container.innerHTML = '';
       this.container.style.display = 'none';
-      this.container.classList.remove('supervisor-progress--active');
+      this.container.classList.remove('worker-progress--active');
       return;
     }
 
     this.container.style.display = 'block';
-    this.container.classList.add('supervisor-progress--active');
+    this.container.classList.add('worker-progress--active');
 
     // Full delegating modal with workers
     const workersArray = Array.from(this.workers.values());
     const runningWorkers = workersArray.filter(w => w.status === 'running' || w.status === 'spawned');
 
     this.container.innerHTML = `
-      <div class="supervisor-progress-content">
+      <div class="worker-progress-content">
         <div class="supervisor-status">
           <div class="supervisor-spinner"></div>
           <span class="supervisor-label">Investigating...</span>
