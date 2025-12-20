@@ -97,9 +97,13 @@
       "name": "zerg-frontend-web",
       "version": "0.1.0",
       "dependencies": {
+        "@openai/agents": "^0.1.1",
         "@tanstack/react-query": "^5.62.7",
         "@xyflow/react": "^12.8.6",
         "clsx": "^2.1.1",
+        "dompurify": "^3.3.0",
+        "idb": "^8.0.0",
+        "marked": "^17.0.1",
         "react": "19.2.1",
         "react-dom": "19.2.1",
         "react-hot-toast": "^2.6.0",
@@ -108,12 +112,14 @@
         "react-syntax-highlighter": "^16.1.0",
         "rehype-highlight": "^7.0.2",
         "remark-gfm": "^4.0.1",
+        "zod": "^3.25.76",
       },
       "devDependencies": {
         "@eslint/js": "^9.36.0",
         "@testing-library/jest-dom": "^6.4.0",
         "@testing-library/react": "^16.0.0",
         "@testing-library/user-event": "^14.5.2",
+        "@types/dompurify": "^3.2.0",
         "@types/node": "^22.5.1",
         "@types/react": "^19.2.7",
         "@types/react-dom": "^19.2.3",
@@ -135,6 +141,10 @@
     "packages/config": {
       "name": "@swarm/config",
       "version": "0.1.0",
+    },
+    "packages/design-tokens": {
+      "name": "@swarmlet/design-tokens",
+      "version": "1.0.0",
     },
   },
   "overrides": {
@@ -1159,6 +1169,8 @@
     "@surma/rollup-plugin-off-main-thread": ["@surma/rollup-plugin-off-main-thread@2.2.3", "", { "dependencies": { "ejs": "^3.1.6", "json5": "^2.2.0", "magic-string": "^0.25.0", "string.prototype.matchall": "^4.0.6" } }, "sha512-lR8q/9W7hZpMWweNiAKU7NQerBnzQQLvi8qnTDU/fxItPhtZVMbPV3lbCwjhIlNBe9Bbr5V+KHshvWmVSG9cxQ=="],
 
     "@swarm/config": ["@swarm/config@workspace:packages/config"],
+
+    "@swarmlet/design-tokens": ["@swarmlet/design-tokens@workspace:packages/design-tokens"],
 
     "@swarmlet/runner": ["@swarmlet/runner@workspace:apps/runner"],
 
@@ -4932,7 +4944,7 @@
 
     "@isaacs/cliui/wrap-ansi/ansi-styles": ["ansi-styles@6.2.3", "", {}, "sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg=="],
 
-    "@jarvis/web/@jarvis/core/@jarvis/data-local": ["@jarvis/data-local@file:apps/jarvis/packages/data/local", {}],
+    "@jarvis/web/@jarvis/core/@jarvis/data-local": ["@jarvis/data-local@file:apps/jarvis/packages/data/local", { "dependencies": { "idb": "^8.0.0" } }],
 
     "@modelcontextprotocol/sdk/ajv/json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, "sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug=="],
 
