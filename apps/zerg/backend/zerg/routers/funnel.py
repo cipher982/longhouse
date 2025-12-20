@@ -91,18 +91,15 @@ def is_known_bot(user_agent: str) -> bool:
 
 def get_funnel_db_path() -> Path:
     """Get path to funnel tracking database."""
-    # Use local data directory in dev, /var/lib/docker/data/zerg in production
+    # Use settings.data_dir which handles environment-specific roots correctly
     if settings.testing:
         # In tests, use temp directory
         data_dir = Path("/tmp/zerg_test_data")
-    elif Path("/var/lib/docker/data/zerg").exists():
-        # Production Docker environment
-        data_dir = Path("/var/lib/docker/data/zerg")
+        data_dir.mkdir(parents=True, exist_ok=True)
     else:
-        # Local development
-        data_dir = Path(__file__).parent.parent.parent.parent / "data"
+        # Use shared data directory
+        data_dir = settings.data_dir
 
-    data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "funnel.db"
 
 

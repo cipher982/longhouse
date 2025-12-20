@@ -156,6 +156,15 @@ export function useWebSocket(
       message = { type: 'message', data: event.data };
     }
 
+    // Handle heartbeat protocol
+    if (message.type === 'ping') {
+      sendMessage({
+        type: 'pong',
+        data: { timestamp: Date.now() }
+      });
+      return;
+    }
+
     // Check if this is a streaming message
     const streamingTypes = [
       'stream_start', 'stream_chunk', 'stream_end', 'assistant_id',

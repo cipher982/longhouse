@@ -171,8 +171,24 @@ _handler = logging.StreamHandler()
 _handler.setFormatter(StructuredFormatter())
 _root_logger.addHandler(_handler)
 
-# Suppress verbose INFO logs from known-noisy modules (e.g., websocket connects)
-for _noisy_mod in ("zerg.routers.websocket", "zerg.websocket.manager"):
+# Suppress verbose logs from known-noisy modules (even when LOG_LEVEL=DEBUG)
+#
+# Goal: keep dev logs high-signal. If you need full wire/debug output from these,
+# temporarily set their log levels explicitly in your environment or in a local patch.
+for _noisy_mod in (
+    # Internal chatty modules
+    "zerg.routers.websocket",
+    "zerg.websocket.manager",
+    # Third-party libraries that can dump huge payloads (e.g., OpenAI request options incl. prompts)
+    "openai",
+    "openai._base_client",
+    "openai._utils",
+    "stainless",
+    "stainless._base_client",
+    # HTTP client debug can be extremely verbose in dev
+    "httpx",
+    "httpcore",
+):
     logging.getLogger(_noisy_mod).setLevel(logging.WARNING)
 
 # Suppress SSE ping/chunk debug logs (sse-starlette healthchecks)

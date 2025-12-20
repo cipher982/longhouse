@@ -117,6 +117,13 @@ class Settings:  # noqa: D401 – simple data container
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
+    def data_dir(self) -> Path:
+        """Return the absolute path to the persistent data directory."""
+        path = _REPO_ROOT / "data"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
     def llm_disabled(self) -> bool:  # noqa: D401
         """Return True when outbound LLM calls are globally disabled."""
         return _truthy(os.getenv("LLM_DISABLED"))
