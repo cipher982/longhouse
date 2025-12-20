@@ -9,6 +9,7 @@
 *secret*
 *key*
 *token*
+!**/copy-tokens.mjs
 *.pem
 *.p12
 *.pfx
