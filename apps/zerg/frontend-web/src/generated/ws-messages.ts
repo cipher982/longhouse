@@ -1,5 +1,5 @@
 // AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from ws-protocol-asyncapi.yml at 2025-11-12T00:33:46.586165Z
+// Generated from ws-protocol-asyncapi.yml at 2025-12-20T05:30:12.362961Z
 // Using AsyncAPI 3.0 + TypeScript Code Generation
 //
 // This file contains strongly-typed WebSocket message definitions.
