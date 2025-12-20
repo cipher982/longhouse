@@ -78,11 +78,7 @@ def _make_notion_request(
         - status_code: HTTP status code
     """
     if not api_key:
-        return tool_error(
-            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
-            user_message="API key is required",
-            connector="notion"
-        )
+        return tool_error(error_type=ErrorType.CONNECTOR_NOT_CONFIGURED, user_message="API key is required", connector="notion")
 
     url = f"{NOTION_API_BASE}{endpoint}"
     headers = {
@@ -117,55 +113,43 @@ def _make_notion_request(
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
                 user_message=f"Resource not found: {error_message}. Verify the page/database ID and that your integration has access.",
-                connector="notion"
+                connector="notion",
             )
         elif response.status_code == 429:
             return tool_error(
                 error_type=ErrorType.RATE_LIMITED,
                 user_message=f"Rate limit exceeded: {error_message}. Notion API limit is ~3 requests/second.",
-                connector="notion"
+                connector="notion",
             )
         elif response.status_code == 400:
             return tool_error(
                 error_type=ErrorType.VALIDATION_ERROR,
                 user_message=f"Invalid request: {error_message}",
-                connector="notion"
+                connector="notion",
             )
         elif response.status_code == 403:
             return tool_error(
                 error_type=ErrorType.PERMISSION_DENIED,
                 user_message=f"Permission denied: {error_message}",
-                connector="notion"
+                connector="notion",
             )
         else:
             logger.warning(f"Notion API error {response.status_code} ({error_code}): {error_message}")
-            return tool_error(
-                error_type=ErrorType.EXECUTION_ERROR,
-                user_message=error_message,
-                connector="notion"
-            )
+            return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=error_message, connector="notion")
 
     except httpx.TimeoutException:
         logger.error(f"Notion API timeout for {endpoint}")
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Request timed out after {timeout} seconds",
-            connector="notion"
+            connector="notion",
         )
     except httpx.RequestError as e:
         logger.error(f"Notion API request error for {endpoint}: {e}")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"Request failed: {str(e)}",
-            connector="notion"
-        )
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Request failed: {str(e)}", connector="notion")
     except Exception as e:
         logger.exception(f"Unexpected error in Notion API request to {endpoint}")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"Unexpected error: {str(e)}",
-            connector="notion"
-        )
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {str(e)}", connector="notion")
 
 
 def notion_create_page(
@@ -265,11 +249,13 @@ def notion_create_page(
 
     if result.get("ok"):
         page_data = result["data"]
-        return tool_success({
-            "page_id": page_data["id"],
-            "url": page_data.get("url", ""),
-            "created_time": page_data.get("created_time", ""),
-        })
+        return tool_success(
+            {
+                "page_id": page_data["id"],
+                "url": page_data.get("url", ""),
+                "created_time": page_data.get("created_time", ""),
+            }
+        )
     else:
         return result
 
@@ -360,7 +346,7 @@ def notion_update_page(
         return tool_error(
             error_type=ErrorType.VALIDATION_ERROR,
             user_message="Must provide either properties or archived parameter",
-            connector="notion"
+            connector="notion",
         )
 
     result = _make_notion_request(resolved_api_key, f"/pages/{page_id}", method="PATCH", data=request_body)
@@ -418,7 +404,7 @@ def notion_search(
             return tool_error(
                 error_type=ErrorType.VALIDATION_ERROR,
                 user_message="filter_type must be 'page' or 'database'",
-                connector="notion"
+                connector="notion",
             )
         request_body["filter"] = {"value": filter_type, "property": "object"}
 
@@ -426,11 +412,13 @@ def notion_search(
 
     if result.get("ok"):
         data = result["data"]
-        return tool_success({
-            "results": data.get("results", []),
-            "has_more": data.get("has_more", False),
-            "next_cursor": data.get("next_cursor"),
-        })
+        return tool_success(
+            {
+                "results": data.get("results", []),
+                "has_more": data.get("has_more", False),
+                "next_cursor": data.get("next_cursor"),
+            }
+        )
     else:
         return result
 
@@ -490,17 +478,17 @@ def notion_query_database(
     if sorts:
         request_body["sorts"] = sorts
 
-    result = _make_notion_request(
-        resolved_api_key, f"/databases/{database_id}/query", method="POST", data=request_body
-    )
+    result = _make_notion_request(resolved_api_key, f"/databases/{database_id}/query", method="POST", data=request_body)
 
     if result.get("ok"):
         data = result["data"]
-        return tool_success({
-            "results": data.get("results", []),
-            "has_more": data.get("has_more", False),
-            "next_cursor": data.get("next_cursor"),
-        })
+        return tool_success(
+            {
+                "results": data.get("results", []),
+                "has_more": data.get("has_more", False),
+                "next_cursor": data.get("next_cursor"),
+            }
+        )
     else:
         return result
 
@@ -566,11 +554,7 @@ def notion_append_blocks(
         return error
 
     if not blocks:
-        return tool_error(
-            error_type=ErrorType.VALIDATION_ERROR,
-            user_message="No blocks provided to append",
-            connector="notion"
-        )
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="No blocks provided to append", connector="notion")
 
     request_body = {"children": blocks}
 
@@ -578,9 +562,11 @@ def notion_append_blocks(
 
     if result.get("ok"):
         data = result["data"]
-        return tool_success({
-            "blocks": data.get("results", []),
-        })
+        return tool_success(
+            {
+                "blocks": data.get("results", []),
+            }
+        )
     else:
         return result
 

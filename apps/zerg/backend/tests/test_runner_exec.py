@@ -10,13 +10,18 @@ Tests the complete runner execution flow:
 """
 
 import asyncio
+from unittest.mock import AsyncMock
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.orm import Session
 
-from zerg.context import WorkerContext, set_worker_context, reset_worker_context
+from zerg.context import WorkerContext
+from zerg.context import reset_worker_context
+from zerg.context import set_worker_context
 from zerg.crud import runner_crud
-from zerg.models.models import Runner, User
+from zerg.models.models import Runner
+from zerg.models.models import User
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.tools.builtin.runner_tools import runner_exec
 
@@ -150,7 +155,9 @@ class TestJobCRUD:
         # Combined output should be truncated to <= 50KB
         # Account for the "[truncated]" suffix
         combined_len = len(job.stdout_trunc or "") + len(job.stderr_trunc or "")
-        assert combined_len <= 51 * 1024, f"Combined output {combined_len} exceeds 51KB (50KB + truncation message buffer)"
+        assert (
+            combined_len <= 51 * 1024
+        ), f"Combined output {combined_len} exceeds 51KB (50KB + truncation message buffer)"
 
     def test_update_job_completed_success(self, db: Session, test_user: User, test_runner: tuple[Runner, str]):
         """Test marking job as completed with success."""
@@ -259,16 +266,18 @@ class TestRunnerExecTool:
         runner, _ = test_runner
 
         # Mock the dispatcher to avoid actual execution
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "test output",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "test output",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             result = runner_exec("test-laptop", "echo 'hello'")
 
@@ -280,16 +289,18 @@ class TestRunnerExecTool:
         """Test target resolution by explicit ID."""
         runner, _ = test_runner
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "test output",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "test output",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             result = runner_exec(f"runner:{runner.id}", "echo 'hello'")
 
@@ -329,16 +340,18 @@ class TestRunnerExecTool:
         """Test successful command execution."""
         runner, _ = test_runner
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "test output\n",
-                    "stderr": "",
-                    "duration_ms": 234,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "test output\n",
+                        "stderr": "",
+                        "duration_ms": 234,
+                    },
+                }
+            )
 
             result = runner_exec("test-laptop", "echo 'test'")
 
@@ -352,16 +365,18 @@ class TestRunnerExecTool:
         """Test command with non-zero exit code (not an error)."""
         runner, _ = test_runner
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 1,
-                    "stdout": "",
-                    "stderr": "error message\n",
-                    "duration_ms": 123,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": "error message\n",
+                        "duration_ms": 123,
+                    },
+                }
+            )
 
             result = runner_exec("test-laptop", "false")
 
@@ -374,14 +389,16 @@ class TestRunnerExecTool:
         """Test handling of execution errors."""
         runner, _ = test_runner
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": False,
-                "error": {
-                    "type": "execution_error",
-                    "message": "Runner is busy with another job",
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": False,
+                    "error": {
+                        "type": "execution_error",
+                        "message": "Runner is busy with another job",
+                    },
+                }
+            )
 
             result = runner_exec("test-laptop", "echo 'test'")
 
@@ -496,16 +513,18 @@ class TestCapabilityEnforcement:
         """Test that readonly runner allows safe commands."""
         runner, _ = test_runner
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "test output",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "test output",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             # Safe command should work
             result = runner_exec("test-laptop", "df -h")
@@ -539,7 +558,9 @@ class TestCapabilityEnforcement:
         assert result["ok"] is False
         assert "not allowed" in result["user_message"].lower()
 
-    def test_runner_exec_readonly_blocks_docker_without_capability(self, worker_context, test_runner: tuple[Runner, str]):
+    def test_runner_exec_readonly_blocks_docker_without_capability(
+        self, worker_context, test_runner: tuple[Runner, str]
+    ):
         """Test that docker requires explicit capability."""
         runner, _ = test_runner
 
@@ -549,7 +570,9 @@ class TestCapabilityEnforcement:
         assert "docker" in result["user_message"].lower()
         assert "capability" in result["user_message"].lower()
 
-    def test_runner_exec_full_allows_dangerous_commands(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_full_allows_dangerous_commands(
+        self, worker_context, test_runner: tuple[Runner, str], db: Session
+    ):
         """Test that exec.full runner allows dangerous commands."""
         runner, _ = test_runner
 
@@ -557,16 +580,18 @@ class TestCapabilityEnforcement:
         runner.capabilities = ["exec.full"]
         db.commit()
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             # Dangerous command should work with exec.full
             result = runner_exec("test-laptop", "rm -rf /tmp/test")
@@ -580,16 +605,18 @@ class TestCapabilityEnforcement:
         runner.capabilities = ["exec.full"]
         db.commit()
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "filtered output",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "filtered output",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             # Pipe should work with exec.full
             result = runner_exec("test-laptop", "ps aux | grep python")
@@ -603,22 +630,26 @@ class TestCapabilityEnforcement:
         runner.capabilities = ["exec.readonly", "docker"]
         db.commit()
 
-        with patch('zerg.tools.builtin.runner_tools.get_runner_job_dispatcher') as mock_dispatcher:
-            mock_dispatcher.return_value.dispatch_job = AsyncMock(return_value={
-                "ok": True,
-                "data": {
-                    "exit_code": 0,
-                    "stdout": "CONTAINER ID   IMAGE   ...",
-                    "stderr": "",
-                    "duration_ms": 100,
-                },
-            })
+        with patch("zerg.tools.builtin.runner_tools.get_runner_job_dispatcher") as mock_dispatcher:
+            mock_dispatcher.return_value.dispatch_job = AsyncMock(
+                return_value={
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "CONTAINER ID   IMAGE   ...",
+                        "stderr": "",
+                        "duration_ms": 100,
+                    },
+                }
+            )
 
             # Docker ps should work with docker capability
             result = runner_exec("test-laptop", "docker ps")
             assert result["ok"] is True
 
-    def test_runner_exec_docker_readonly_blocks_destructive(self, worker_context, test_runner: tuple[Runner, str], db: Session):
+    def test_runner_exec_docker_readonly_blocks_destructive(
+        self, worker_context, test_runner: tuple[Runner, str], db: Session
+    ):
         """Test that docker capability only allows readonly docker commands."""
         runner, _ = test_runner
 

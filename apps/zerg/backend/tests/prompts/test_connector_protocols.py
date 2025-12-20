@@ -5,7 +5,6 @@ agent system prompt to define how the agent should interpret dynamic
 connector status.
 """
 
-
 import pytest
 
 from zerg.prompts.connector_protocols import CAPABILITY_PROTOCOL
@@ -142,9 +141,9 @@ def test_error_handling_protocol_has_envelope_structure():
 
 def test_temporal_awareness_protocol_not_empty():
     """Test that TEMPORAL_AWARENESS_PROTOCOL contains meaningful content."""
-    content = TEMPORAL_AWARENESS_PROTOCOL.replace("<temporal_awareness>", "").replace(
-        "</temporal_awareness>", ""
-    ).strip()
+    content = (
+        TEMPORAL_AWARENESS_PROTOCOL.replace("<temporal_awareness>", "").replace("</temporal_awareness>", "").strip()
+    )
 
     assert len(content) > 100
 

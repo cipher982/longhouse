@@ -274,7 +274,7 @@ async def update_agent(
     agent: AgentUpdate,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
-    ):
+):
     if agent.model is not None:
         _validate_model_or_400(agent.model)
         # Enforce role-based allowlist for non-admin users when updating model

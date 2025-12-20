@@ -20,8 +20,8 @@ from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
 from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
-from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.runner_setup_tools import TOOLS as RUNNER_SETUP_TOOLS
+from zerg.tools.builtin.runner_tools import TOOLS as RUNNER_TOOLS
 from zerg.tools.builtin.slack_tools import TOOLS as SLACK_TOOLS
 from zerg.tools.builtin.sms_tools import TOOLS as SMS_TOOLS
 from zerg.tools.builtin.ssh_tools import TOOLS as SSH_TOOLS

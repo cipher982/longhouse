@@ -99,10 +99,7 @@ def list_agent_connectors(
     _get_agent_or_404(db, agent_id, current_user)
 
     # Get all configured credentials for this agent
-    configured_creds = {
-        c.connector_type: c
-        for c in db.query(ConnectorCredential).filter(ConnectorCredential.agent_id == agent_id).all()
-    }
+    configured_creds = {c.connector_type: c for c in db.query(ConnectorCredential).filter(ConnectorCredential.agent_id == agent_id).all()}
 
     result = []
     for conn_type, definition in CONNECTOR_REGISTRY.items():

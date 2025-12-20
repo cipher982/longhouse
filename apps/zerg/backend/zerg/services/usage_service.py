@@ -6,20 +6,23 @@ All costs are derived from AgentRun.total_cost_usd (NULL costs are excluded from
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from typing import Literal, Optional
+from datetime import date
+from datetime import datetime
+from datetime import timedelta
+from typing import Literal
+from typing import Optional
 
-from sqlalchemy import and_, case, func
+from sqlalchemy import and_
+from sqlalchemy import case
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun as AgentRunModel
-from zerg.schemas.usage import (
-    TokenBreakdown,
-    UsageLimit,
-    UserUsageResponse,
-)
+from zerg.schemas.usage import TokenBreakdown
+from zerg.schemas.usage import UsageLimit
+from zerg.schemas.usage import UserUsageResponse
 from zerg.utils.time import utc_now_naive
 
 
@@ -279,9 +282,21 @@ def get_all_users_usage(
                 "is_active": row.is_active,
                 "created_at": row.created_at,
                 "usage": {
-                    "today": {"tokens": int(row.tokens_today or 0), "cost_usd": round(float(row.cost_today or 0.0), 4), "runs": int(row.runs_today or 0)},
-                    "seven_days": {"tokens": int(row.tokens_7d or 0), "cost_usd": round(float(row.cost_7d or 0.0), 4), "runs": int(row.runs_7d or 0)},
-                    "thirty_days": {"tokens": int(row.tokens_30d or 0), "cost_usd": round(float(row.cost_30d or 0.0), 4), "runs": int(row.runs_30d or 0)},
+                    "today": {
+                        "tokens": int(row.tokens_today or 0),
+                        "cost_usd": round(float(row.cost_today or 0.0), 4),
+                        "runs": int(row.runs_today or 0),
+                    },
+                    "seven_days": {
+                        "tokens": int(row.tokens_7d or 0),
+                        "cost_usd": round(float(row.cost_7d or 0.0), 4),
+                        "runs": int(row.runs_7d or 0),
+                    },
+                    "thirty_days": {
+                        "tokens": int(row.tokens_30d or 0),
+                        "cost_usd": round(float(row.cost_30d or 0.0), 4),
+                        "runs": int(row.runs_30d or 0),
+                    },
                 },
             }
         )

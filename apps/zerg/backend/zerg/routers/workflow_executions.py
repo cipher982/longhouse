@@ -57,11 +57,7 @@ async def reserve_workflow_execution(
     # Create execution record with "waiting" phase (reserved for execution)
     execution = crud.create_workflow_execution(db, workflow_id=workflow_id, phase="waiting", triggered_by="manual")
 
-    return ExecutionStatusResponse(
-        execution_id=execution.id,
-        phase="waiting",
-        result=None
-    )
+    return ExecutionStatusResponse(execution_id=execution.id, phase="waiting", result=None)
 
 
 @router.post("/by-workflow/{workflow_id}/start", response_model=ExecutionStatusResponse)
@@ -103,20 +99,18 @@ async def start_workflow_execution(
 
         # Start workflow in background with small delay to allow subscription
         import asyncio
+
         async def delayed_start():
             await asyncio.sleep(0.1)  # 100ms delay for subscription to register
             workflow_engine.start_workflow_in_background(workflow_id, execution_id)
 
         asyncio.create_task(delayed_start())
 
-        return ExecutionStatusResponse(
-            execution_id=execution_id,
-            phase="running",
-            result=None
-        )
+        return ExecutionStatusResponse(execution_id=execution_id, phase="running", result=None)
     except Exception as e:
         # Log the full error for debugging
         import logging
+
         logger = logging.getLogger(__name__)
         logger.exception(f"Failed to start workflow {workflow_id}")
 
@@ -127,10 +121,7 @@ async def start_workflow_execution(
         elif "execution_id not found" in error_msg:
             error_msg = "Workflow execution failed: missing execution context. This is a configuration error."
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to start workflow: {error_msg}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to start workflow: {error_msg}")
 
 
 @router.post("/executions/{execution_id}/start", response_model=ExecutionStatusResponse)
@@ -159,11 +150,7 @@ async def start_reserved_execution(
     # Start execution using the proper task tracking
     workflow_engine.start_workflow_in_background(execution.workflow_id, execution_id)
 
-    return ExecutionStatusResponse(
-        execution_id=execution_id,
-        phase="running",
-        result=None
-    )
+    return ExecutionStatusResponse(execution_id=execution_id, phase="running", result=None)
 
 
 # Backward compatibility - DEPRECATED (place after specific routes to avoid conflicts)
@@ -209,11 +196,7 @@ def get_execution_status(
     execution = crud.get_workflow_execution(db, execution_id)
     if not execution or execution.workflow.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Execution not found")
-    return ExecutionStatusResponse(
-        execution_id=execution.id,
-        phase=execution.phase,
-        result=execution.result
-    )
+    return ExecutionStatusResponse(execution_id=execution.id, phase=execution.phase, result=execution.result)
 
 
 @router.post("/{execution_id}/await")
@@ -444,9 +427,7 @@ def list_scheduled_workflows(
                 {
                     "workflow_id": workflow_id,
                     "workflow_name": workflow.name,
-                    "next_run_time": schedule_info["next_run_time"].isoformat()
-                    if schedule_info["next_run_time"]
-                    else None,
+                    "next_run_time": schedule_info["next_run_time"].isoformat() if schedule_info["next_run_time"] else None,
                     "trigger": schedule_info["trigger"],
                 }
             )

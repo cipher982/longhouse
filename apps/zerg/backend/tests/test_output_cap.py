@@ -1,5 +1,5 @@
+from tests.conftest import TEST_WORKER_MODEL
 
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 def test_max_output_tokens_is_passed_to_chat_openai(monkeypatch):
     import zerg.agents_def.zerg_react_agent as zr

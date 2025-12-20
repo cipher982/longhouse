@@ -74,17 +74,17 @@ async def execute_thread_run_with_history(
         crud.mark_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
         await event_bus.publish(
             EventType.RUN_UPDATED,
-        {
-            "event_type": "run_updated",
-            "agent_id": agent.id,
-            "run_id": run_row.id,
-            "status": "failed",
-            "finished_at": end_ts.isoformat(),
-            "duration_ms": duration_ms,
-            "error": str(exc),
-            "thread_id": thread.id,
-        },
-    )
+            {
+                "event_type": "run_updated",
+                "agent_id": agent.id,
+                "run_id": run_row.id,
+                "status": "failed",
+                "finished_at": end_ts.isoformat(),
+                "duration_ms": duration_ms,
+                "error": str(exc),
+                "thread_id": thread.id,
+            },
+        )
         raise
 
     # Success path
@@ -93,18 +93,13 @@ async def execute_thread_run_with_history(
     # Persist usage/cost if Runner captured metadata
     total_tokens = getattr(runner, "usage_total_tokens", None)
     total_cost_usd = None
-    if (
-        getattr(runner, "usage_prompt_tokens", None) is not None
-        and getattr(runner, "usage_completion_tokens", None) is not None
-    ):
+    if getattr(runner, "usage_prompt_tokens", None) is not None and getattr(runner, "usage_completion_tokens", None) is not None:
         from zerg.pricing import get_usd_prices_per_1k
 
         prices = get_usd_prices_per_1k(agent.model)
         if prices is not None:
             in_price, out_price = prices
-            total_cost_usd = (
-                (runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)
-            ) / 1000.0
+            total_cost_usd = ((runner.usage_prompt_tokens * in_price) + (runner.usage_completion_tokens * out_price)) / 1000.0
 
     # Mark run as finished (summary auto-extracted)
     finished_run = crud.mark_finished(

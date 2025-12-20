@@ -11,30 +11,21 @@ class TestSendSlackWebhook:
 
     def test_invalid_webhook_url_empty(self):
         """Test that empty webhook URL is rejected."""
-        result = send_slack_webhook(
-            webhook_url="",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="", text="Test message")
         assert result["ok"] is False
         assert "error_type" in result
         assert "user_message" in result
 
     def test_invalid_webhook_url_wrong_format(self):
         """Test that non-Slack URLs are rejected."""
-        result = send_slack_webhook(
-            webhook_url="https://example.com/webhook",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="https://example.com/webhook", text="Test message")
         assert result["ok"] is False
         assert "error_type" in result
         assert "user_message" in result
 
     def test_empty_text_without_blocks(self):
         """Test that empty text without blocks is rejected."""
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text=""
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="")
         assert result["ok"] is False
 
     @patch("zerg.tools.builtin.slack_tools.httpx.Client")
@@ -45,10 +36,7 @@ class TestSendSlackWebhook:
         mock_response.text = "ok"
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="Test message")
 
         assert result["ok"] is True
         assert result["data"]["status_code"] == 200
@@ -62,10 +50,7 @@ class TestSendSlackWebhook:
         mock_response.text = "rate_limited"
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="Test message")
 
         assert result["ok"] is False
         assert result["error_type"] == "rate_limited"
@@ -79,18 +64,9 @@ class TestSendSlackWebhook:
         mock_post = mock_client.return_value.__enter__.return_value.post
         mock_post.return_value = mock_response
 
-        blocks = [
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Bold text*"}
-            }
-        ]
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "*Bold text*"}}]
 
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text="Fallback text",
-            blocks=blocks
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="Fallback text", blocks=blocks)
 
         assert result["ok"] is True
 
@@ -109,10 +85,7 @@ class TestSendSlackWebhook:
         mock_response.text = "no_team"
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="Test message")
 
         assert result["ok"] is False
         assert result["error_type"] == "invalid_credentials"
@@ -125,10 +98,7 @@ class TestSendSlackWebhook:
         mock_response.text = "invalid_payload"
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
-        result = send_slack_webhook(
-            webhook_url="https://hooks.slack.com/services/T00/B00/xxx",
-            text="Test message"
-        )
+        result = send_slack_webhook(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", text="Test message")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"

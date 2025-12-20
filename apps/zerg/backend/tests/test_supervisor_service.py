@@ -4,22 +4,18 @@ import tempfile
 
 import pytest
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-from zerg.models.models import AgentRun
 from zerg.models.enums import RunStatus
-from zerg.services.supervisor_context import (
-    get_supervisor_run_id,
-    set_supervisor_run_id,
-    reset_supervisor_run_id,
-    get_next_seq,
-    reset_seq,
-)
-from zerg.services.supervisor_service import (
-    SupervisorService,
-    SUPERVISOR_THREAD_TYPE,
-)
-from tests.conftest import TEST_WORKER_MODEL
+from zerg.models.models import AgentRun
+from zerg.services.supervisor_context import get_next_seq
+from zerg.services.supervisor_context import get_supervisor_run_id
+from zerg.services.supervisor_context import reset_seq
+from zerg.services.supervisor_context import reset_supervisor_run_id
+from zerg.services.supervisor_context import set_supervisor_run_id
+from zerg.services.supervisor_service import SUPERVISOR_THREAD_TYPE
+from zerg.services.supervisor_service import SupervisorService
 
 
 @pytest.fixture
@@ -141,9 +137,7 @@ class TestSupervisorService:
         for tool in expected_tools:
             assert tool in agent.allowed_tools, f"Missing tool: {tool}"
 
-    def test_get_or_create_supervisor_thread_creates_agent_if_needed(
-        self, db_session, test_user
-    ):
+    def test_get_or_create_supervisor_thread_creates_agent_if_needed(self, db_session, test_user):
         """Test that thread creation also creates agent if not provided."""
         service = SupervisorService(db_session)
 
@@ -245,13 +239,11 @@ class TestSupervisorContext:
 class TestWorkerSupervisorCorrelation:
     """Tests for worker-supervisor correlation via run_id."""
 
-    def test_spawn_worker_stores_supervisor_run_id(
-        self, db_session, test_user, credential_context, temp_artifact_path
-    ):
+    def test_spawn_worker_stores_supervisor_run_id(self, db_session, test_user, credential_context, temp_artifact_path):
         """Test that spawn_worker stores supervisor_run_id from context."""
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
-        from zerg.models.models import WorkerJob
         from tests.conftest import TEST_WORKER_MODEL
+        from zerg.models.models import WorkerJob
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
 
         # Create a real supervisor agent and run for FK constraint
         service = SupervisorService(db_session)
@@ -260,6 +252,7 @@ class TestWorkerSupervisorCorrelation:
 
         # Create a run
         from zerg.models.enums import RunTrigger
+
         run = AgentRun(
             agent_id=agent.id,
             thread_id=thread.id,
@@ -277,9 +270,7 @@ class TestWorkerSupervisorCorrelation:
             assert "queued successfully" in result
 
             # Find the created job
-            job = db_session.query(WorkerJob).filter(
-                WorkerJob.task == "Test task"
-            ).first()
+            job = db_session.query(WorkerJob).filter(WorkerJob.task == "Test task").first()
             assert job is not None
             assert job.supervisor_run_id == run.id
         finally:
@@ -289,9 +280,9 @@ class TestWorkerSupervisorCorrelation:
         self, db_session, test_user, credential_context, temp_artifact_path
     ):
         """Test that spawn_worker without context sets supervisor_run_id to None."""
-        from zerg.tools.builtin.supervisor_tools import spawn_worker
-        from zerg.models.models import WorkerJob
         from tests.conftest import TEST_WORKER_MODEL
+        from zerg.models.models import WorkerJob
+        from zerg.tools.builtin.supervisor_tools import spawn_worker
 
         # Ensure no supervisor context
         assert get_supervisor_run_id() is None
@@ -300,9 +291,7 @@ class TestWorkerSupervisorCorrelation:
         assert "queued successfully" in result
 
         # Find the created job
-        job = db_session.query(WorkerJob).filter(
-            WorkerJob.task == "Standalone task"
-        ).first()
+        job = db_session.query(WorkerJob).filter(WorkerJob.task == "Standalone task").first()
         assert job is not None
         assert job.supervisor_run_id is None
 
@@ -320,11 +309,11 @@ class TestRecentWorkerHistoryInjection:
         context = service._build_recent_worker_context(test_user.id)
         assert context is None
 
-    def test_build_recent_worker_context_with_workers(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_build_recent_worker_context_with_workers(self, db_session, test_user, temp_artifact_path):
         """Should return formatted context when recent workers exist."""
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
+
         from zerg.models.models import WorkerJob
 
         # Create a recent worker job
@@ -348,11 +337,11 @@ class TestRecentWorkerHistoryInjection:
         assert "SUCCESS" in context
         assert "Check disk usage" in context
 
-    def test_build_recent_worker_context_respects_limit(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_build_recent_worker_context_respects_limit(self, db_session, test_user, temp_artifact_path):
         """Should only return up to RECENT_WORKER_HISTORY_LIMIT workers."""
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
+
         from zerg.models.models import WorkerJob
         from zerg.services.supervisor_service import RECENT_WORKER_HISTORY_LIMIT
 
@@ -376,11 +365,11 @@ class TestRecentWorkerHistoryInjection:
         job_count = context.count("Job ")
         assert job_count == RECENT_WORKER_HISTORY_LIMIT
 
-    def test_build_recent_worker_context_includes_running(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_build_recent_worker_context_includes_running(self, db_session, test_user, temp_artifact_path):
         """Should include running workers in context."""
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
+
         from zerg.models.models import WorkerJob
 
         job = WorkerJob(
@@ -400,11 +389,11 @@ class TestRecentWorkerHistoryInjection:
         assert "RUNNING" in context
         assert "Long running investigation" in context
 
-    def test_build_recent_worker_context_includes_marker(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_build_recent_worker_context_includes_marker(self, db_session, test_user, temp_artifact_path):
         """Context should include marker for cleanup identification."""
-        from datetime import datetime, timezone
+        from datetime import datetime
+        from datetime import timezone
+
         from zerg.models.models import WorkerJob
         from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
 
@@ -424,9 +413,7 @@ class TestRecentWorkerHistoryInjection:
         assert context is not None
         assert RECENT_WORKER_CONTEXT_MARKER in context
 
-    def test_cleanup_stale_worker_context(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_cleanup_stale_worker_context(self, db_session, test_user, temp_artifact_path):
         """Should delete messages containing the marker (older than min_age)."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
@@ -448,10 +435,14 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         # Verify message exists
-        messages_before = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        messages_before = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(messages_before) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
@@ -461,15 +452,17 @@ class TestRecentWorkerHistoryInjection:
         assert deleted_count == 1
 
         # Verify message is gone
-        messages_after = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        messages_after = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(messages_after) == 0
 
-    def test_cleanup_does_not_affect_other_messages(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_cleanup_does_not_affect_other_messages(self, db_session, test_user, temp_artifact_path):
         """Cleanup should only delete messages with the marker."""
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
@@ -481,9 +474,13 @@ class TestRecentWorkerHistoryInjection:
         thread = service.get_or_create_supervisor_thread(test_user.id, agent)
 
         # Count existing messages (thread may have a system prompt)
-        initial_count = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-        ).count()
+        initial_count = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+            )
+            .count()
+        )
 
         # Add a normal system message (no marker)
         crud.create_thread_message(
@@ -504,10 +501,14 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         # Verify marker message exists
-        marker_messages = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        marker_messages = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(marker_messages) == 1
 
         # Cleanup with min_age_seconds=0 to delete immediately (for testing)
@@ -517,22 +518,28 @@ class TestRecentWorkerHistoryInjection:
         assert deleted_count == 1
 
         # Verify marker message is gone
-        marker_messages_after = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        marker_messages_after = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(marker_messages_after) == 0
 
         # Verify our "Important system instructions" message still exists
-        important_msg = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains("Important system instructions"),
-        ).first()
+        important_msg = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains("Important system instructions"),
+            )
+            .first()
+        )
         assert important_msg is not None
 
-    def test_cleanup_respects_min_age_for_race_condition_protection(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_cleanup_respects_min_age_for_race_condition_protection(self, db_session, test_user, temp_artifact_path):
         """Fresh context messages (< min_age) should NOT be deleted.
 
         This prevents race conditions where concurrent requests could
@@ -566,21 +573,22 @@ class TestRecentWorkerHistoryInjection:
         assert deleted_count == 0
 
         # Message should still exist
-        messages = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        messages = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(messages) == 1
 
-    def test_cleanup_removes_older_duplicates_but_keeps_fresh(
-        self, db_session, test_user, temp_artifact_path
-    ):
+    def test_cleanup_removes_older_duplicates_but_keeps_fresh(self, db_session, test_user, temp_artifact_path):
         """Back-to-back requests should not accumulate multiple context blocks.
 
         When there are multiple context messages and the newest is fresh,
         only the newest should be kept (all older ones deleted).
         """
-        from datetime import timedelta
         from zerg.crud import crud
         from zerg.models.models import ThreadMessage
         from zerg.services.supervisor_service import RECENT_WORKER_CONTEXT_MARKER
@@ -610,10 +618,14 @@ class TestRecentWorkerHistoryInjection:
         db_session.commit()
 
         # Verify both exist
-        before = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        before = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(before) == 2
 
         # Cleanup with default min_age - newest is fresh so kept, older deleted
@@ -624,9 +636,13 @@ class TestRecentWorkerHistoryInjection:
         assert deleted_count == 1
 
         # Only the fresh one should remain
-        after = db_session.query(ThreadMessage).filter(
-            ThreadMessage.thread_id == thread.id,
-            ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
-        ).all()
+        after = (
+            db_session.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.content.contains(RECENT_WORKER_CONTEXT_MARKER),
+            )
+            .all()
+        )
         assert len(after) == 1
         assert "Fresh context 2" in after[0].content

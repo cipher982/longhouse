@@ -10,12 +10,12 @@ from typing import Dict
 from typing import List
 from typing import Optional
 
+# Cron validation helper
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
-# Cron validation helper
-from apscheduler.triggers.cron import CronTrigger
 from zerg.models.enums import RunStatus
 from zerg.models.models import Agent
 from zerg.models.models import AgentMessage
@@ -27,7 +27,6 @@ from zerg.models.models import Connector
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
 from zerg.models.models import Trigger
-from zerg.models.models import WorkerJob
 
 # Added for authentication
 # NOTE: For return type hints we avoid the newer *PEP 604* union syntax
@@ -37,6 +36,7 @@ from zerg.models.models import WorkerJob
 # Python 3.13.  Using the classic ``Optional[User]`` sidesteps the issue
 # without requiring ``from __future__ import annotations``.
 from zerg.models.models import User
+from zerg.models.models import WorkerJob
 from zerg.schemas.schemas import RunTrigger
 from zerg.utils.time import utc_now_naive
 
@@ -494,14 +494,7 @@ def delete_connector(db: Session, connector_id: int) -> bool:
 # Agent Message CRUD operations
 def get_agent_messages(db: Session, agent_id: int, skip: int = 0, limit: int = 100):
     """Get all messages for a specific agent"""
-    return (
-        db.query(AgentMessage)
-        .filter(AgentMessage.agent_id == agent_id)
-        .order_by(AgentMessage.timestamp)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    return db.query(AgentMessage).filter(AgentMessage.agent_id == agent_id).order_by(AgentMessage.timestamp).offset(skip).limit(limit).all()
 
 
 def create_agent_message(db: Session, agent_id: int, role: str, content: str):
@@ -581,9 +574,7 @@ def update_thread(
     if active is not None:
         if active:
             # Deactivate other threads for this agent
-            db.query(Thread).filter(Thread.agent_id == db_thread.agent_id, Thread.id != thread_id).update(
-                {"active": False}
-            )
+            db.query(Thread).filter(Thread.agent_id == db_thread.agent_id, Thread.id != thread_id).update({"active": False})
         db_thread.active = active
     if agent_state is not None:
         db_thread.agent_state = agent_state
@@ -623,14 +614,7 @@ def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int =
 
     See the API endpoint documentation in zerg.routers.threads.read_thread_messages().
     """
-    return (
-        db.query(ThreadMessage)
-        .filter(ThreadMessage.thread_id == thread_id)
-        .order_by(ThreadMessage.id)
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
+    return db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread_id).order_by(ThreadMessage.id).offset(skip).limit(limit).all()
 
 
 def create_thread_message(
@@ -720,9 +704,7 @@ def mark_messages_processed_bulk(db: Session, message_ids: List[int]):
         return 0
 
     updated = (
-        db.query(ThreadMessage)
-        .filter(ThreadMessage.id.in_(message_ids))
-        .update({ThreadMessage.processed: True}, synchronize_session=False)
+        db.query(ThreadMessage).filter(ThreadMessage.id.in_(message_ids)).update({ThreadMessage.processed: True}, synchronize_session=False)
     )
 
     db.commit()
@@ -832,10 +814,12 @@ def mark_finished(
         summary = _extract_run_summary(db, row.thread_id)
         if summary:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.info(f"Auto-extracted summary for run {run_id}: {summary[:100]}...")
         else:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.warning(f"No summary extracted for run {run_id} (thread {row.thread_id})")
 
@@ -963,9 +947,7 @@ def upsert_canvas_layout(
         raise ValueError("upsert_canvas_layout: `user_id` must not be None, auth dependency failed?")
 
     # First, try to find an existing record
-    existing = (
-        db.query(CanvasLayout).filter(CanvasLayout.user_id == user_id, CanvasLayout.workflow_id == workflow_id).first()
-    )
+    existing = db.query(CanvasLayout).filter(CanvasLayout.user_id == user_id, CanvasLayout.workflow_id == workflow_id).first()
 
     if existing:
         # Update existing record
@@ -997,9 +979,7 @@ def get_canvas_layout(db: Session, user_id: Optional[int], workflow_id: Optional
     return db.query(CanvasLayout).filter_by(user_id=user_id, workflow_id=workflow_id).first()
 
 
-def create_workflow(
-    db: Session, *, owner_id: int, name: str, description: Optional[str] = None, canvas: Dict[str, Any]
-):
+def create_workflow(db: Session, *, owner_id: int, name: str, description: Optional[str] = None, canvas: Dict[str, Any]):
     """Create a new workflow."""
     from zerg.models.models import Workflow
 
@@ -1072,9 +1052,7 @@ def get_waiting_execution_for_workflow(db: Session, workflow_id: int):
     return db.query(WorkflowExecution).filter_by(workflow_id=workflow_id, phase="waiting").first()
 
 
-def create_workflow_execution(
-    db: Session, *, workflow_id: int, phase: str = "running", triggered_by: str = "manual", result: str = None
-):
+def create_workflow_execution(db: Session, *, workflow_id: int, phase: str = "running", triggered_by: str = "manual", result: str = None):
     """Create a new workflow execution record."""
     from datetime import datetime
     from datetime import timezone
@@ -1202,6 +1180,4 @@ def deploy_workflow_template(
     workflow_name = name or f"{template.name} (Copy)"
     workflow_description = description or template.description
 
-    return create_workflow(
-        db=db, owner_id=owner_id, name=workflow_name, description=workflow_description, canvas=template.canvas
-    )
+    return create_workflow(db=db, owner_id=owner_id, name=workflow_name, description=workflow_description, canvas=template.canvas)

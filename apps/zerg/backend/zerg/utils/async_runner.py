@@ -156,6 +156,7 @@ class SharedAsyncRunner:
         Returns:
             The result of the function
         """
+
         async def _run():
             return await asyncio.to_thread(func)
 

@@ -7,10 +7,10 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud as _crud
 from zerg.models.models import Agent
 from zerg.services.thread_service import ThreadService
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 # Regex pattern for ISO 8601 timestamp prefix: [YYYY-MM-DDTHH:MM:SSZ]
 TIMESTAMP_PATTERN = r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\] "
@@ -79,7 +79,9 @@ def test_save_and_retrieve_messages(db_session):
     # Verify assistant message has timestamp prefix
     assert isinstance(history[2], AIMessage)
     assert re.match(TIMESTAMP_PATTERN, history[2].content), "Assistant message should have timestamp prefix"
-    assert history[2].content.endswith("] Hello!"), f"Expected content to end with '] Hello!', got: {history[2].content}"
+    assert history[2].content.endswith(
+        "] Hello!"
+    ), f"Expected content to end with '] Hello!', got: {history[2].content}"
 
     # Verify tool message does NOT have timestamp prefix
     assert isinstance(history[3], ToolMessage)

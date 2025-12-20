@@ -2,7 +2,6 @@
 
 import pytest
 from langchain_core.tools import StructuredTool
-
 from zerg.tools.builtin import BUILTIN_TOOLS
 from zerg.tools.registry import ImmutableToolRegistry
 

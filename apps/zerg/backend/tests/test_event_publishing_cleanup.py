@@ -6,7 +6,6 @@ to simple, clean event publishing.
 """
 
 from unittest.mock import AsyncMock
-from unittest.mock import Mock
 from unittest.mock import patch
 
 import pytest

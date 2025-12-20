@@ -4,10 +4,7 @@ Tests the /users/me/context endpoints (GET, PATCH, PUT) for managing
 user-specific context used in prompt composition.
 """
 
-import json
-import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # GET /users/me/context
@@ -148,9 +145,7 @@ class TestPatchUserContext:
     def test_patch_context_array_replacement(self, client: TestClient, test_user, db_session):
         """Test that arrays are replaced, not merged (arrays aren't dict-like)."""
         # Set initial servers
-        test_user.context = {
-            "servers": [{"name": "server1", "ip": "10.0.0.1"}]
-        }
+        test_user.context = {"servers": [{"name": "server1", "ip": "10.0.0.1"}]}
         db_session.commit()
 
         # Replace servers list
@@ -219,7 +214,7 @@ class TestPatchUserContext:
                 },
                 "privacy": {
                     "share_location": True,
-                }
+                },
             }
         }
         db_session.commit()

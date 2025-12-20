@@ -14,15 +14,21 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from datetime import timezone
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 import httpx
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.registry import ConnectorType
-from zerg.tools.error_envelope import ErrorType, tool_error, tool_success
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 from zerg.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
@@ -189,10 +195,12 @@ def _refresh_whoop_token(refresh_token: str, client_id: str, client_secret: str,
         New credentials dict with access_token and refresh_token, or None if failed
     """
     try:
+        import json
+
         import httpx
+
         from zerg.models.models import AccountConnectorCredential
         from zerg.utils.crypto import encrypt
-        import json
 
         logger.info(f"Refreshing WHOOP token for user {owner_id}")
 
@@ -217,10 +225,14 @@ def _refresh_whoop_token(refresh_token: str, client_id: str, client_secret: str,
 
         # IMPORTANT: Preserve client_id/client_secret when updating tokens
         # Otherwise next refresh will fail due to missing OAuth app credentials
-        credential = db.query(AccountConnectorCredential).filter(
-            AccountConnectorCredential.owner_id == owner_id,
-            AccountConnectorCredential.connector_type == "whoop",
-        ).first()
+        credential = (
+            db.query(AccountConnectorCredential)
+            .filter(
+                AccountConnectorCredential.owner_id == owner_id,
+                AccountConnectorCredential.connector_type == "whoop",
+            )
+            .first()
+        )
 
         if credential:
             # Decrypt existing credentials to preserve client_id/secret
@@ -245,7 +257,7 @@ def _refresh_whoop_token(refresh_token: str, client_id: str, client_secret: str,
         logger.error(f"WHOOP credential not found for user {owner_id} during refresh")
         return None
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to refresh WHOOP token for user {owner_id}")
         return None
 
@@ -353,11 +365,10 @@ def get_whoop_data(
                         logger.info("WHOOP token expired, attempting refresh...")
                         # Get database session from resolver
                         from zerg.database import get_db
+
                         db = next(get_db())
                         try:
-                            new_creds = _refresh_whoop_token(
-                                refresh_token, client_id, client_secret, resolver.owner_id, db
-                            )
+                            new_creds = _refresh_whoop_token(refresh_token, client_id, client_secret, resolver.owner_id, db)
                             if new_creds:
                                 # Update token for retry
                                 access_token = new_creds["access_token"]
@@ -523,17 +534,14 @@ def search_notes(
     # -C 1: 1 line of context
     # --max-count: limit matches per file
     # --type md: only markdown files
-    rg_command = (
-        f'rg -i -C 1 --max-count 3 --type md '
-        f'"{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
-    )
+    rg_command = f'rg -i -C 1 --max-count 3 --type md "{safe_query}" {expanded_vault} 2>/dev/null | head -n 100'
 
     try:
         # Execute via runner using supervisor-safe method
         # runner_exec requires worker context, so we use the dispatcher directly
+        from zerg.crud import runner_crud
         from zerg.database import get_db
         from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
-        from zerg.crud import runner_crud
 
         db = next(get_db())
         try:
@@ -597,19 +605,23 @@ def search_notes(
 
         # ripgrep returns exit code 1 if no matches (not an error)
         if exit_code == 1 and not stdout:
-            return tool_success({
-                "results": [],
-                "total_matches": 0,
-                "message": f"No notes found matching '{query}'",
-            })
+            return tool_success(
+                {
+                    "results": [],
+                    "total_matches": 0,
+                    "message": f"No notes found matching '{query}'",
+                }
+            )
 
         # Parse ripgrep output
         results = _parse_ripgrep_output(stdout, vault_path, limit)
 
-        return tool_success({
-            "results": results,
-            "total_matches": len(results),
-        })
+        return tool_success(
+            {
+                "results": results,
+                "total_matches": len(results),
+            }
+        )
 
     except Exception as e:
         logger.exception("Unexpected error in search_notes")
@@ -626,11 +638,9 @@ def _parse_ripgrep_output(output: str, vault_path: str, limit: int) -> List[Dict
     --
     """
     results: Dict[str, Dict[str, Any]] = {}
-    current_file = None
 
     for line in output.split("\n"):
         if line == "--" or not line:
-            current_file = None
             continue
 
         # Parse file:line or file-line format
@@ -647,11 +657,11 @@ def _parse_ripgrep_output(output: str, vault_path: str, limit: int) -> List[Dict
 
             if sep_idx > 0:
                 file_path = line[:sep_idx]
-                content = line[sep_idx + 1:].strip()
+                content = line[sep_idx + 1 :].strip()
 
                 # Make path relative to vault
                 if file_path.startswith(vault_path):
-                    file_path = file_path[len(vault_path):].lstrip("/")
+                    file_path = file_path[len(vault_path) :].lstrip("/")
 
                 if file_path not in results:
                     if len(results) >= limit:
@@ -666,8 +676,6 @@ def _parse_ripgrep_output(output: str, vault_path: str, limit: int) -> List[Dict
                         "title": title,
                         "matches": [],
                     }
-
-                current_file = file_path
 
                 # Only add non-empty content lines
                 if content and len(results[file_path]["matches"]) < 3:

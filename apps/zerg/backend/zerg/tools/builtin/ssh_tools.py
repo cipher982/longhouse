@@ -232,14 +232,16 @@ def ssh_exec(
 
         # Return success envelope even for non-zero exit codes
         # (non-zero exit code means command ran but failed, not a connection error)
-        return tool_success({
-            "host": host,
-            "command": command,
-            "exit_code": result.returncode,
-            "stdout": stdout,
-            "stderr": stderr,
-            "duration_ms": duration_ms,
-        })
+        return tool_success(
+            {
+                "host": host,
+                "command": command,
+                "exit_code": result.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "duration_ms": duration_ms,
+            }
+        )
 
     except subprocess.TimeoutExpired:
         logger.error(f"SSH command timeout after {timeout_secs}s on {host}: {command}")

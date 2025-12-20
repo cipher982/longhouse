@@ -33,10 +33,13 @@ class TestEventPublisherTaskTracking:
         # Publish several fire-and-forget events
         event_count = 3
         for i in range(event_count):
-            publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {
-                "node_id": f"test-{i}",
-                "execution_id": f"exec-{i}"  # Required by _handle_node_state_event
-            })
+            publish_event_fire_and_forget(
+                EventType.NODE_STATE_CHANGED,
+                {
+                    "node_id": f"test-{i}",
+                    "execution_id": f"exec-{i}",  # Required by _handle_node_state_event
+                },
+            )
 
         # With shared runner, tasks execute synchronously
         active_count = get_active_task_count()
@@ -90,10 +93,13 @@ class TestEventPublisherTaskTracking:
         assert initial_count == 0, "Shared runner has no tracked tasks"
 
         # Publish an event
-        publish_event_fire_and_forget(EventType.NODE_STATE_CHANGED, {
-            "test": "monitoring",
-            "execution_id": "test-exec"  # Required by _handle_node_state_event
-        })
+        publish_event_fire_and_forget(
+            EventType.NODE_STATE_CHANGED,
+            {
+                "test": "monitoring",
+                "execution_id": "test-exec",  # Required by _handle_node_state_event
+            },
+        )
 
         # With shared runner, count stays at 0 (synchronous execution)
         new_count = get_active_task_count()

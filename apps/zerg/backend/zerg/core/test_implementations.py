@@ -75,9 +75,7 @@ class IsolatedSQLiteDatabase(Database):
         with db_session(self.session_factory) as db:
             existing_user = crud.get_user_by_email(db, "test@example.com")
             if not existing_user:
-                crud.create_user(
-                    db, email="test@example.com", role="ADMIN", provider="dev", provider_user_id="test-user-1"
-                )
+                crud.create_user(db, email="test@example.com", role="ADMIN", provider="dev", provider_user_id="test-user-1")
 
     def cleanup(self):
         """Clean up database file."""

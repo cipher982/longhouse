@@ -1,4 +1,5 @@
 """Test to verify Tier 2 (Progressive Disclosure) - metrics.jsonl functionality."""
+
 import json
 from datetime import datetime
 from datetime import timezone

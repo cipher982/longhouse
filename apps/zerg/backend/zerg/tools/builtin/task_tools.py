@@ -7,17 +7,21 @@ requiring external integrations.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
+from typing import Dict
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy import desc
 
-from zerg.context import get_worker_context
 from zerg.connectors.context import get_credential_resolver
+from zerg.context import get_worker_context
 from zerg.database import db_session
 from zerg.models.models import UserTask
-from zerg.tools.error_envelope import ErrorType, tool_error, tool_success
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +63,8 @@ def _parse_iso8601(date_str: str | None) -> datetime | None:
 
     try:
         # Try with timezone
-        if date_str.endswith('Z'):
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        if date_str.endswith("Z"):
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         return datetime.fromisoformat(date_str)
     except (ValueError, AttributeError) as e:
         logger.warning(f"Failed to parse date string '{date_str}': {e}")
@@ -69,6 +73,7 @@ def _parse_iso8601(date_str: str | None) -> datetime | None:
 
 class TaskCreateInput(BaseModel):
     """Input schema for task_create."""
+
     title: str = Field(description="Task title/summary")
     notes: str | None = Field(default=None, description="Additional task notes or description")
     due_at: str | None = Field(default=None, description="Optional due date in ISO8601 format (e.g., '2025-12-31T23:59:59Z')")
@@ -160,6 +165,7 @@ def task_create(
 
 class TaskListInput(BaseModel):
     """Input schema for task_list."""
+
     status: str | None = Field(default=None, description="Filter by status: 'pending', 'done', or 'cancelled'. Omit to see all tasks.")
     limit: int = Field(default=50, description="Maximum number of tasks to return (default: 50)")
     offset: int = Field(default=0, description="Number of tasks to skip for pagination (default: 0)")
@@ -236,23 +242,27 @@ def task_list(
             # Serialize tasks
             tasks_data = []
             for task in tasks:
-                tasks_data.append({
-                    "id": task.id,
-                    "title": task.title,
-                    "notes": task.notes,
-                    "status": task.status,
-                    "due_at": task.due_at.isoformat() if task.due_at else None,
-                    "created_at": task.created_at.isoformat() if task.created_at else None,
-                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-                })
+                tasks_data.append(
+                    {
+                        "id": task.id,
+                        "title": task.title,
+                        "notes": task.notes,
+                        "status": task.status,
+                        "due_at": task.due_at.isoformat() if task.due_at else None,
+                        "created_at": task.created_at.isoformat() if task.created_at else None,
+                        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                    }
+                )
 
         logger.info(f"Listed {len(tasks_data)} tasks for user {user_id} (status={status}, total={total})")
-        return tool_success({
-            "tasks": tasks_data,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        })
+        return tool_success(
+            {
+                "tasks": tasks_data,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     except Exception as e:
         logger.exception("Error listing tasks")
@@ -264,6 +274,7 @@ def task_list(
 
 class TaskUpdateInput(BaseModel):
     """Input schema for task_update."""
+
     task_id: int = Field(description="ID of the task to update")
     title: str | None = Field(default=None, description="New task title")
     notes: str | None = Field(default=None, description="New task notes")
@@ -338,10 +349,14 @@ def task_update(
 
         # Update task
         with db_session() as db:
-            task = db.query(UserTask).filter(
-                UserTask.id == task_id,
-                UserTask.user_id == user_id  # Security: ensure user owns this task
-            ).first()
+            task = (
+                db.query(UserTask)
+                .filter(
+                    UserTask.id == task_id,
+                    UserTask.user_id == user_id,  # Security: ensure user owns this task
+                )
+                .first()
+            )
 
             if not task:
                 return tool_error(
@@ -386,6 +401,7 @@ def task_update(
 
 class TaskDeleteInput(BaseModel):
     """Input schema for task_delete."""
+
     task_id: int = Field(description="ID of the task to delete")
 
 
@@ -417,10 +433,14 @@ def task_delete(task_id: int) -> Dict[str, Any]:
 
         # Delete task
         with db_session() as db:
-            task = db.query(UserTask).filter(
-                UserTask.id == task_id,
-                UserTask.user_id == user_id  # Security: ensure user owns this task
-            ).first()
+            task = (
+                db.query(UserTask)
+                .filter(
+                    UserTask.id == task_id,
+                    UserTask.user_id == user_id,  # Security: ensure user owns this task
+                )
+                .first()
+            )
 
             if not task:
                 return tool_error(
@@ -431,10 +451,12 @@ def task_delete(task_id: int) -> Dict[str, Any]:
             db.delete(task)
 
         logger.info(f"Deleted task {task_id} for user {user_id}")
-        return tool_success({
-            "deleted": True,
-            "task_id": task_id,
-        })
+        return tool_success(
+            {
+                "deleted": True,
+                "task_id": task_id,
+            }
+        )
 
     except Exception as e:
         logger.exception("Error deleting task")

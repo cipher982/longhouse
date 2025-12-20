@@ -194,9 +194,7 @@ async def add_mcp_server(
     else:
         # Validate HTTPS URL for security
         if not request.url.startswith("https://"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="MCP server URL must use HTTPS for security"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MCP server URL must use HTTPS for security")
 
         server_config = {
             "url": request.url,
@@ -308,9 +306,7 @@ async def test_mcp_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     if agent.owner_id != current_user.id and current_user.role != "ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to test servers for this agent"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to test servers for this agent")
 
     # Build MCP server config
     if request.preset:

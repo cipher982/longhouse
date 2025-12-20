@@ -21,6 +21,7 @@ from pydantic import model_validator
 # Workflow Execution Response Models
 class ExecutionStatusResponse(BaseModel):
     """Response for workflow execution status."""
+
     execution_id: int
     phase: str
     result: Optional[Any] = None
@@ -28,6 +29,7 @@ class ExecutionStatusResponse(BaseModel):
 
 class ExecutionLogsResponse(BaseModel):
     """Response for workflow execution logs."""
+
     logs: str
 
 
@@ -66,11 +68,7 @@ class WorkflowNode(BaseModel):
         trigger_meta = config.get("trigger") if isinstance(config.get("trigger"), dict) else None
         if trigger_meta is not None:
             # Already in new shape – ensure legacy keys are stripped if present.
-            cleaned_config = {
-                key: value
-                for key, value in config.items()
-                if key not in {"trigger_type", "enabled", "params", "filters"}
-            }
+            cleaned_config = {key: value for key, value in config.items() if key not in {"trigger_type", "enabled", "params", "filters"}}
             cleaned_config["trigger"] = trigger_meta
             return {**data, "config": cleaned_config}
 
@@ -93,9 +91,7 @@ class WorkflowNode(BaseModel):
         legacy_filters = config.get("filters") if isinstance(config.get("filters"), list) else []
         legacy_enabled = config.get("enabled") if isinstance(config.get("enabled"), bool) else True
 
-        upgraded = {
-            key: value for key, value in config.items() if key not in {"trigger_type", "enabled", "params", "filters"}
-        }
+        upgraded = {key: value for key, value in config.items() if key not in {"trigger_type", "enabled", "params", "filters"}}
         upgraded["trigger"] = {
             "type": inferred_type,
             "config": {

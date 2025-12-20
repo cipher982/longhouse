@@ -4,7 +4,6 @@ Tests enrollment, registration, and management of runners.
 """
 
 import threading
-from datetime import datetime
 from datetime import timedelta
 
 from fastapi.testclient import TestClient

@@ -39,9 +39,7 @@ def _alerts_enabled() -> bool:
     return bool(getattr(get_settings(), "discord_enable_alerts", False))
 
 
-async def send_budget_alert(
-    scope: str, percent: float, used_usd: float, limit_cents: int, user_email: Optional[str] = None
-) -> None:
+async def send_budget_alert(scope: str, percent: float, used_usd: float, limit_cents: int, user_email: Optional[str] = None) -> None:
     """Send a budget threshold alert to Discord.
 
     Fire-and-forget; respects DISCORD_ENABLE_ALERTS and webhook presence.

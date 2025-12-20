@@ -56,11 +56,11 @@ build-backend = "hatchling.build"
 packages = ["zerg"]
 
 [tool.ruff]
-line-length = 120
+line-length = 140
 
 [tool.ruff.lint]
 select = ["I", "E", "F", "Q000"]
-ignore = []
+ignore = ["E501"]  # Line length - not a safety issue, and prompt templates are intentionally long
 
 [tool.ruff.lint.isort]
 force-single-line = true

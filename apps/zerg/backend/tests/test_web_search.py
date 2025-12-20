@@ -4,8 +4,6 @@ import os
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import pytest
-
 from zerg.tools.builtin.web_search import web_search
 from zerg.tools.builtin.web_search import web_search_tool
 

@@ -113,10 +113,30 @@ Rules for this effort:
 
 ---
 
-## Phase 6 — CI / Automation Alignment (Optional but Recommended)
+## Phase 6 — CI / Automation Alignment
 
 - [x] Update `.github/workflows/*` to match current repo structure + Bun/uv.
-- [ ] Update or remove stale `.pre-commit-config*.yaml` (currently references old paths + npm).
+
+### 6.1 Pre-commit Overhaul (AI Agent Safety)
+
+**Goal:** Make pre-commit a robust guardrail for AI agents. See `docs/work/PRECOMMIT_OVERHAUL_SPEC.md` for full spec.
+
+**Baseline cleanup (one-time):**
+- [x] Fix ruff format violations (~72 files)
+- [x] Fix ruff lint violations (~407 errors)
+
+**New pre-commit config:**
+- [x] Remove all dead Rust hooks (frontend removed)
+- [x] Fix paths: `backend/` → `apps/zerg/backend/`, `frontend/` → `apps/zerg/frontend-web/`
+- [x] Replace npm with bun
+- [x] Add TypeScript type checking (blocks commit)
+- [x] Add ruff lint + format (auto-fix mode)
+- [x] Add WS contract drift check
+- [ ] (Optional) Add pyright for Python type checking
+
+**Validation:**
+- [x] `pre-commit run --all-files` passes in ~5.6s (target was < 15s)
+- [x] No references to dead paths
 
 ---
 
@@ -138,3 +158,4 @@ Format:
 - 2025-12-20: unify frontend API base URL resolution — commits `eec399a`, `743b035`
 - 2025-12-20: fix `make validate` by updating `.PHONY` list — commit `620aa60`
 - 2025-12-20: update GitHub Actions workflows for Bun/uv — commits `49ef5b3`, `79cffc4`
+- 2025-12-20: pre-commit overhaul for AI agent safety — pending commit (ruff baseline cleanup, new config, ESLint fix)

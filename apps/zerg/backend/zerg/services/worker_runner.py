@@ -159,6 +159,7 @@ class WorkerRunner:
         from zerg.worker_metrics import MetricsCollector
         from zerg.worker_metrics import reset_metrics_collector
         from zerg.worker_metrics import set_metrics_collector
+
         metrics_collector = MetricsCollector(worker_id)
         set_metrics_collector(metrics_collector)
 
@@ -209,10 +210,7 @@ class WorkerRunner:
             # Run agent and capture messages (with timeout enforcement)
             runner = AgentRunner(agent)
             try:
-                created_messages = await asyncio.wait_for(
-                    runner.run_thread(db, thread),
-                    timeout=timeout
-                )
+                created_messages = await asyncio.wait_for(runner.run_thread(db, thread), timeout=timeout)
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Worker execution timed out after {timeout} seconds")
 
@@ -233,10 +231,7 @@ class WorkerRunner:
             if not result_text:
                 result_text = self._synthesize_from_tool_outputs(langchain_messages, task)
                 if result_text:
-                    logger.info(
-                        f"Worker {worker_id}: synthesized result from tool outputs "
-                        "(no final assistant message)"
-                    )
+                    logger.info(f"Worker {worker_id}: synthesized result from tool outputs (no final assistant message)")
 
             # Phase 6: Check for critical errors
             # If a critical error occurred during execution, mark as failed
@@ -250,11 +245,7 @@ class WorkerRunner:
                 self.artifact_store.save_result(worker_id, error_result)
 
                 # Mark worker failed
-                self.artifact_store.complete_worker(
-                    worker_id,
-                    status="failed",
-                    error=worker_context.critical_error_message
-                )
+                self.artifact_store.complete_worker(worker_id, status="failed", error=worker_context.critical_error_message)
 
                 if event_context is not None:
                     await self._emit_event(
@@ -408,9 +399,7 @@ class WorkerRunner:
         except Exception:
             logger.warning("Failed to emit worker event %s", event_type, exc_info=True)
 
-    async def _create_temporary_agent(
-        self, db: Session, task: str, config: dict[str, Any]
-    ) -> AgentModel:
+    async def _create_temporary_agent(self, db: Session, task: str, config: dict[str, Any]) -> AgentModel:
         """Create a temporary agent for a worker run.
 
         Workers get access to infrastructure tools (ssh_exec, http_request, etc.)
@@ -458,15 +447,15 @@ class WorkerRunner:
         default_worker_tools = config.get(
             "allowed_tools",
             [
-                "runner_exec",       # Preferred: execute via user-owned runner daemons
-                "ssh_exec",          # Legacy fallback (requires backend key/network access)
-                "http_request",      # API calls and web requests
+                "runner_exec",  # Preferred: execute via user-owned runner daemons
+                "ssh_exec",  # Legacy fallback (requires backend key/network access)
+                "http_request",  # API calls and web requests
                 "get_current_time",  # Time lookups
-                "send_email",        # Notifications (if configured)
-                "contact_user",      # V1.3: notify owner about task completion/errors
+                "send_email",  # Notifications (if configured)
+                "contact_user",  # V1.3: notify owner about task completion/errors
                 "knowledge_search",  # V1.1: user knowledge base search
-                "web_search",        # V1.2: web search via Tavily
-                "web_fetch",         # V1.2: fetch and parse web pages
+                "web_search",  # V1.2: web search via Tavily
+                "web_fetch",  # V1.2: fetch and parse web pages
             ],
         )
 
@@ -491,9 +480,7 @@ class WorkerRunner:
         logger.debug(f"Created temporary agent {agent.id} for worker")
         return agent
 
-    async def _persist_messages(
-        self, worker_id: str, thread_id: int, db: Session
-    ) -> None:
+    async def _persist_messages(self, worker_id: str, thread_id: int, db: Session) -> None:
         """Persist all thread messages to thread.jsonl.
 
         Parameters
@@ -525,9 +512,7 @@ class WorkerRunner:
 
             self.artifact_store.save_message(worker_id, message_dict)
 
-    async def _persist_tool_calls(
-        self, worker_id: str, messages: list[BaseMessage]
-    ) -> None:
+    async def _persist_tool_calls(self, worker_id: str, messages: list[BaseMessage]) -> None:
         """Persist tool call outputs to separate files.
 
         Parameters
@@ -546,9 +531,7 @@ class WorkerRunner:
                 output = msg.content
 
                 # Save tool output
-                self.artifact_store.save_tool_output(
-                    worker_id, tool_name, output, sequence
-                )
+                self.artifact_store.save_tool_output(worker_id, tool_name, output, sequence)
                 sequence += 1
 
     def _extract_result(self, messages: list[BaseMessage]) -> str | None:
@@ -573,11 +556,7 @@ class WorkerRunner:
                 content = msg.content
                 if isinstance(content, list):
                     # Handle list of content blocks (multimodal messages)
-                    text_parts = [
-                        part["text"] if isinstance(part, dict) else str(part)
-                        for part in content
-                        if part
-                    ]
+                    text_parts = [part["text"] if isinstance(part, dict) else str(part) for part in content if part]
                     content = " ".join(text_parts)
                 elif content:
                     content = str(content)
@@ -632,9 +611,7 @@ class WorkerRunner:
 
         return "\n".join(parts)
 
-    async def _extract_summary(
-        self, task: str, result: str
-    ) -> tuple[str, dict[str, Any]]:
+    async def _extract_summary(self, task: str, result: str) -> tuple[str, dict[str, Any]]:
         """Extract compressed summary for context efficiency.
 
         Uses LLM to generate a concise summary focusing on outcomes.
@@ -682,6 +659,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
 
             # Record metrics if collector is available
             from zerg.worker_metrics import get_metrics_collector
+
             collector = get_metrics_collector()
             if collector:
                 # Extract token usage from OpenAI response
@@ -705,6 +683,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 # This provides real-time grep-able logs alongside metrics.jsonl for monitoring/debugging
                 try:
                     from zerg.context import get_worker_context
+
                     ctx = get_worker_context()
                     log_extra = {
                         "phase": "summary",

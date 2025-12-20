@@ -36,7 +36,9 @@ from zerg.tools.error_envelope import tool_success
 logger = logging.getLogger(__name__)
 
 
-def _resolve_jira_credentials(domain: Optional[str] = None, email: Optional[str] = None, api_token: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[str], Optional[dict]]:
+def _resolve_jira_credentials(
+    domain: Optional[str] = None, email: Optional[str] = None, api_token: Optional[str] = None
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[dict]]:
     """Resolve Jira credentials from parameters or context.
 
     Returns: (domain, email, api_token, error_response) - if error_response is not None, return it.
@@ -57,18 +59,28 @@ def _resolve_jira_credentials(domain: Optional[str] = None, email: Optional[str]
     if not resolved_domain:
         return None, None, None, connector_not_configured_error("jira", "Jira")
     if not resolved_email:
-        return None, None, None, tool_error(
-            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
-            user_message="Jira email not configured. Set it up in Settings → Integrations → Jira.",
-            connector="jira",
-            setup_url="/settings/integrations",
+        return (
+            None,
+            None,
+            None,
+            tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="Jira email not configured. Set it up in Settings → Integrations → Jira.",
+                connector="jira",
+                setup_url="/settings/integrations",
+            ),
         )
     if not resolved_api_token:
-        return None, None, None, tool_error(
-            error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
-            user_message="Jira API token not configured. Set it up in Settings → Integrations → Jira.",
-            connector="jira",
-            setup_url="/settings/integrations",
+        return (
+            None,
+            None,
+            None,
+            tool_error(
+                error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
+                user_message="Jira API token not configured. Set it up in Settings → Integrations → Jira.",
+                connector="jira",
+                setup_url="/settings/integrations",
+            ),
         )
 
     return resolved_domain, resolved_email, resolved_api_token, None
@@ -188,23 +200,11 @@ def jira_create_issue(
 
         # Validate required fields
         if not project_key:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "Project key is required to create a Jira issue.",
-                connector="jira"
-            )
+            return tool_error(ErrorType.VALIDATION_ERROR, "Project key is required to create a Jira issue.", connector="jira")
         if not issue_type:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "Issue type is required to create a Jira issue.",
-                connector="jira"
-            )
+            return tool_error(ErrorType.VALIDATION_ERROR, "Issue type is required to create a Jira issue.", connector="jira")
         if not summary:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "Summary is required to create a Jira issue.",
-                connector="jira"
-            )
+            return tool_error(ErrorType.VALIDATION_ERROR, "Summary is required to create a Jira issue.", connector="jira")
 
         # Build payload
         payload = {
@@ -224,7 +224,11 @@ def jira_create_issue(
 
         if labels:
             if not isinstance(labels, list):
-                return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Labels must be a list of strings", connector="jira")
+                return tool_error(
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    user_message="Labels must be a list of strings",
+                    connector="jira",
+                )
             payload["fields"]["labels"] = labels
 
         if assignee:
@@ -252,9 +256,13 @@ def jira_create_issue(
             issue_url = f"https://{domain_clean}/browse/{issue_key}"
 
             logger.info(f"Created Jira issue: {issue_key}")
-            return tool_success({"issue_key": issue_key,
-                "issue_id": issue_id,
-                "url": issue_url,})
+            return tool_success(
+                {
+                    "issue_key": issue_key,
+                    "issue_id": issue_id,
+                    "url": issue_url,
+                }
+            )
 
         # Handle errors
         return _handle_jira_error(response, "create issue")
@@ -326,7 +334,11 @@ def jira_list_issues(
 
         # Validate required fields
         if not project_key:
-            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required field: project_key", connector="jira")
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Missing required field: project_key",
+                connector="jira",
+            )
 
         # Build JQL query
         if jql:
@@ -375,9 +387,13 @@ def jira_list_issues(
                 issues.append(issue_info)
 
             logger.info(f"Listed {len(issues)} Jira issues from project {project_key}")
-            return tool_success({"total": total,
-                "returned": len(issues),
-                "issues": issues,})
+            return tool_success(
+                {
+                    "total": total,
+                    "returned": len(issues),
+                    "issues": issues,
+                }
+            )
 
         # Handle errors
         return _handle_jira_error(response, "list issues")
@@ -436,7 +452,11 @@ def jira_get_issue(
 
         # Validate required fields
         if not issue_key:
-            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required field: issue_key", connector="jira")
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Missing required field: issue_key",
+                connector="jira",
+            )
 
         # Build URL
         url = _build_jira_url(domain, f"/issue/{issue_key}")
@@ -544,7 +564,11 @@ def jira_add_comment(
 
         # Validate required fields
         if not all([issue_key, body]):
-            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required fields: issue_key, body", connector="jira")
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Missing required fields: issue_key, body",
+                connector="jira",
+            )
 
         # Build payload with ADF format
         payload = {"body": _text_to_adf(body)}
@@ -626,17 +650,9 @@ def jira_transition_issue(
 
         # Validate required fields
         if not issue_key:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "Issue key is required to transition a Jira issue.",
-                connector="jira"
-            )
+            return tool_error(ErrorType.VALIDATION_ERROR, "Issue key is required to transition a Jira issue.", connector="jira")
         if not transition_id:
-            return tool_error(
-                ErrorType.VALIDATION_ERROR,
-                "Transition ID is required to transition a Jira issue.",
-                connector="jira"
-            )
+            return tool_error(ErrorType.VALIDATION_ERROR, "Transition ID is required to transition a Jira issue.", connector="jira")
 
         # Build payload
         payload = {"transition": {"id": str(transition_id)}}
@@ -712,7 +728,11 @@ def jira_update_issue(
 
         # Validate required fields
         if not all([issue_key, fields]):
-            return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Missing required fields: issue_key, fields", connector="jira")
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message="Missing required fields: issue_key, fields",
+                connector="jira",
+            )
 
         if not isinstance(fields, dict):
             return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Fields must be a dictionary", connector="jira")

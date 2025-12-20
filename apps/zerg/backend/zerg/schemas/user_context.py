@@ -4,9 +4,12 @@ User context is stored as JSONB and used for prompt composition. These schemas
 provide validation while maintaining backwards compatibility through extra="allow".
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
+from typing import Dict
+from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
 
 class ServerConfig(BaseModel):
@@ -75,18 +78,10 @@ class UserContext(BaseModel):
     role: Optional[str] = Field(None, description="User's job role or title")
     location: Optional[str] = Field(None, description="User's primary location")
     description: Optional[str] = Field(None, description="General description or bio")
-    servers: list[ServerConfig] = Field(
-        default_factory=list, description="List of servers user has access to"
-    )
-    integrations: Dict[str, str] = Field(
-        default_factory=dict, description="Integration credentials or handles"
-    )
-    tools: ToolsConfig = Field(
-        default_factory=ToolsConfig, description="Tool enablement configuration"
-    )
-    custom_instructions: Optional[str] = Field(
-        None, description="Custom instructions for agent behavior"
-    )
+    servers: list[ServerConfig] = Field(default_factory=list, description="List of servers user has access to")
+    integrations: Dict[str, str] = Field(default_factory=dict, description="Integration credentials or handles")
+    tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Tool enablement configuration")
+    custom_instructions: Optional[str] = Field(None, description="Custom instructions for agent behavior")
 
     class Config:
         extra = "allow"  # Allow additional fields for flexibility

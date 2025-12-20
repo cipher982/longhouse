@@ -12,7 +12,6 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
-from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import relationship
@@ -21,12 +20,12 @@ from sqlalchemy.sql import func
 # Local helpers / enums
 from zerg.database import Base
 from zerg.models.enums import AgentStatus
-from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.models.enums import Phase
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.enums import UserRole
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 
 # ---------------------------------------------------------------------------
 # Authentication – User table (Stage 1)
@@ -523,9 +522,7 @@ class NodeExecutionState(Base):
     __tablename__ = "node_execution_states"
 
     # Add constraint for Phase/Result consistency
-    __table_args__ = (
-        CheckConstraint("(phase='finished') = (result IS NOT NULL)", name="phase_result_consistency_node"),
-    )
+    __table_args__ = (CheckConstraint("(phase='finished') = (result IS NOT NULL)", name="phase_result_consistency_node"),)
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_execution_id = Column(Integer, ForeignKey("workflow_executions.id"), nullable=False, index=True)

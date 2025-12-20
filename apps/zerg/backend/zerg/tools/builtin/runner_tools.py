@@ -234,14 +234,16 @@ def runner_exec(
 
         # Transform result to match ssh_exec envelope
         data = result.get("data", {})
-        return tool_success({
-            "target": runner_name,
-            "command": command,
-            "exit_code": data.get("exit_code", -1),
-            "stdout": data.get("stdout", ""),
-            "stderr": data.get("stderr", ""),
-            "duration_ms": data.get("duration_ms", 0),
-        })
+        return tool_success(
+            {
+                "target": runner_name,
+                "command": command,
+                "exit_code": data.get("exit_code", -1),
+                "stdout": data.get("stdout", ""),
+                "stderr": data.get("stderr", ""),
+                "duration_ms": data.get("duration_ms", 0),
+            }
+        )
 
     except Exception as e:
         logger.exception(f"Error executing command on runner {runner_name}")

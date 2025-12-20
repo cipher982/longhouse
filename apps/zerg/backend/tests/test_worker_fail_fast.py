@@ -4,11 +4,12 @@ This module tests that workers fail immediately when critical tool errors occur,
 rather than continuing execution with errors accumulated in the message history.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
 
 from zerg.context import WorkerContext
-from zerg.services.worker_runner import WorkerRunner, WorkerResult
+from zerg.services.worker_runner import WorkerRunner
 
 
 @pytest.fixture
@@ -41,8 +42,8 @@ async def test_worker_fails_fast_on_critical_error(db_session, tmp_path, monkeyp
 
     # Mock the agent runner to simulate critical error with context
     async def mock_run_thread_with_critical_error(db, thread):
-        from zerg.crud import crud
         from zerg.context import get_worker_context
+        from zerg.crud import crud
 
         # Get the worker context (set by WorkerRunner)
         ctx = get_worker_context()
@@ -156,11 +157,7 @@ async def test_worker_succeeds_without_critical_error(db_session, tmp_path, monk
 @pytest.mark.asyncio
 async def test_worker_context_tracks_critical_error(db_session):
     """WorkerContext should track critical errors."""
-    ctx = WorkerContext(
-        worker_id="test-worker-123",
-        owner_id=1,
-        task="Test task"
-    )
+    ctx = WorkerContext(worker_id="test-worker-123", owner_id=1, task="Test task")
 
     # Initially no error
     assert ctx.has_critical_error is False
@@ -200,11 +197,11 @@ def test_critical_error_detection():
 @pytest.mark.asyncio
 async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_path, monkeypatch):
     """Roundabout should exit immediately when worker fails with critical error."""
+    import zerg.services.roundabout_monitor as rm
     from zerg.events import event_bus
     from zerg.models.models import WorkerJob
     from zerg.services.roundabout_monitor import RoundaboutMonitor
     from zerg.services.worker_artifact_store import WorkerArtifactStore
-    import zerg.services.roundabout_monitor as rm
 
     # Speed up polling
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
@@ -235,6 +232,7 @@ async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_pa
 
         # Simulate critical error after a brief delay
         import asyncio
+
         await asyncio.sleep(0.05)
 
         # Mark job as failed (simulating critical error)
@@ -262,7 +260,9 @@ async def test_roundabout_exits_immediately_on_worker_failure(db_session, tmp_pa
 async def test_error_message_formatting():
     """Test that error messages are formatted clearly for supervisor."""
     # Critical SSH error
-    error_content = "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH key not found at ~/.ssh/id_ed25519'}"
+    error_content = (
+        "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH key not found at ~/.ssh/id_ed25519'}"
+    )
 
     # Should extract user_message
     assert "SSH key not found" in error_content

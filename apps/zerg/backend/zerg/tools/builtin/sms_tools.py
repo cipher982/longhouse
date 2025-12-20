@@ -198,16 +198,18 @@ def send_sms(
         if response.status_code == 201:
             # Success - message was queued
             response_data = response.json()
-            return tool_success({
-                "message_sid": response_data.get("sid"),
-                "status": response_data.get("status"),
-                "from_number": response_data.get("from"),
-                "to_number": response_data.get("to"),
-                "date_created": response_data.get("date_created"),
-                "segments": response_data.get("num_segments", "unknown"),
-                "price": response_data.get("price"),
-                "price_unit": response_data.get("price_unit"),
-            })
+            return tool_success(
+                {
+                    "message_sid": response_data.get("sid"),
+                    "status": response_data.get("status"),
+                    "from_number": response_data.get("from"),
+                    "to_number": response_data.get("to"),
+                    "date_created": response_data.get("date_created"),
+                    "segments": response_data.get("num_segments", "unknown"),
+                    "price": response_data.get("price"),
+                    "price_unit": response_data.get("price_unit"),
+                }
+            )
         else:
             # Error response from Twilio
             try:
@@ -216,10 +218,7 @@ def send_sms(
                 error_message = error_data.get("message", "Unknown error")
                 more_info = error_data.get("more_info")
 
-                logger.error(
-                    f"Twilio API error {error_code}: {error_message}. "
-                    f"Status: {response.status_code}. More info: {more_info}"
-                )
+                logger.error(f"Twilio API error {error_code}: {error_message}. " f"Status: {response.status_code}. More info: {more_info}")
 
                 # Map status codes to error types
                 if response.status_code == 401:

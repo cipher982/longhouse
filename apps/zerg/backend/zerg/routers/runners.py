@@ -15,24 +15,21 @@ import logging
 import os
 import secrets
 import threading
-from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Path
 from fastapi import Response
-from fastapi import status
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
+from fastapi import status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.models.models import Runner
 from zerg.models.models import User
 from zerg.schemas.runner_schemas import EnrollTokenResponse
 from zerg.schemas.runner_schemas import RunnerListResponse
@@ -90,7 +87,7 @@ def create_enroll_token(
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
-        f"  -d '{{\"enroll_token\": \"{plaintext_token}\", \"name\": \"my-runner\"}}'\n\n"
+        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
         f"# Step 2: Run with credentials from step 1\n"
         f"docker run -d --name swarmlet-runner \\\n"
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"
@@ -197,9 +194,7 @@ def list_runners(
     """List all runners for the authenticated user."""
     runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
 
-    return RunnerListResponse(
-        runners=[RunnerResponse.model_validate(r) for r in runners]
-    )
+    return RunnerListResponse(runners=[RunnerResponse.model_validate(r) for r in runners])
 
 
 @router.get("/{runner_id}", response_model=RunnerResponse)
@@ -459,10 +454,7 @@ async def runner_websocket(
             # Validate runner capabilities match what's in the database
             reported_caps = metadata.get("capabilities", [])
             if reported_caps and set(reported_caps) != set(runner.capabilities):
-                logger.warning(
-                    f"Runner {runner_id} capability mismatch: "
-                    f"DB={runner.capabilities}, reported={reported_caps}"
-                )
+                logger.warning(f"Runner {runner_id} capability mismatch: DB={runner.capabilities}, reported={reported_caps}")
 
         db.commit()
 
@@ -485,17 +477,13 @@ async def runner_websocket(
                     job_id = message.get("job_id")
                     stream = message.get("stream")
                     data = message.get("data")
-                    logger.debug(
-                        f"Exec chunk from runner {runner_id}, job {job_id}, stream {stream}"
-                    )
+                    logger.debug(f"Exec chunk from runner {runner_id}, job {job_id}, stream {stream}")
 
                     # Update job output in database
                     if job_id and stream and data:
                         job = runner_crud.get_job(db, job_id)
                         if not job or job.runner_id != runner_id or job.owner_id != owner_id:
-                            logger.warning(
-                                f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}"
-                            )
+                            logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
                         else:
                             runner_crud.update_job_output(db, job_id, stream, data)
 
@@ -504,17 +492,13 @@ async def runner_websocket(
                     job_id = message.get("job_id")
                     exit_code = message.get("exit_code")
                     duration_ms = message.get("duration_ms")
-                    logger.info(
-                        f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}"
-                    )
+                    logger.info(f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}")
 
                     # Update job status in database
                     if job_id is not None and exit_code is not None:
                         job = runner_crud.get_job(db, job_id)
                         if not job or job.runner_id != runner_id or job.owner_id != owner_id:
-                            logger.warning(
-                                f"Ignoring exec_done for invalid job {job_id} from runner {runner_id}"
-                            )
+                            logger.warning(f"Ignoring exec_done for invalid job {job_id} from runner {runner_id}")
                             continue
 
                         runner_crud.update_job_completed(db, job_id, exit_code, duration_ms or 0)
@@ -538,17 +522,13 @@ async def runner_websocket(
                     # Handle job error
                     job_id = message.get("job_id")
                     error = message.get("error")
-                    logger.error(
-                        f"Exec error from runner {runner_id}, job {job_id}: {error}"
-                    )
+                    logger.error(f"Exec error from runner {runner_id}, job {job_id}: {error}")
 
                     # Update job status in database
                     if job_id and error:
                         job = runner_crud.get_job(db, job_id)
                         if not job or job.runner_id != runner_id or job.owner_id != owner_id:
-                            logger.warning(
-                                f"Ignoring exec_error for invalid job {job_id} from runner {runner_id}"
-                            )
+                            logger.warning(f"Ignoring exec_error for invalid job {job_id} from runner {runner_id}")
                             continue
 
                         runner_crud.update_job_error(db, job_id, error)
@@ -564,9 +544,7 @@ async def runner_websocket(
                         job_dispatcher.complete_job(job_id, result, runner_id)
 
                 else:
-                    logger.warning(
-                        f"Unknown message type from runner {runner_id}: {message_type}"
-                    )
+                    logger.warning(f"Unknown message type from runner {runner_id}: {message_type}")
 
             except WebSocketDisconnect:
                 logger.info(f"Runner {runner_id} disconnected")

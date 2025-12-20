@@ -149,9 +149,7 @@ class EmailTriggerService:
             provider_impl = get_provider(str(provider_name))
 
             if provider_impl is None:
-                log.warning(
-                    "email-trigger", event="unsupported-provider", provider=provider_name, trigger_id=trg_data["id"]
-                )
+                log.warning("email-trigger", event="unsupported-provider", provider=provider_name, trigger_id=trg_data["id"])
                 continue
 
             # Gmail logic now lives **entirely** in ``GmailProvider``.  The
@@ -173,9 +171,7 @@ class EmailTriggerService:
             try:
                 await provider_impl.process_trigger(trg_data["id"])
             except NotImplementedError:
-                log.info(
-                    "email-trigger", event="provider-not-implemented", provider=provider_name, trigger_id=trg_data["id"]
-                )
+                log.info("email-trigger", event="provider-not-implemented", provider=provider_name, trigger_id=trg_data["id"])
             except Exception as exc:  # pragma: no cover – safety net
                 log.exception(
                     "email-trigger",

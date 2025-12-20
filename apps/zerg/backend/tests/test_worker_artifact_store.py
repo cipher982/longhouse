@@ -3,14 +3,13 @@
 import json
 import tempfile
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import TEST_MODEL
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -82,12 +81,8 @@ def test_save_tool_output(temp_store):
     worker_id = temp_store.create_worker("Test task")
 
     # Save multiple tool outputs
-    path1 = temp_store.save_tool_output(
-        worker_id, "ssh_exec", "Output from SSH command", sequence=1
-    )
-    path2 = temp_store.save_tool_output(
-        worker_id, "http_request", '{"status": "ok"}', sequence=2
-    )
+    path1 = temp_store.save_tool_output(worker_id, "ssh_exec", "Output from SSH command", sequence=1)
+    path2 = temp_store.save_tool_output(worker_id, "http_request", '{"status": "ok"}', sequence=2)
 
     assert path1 == "tool_calls/001_ssh_exec.txt"
     assert path2 == "tool_calls/002_http_request.txt"
@@ -182,9 +177,7 @@ def test_complete_worker_with_error(temp_store):
 
 def test_get_worker_metadata(temp_store):
     """Test reading worker metadata."""
-    worker_id = temp_store.create_worker(
-        "Test task", config={"model": TEST_MODEL, "timeout": 300}
-    )
+    worker_id = temp_store.create_worker("Test task", config={"model": TEST_MODEL, "timeout": 300})
 
     metadata = temp_store.get_worker_metadata(worker_id)
     assert metadata["worker_id"] == worker_id

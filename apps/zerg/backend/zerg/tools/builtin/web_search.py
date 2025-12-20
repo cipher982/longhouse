@@ -137,12 +137,14 @@ def web_search(
         # Extract results
         results = []
         for item in response.get("results", []):
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "content": item.get("content", ""),
-                "score": item.get("score", 0.0),
-            })
+            results.append(
+                {
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "content": item.get("content", ""),
+                    "score": item.get("score", 0.0),
+                }
+            )
 
         return {
             "ok": True,

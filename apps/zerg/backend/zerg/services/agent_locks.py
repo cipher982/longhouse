@@ -108,9 +108,7 @@ class AgentLockManager:
             if released:
                 logger.debug(f"✅ Released advisory lock for agent {agent_id}")
             else:
-                logger.warning(
-                    f"⚠️ Attempted to release advisory lock for agent {agent_id} but it wasn't held by this session"
-                )
+                logger.warning(f"⚠️ Attempted to release advisory lock for agent {agent_id} but it wasn't held by this session")
 
             return bool(released)
 

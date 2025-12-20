@@ -150,10 +150,12 @@ def send_slack_webhook(
 
         # Check for success
         if response.status_code == 200:
-            return tool_success({
-                "status_code": response.status_code,
-                "response": response.text,
-            })
+            return tool_success(
+                {
+                    "status_code": response.status_code,
+                    "response": response.text,
+                }
+            )
 
         # Handle error responses
         error_messages = {

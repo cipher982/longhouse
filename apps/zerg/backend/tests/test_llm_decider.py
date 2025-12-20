@@ -1,22 +1,23 @@
 """Tests for the LLM decider module."""
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from datetime import timezone
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
-from zerg.services.llm_decider import (
-    DecisionMode,
-    LLMDeciderStats,
-    LLMDecisionPayload,
-    LLMDecisionResult,
-    build_decision_payload,
-    build_llm_prompt,
-    call_llm_decider,
-    decide_roundabout_action,
-)
-from zerg.services.roundabout_monitor import DecisionContext, ToolActivity
+from zerg.services.llm_decider import LLMDeciderStats
+from zerg.services.llm_decider import LLMDecisionPayload
+from zerg.services.llm_decider import LLMDecisionResult
+from zerg.services.llm_decider import build_decision_payload
+from zerg.services.llm_decider import build_llm_prompt
+from zerg.services.llm_decider import call_llm_decider
+from zerg.services.llm_decider import decide_roundabout_action
+from zerg.services.roundabout_monitor import DecisionContext
+from zerg.services.roundabout_monitor import ToolActivity
 
 
 class TestLLMDeciderStats:
@@ -288,9 +289,7 @@ class TestCallLLMDecider:
         mock_response.choices[0].message.content = "wait"
 
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                return_value=mock_response
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
 
             payload = LLMDecisionPayload(
                 job_id=1,
@@ -316,9 +315,7 @@ class TestCallLLMDecider:
         mock_response.choices[0].message.content = "exit"
 
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                return_value=mock_response
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
 
             payload = LLMDecisionPayload(
                 job_id=1,
@@ -344,9 +341,7 @@ class TestCallLLMDecider:
         mock_response.choices[0].message.content = "cancel"
 
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                return_value=mock_response
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
 
             # v2.0: Pass raw timing - LLM decides if 90s on simple command is stuck
             payload = LLMDecisionPayload(
@@ -373,9 +368,7 @@ class TestCallLLMDecider:
         mock_response.choices[0].message.content = "invalid_action"
 
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                return_value=mock_response
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
 
             payload = LLMDecisionPayload(
                 job_id=1,
@@ -425,9 +418,7 @@ class TestCallLLMDecider:
     async def test_api_error_fallback(self):
         """Should fallback to wait on API error."""
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                side_effect=Exception("API Error")
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(side_effect=Exception("API Error"))
 
             payload = LLMDecisionPayload(
                 job_id=1,
@@ -476,9 +467,7 @@ class TestDecideRoundaboutAction:
         mock_response.choices[0].message.content = "wait"
 
         with patch("openai.AsyncOpenAI") as mock_client:
-            mock_client.return_value.chat.completions.create = AsyncMock(
-                return_value=mock_response
-            )
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
 
             ctx = self._make_context()
             action, rationale, result = await decide_roundabout_action(ctx)

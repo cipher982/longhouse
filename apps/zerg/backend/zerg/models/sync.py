@@ -4,7 +4,13 @@ This model stores sync operations from Jarvis clients to enable
 offline-first conversation sync with idempotent push operations.
 """
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import JSON
+from sqlalchemy import Column
+from sqlalchemy import DateTime
+from sqlalchemy import ForeignKey
+from sqlalchemy import Integer
+from sqlalchemy import String
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 

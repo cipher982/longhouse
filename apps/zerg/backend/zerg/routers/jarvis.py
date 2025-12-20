@@ -13,7 +13,9 @@ import json
 import logging
 from datetime import datetime
 from datetime import timezone
-from typing import Dict, List, Optional
+from typing import Dict
+from typing import List
+from typing import Optional
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -27,14 +29,15 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.models.models import Agent, AgentRun
+from zerg.models.models import Agent
+from zerg.models.models import AgentRun
+from zerg.services.supervisor_context import get_next_seq
+from zerg.services.supervisor_context import reset_seq
 from zerg.services.task_runner import execute_agent_task
-from zerg.services.supervisor_context import get_next_seq, reset_seq
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +352,7 @@ def list_jarvis_runs(
 
     return summaries
 
+
 # ---------------------------------------------------------------------------
 # Dispatch Endpoint
 # ---------------------------------------------------------------------------
@@ -400,12 +404,7 @@ async def jarvis_dispatch(
         thread = await execute_agent_task(db, agent, thread_type="manual")
 
         # Get the created run
-        run = (
-            db.query(AgentRun)
-            .filter(AgentRun.thread_id == thread.id)
-            .order_by(AgentRun.created_at.desc())
-            .first()
-        )
+        run = db.query(AgentRun).filter(AgentRun.thread_id == thread.id).order_by(AgentRun.created_at.desc()).first()
 
         if not run:
             raise HTTPException(
@@ -503,7 +502,6 @@ async def jarvis_supervisor(
 
     # Create run record (marks as running)
     from zerg.models.enums import RunStatus
-
     from zerg.models.enums import RunTrigger
 
     run = AgentRun(
@@ -516,10 +514,7 @@ async def jarvis_supervisor(
     db.commit()
     db.refresh(run)
 
-    logger.info(
-        f"Jarvis supervisor: created run {run.id} for user {current_user.id}, "
-        f"task: {request.task[:50]}..."
-    )
+    logger.info(f"Jarvis supervisor: created run {run.id} for user {current_user.id}, task: {request.task[:50]}...")
 
     # Start supervisor execution in background
     # We use asyncio.create_task directly since we're in an async context
@@ -545,9 +540,7 @@ async def jarvis_supervisor(
             await _pop_supervisor_task(run_id)
 
     # Create background task - runs independently of the request
-    task_handle = asyncio.create_task(
-        run_supervisor_background(current_user.id, request.task, run.id)
-    )
+    task_handle = asyncio.create_task(run_supervisor_background(current_user.id, request.task, run.id))
     await _register_supervisor_task(run.id, task_handle)
 
     return JarvisSupervisorResponse(
@@ -614,11 +607,13 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         # Send initial connection event with seq
         yield {
             "event": "connected",
-            "data": json.dumps({
-                "message": "Supervisor SSE stream connected",
-                "run_id": run_id,
-                "seq": get_next_seq(run_id),
-            }),
+            "data": json.dumps(
+                {
+                    "message": "Supervisor SSE stream connected",
+                    "run_id": run_id,
+                    "seq": get_next_seq(run_id),
+                }
+            ),
         }
 
         # Stream events until supervisor completes or errors
@@ -648,33 +643,33 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     complete = True
 
                 # Format payload (remove internal fields)
-                payload = {
-                    k: v
-                    for k, v in event.items()
-                    if k not in {"event_type", "type", "owner_id"}
-                }
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
 
                 # Add monotonically increasing seq for idempotent reconnect handling
                 seq = get_next_seq(run_id)
 
                 yield {
                     "event": event_type,
-                    "data": json.dumps({
-                        "type": event_type,
-                        "payload": payload,
-                        "seq": seq,
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }),
+                    "data": json.dumps(
+                        {
+                            "type": event_type,
+                            "payload": payload,
+                            "seq": seq,
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
                 }
 
             except asyncio.TimeoutError:
                 # Send heartbeat with seq
                 yield {
                     "event": "heartbeat",
-                    "data": json.dumps({
-                        "seq": get_next_seq(run_id),
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }),
+                    "data": json.dumps(
+                        {
+                            "seq": get_next_seq(run_id),
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
                 }
 
         # Run reached terminal state; clear sequence counter to avoid leaks
@@ -746,9 +741,7 @@ async def jarvis_supervisor_events(
             detail=f"Run {run_id} not found",  # Don't reveal existence to other users
         )
 
-    return EventSourceResponse(
-        _supervisor_event_generator(run_id, current_user.id)
-    )
+    return EventSourceResponse(_supervisor_event_generator(run_id, current_user.id))
 
 
 # ---------------------------------------------------------------------------
@@ -1036,11 +1029,13 @@ async def _chat_stream_generator(
         # Send initial connection event
         yield {
             "event": "connected",
-            "data": json.dumps({
-                "message": "Chat stream connected",
-                "run_id": run_id,
-                "client_correlation_id": client_correlation_id,
-            }),
+            "data": json.dumps(
+                {
+                    "message": "Chat stream connected",
+                    "run_id": run_id,
+                    "client_correlation_id": client_correlation_id,
+                }
+            ),
         }
 
         # NOW start the background task - after subscriptions are ready and connected event sent
@@ -1075,29 +1070,29 @@ async def _chat_stream_generator(
                     complete = True
 
                 # Format payload
-                payload = {
-                    k: v
-                    for k, v in event.items()
-                    if k not in {"event_type", "type", "owner_id"}
-                }
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
 
                 yield {
                     "event": event_type,
-                    "data": json.dumps({
-                        "type": event_type,
-                        "payload": payload,
-                        "client_correlation_id": client_correlation_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }),
+                    "data": json.dumps(
+                        {
+                            "type": event_type,
+                            "payload": payload,
+                            "client_correlation_id": client_correlation_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
                 }
 
             except asyncio.TimeoutError:
                 # Send heartbeat
                 yield {
                     "event": "heartbeat",
-                    "data": json.dumps({
-                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }),
+                    "data": json.dumps(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
                 }
 
     except asyncio.CancelledError:
@@ -1166,7 +1161,8 @@ async def jarvis_chat(
     ctx = current_user.context or {}
     saved_prefs = (ctx.get("preferences", {}) or {}) if isinstance(ctx, dict) else {}
 
-    from zerg.models_config import get_default_model_id_str, get_model_by_id
+    from zerg.models_config import get_default_model_id_str
+    from zerg.models_config import get_model_by_id
 
     model_to_use = request.model or saved_prefs.get("chat_model") or get_default_model_id_str()
     model_config = get_model_by_id(model_to_use)
@@ -1190,7 +1186,8 @@ async def jarvis_chat(
     thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
 
     # Create run record
-    from zerg.models.enums import RunStatus, RunTrigger
+    from zerg.models.enums import RunStatus
+    from zerg.models.enums import RunTrigger
 
     run = AgentRun(
         agent_id=agent.id,
@@ -1262,8 +1259,8 @@ def jarvis_history(
     Returns:
         JarvisHistoryResponse with messages and total count
     """
-    from zerg.services.supervisor_service import SupervisorService
     from zerg.models.models import ThreadMessage
+    from zerg.services.supervisor_service import SupervisorService
 
     supervisor_service = SupervisorService(db)
 
@@ -1324,7 +1321,6 @@ def jarvis_clear_history(
         current_user: Authenticated user
     """
     from zerg.services.supervisor_service import SupervisorService
-    from zerg.models.models import Agent
 
     supervisor_service = SupervisorService(db)
 
@@ -1335,9 +1331,13 @@ def jarvis_clear_history(
     # Delete all messages from the thread (keeps thread, clears history)
     from zerg.models.models import ThreadMessage
 
-    deleted_count = db.query(ThreadMessage).filter(
-        ThreadMessage.thread_id == old_thread.id,
-    ).delete()
+    deleted_count = (
+        db.query(ThreadMessage)
+        .filter(
+            ThreadMessage.thread_id == old_thread.id,
+        )
+        .delete()
+    )
 
     db.commit()
 
@@ -1385,7 +1385,8 @@ def jarvis_bootstrap(
 
     This is the single source of truth for Jarvis configuration.
     """
-    from zerg.models_config import get_all_models, get_default_model_id_str
+    from zerg.models_config import get_all_models
+    from zerg.models_config import get_default_model_id_str
     from zerg.prompts.composer import build_jarvis_prompt
 
     # Define all available personal tools (Phase 4 v2.1)
@@ -1401,7 +1402,6 @@ def jarvis_bootstrap(
 
     # Get tool configuration from user context (default all enabled)
     ctx = current_user.context or {}
-    tool_config = ctx.get("tools", {})
 
     # Build enabled tools list based on user configuration
     enabled_tools = []
@@ -1438,7 +1438,11 @@ def jarvis_bootstrap(
     prefs = ctx.get("preferences", {}) or {}
     requested_model = prefs.get("chat_model") or default_model_id
     if requested_model not in available_model_ids:
-        requested_model = default_model_id if default_model_id in available_model_ids else (available_models[0].id if available_models else default_model_id)
+        requested_model = (
+            default_model_id
+            if default_model_id in available_model_ids
+            else (available_models[0].id if available_models else default_model_id)
+        )
 
     requested_effort = (prefs.get("reasoning_effort") or "none").lower()
     if requested_effort not in {"none", "low", "medium", "high"}:
@@ -1473,7 +1477,8 @@ def jarvis_update_preferences(
     Saves preferences to the user's context in the database.
     Only provided fields are updated; others remain unchanged.
     """
-    from zerg.models_config import get_default_model_id_str, get_model_by_id
+    from zerg.models_config import get_default_model_id_str
+    from zerg.models_config import get_model_by_id
 
     ctx = current_user.context or {}
     prefs = ctx.get("preferences", {}) or {}

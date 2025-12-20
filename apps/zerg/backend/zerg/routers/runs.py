@@ -50,12 +50,7 @@ def list_agent_runs(
 
 @router.get("/runs/{run_id}", response_model=AgentRunOut)
 def get_run(run_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = (
-        db.query(AgentRunModel)
-        .join(AgentModel, AgentModel.id == AgentRunModel.agent_id)
-        .filter(AgentRunModel.id == run_id)
-        .first()
-    )
+    row = db.query(AgentRunModel).join(AgentModel, AgentModel.id == AgentRunModel.agent_id).filter(AgentRunModel.id == run_id).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
