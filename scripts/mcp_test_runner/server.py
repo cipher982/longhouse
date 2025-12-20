@@ -22,9 +22,9 @@ from typing import Dict
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
-# The project root is two levels above this file:  tools/mcp_test_runner/ → tools → *ROOT*
+# The project root is two levels above this file: scripts/mcp_test_runner/ → scripts → *ROOT*
 PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[2]
-BACKEND_ROOT: pathlib.Path = PROJECT_ROOT / "backend"
+BACKEND_ROOT: pathlib.Path = PROJECT_ROOT / "apps" / "zerg" / "backend"
 
 def run_backend_tests(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run `pytest` on the backend package and return a structured result."""
