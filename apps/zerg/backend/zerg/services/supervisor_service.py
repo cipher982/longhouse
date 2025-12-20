@@ -156,6 +156,7 @@ class SupervisorService:
             "prompt_version": self.SUPERVISOR_PROMPT_VERSION,
             "temperature": 0.7,
             "max_tokens": 2000,
+            "reasoning_effort": "none",  # Disable reasoning for fast responses
         }
 
         supervisor_tools = [
