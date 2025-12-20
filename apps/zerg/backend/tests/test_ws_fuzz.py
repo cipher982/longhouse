@@ -63,20 +63,12 @@ def _message_strategy(thread_id: int):  # noqa: D401 – generate any *one* mess
     Pydantic models – single source-of-truth.
     """
 
-    # For *subscribe_thread* and *send_message* we still need to inject the
-    # concrete *thread_id* so the payload passes runtime checks.
-
-    sub_thread = strategy_for("subscribe_thread").map(
-        lambda d: {**d, "thread_id": thread_id},
-    )
-
-    send_msg = strategy_for("send_message").map(
-        lambda d: {**d, "thread_id": thread_id},
-    )
-
+    # For *send_message* we inject the concrete *thread_id* so the payload
+    # passes runtime checks.
+    send_msg = strategy_for("send_message").map(lambda d: {**d, "thread_id": thread_id})
     ping = strategy_for("ping")
 
-    return st.one_of(ping, sub_thread, send_msg)
+    return st.one_of(ping, send_msg)
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +129,8 @@ def test_ws_fuzz_roundtrip(client, db_session, data):  # type: ignore[valid-type
         # to this client.  We reuse the helper to keep traffic realistic.
         websocket.send_json(
             {
-                "type": "subscribe_thread",
-                "thread_id": thread.id,
+                "type": "subscribe",
+                "topics": [f"user:{user.id}"],
                 "message_id": f"init-{uuid.uuid4()}",
             }
         )

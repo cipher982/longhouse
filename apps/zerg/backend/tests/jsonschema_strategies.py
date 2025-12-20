@@ -22,15 +22,15 @@ from typing import Dict
 from hypothesis_jsonschema import from_schema  # type: ignore
 
 # Import *after* hypothesis_jsonschema so optional import errors surface early
-from zerg.schemas.ws_messages import PingMessage
-from zerg.schemas.ws_messages import SendMessageRequest
-from zerg.schemas.ws_messages import SubscribeThreadMessage
+from zerg.generated.ws_messages import PingData
+from zerg.generated.ws_messages import SendMessageData
+from zerg.generated.ws_messages import SubscribeData
 
-# Map of runtime ``type`` → Pydantic model
+# Map of runtime ``type`` → Pydantic payload model (envelope.data)
 _MODEL_MAP: Dict[str, type] = {
-    "ping": PingMessage,
-    "subscribe_thread": SubscribeThreadMessage,
-    "send_message": SendMessageRequest,
+    "ping": PingData,
+    "subscribe": SubscribeData,
+    "send_message": SendMessageData,
 }
 
 
@@ -46,7 +46,7 @@ def strategy_for(message_type: str):  # noqa: D401 – helper function
 
     model = _MODEL_MAP[message_type]
     schema = model.model_json_schema(mode="validation")
-    return from_schema(schema)
+    return from_schema(schema).map(lambda payload: {"type": message_type, **payload})
 
 
 # Convenience – bulk generator ------------------------------------------------

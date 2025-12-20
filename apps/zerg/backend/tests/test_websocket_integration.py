@@ -4,7 +4,6 @@ import pytest
 
 from zerg.main import app
 from zerg.models.models import Thread
-from zerg.schemas.ws_messages import MessageType
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -106,7 +105,7 @@ class TestWebSocketIntegration:
         logger.info(f"Subscribing to thread: {test_thread.id}")
         ws_client.send_json(
             {
-                "type": MessageType.SUBSCRIBE_THREAD,
+                "type": "subscribe_thread",
                 "thread_id": test_thread.id,
                 "message_id": "test-sub-3",
             }
@@ -124,7 +123,7 @@ class TestWebSocketIntegration:
         logger.info(f"Sending message to thread {test_thread.id}: {test_content}")
         ws_client.send_json(
             {
-                "type": MessageType.SEND_MESSAGE,
+                "type": "send_message",
                 "thread_id": test_thread.id,
                 "content": test_content,
                 "message_id": "test-msg-1",
@@ -140,7 +139,7 @@ class TestWebSocketIntegration:
             logger.error(f"Error sending message: {response}")
             assert False, f"Error sending message: {response.get('error')}"
 
-        assert response["type"] == MessageType.THREAD_MESSAGE
+        assert response["type"] == "thread_message"
         assert response["thread_id"] == test_thread.id
         assert response["message"]["content"] == test_content
 
@@ -155,7 +154,7 @@ class TestWebSocketIntegration:
             for i, ws in enumerate(clients):
                 ws.send_json(
                     {
-                        "type": MessageType.SUBSCRIBE_THREAD,
+                        "type": "subscribe_thread",
                         "thread_id": test_thread.id,
                         "message_id": f"test-sub-{i}",
                     }
@@ -173,7 +172,7 @@ class TestWebSocketIntegration:
             logger.info(f"Client 0 sending message to thread {test_thread.id}: {test_content}")
             clients[0].send_json(
                 {
-                    "type": MessageType.SEND_MESSAGE,
+                    "type": "send_message",
                     "thread_id": test_thread.id,
                     "content": test_content,
                     "message_id": "test-msg-2",
@@ -195,5 +194,5 @@ class TestWebSocketIntegration:
 
             # Verify both clients received valid messages
             for response in responses:
-                assert response["type"] == MessageType.THREAD_MESSAGE
+                assert response["type"] == "thread_message"
                 assert response["message"]["content"] == test_content
