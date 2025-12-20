@@ -31,10 +31,6 @@ describe('ConversationController (server SSOT)', () => {
     expect(listener).toHaveBeenCalledWith({ type: 'conversationIdChange', id: 'server' })
   })
 
-  it('addUserTurn is a no-op kept for compatibility', async () => {
-    await expect(controller.addUserTurn('Hello')).resolves.toBe(true)
-  })
-
   it('streams text and finalizes into stateManager', async () => {
     controller.startStreaming()
     controller.appendStreaming('Hello')

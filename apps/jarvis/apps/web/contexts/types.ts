@@ -31,7 +31,7 @@ export interface VoiceAgentConfig {
   // API endpoints and configuration
   apiEndpoints: {
     tokenMinting: string;
-    toolExecution: string;
+    toolExecution?: string; // Optional - removed in v2.1, tools execute via Supervisor
   };
 
   // Synchronization / persistence settings

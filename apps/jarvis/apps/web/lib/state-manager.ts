@@ -378,6 +378,13 @@ export class StateManager {
   }
 
   /**
+   * Alias for notifyListeners (for consistency)
+   */
+  private emit(event: StateChangeEvent): void {
+    this.notifyListeners(event);
+  }
+
+  /**
    * Reset state to initial
    */
   reset(): void {

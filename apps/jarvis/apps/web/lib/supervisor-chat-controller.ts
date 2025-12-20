@@ -40,13 +40,25 @@ interface SSEConnectedEvent {
 }
 
 interface SSESupervisorEvent {
-  type: 'supervisor_started' | 'supervisor_thinking' | 'supervisor_complete' | 'error';
+  type: string; // All event types including worker_* events
   payload: {
+    // Core fields
     run_id?: number;
     message?: string;
     result?: string;
     error?: string;
     status?: string;
+    // Worker lifecycle fields
+    job_id?: number;
+    task?: string;
+    worker_id?: string;
+    summary?: string;
+    duration_ms?: number;
+    // Worker tool fields
+    tool_name?: string;
+    tool_call_id?: string;
+    tool_args_preview?: string;
+    result_preview?: string;
   };
   client_correlation_id?: string;
 }
@@ -485,7 +497,7 @@ export class SupervisorChatController {
 
       case 'worker_complete':
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Worker complete:', payload.job_id, payload.status);
+        logger.info(`[SupervisorChat] Worker complete: job=${payload.job_id} status=${payload.status}`);
         eventBus.emit('supervisor:worker_complete', {
           jobId: payload.job_id || 0,
           workerId: payload.worker_id,
@@ -534,7 +546,7 @@ export class SupervisorChatController {
 
       case 'worker_tool_failed':
         this.petWatchdog(correlationId);
-        logger.warn('[SupervisorChat] Worker tool failed:', payload.tool_name, payload.error);
+        logger.warn(`[SupervisorChat] Worker tool failed: ${payload.tool_name} - ${payload.error}`);
         eventBus.emit('worker:tool_failed', {
           workerId: payload.worker_id || '',
           toolName: payload.tool_name || '',
