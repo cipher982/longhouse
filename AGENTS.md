@@ -127,6 +127,20 @@ Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to p
 4. If the UI looks fine but backend events are missing: `make test-e2e-logs` (then focus on `zerg-backend` + `reverse-proxy`)
 5. If you need interactive UI debugging: `make test-jarvis-e2e-ui` (host Playwright UI, not Docker)
 
+### Live Integration Testing (Backend Tools)
+To verify core supervisor tools (KV memory, Tasks, Web Search) against a running backend:
+
+```bash
+# 1. Start backend
+make dev
+
+# 2. Run live tests (from apps/zerg/backend)
+cd apps/zerg/backend
+uv run python -m pytest tests/live --live-token <YOUR_JWT>
+```
+
+These tests dispatch real tasks to the Supervisor and verify the SSE stream results.
+
 ## Conventions
 
 ### Backend (Python)
