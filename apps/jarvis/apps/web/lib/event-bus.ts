@@ -226,3 +226,10 @@ export const eventBus = new EventBus();
 if (import.meta.env?.DEV) {
   eventBus.setDebugMode(true);
 }
+
+// Expose the bus for Playwright E2E injection (dev server only).
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  const w = window as any;
+  w.__jarvis = w.__jarvis || {};
+  w.__jarvis.eventBus = eventBus;
+}
