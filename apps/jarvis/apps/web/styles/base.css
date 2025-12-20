@@ -1,93 +1,13 @@
-/* Base styles and CSS variables - Cyber/Holographic Theme */
+/* Base styles - Cyber/Holographic Theme */
+
+/* Import shared design tokens */
+@import url("../../../../../packages/design-tokens/dist/core.css");
+@import url("../../../../../packages/design-tokens/dist/theme-glass.css");
 
 :root {
-  /* ------------------------------------------------------------------ */
+  /* Jarvis-specific overrides and aliases */
 
-  /*  Cyber Design System Tokens                                        */
-
-  /* ------------------------------------------------------------------ */
-
-  /* Core Palette - Deep Space & Neon */
-  --color-void: #030305; /* Absolute black/blue */
-  --color-void-light: #0a0a12; /* Slightly lighter void */
-  --color-glass: rgb(20 20 30 / 60%);
-  --color-glass-border: rgb(255 255 255 / 8%);
-
-  /* Neon Accents */
-  --color-neon-primary: #6366f1; /* Electric Indigo */
-  --color-neon-secondary: #a855f7; /* Cyber Purple */
-  --color-neon-cyan: #06b6d4; /* Tron Cyan */
-  --color-neon-pink: #ec4899; /* Laser Pink */
-
-  /* Functional Colors */
-  --color-text-primary: #fff;
-  --color-text-secondary: #94a3b8; /* Slate 400 */
-  --color-text-muted: #475569; /* Slate 600 */
-  --color-border-muted: rgb(255 255 255 / 5%);
-
-  /* Brand Colors (aliases to neon palette) */
-  --color-brand-primary: var(--color-neon-primary);
-  --color-brand-secondary: var(--color-neon-secondary);
-
-  /* Intent/Semantic Colors */
-  --color-intent-success: #22c55e; /* Green 500 */
-  --color-intent-error: #ef4444; /* Red 500 */
-  --color-intent-warning: #f59e0b; /* Amber 500 */
-
-  /* Surfaces */
-  --color-surface-page: var(--color-void);
-  --color-surface-secondary: rgb(10 10 15 / 40%);
-  --color-surface-card: rgb(255 255 255 / 3%);
-  --color-surface-elevated: rgb(255 255 255 / 7%);
-  --color-surface-dark: #1a1a2e; /* Dark surface for inputs/controls */
-  --color-neon-primary-dark: #4f46e5; /* Darker variant of neon-primary */
-
-  /* Typography */
-  --font-family-base: "Inter", system-ui, -apple-system, sans-serif;
-  --font-family-mono: "JetBrains Mono", "Fira Code", monospace;
-
-  /* Effects */
-  --blur-sm: 8px;
-  --blur-md: 16px;
-  --blur-lg: 24px;
-
-  /* Shadows & Glows */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 20%);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 30%);
-  --shadow-card: 0 8px 32px rgb(0 0 0 / 40%);
-  --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
-  --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
-
-  /* Breakpoints (for reference - CSS can't use vars in media queries) */
-  /* --breakpoint-sm: 640px;  Small mobile */
-  /* --breakpoint-md: 768px;  Tablet/mobile threshold */
-  /* --breakpoint-lg: 1024px; Desktop */
-  /* --breakpoint-xl: 1280px; Large desktop */
-
-  /* Spacing & Radius */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-8: 48px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
-  --radius-full: 9999px;
-
-  /* Font Sizes */
-  --font-size-xs: 0.75rem;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
-  --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.5rem;
-  --font-size-3xl: 2rem;
-
-  /* Legacy Mappings */
+  /* Legacy mappings for backward compatibility */
   --bg-primary: var(--color-void);
   --bg-secondary: var(--color-surface-secondary);
   --bg-elevated: var(--color-surface-elevated);
@@ -99,6 +19,10 @@
   --glass-bg: var(--color-glass);
   --glass-border: var(--color-glass-border);
   --font-mono: var(--font-family-mono);
+
+  /* Glow effects (Jarvis-specific) */
+  --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
+  --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
 }
 
 /* Global Reset & Base */
