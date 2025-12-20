@@ -22,6 +22,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create runners tables."""
+    # Check if tables already exist (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
+
+    if 'runners' in existing_tables:
+        print("runners tables already exist - skipping")
+        return
 
     # Create runners table
     op.create_table(

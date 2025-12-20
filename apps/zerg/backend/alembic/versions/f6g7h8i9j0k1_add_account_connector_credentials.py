@@ -24,6 +24,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create account_connector_credentials table for account-scoped tool credentials."""
+    # Check if table already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'account_connector_credentials' in inspector.get_table_names():
+        print("account_connector_credentials table already exists - skipping")
+        return
+
     op.create_table(
         'account_connector_credentials',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
