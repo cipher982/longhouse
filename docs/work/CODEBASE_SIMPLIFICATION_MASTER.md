@@ -60,7 +60,7 @@ Rules for this effort:
 
 ### 2.1 Remove runtime debug print spam
 
-- [ ] Remove/guard `print(...)` spam in:
+- [x] Remove/guard `print(...)` spam in:
   - `apps/zerg/backend/zerg/events/event_bus.py`
   - `apps/zerg/backend/zerg/websocket/manager.py`
   - `apps/zerg/backend/zerg/database.py` (test-only prints should be gated)
@@ -133,3 +133,4 @@ Format:
 - 2025-12-20: update stale `scripts/run_all_tests.sh` to call Make targets — commit `608fbb5`
 - 2025-12-20: fix OpenAPI contract scripts to use `apps/zerg/openapi.json` — commit `f6478f1`
 - 2025-12-20: export OpenAPI schema to a single canonical location — commit `e6dfeab`
+- 2025-12-20: remove backend print spam (event bus / ws manager / db) — commits `f69bb07`, `7c38576`, `ddb5c30`
