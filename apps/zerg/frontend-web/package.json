@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:tokens": "node ./scripts/build-design-tokens.mjs",
+    "copy:tokens": "node ./scripts/copy-tokens.mjs",
     "dev": "vite",
-    "predev": "bun run build:tokens",
-    "prebuild": "bun run build:tokens",
+    "predev": "bun run copy:tokens",
+    "prebuild": "bun run copy:tokens",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
