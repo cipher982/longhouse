@@ -1,5 +1,7 @@
-/* Tokens first (already in @layer tokens via generated file) */
-@import url("./generated/tokens.css");
+/* Shared Design Tokens */
+@import url("./tokens/core.css");
+@import url("./tokens/theme-solid.css");
+@import url("./tokens/legacy-aliases.css");
 
 /* All legacy CSS using spec-compliant layer() syntax */
 @import url("./styles.css") layer(legacy);

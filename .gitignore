@@ -168,6 +168,7 @@ e2e/enhanced-analysis.js
 # Generated files
 openapi.json
 apps/zerg/frontend-web/src/styles/generated/
+apps/zerg/frontend-web/src/styles/tokens/
 
 # Logs (local dev only)
 logs/
