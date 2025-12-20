@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "copy-tokens": "node scripts/copy-tokens.mjs",
+    "predev": "npm run copy-tokens",
     "dev": "vite --port 8080 --host 0.0.0.0",
+    "prebuild": "npm run copy-tokens",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "dev-static": "node dev-server.js",

@@ -1,8 +1,8 @@
 /* Base styles - Cyber/Holographic Theme */
 
-/* Import shared design tokens */
-@import url("../../../../../packages/design-tokens/dist/core.css");
-@import url("../../../../../packages/design-tokens/dist/theme-glass.css");
+/* Import shared design tokens (copied from packages/design-tokens/) */
+@import url("./tokens/core.css");
+@import url("./tokens/theme-glass.css");
 
 :root {
   /* Jarvis-specific overrides and aliases */

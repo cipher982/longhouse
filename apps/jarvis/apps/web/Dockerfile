@@ -22,6 +22,10 @@ COPY packages/config/src ./swarm-packages/config/src
 # Symlink models.json so @swarm/config can import it
 RUN ln -s /app/config/models.json /app/swarm-packages/config/models.json
 
+# Copy @swarmlet/design-tokens package and build it
+COPY packages/design-tokens ./swarm-packages/design-tokens
+RUN cd /app/swarm-packages/design-tokens && node build.mjs
+
 # Copy jarvis workspace package.json files
 COPY apps/jarvis/packages/core/package.json ./packages/core/package.json
 COPY apps/jarvis/packages/data/local/package.json ./packages/data/local/package.json
@@ -36,6 +40,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 COPY apps/jarvis/packages ./packages
 COPY apps/jarvis/configs ./configs
 COPY apps/jarvis/apps/web ./apps/web
+
+# Copy design tokens into Jarvis styles folder
+RUN node /app/apps/web/scripts/copy-tokens.mjs
 
 # Fail-fast verification: Ensure critical config files exist
 RUN test -f /app/config/models.json || (echo "❌ FATAL: models.json not found" && exit 1)
