@@ -71,22 +71,27 @@ def _make_llm(agent_row, tools):
         kwargs["reasoning_effort"] = reasoning_effort.lower()
 
     # Enforce a maximum completion length if configured (>0)
+    # Note: O1-series/reasoning models require max_completion_tokens instead of max_tokens
     try:
         max_toks = int(get_settings().max_output_tokens)
     except Exception:  # noqa: BLE001 – defensive parsing
         max_toks = 0
     if max_toks and max_toks > 0:
-        kwargs["max_tokens"] = max_toks
+        # O1-series models (gpt-5.1, o1-*, etc.) require max_completion_tokens
+        is_reasoning_model = agent_row.model.startswith(("gpt-5", "o1-", "o3-"))
+        if is_reasoning_model:
+            kwargs["max_completion_tokens"] = max_toks
+        else:
+            kwargs["max_tokens"] = max_toks
 
-    # Be defensive against older stubs or versions that don't accept max_tokens
+    # Be defensive against older stubs or versions that don't accept these params
     try:
         llm = ChatOpenAI(**kwargs)
     except TypeError:
-        if "max_tokens" in kwargs:
-            kwargs.pop("max_tokens", None)
-            llm = ChatOpenAI(**kwargs)
-        else:
-            raise
+        # Try removing token limit params if model doesn't support them
+        kwargs.pop("max_tokens", None)
+        kwargs.pop("max_completion_tokens", None)
+        llm = ChatOpenAI(**kwargs)
 
     # Note: callbacks should be passed during invocation, not construction
     # The WsTokenCallback should be handled at the invocation level
