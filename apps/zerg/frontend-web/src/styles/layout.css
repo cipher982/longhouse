@@ -72,34 +72,71 @@
   /* The React root acts as the application grid */
   #react-root {
     display: grid;
-    grid-template-rows: auto auto 1fr auto;
+    grid-template-rows: auto 1fr auto;
     height: 100%;
     min-height: 100vh;
     min-height: 100dvh; /* modern viewport units */
+    background-color: var(--color-void, #030305);
+    position: relative;
+    overflow: hidden;
+
+    /* Living Void Layer 1: Deep Nebula */
+    background-image:
+      radial-gradient(
+        circle at 15% 50%,
+        rgb(99 102 241 / 8%) 0%,
+        transparent 25%
+      ),
+      radial-gradient(circle at 85% 30%, rgb(236 72 153 / 8%) 0%, transparent 25%);
+  }
+
+  /* Living Void Layer 2: Moving Grid */
+  #react-root::before {
+    content: "";
+    position: absolute;
+    inset: -50%;
+    width: 200%;
+    height: 200%;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 50px 50px;
+    transform: perspective(500px) rotateX(60deg);
+    animation: grid-move 20s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+    mask-image: radial-gradient(circle, black 30%, transparent 70%);
+  }
+
+  @keyframes grid-move {
+    from { transform: perspective(500px) rotateX(60deg) translateY(0); }
+    to { transform: perspective(500px) rotateX(60deg) translateY(50px); }
   }
 
   /* Place elements explicitly so order in DOM does not matter */
-  .header {
+  .main-header {
     grid-row: 1;
-  }
-
-  .tabs-container {
-    grid-row: 2;
+    z-index: 10;
   }
 
   .status-bar {
-    grid-row: 4;
+    grid-row: 3;
+    z-index: 10;
   }
 
   /* Content area - main scrollable viewport */
   #app-container {
-    grid-row: 3;
+    grid-row: 2;
     min-height: 0; /* required for grid children to respect overflow */
     display: flex;
     flex-direction: column;
     overflow-x: hidden; /* prevent page-level horizontal scroll */
     overflow-y: auto;
     position: relative;
+    z-index: 1;
+    /* Glass panel effect over the void */
+    background: rgba(3, 3, 5, 0.4);
+    backdrop-filter: blur(var(--blur-sm, 8px));
   }
 
   /* Ensure direct children fill available space */
