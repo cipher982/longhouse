@@ -6,7 +6,7 @@
  */
 
 /* Main container */
-.worker-progress {
+.jarvis-container .worker-progress {
   display: none;
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-2);
@@ -16,20 +16,20 @@
   box-shadow: var(--shadow-sm);
 }
 
-.worker-progress-content {
+.jarvis-container .worker-progress-content {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
 }
 
 /* Status header with spinner */
-.supervisor-status {
+.jarvis-container .supervisor-status {
   display: flex;
   align-items: center;
   gap: var(--space-3);
 }
 
-.supervisor-spinner {
+.jarvis-container .supervisor-spinner {
   width: 18px;
   height: 18px;
   border: 2px solid var(--color-surface-elevated);
@@ -44,14 +44,14 @@
   }
 }
 
-.supervisor-label {
+.jarvis-container .supervisor-label {
   font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--color-text-primary);
 }
 
 /* Workers list */
-.supervisor-workers {
+.jarvis-container .supervisor-workers {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -59,7 +59,7 @@
   padding-left: 30px; /* Align with text start */
 }
 
-.supervisor-worker {
+.jarvis-container .supervisor-worker {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -68,33 +68,33 @@
   transition: opacity 0.2s ease;
 }
 
-.supervisor-worker .worker-icon {
+.jarvis-container .supervisor-worker .worker-icon {
   font-size: 14px;
   flex-shrink: 0;
 }
 
-.supervisor-worker .worker-task {
+.jarvis-container .supervisor-worker .worker-task {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.supervisor-worker .worker-summary {
+.jarvis-container .supervisor-worker .worker-summary {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   font-style: italic;
 }
 
 /* Worker header (contains icon and task) */
-.supervisor-worker .worker-header {
+.jarvis-container .supervisor-worker .worker-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
 /* Tool calls list within worker */
-.supervisor-worker .worker-tools {
+.jarvis-container .supervisor-worker .worker-tools {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -105,7 +105,7 @@
 }
 
 /* Individual tool call */
-.worker-tool {
+.jarvis-container .worker-tool {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -114,19 +114,19 @@
   font-family: var(--font-mono);
 }
 
-.worker-tool .tool-icon {
+.jarvis-container .worker-tool .tool-icon {
   font-size: 12px;
   flex-shrink: 0;
   width: 14px;
   text-align: center;
 }
 
-.worker-tool .tool-name {
+.jarvis-container .worker-tool .tool-name {
   font-weight: 500;
   color: var(--color-text-primary);
 }
 
-.worker-tool .tool-preview {
+.jarvis-container .worker-tool .tool-preview {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -135,30 +135,30 @@
   font-size: 11px;
 }
 
-.worker-tool .tool-duration {
+.jarvis-container .worker-tool .tool-duration {
   font-size: 11px;
   color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
 /* Tool status states */
-.worker-tool.tool-status-running {
+.jarvis-container .worker-tool.tool-status-running {
   color: var(--color-brand-primary);
 }
 
-.worker-tool.tool-status-running .tool-icon {
+.jarvis-container .worker-tool.tool-status-running .tool-icon {
   animation: tool-pulse 1s ease-in-out infinite;
 }
 
-.worker-tool.tool-status-completed .tool-icon {
+.jarvis-container .worker-tool.tool-status-completed .tool-icon {
   color: var(--color-intent-success);
 }
 
-.worker-tool.tool-status-failed .tool-icon {
+.jarvis-container .worker-tool.tool-status-failed .tool-icon {
   color: var(--color-intent-error);
 }
 
-.worker-tool.tool-status-failed .tool-preview {
+.jarvis-container .worker-tool.tool-status-failed .tool-preview {
   color: var(--color-intent-error);
 }
 
@@ -174,36 +174,36 @@
 }
 
 /* Worker status states */
-.supervisor-worker.worker-status-spawned {
+.jarvis-container .supervisor-worker.worker-status-spawned {
   opacity: 0.7;
 }
 
-.supervisor-worker.worker-status-running {
+.jarvis-container .supervisor-worker.worker-status-running {
   opacity: 1;
 }
 
-.supervisor-worker.worker-status-running .worker-task {
+.jarvis-container .supervisor-worker.worker-status-running .worker-task {
   color: var(--color-brand-primary);
 }
 
-.supervisor-worker.worker-status-complete {
+.jarvis-container .supervisor-worker.worker-status-complete {
   opacity: 0.8;
 }
 
-.supervisor-worker.worker-status-complete .worker-task {
+.jarvis-container .supervisor-worker.worker-status-complete .worker-task {
   color: var(--color-intent-success);
 }
 
-.supervisor-worker.worker-status-failed {
+.jarvis-container .supervisor-worker.worker-status-failed {
   opacity: 0.8;
 }
 
-.supervisor-worker.worker-status-failed .worker-task {
+.jarvis-container .supervisor-worker.worker-status-failed .worker-task {
   color: var(--color-intent-error);
 }
 
 /* Active worker count */
-.supervisor-active-count {
+.jarvis-container .supervisor-active-count {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   padding-left: 30px;
@@ -211,18 +211,18 @@
 
 /* Responsive adjustments */
 @media (width <= 768px) {
-  .worker-progress {
+  .jarvis-container .worker-progress {
     padding: var(--space-3);
     margin: 0 var(--space-2) var(--space-2);
   }
 
-  .supervisor-workers {
+  .jarvis-container .supervisor-workers {
     padding-left: 24px;
   }
 }
 
 /* Animation for fade in */
-.worker-progress[style*="display: block"] {
+.jarvis-container .worker-progress[style*="display: block"] {
   animation: supervisor-fade-in 0.2s ease-out;
 }
 
@@ -242,7 +242,7 @@
 /* Sticky Mode - Sticks to top of chat area (default)                 */
 /* ------------------------------------------------------------------ */
 
-.worker-progress--sticky {
+.jarvis-container .worker-progress--sticky {
   position: sticky;
   top: 0;
   z-index: 100;
@@ -258,7 +258,7 @@
 }
 
 /* Sticky mode entrance animation */
-.worker-progress--sticky[style*="display: block"] {
+.jarvis-container .worker-progress--sticky[style*="display: block"] {
   animation: supervisor-sticky-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -276,7 +276,7 @@
 
 /* Mobile adjustments for sticky */
 @media (width <= 768px) {
-  .worker-progress--sticky {
+  .jarvis-container .worker-progress--sticky {
     margin: 0 0 var(--space-2) 0;
     border-radius: var(--radius-md);
   }
@@ -286,7 +286,7 @@
 /* Floating Mode - Fixed position toast, always visible               */
 /* ------------------------------------------------------------------ */
 
-.worker-progress--floating {
+.jarvis-container .worker-progress--floating {
   position: fixed;
   bottom: 140px; /* Above voice button controls */
   right: var(--space-5);
@@ -302,7 +302,7 @@
 }
 
 /* Floating mode entrance animation */
-.worker-progress--floating[style*="display: block"] {
+.jarvis-container .worker-progress--floating[style*="display: block"] {
   animation: supervisor-float-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -320,7 +320,7 @@
 
 /* Mobile: full width at bottom */
 @media (width <= 768px) {
-  .worker-progress--floating {
+  .jarvis-container .worker-progress--floating {
     left: var(--space-3);
     right: var(--space-3);
     bottom: 120px;
@@ -333,7 +333,7 @@
 /* Attention Animation - Draws user focus when supervisor starts      */
 /* ------------------------------------------------------------------ */
 
-.worker-progress--attention {
+.jarvis-container .worker-progress--attention {
   animation: supervisor-attention 0.4s ease-out;
 }
 
@@ -359,6 +359,6 @@
 /* Active State - Full modal with workers                              */
 /* ------------------------------------------------------------------ */
 
-.worker-progress--active {
+.jarvis-container .worker-progress--active {
   /* Active class applied when workers are displayed */
 }

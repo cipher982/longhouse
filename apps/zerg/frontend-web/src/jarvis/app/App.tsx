@@ -15,7 +15,11 @@ import { workerProgress } from '../lib/worker-progress'
 
 console.info('[Jarvis] Starting React application')
 
-export default function App() {
+interface AppProps {
+  embedded?: boolean
+}
+
+export default function App({ embedded = false }: AppProps) {
   const state = useAppState()
   const dispatch = useAppDispatch()
 
@@ -122,7 +126,7 @@ export default function App() {
       />
 
       <div className="main-content">
-        <Header onSync={handleSync} />
+        {!embedded && <Header onSync={handleSync} />}
 
         <ChatContainer
           messages={state.messages}

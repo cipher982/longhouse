@@ -4,7 +4,7 @@
    All effects are CSS-only, GPU-accelerated.
 */
 
-.voice-controls {
+.jarvis-container .voice-controls {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -21,7 +21,7 @@
    Reactor Core Container
    ============================ */
 
-.voice-button-wrapper {
+.jarvis-container .voice-button-wrapper {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -35,7 +35,7 @@
    Reactor Rings
    ============================ */
 
-.reactor-ring {
+.jarvis-container .reactor-ring {
   position: absolute;
   border-radius: 50%;
   border: 2px solid transparent;
@@ -46,7 +46,7 @@
 }
 
 /* Outer Ring - Largest, slowest */
-.reactor-ring-outer {
+.jarvis-container .reactor-ring-outer {
   width: 112px;
   height: 112px;
   border: 2px dashed rgb(99 102 241 / 30%);
@@ -54,7 +54,7 @@
 }
 
 /* Middle Ring - Counter-rotation */
-.reactor-ring-middle {
+.jarvis-container .reactor-ring-middle {
   width: 96px;
   height: 96px;
   border: 1.5px solid rgb(99 102 241 / 20%);
@@ -66,7 +66,7 @@
 }
 
 /* Inner Ring - Closest to button, fastest */
-.reactor-ring-inner {
+.jarvis-container .reactor-ring-inner {
   width: 82px;
   height: 82px;
   border: 1px dotted rgb(99 102 241 / 25%);
@@ -97,108 +97,108 @@
    ============================ */
 
 /* Idle - Slow, subtle */
-.voice-button-wrapper.idle .reactor-ring-outer {
+.jarvis-container .voice-button-wrapper.idle .reactor-ring-outer {
   animation-duration: 20s;
   opacity: 0.5;
 }
 
-.voice-button-wrapper.idle .reactor-ring-middle {
+.jarvis-container .voice-button-wrapper.idle .reactor-ring-middle {
   animation-duration: 15s;
   opacity: 0.4;
 }
 
-.voice-button-wrapper.idle .reactor-ring-inner {
+.jarvis-container .voice-button-wrapper.idle .reactor-ring-inner {
   animation-duration: 10s;
   opacity: 0.3;
 }
 
 /* Connecting - Speed up, pulse */
-.voice-button-wrapper.connecting .reactor-ring {
+.jarvis-container .voice-button-wrapper.connecting .reactor-ring {
   animation-duration: 3s;
   opacity: 0.8;
 }
 
-.voice-button-wrapper.connecting .reactor-ring-outer {
+.jarvis-container .voice-button-wrapper.connecting .reactor-ring-outer {
   border-color: rgb(99 102 241 / 50%);
   animation:
     ring-rotate 3s linear infinite,
     ring-pulse 1.5s ease-in-out infinite;
 }
 
-.voice-button-wrapper.connecting .reactor-ring-middle {
+.jarvis-container .voice-button-wrapper.connecting .reactor-ring-middle {
   border-top-color: var(--color-neon-primary);
   border-bottom-color: var(--color-neon-primary);
 }
 
 /* Ready - Gentle glow, green tint */
-.voice-button-wrapper.ready .reactor-ring-outer {
+.jarvis-container .voice-button-wrapper.ready .reactor-ring-outer {
   border-color: rgb(34 197 94 / 30%);
   animation-duration: 15s;
 }
 
-.voice-button-wrapper.ready .reactor-ring-middle {
+.jarvis-container .voice-button-wrapper.ready .reactor-ring-middle {
   border-top-color: rgb(34 197 94 / 50%);
   border-bottom-color: rgb(34 197 94 / 50%);
   animation-duration: 10s;
 }
 
-.voice-button-wrapper.ready .reactor-ring-inner {
+.jarvis-container .voice-button-wrapper.ready .reactor-ring-inner {
   border-color: rgb(34 197 94 / 20%);
   animation-duration: 8s;
 }
 
 /* Listening - Fast, cyan energy burst */
-.voice-button-wrapper.listening .reactor-ring {
+.jarvis-container .voice-button-wrapper.listening .reactor-ring {
   opacity: 1;
 }
 
-.voice-button-wrapper.listening .reactor-ring-outer {
+.jarvis-container .voice-button-wrapper.listening .reactor-ring-outer {
   border-color: rgb(6 182 212 / 50%);
   animation: ring-rotate 4s linear infinite;
   box-shadow: 0 0 20px rgb(6 182 212 / 30%);
 }
 
-.voice-button-wrapper.listening .reactor-ring-middle {
+.jarvis-container .voice-button-wrapper.listening .reactor-ring-middle {
   border-top-color: var(--color-neon-cyan);
   border-bottom-color: var(--color-neon-cyan);
   animation: ring-rotate-reverse 2.5s linear infinite;
   box-shadow: 0 0 15px rgb(6 182 212 / 40%);
 }
 
-.voice-button-wrapper.listening .reactor-ring-inner {
+.jarvis-container .voice-button-wrapper.listening .reactor-ring-inner {
   border-color: rgb(6 182 212 / 40%);
   animation: ring-rotate 1.5s linear infinite;
   box-shadow: 0 0 10px rgb(6 182 212 / 30%);
 }
 
 /* Speaking - Pink energy pulse */
-.voice-button-wrapper.speaking .reactor-ring-outer {
+.jarvis-container .voice-button-wrapper.speaking .reactor-ring-outer {
   border-color: rgb(236 72 153 / 40%);
   animation:
     ring-rotate 6s linear infinite,
     ring-pulse-pink 1s ease-in-out infinite;
 }
 
-.voice-button-wrapper.speaking .reactor-ring-middle {
+.jarvis-container .voice-button-wrapper.speaking .reactor-ring-middle {
   border-top-color: var(--color-neon-pink);
   border-bottom-color: var(--color-neon-pink);
   animation: ring-rotate-reverse 4s linear infinite;
 }
 
-.voice-button-wrapper.speaking .reactor-ring-inner {
+.jarvis-container .voice-button-wrapper.speaking .reactor-ring-inner {
   border-color: rgb(236 72 153 / 30%);
   animation: ring-rotate 2s linear infinite;
 }
 
 /* Processing - Rainbow cycle */
-.voice-button-wrapper.processing .reactor-ring {
+.jarvis-container .voice-button-wrapper.processing .reactor-ring {
   animation:
     ring-rotate 2s linear infinite,
     ring-color-cycle 2s linear infinite;
 }
 
 /* Error - Red warning */
-.voice-button-wrapper.error .reactor-ring {
+.jarvis-container .voice-button-wrapper.error .reactor-ring {
   border-color: rgb(239 68 68 / 40%);
   animation:
     ring-rotate 3s linear infinite,
@@ -263,7 +263,7 @@
    The Core Button
    ============================ */
 
-.voice-button {
+.jarvis-container .voice-button {
   width: 64px;
   height: 64px;
   border-radius: 50%;
@@ -285,7 +285,7 @@
 }
 
 /* Icon */
-.voice-icon {
+.jarvis-container .voice-icon {
   width: 20px;
   height: 20px;
   color: rgb(255 255 255 / 50%);
@@ -298,27 +298,27 @@
    ============================ */
 
 /* Idle */
-.voice-button.idle {
+.jarvis-container .voice-button.idle {
   animation: button-idle-pulse 4s ease-in-out infinite;
 }
 
-.voice-button.idle .voice-icon {
+.jarvis-container .voice-button.idle .voice-icon {
   color: rgb(255 255 255 / 60%);
 }
 
 /* Connecting */
-.voice-button.connecting {
+.jarvis-container .voice-button.connecting {
   border-color: rgb(99 102 241 / 50%);
   animation: button-connecting 1.5s ease-in-out infinite;
 }
 
-.voice-button.connecting .voice-icon {
+.jarvis-container .voice-button.connecting .voice-icon {
   color: var(--color-neon-primary);
   animation: icon-blink 1s steps(2, start) infinite;
 }
 
 /* Ready */
-.voice-button.ready {
+.jarvis-container .voice-button.ready {
   border-color: rgb(34 197 94 / 40%);
   box-shadow:
     inset 0 0 30px rgb(0 0 0 / 60%),
@@ -328,13 +328,13 @@
   animation: button-ready-breathe 3s ease-in-out infinite;
 }
 
-.voice-button.ready .voice-icon {
+.jarvis-container .voice-button.ready .voice-icon {
   color: #22c55e;
   filter: drop-shadow(0 0 6px rgb(34 197 94 / 50%));
 }
 
 /* Listening */
-.voice-button.listening {
+.jarvis-container .voice-button.listening {
   border-color: var(--color-neon-cyan);
   background: radial-gradient(circle at 30% 30%, #0f2027 0%, #0a1015 70%);
   transform: scale(1.05);
@@ -347,25 +347,25 @@
   animation: button-listening 1.5s ease-in-out infinite;
 }
 
-.voice-button.listening .voice-icon {
+.jarvis-container .voice-button.listening .voice-icon {
   color: var(--color-neon-cyan);
   filter: drop-shadow(0 0 10px var(--color-neon-cyan));
   animation: icon-float 2s ease-in-out infinite;
 }
 
 /* Processing */
-.voice-button.processing {
+.jarvis-container .voice-button.processing {
   border-color: var(--color-neon-secondary);
   animation: button-processing 2s linear infinite;
 }
 
-.voice-button.processing .voice-icon {
+.jarvis-container .voice-button.processing .voice-icon {
   color: var(--color-neon-secondary);
   filter: drop-shadow(0 0 8px var(--color-neon-secondary));
 }
 
 /* Speaking */
-.voice-button.speaking {
+.jarvis-container .voice-button.speaking {
   border-color: var(--color-neon-pink);
   background: radial-gradient(circle at 30% 30%, #1a0a15 0%, #0f050a 70%);
   box-shadow:
@@ -376,13 +376,13 @@
   animation: button-speaking 1s ease-in-out infinite;
 }
 
-.voice-button.speaking .voice-icon {
+.jarvis-container .voice-button.speaking .voice-icon {
   color: var(--color-neon-pink);
   filter: drop-shadow(0 0 8px var(--color-neon-pink));
 }
 
 /* Error */
-.voice-button.error {
+.jarvis-container .voice-button.error {
   border-color: var(--color-intent-error);
   box-shadow:
     inset 0 0 30px rgb(239 68 68 / 10%),
@@ -391,29 +391,29 @@
     0 0 30px rgb(239 68 68 / 20%);
 }
 
-.voice-button.error .voice-icon {
+.jarvis-container .voice-button.error .voice-icon {
   color: var(--color-intent-error);
 }
 
 /* Disabled */
-.voice-button.disabled {
+.jarvis-container .voice-button.disabled {
   opacity: 0.5;
   cursor: not-allowed;
   filter: grayscale(50%);
 }
 
 /* Hover */
-.voice-button:hover:not(.disabled):not(.listening) {
+.jarvis-container .voice-button:hover:not(.disabled):not(.listening) {
   transform: scale(1.02);
   border-color: var(--color-neon-primary);
 }
 
-.voice-button:hover:not(.disabled) .voice-icon {
+.jarvis-container .voice-button:hover:not(.disabled) .voice-icon {
   color: #fff;
 }
 
 /* Active */
-.voice-button:active:not(.disabled) {
+.jarvis-container .voice-button:active:not(.disabled) {
   transform: scale(0.98);
 }
 
@@ -558,13 +558,13 @@
    Status Text
    ============================ */
 
-.voice-status {
+.jarvis-container .voice-status {
   text-align: center;
   animation: slide-up-fade 0.4s ease-out 0.2s backwards;
   min-width: 120px;
 }
 
-.voice-status-text {
+.jarvis-container .voice-status-text {
   font-family: var(--font-family-mono);
   font-size: 0.7rem;
   letter-spacing: 1.5px;
@@ -575,20 +575,20 @@
 }
 
 /* Status text color by state */
-.voice-button.connecting ~ .voice-status .voice-status-text {
+.jarvis-container .voice-button.connecting ~ .voice-status .voice-status-text {
   color: var(--color-neon-primary);
 }
 
-.voice-button.ready ~ .voice-status .voice-status-text {
+.jarvis-container .voice-button.ready ~ .voice-status .voice-status-text {
   color: #22c55e;
 }
 
-.voice-button.listening ~ .voice-status .voice-status-text {
+.jarvis-container .voice-button.listening ~ .voice-status .voice-status-text {
   color: var(--color-neon-cyan);
 }
 
-.voice-button.speaking ~ .voice-status .voice-status-text,
-.voice-button.processing ~ .voice-status .voice-status-text {
+.jarvis-container .voice-button.speaking ~ .voice-status .voice-status-text,
+.jarvis-container .voice-button.processing ~ .voice-status .voice-status-text {
   color: var(--color-neon-pink);
 }
 
@@ -596,7 +596,7 @@
    Mode Toggle - Cyber Switch
    ============================ */
 
-.mode-toggle-container {
+.jarvis-container .mode-toggle-container {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -611,12 +611,12 @@
   justify-content: center;
 }
 
-.mode-toggle-container:hover {
+.jarvis-container .mode-toggle-container:hover {
   background: rgb(255 255 255 / 5%);
   border-color: rgb(255 255 255 / 15%);
 }
 
-.mode-toggle {
+.jarvis-container .mode-toggle {
   width: 40px;
   height: 20px;
   background: rgb(0 0 0 / 60%);
@@ -630,7 +630,7 @@
     0 1px 0 rgb(255 255 255 / 5%);
 }
 
-.mode-toggle[aria-checked="true"] {
+.jarvis-container .mode-toggle[aria-checked="true"] {
   background: linear-gradient(
     135deg,
     rgb(99 102 241 / 40%) 0%,
@@ -642,7 +642,7 @@
     0 0 15px rgb(6 182 212 / 30%);
 }
 
-.mode-toggle-slider {
+.jarvis-container .mode-toggle-slider {
   width: 14px;
   height: 14px;
   background: linear-gradient(135deg, #fff 0%, #e0e0e0 100%);
@@ -656,7 +656,7 @@
     0 0 0 1px rgb(255 255 255 / 10%);
 }
 
-.mode-toggle[aria-checked="true"] .mode-toggle-slider {
+.jarvis-container .mode-toggle[aria-checked="true"] .mode-toggle-slider {
   transform: translateX(20px);
   background: linear-gradient(135deg, var(--color-neon-cyan) 0%, #22d3ee 100%);
   box-shadow:
@@ -664,7 +664,7 @@
     0 0 12px var(--color-neon-cyan);
 }
 
-.mode-label {
+.jarvis-container .mode-label {
   font-size: 0.65rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -673,16 +673,16 @@
   transition: color 0.3s ease;
 }
 
-.mode-toggle-container:hover .mode-label {
+.jarvis-container .mode-toggle-container:hover .mode-label {
   color: var(--color-text-secondary);
 }
 
 /* Disabled toggle */
-.mode-toggle:disabled {
+.jarvis-container .mode-toggle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.mode-toggle:disabled + .mode-label {
+.jarvis-container .mode-toggle:disabled + .mode-label {
   opacity: 0.4;
 }

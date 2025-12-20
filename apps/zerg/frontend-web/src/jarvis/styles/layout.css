@@ -1,9 +1,9 @@
 /* Advanced Layout - GPU Accelerated & Glassmorphic */
 
-.app-container {
+.jarvis-container .app-container {
   display: grid;
   grid-template-columns: 280px 1fr;
-  height: 100vh;
+  height: 100%;
   position: relative;
   overflow: hidden;
   background-color: var(--color-void);
@@ -18,7 +18,7 @@
 }
 
 /* Living Void Layer 2: Moving Grid */
-.app-container::before {
+.jarvis-container .app-container::before {
   content: "";
   position: absolute;
   inset: -50%;
@@ -36,7 +36,7 @@
 }
 
 /* Living Void Layer 3: Dynamic Ambient Glows */
-.app-container::after {
+.jarvis-container .app-container::after {
   content: "";
   position: absolute;
   top: -50%;
@@ -52,10 +52,10 @@
   filter: blur(60px);
 }
 
-.main-content {
+.jarvis-container .main-content {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   position: relative;
   z-index: 1;
@@ -66,7 +66,7 @@
 }
 
 /* Header - HUD Style */
-.main-header {
+.jarvis-container .main-header {
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--color-border-muted);
   display: flex;
@@ -77,13 +77,13 @@
 }
 
 /* Brand lockup - logo + wordmark */
-.header-brand {
+.jarvis-container .header-brand {
   display: flex;
   align-items: center;
   gap: var(--space-3);
 }
 
-.brand-logo-wrapper {
+.jarvis-container .brand-logo-wrapper {
   position: relative;
   width: 36px;
   height: 36px;
@@ -92,7 +92,7 @@
   justify-content: center;
 }
 
-.brand-logo {
+.jarvis-container .brand-logo {
   width: 36px;
   height: 36px;
   object-fit: contain;
@@ -102,12 +102,12 @@
   transition: filter 0.3s ease;
 }
 
-.brand-logo-wrapper:hover .brand-logo {
+.jarvis-container .brand-logo-wrapper:hover .brand-logo {
   filter: drop-shadow(0 0 12px rgb(99 102 241 / 60%));
 }
 
 /* Ambient glow behind logo */
-.brand-logo-glow {
+.jarvis-container .brand-logo-glow {
   position: absolute;
   inset: -4px;
   background: radial-gradient(
@@ -127,7 +127,7 @@
 }
 
 /* Brand link wrapper */
-.brand-link {
+.jarvis-container .brand-link {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -135,18 +135,18 @@
   color: inherit;
 }
 
-.brand-link:hover .brand-logo {
+.jarvis-container .brand-link:hover .brand-logo {
   filter: drop-shadow(0 0 12px rgb(99 102 241 / 60%));
 }
 
 /* Global Navigation - Cyber Tabs */
-.header-nav {
+.jarvis-container .header-nav {
   display: flex;
   align-items: center;
   gap: var(--space-1);
 }
 
-.nav-tab {
+.jarvis-container .nav-tab {
   position: relative;
   display: flex;
   align-items: center;
@@ -160,21 +160,21 @@
   transition: all 0.25s ease;
 }
 
-.nav-tab:hover {
+.jarvis-container .nav-tab:hover {
   color: var(--color-text-secondary);
   background: rgb(255 255 255 / 4%);
 }
 
-.nav-tab--active {
+.jarvis-container .nav-tab--active {
   color: var(--color-text-primary);
 }
 
-.nav-tab--active:hover {
+.jarvis-container .nav-tab--active:hover {
   background: transparent;
 }
 
 /* Active indicator - glowing underline */
-.nav-tab-indicator {
+.jarvis-container .nav-tab-indicator {
   position: absolute;
   bottom: 0;
   left: 50%;
@@ -203,23 +203,23 @@
 
 /* Responsive: hide nav labels on smaller screens */
 @media (width <= 900px) {
-  .header-nav {
+  .jarvis-container .header-nav {
     gap: 0;
   }
 
-  .nav-tab {
+  .jarvis-container .nav-tab {
     padding: var(--space-2);
     font-size: 12px;
   }
 }
 
 @media (width <= 640px) {
-  .header-nav {
+  .jarvis-container .header-nav {
     display: none;
   }
 }
 
-.main-header h1 {
+.jarvis-container .main-header h1 {
   font-size: var(--font-size-xl);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -237,12 +237,12 @@
 }
 
 /* Controls & Inputs */
-.header-actions {
+.jarvis-container .header-actions {
   display: flex;
   gap: var(--space-2);
 }
 
-.header-button {
+.jarvis-container .header-button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -258,7 +258,7 @@
   backdrop-filter: blur(4px);
 }
 
-.header-button:hover {
+.jarvis-container .header-button:hover {
   background: rgb(255 255 255 / 10%);
   border-color: var(--color-neon-primary);
   color: var(--color-text-primary);
@@ -266,13 +266,13 @@
   transform: translateY(-1px);
 }
 
-.header-button svg {
+.jarvis-container .header-button svg {
   width: 14px;
   height: 14px;
 }
 
 /* Context Selector */
-.context-selector {
+.jarvis-container .context-selector {
   /* Remove default arrow */
   appearance: none;
   padding: var(--space-2) var(--space-3);
@@ -292,7 +292,7 @@
   font-family: inherit;
 }
 
-.context-selector:hover {
+.jarvis-container .context-selector:hover {
   background-color: rgb(255 255 255 / 10%);
   border-color: var(--color-neon-primary);
   color: var(--color-text-primary);
@@ -300,19 +300,19 @@
   transform: translateY(-1px);
 }
 
-.context-selector:focus {
+.jarvis-container .context-selector:focus {
   outline: none;
   border-color: var(--color-neon-cyan);
   box-shadow: 0 0 0 1px var(--color-neon-cyan);
 }
 
-.context-selector option {
+.jarvis-container .context-selector option {
   background-color: var(--color-surface-dark);
   color: var(--color-text-primary);
 }
 
 /* Chat Area */
-.chat-container {
+.jarvis-container .chat-container {
   flex: 1;
   overflow-y: auto;
   padding: 0;
@@ -328,7 +328,7 @@
 }
 
 /* Text Input - Floating Capsule */
-.text-input-container {
+.jarvis-container .text-input-container {
   padding: 0 var(--space-6) var(--space-6);
   max-width: 800px;
   margin: 0 auto;
@@ -339,7 +339,7 @@
 }
 
 /* Bottom Bar Container */
-.bottom-controls {
+.jarvis-container .bottom-controls {
   display: flex;
   flex-direction: column;
   background: linear-gradient(to top, var(--color-void) 0%, transparent 100%);
@@ -348,7 +348,7 @@
 }
 
 /* Input Controls Container */
-.input-controls {
+.jarvis-container .input-controls {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -359,20 +359,20 @@
 }
 
 /* When TextInput is inside input-controls, remove its padding */
-.input-controls .text-input-container {
+.jarvis-container .input-controls .text-input-container {
   padding: 0;
   max-width: none;
 }
 
 /* Model Selector Row */
-.model-selector {
+.jarvis-container .model-selector {
   display: flex;
   gap: var(--space-3);
   padding: 0 var(--space-2);
 }
 
-.model-select,
-.reasoning-select {
+.jarvis-container .model-select,
+.jarvis-container .reasoning-select {
   /* Remove default arrow */
   appearance: none;
   padding: var(--space-1) var(--space-3);
@@ -394,28 +394,28 @@
   backdrop-filter: blur(8px);
 }
 
-.model-select:hover,
-.reasoning-select:hover {
+.jarvis-container .model-select:hover,
+.jarvis-container .reasoning-select:hover {
   background-color: rgb(255 255 255 / 12%);
   border-color: var(--color-neon-primary);
   color: var(--color-text-primary);
   box-shadow: 0 0 10px rgb(99 102 241 / 20%);
 }
 
-.model-select:focus,
-.reasoning-select:focus {
+.jarvis-container .model-select:focus,
+.jarvis-container .reasoning-select:focus {
   outline: none;
   border-color: var(--color-neon-cyan);
   box-shadow: 0 0 0 1px var(--color-neon-cyan);
 }
 
-.model-select option,
-.reasoning-select option {
+.jarvis-container .model-select option,
+.jarvis-container .reasoning-select option {
   background-color: var(--color-surface-dark);
   color: var(--color-text-primary);
 }
 
-.text-input {
+.jarvis-container .text-input {
   flex: 1;
   background: var(--color-glass);
   border: 1px solid var(--color-border-muted);
@@ -428,7 +428,7 @@
   box-shadow: var(--shadow-md);
 }
 
-.text-input:focus {
+.jarvis-container .text-input:focus {
   outline: none;
   border-color: var(--color-neon-primary);
   background: rgb(30 30 45 / 80%);
@@ -437,11 +437,11 @@
     0 0 20px rgb(99 102 241 / 15%);
 }
 
-.text-input::placeholder {
+.jarvis-container .text-input::placeholder {
   color: rgb(255 255 255 / 30%);
 }
 
-.send-button {
+.jarvis-container .send-button {
   width: 48px;
   height: 48px;
   border-radius: 50%;
@@ -456,7 +456,7 @@
   box-shadow: var(--glow-primary);
 }
 
-.send-button:hover {
+.jarvis-container .send-button:hover {
   background: var(--color-neon-primary-dark);
   transform: scale(1.05);
   box-shadow: 0 0 30px rgb(99 102 241 / 60%);
@@ -464,21 +464,21 @@
 
 /* Responsive */
 @media (width <= 768px) {
-  .app-container {
+  .jarvis-container .app-container {
     grid-template-columns: 1fr;
   }
 
-  .sidebar {
+  .jarvis-container .sidebar {
     position: fixed;
     transform: translateX(-100%);
     z-index: 100;
   }
 
-  .sidebar.open {
+  .jarvis-container .sidebar.open {
     transform: translateX(0);
   }
 
-  .main-header {
+  .jarvis-container .main-header {
     padding: var(--space-3) var(--space-4);
     height: 60px;
   }

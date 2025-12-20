@@ -15,7 +15,9 @@ import App from '../jarvis/app/App';
 export default function JarvisChatPage() {
   return (
     <AppProvider>
-      <App />
+      <div className="jarvis-container">
+        <App embedded={true} />
+      </div>
     </AppProvider>
   );
 }
