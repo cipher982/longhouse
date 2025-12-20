@@ -11,6 +11,7 @@ different users. Now (user_id, op_id) is unique instead.
 from typing import Sequence, Union
 
 from alembic import op
+import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -22,11 +23,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Change op_id uniqueness from global to per-user."""
-    # Drop the global unique index on op_id
-    op.drop_index('ix_sync_operations_op_id', table_name='sync_operations')
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
 
-    # Create a non-unique index on op_id (for query performance)
-    op.create_index('ix_sync_operations_op_id', 'sync_operations', ['op_id'], unique=False)
+    # Check if table exists
+    if 'sync_operations' not in inspector.get_table_names():
+        print("sync_operations table doesn't exist - skipping")
+        return
+
+    # Check if constraint already exists
+    existing_constraints = [c['name'] for c in inspector.get_unique_constraints('sync_operations')]
+    if 'uq_sync_operations_user_op' in existing_constraints:
+        print("uq_sync_operations_user_op constraint already exists - skipping")
+        return
+
+    # Check if index exists before dropping
+    existing_indexes = [idx['name'] for idx in inspector.get_indexes('sync_operations')]
+    if 'ix_sync_operations_op_id' in existing_indexes:
+        # Drop the global unique index on op_id
+        op.drop_index('ix_sync_operations_op_id', table_name='sync_operations')
+
+    # Create a non-unique index on op_id (for query performance) if not exists
+    if 'ix_sync_operations_op_id' not in existing_indexes:
+        op.create_index('ix_sync_operations_op_id', 'sync_operations', ['op_id'], unique=False)
 
     # Create composite unique constraint on (user_id, op_id)
     op.create_unique_constraint(

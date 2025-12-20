@@ -19,6 +19,15 @@ depends_on = None
 def upgrade() -> None:
     # Drop the unique constraint on (owner_id, name)
     # This allows multiple agents with the same name (e.g., "New Agent")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+
+    # Check if constraint exists before dropping
+    existing_constraints = [c['name'] for c in inspector.get_unique_constraints('agents')]
+    if 'uq_agent_owner_name' not in existing_constraints:
+        print("uq_agent_owner_name constraint doesn't exist - skipping")
+        return
+
     op.drop_constraint('uq_agent_owner_name', 'agents', type_='unique')
 
 

@@ -21,6 +21,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create agent_memory_kv table."""
+    # Check if table already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'agent_memory_kv' in inspector.get_table_names():
+        print("agent_memory_kv table already exists - skipping")
+        return
+
     op.create_table(
         'agent_memory_kv',
         sa.Column('user_id', sa.Integer(), nullable=False),

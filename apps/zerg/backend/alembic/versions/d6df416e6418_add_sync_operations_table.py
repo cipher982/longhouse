@@ -23,6 +23,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add sync_operations table."""
+    # Check if table already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'sync_operations' in inspector.get_table_names():
+        print("sync_operations table already exists - skipping")
+        return
+
     op.create_table(
         'sync_operations',
         sa.Column('id', sa.Integer(), nullable=False),

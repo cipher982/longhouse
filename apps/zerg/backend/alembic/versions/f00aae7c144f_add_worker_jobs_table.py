@@ -20,6 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create worker_jobs table for background worker task execution."""
+    # Check if table already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'worker_jobs' in inspector.get_table_names():
+        print("worker_jobs table already exists - skipping")
+        return
+
     op.create_table(
         'worker_jobs',
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),

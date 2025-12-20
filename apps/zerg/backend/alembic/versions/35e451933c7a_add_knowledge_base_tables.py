@@ -23,6 +23,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create knowledge_sources and knowledge_documents tables."""
+    # Check if tables already exist (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
+
+    if 'knowledge_sources' in existing_tables:
+        print("knowledge_sources and knowledge_documents tables already exist - skipping")
+        return
+
     # Create knowledge_sources table
     op.create_table(
         'knowledge_sources',
