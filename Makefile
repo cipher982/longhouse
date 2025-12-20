@@ -312,10 +312,19 @@ validate: ## Run all validation checks
 
 validate-ws: ## Check WebSocket code is in sync (for CI)
 	@bash scripts/regen-ws-code.sh >/dev/null 2>&1
-	@if ! git diff --quiet; then \
+	@# Only check for drift in generated files to avoid false positives from unrelated changes
+	@if ! git diff --quiet \
+		apps/zerg/backend/zerg/generated/ws_messages.py \
+		apps/zerg/frontend-web/src/generated/ws-messages.ts \
+		schemas/ws-protocol.schema.json \
+		schemas/ws-protocol-v1.json; then \
 		echo "❌ WebSocket code out of sync"; \
 		echo "   Run 'make regen-ws' and commit changes"; \
-		git diff; \
+		git diff \
+			apps/zerg/backend/zerg/generated/ws_messages.py \
+			apps/zerg/frontend-web/src/generated/ws-messages.ts \
+			schemas/ws-protocol.schema.json \
+			schemas/ws-protocol-v1.json; \
 		exit 1; \
 	fi
 	@echo "✅ WebSocket code in sync"

@@ -428,14 +428,14 @@ class TopicConnectionManager:
             topic: The topic to broadcast to
             message: The message to broadcast (must be in envelope format)
         """
-        logger.info(f"🔔 broadcast_to_topic called for topic: {topic}")
+        logger.debug(f"broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
         # spam – this situation is perfectly normal when scheduled agents or
         # background jobs emit updates while no browser is connected.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
-                logger.warning(f"❌ NO SUBSCRIBERS for topic {topic}")
-                logger.warning(f"   Available topics: {list(self.topic_subscriptions.keys())}")
+                # Use debug level for no-subscriber warnings to keep logs clean
+                logger.debug(f"No subscribers for topic {topic}")
                 return
 
             # Take a *snapshot* of client IDs and their queues to send to outside the lock
@@ -443,7 +443,7 @@ class TopicConnectionManager:
                 client_id: self.client_queues.get(client_id)  # *None* when no dedicated queue
                 for client_id in self.topic_subscriptions[topic]
             }
-            logger.info(f"📤 Broadcasting to {len(client_queues)} subscribers on topic {topic}")
+            logger.info(f"Broadcasting to {len(client_queues)} subscribers on topic {topic}")
 
         # Envelope format is mandatory - no legacy format support
         # All callers must provide properly formatted envelope messages

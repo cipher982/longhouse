@@ -43,6 +43,7 @@ dependencies = [
     "docker>=7.1.0",
     "testcontainers>=4.13.1",
     "psycopg>=3.2.10",
+    "psycopg-pool>=3.2.4",
     "pathspec>=0.12.0",
     "tavily-python>=0.7.0",
     "trafilatura>=2.0.0",
