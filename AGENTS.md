@@ -46,6 +46,9 @@ Do not use npm, yarn, pip, or poetry.
 ```bash
 # Start everything (Docker + nginx + services)
 make dev           # Full platform with nginx proxy (profile: full)
+                   # ⚠️ Interactive - tails logs until Ctrl+C
+                   # ⚠️ Auto-rebuilds images (--build flag included)
+make dev-bg        # Same but background (for CI/automation)
 
 # Start individual services
 make zerg          # Just Zerg with direct ports (profile: zerg)
@@ -265,6 +268,10 @@ If you edit these, your changes will be overwritten by `make regen-ws` or `make 
 15. **Generated tool types path**: `scripts/generate_tool_types.py` writes to `apps/zerg/backend/zerg/tools/generated/` relative to repo root (safe from any CWD). If you ever see a duplicate tree like `apps/zerg/backend/apps/...`, it's a stray artifact and can be deleted.
 
 16. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
+
+17. **`make dev` is interactive**: It starts services, then tails logs forever (never exits). Run it in your terminal, not via automated tools expecting completion. To rebuild after Dockerfile changes, just `make stop && make dev` — the `--build` flag is already included.
+
+18. **Never use raw `docker compose` for dev**: Always use Make targets (`make dev`, `make stop`, `make logs`). Raw `docker compose` commands use wrong project names, miss env vars from `.env`, and create containers on isolated networks that can't communicate with the rest of the stack. If you must, use the pattern from Makefile line 17: `docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ...`
 
 ## Environment Setup
 
