@@ -4,7 +4,7 @@
 @import url("./tokens/core.css");
 @import url("./tokens/theme-glass.css");
 
-:root {
+.jarvis-container {
   /* Jarvis-specific overrides and aliases */
 
   /* Legacy mappings for backward compatibility */
@@ -23,17 +23,8 @@
   /* Glow effects (Jarvis-specific) */
   --glow-primary: 0 0 20px rgb(99 102 241 / 30%);
   --glow-cyan: 0 0 20px rgb(6 182 212 / 30%);
-}
 
-/* Global Reset & Base */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html,
-body {
+  /* Replaces html/body styles */
   height: 100%;
   width: 100%;
   font-family: var(--font-family-base);
@@ -41,66 +32,74 @@ body {
   color: var(--color-text-primary);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  position: relative; /* For the ::before overlay */
+}
+
+/* Global Reset & Base - scoped */
+.jarvis-container * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 /* Cinematic noise overlay */
-body::before {
+.jarvis-container::before {
   content: "";
-  position: fixed;
+  position: absolute; /* Changed from fixed to absolute to stay within container */
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E");
   pointer-events: none;
-  z-index: 9999;
+  z-index: 0; /* Lower z-index to stay behind content */
   opacity: 0.4;
 }
 
-/* Scrollbar */
-*::-webkit-scrollbar {
+/* Scrollbar - scoped */
+.jarvis-container *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
+.jarvis-container *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-thumb {
+.jarvis-container *::-webkit-scrollbar-thumb {
   background: var(--color-surface-elevated);
   border-radius: var(--radius-full);
 }
 
-*::-webkit-scrollbar-thumb:hover {
+.jarvis-container *::-webkit-scrollbar-thumb:hover {
   background: var(--color-neon-primary);
 }
 
-/* Accessibility: Focus visible states for keyboard navigation */
-:focus {
+/* Accessibility: Focus visible states for keyboard navigation - scoped */
+.jarvis-container :focus {
   outline: none;
 }
 
-:focus-visible {
+.jarvis-container :focus-visible {
   outline: 2px solid var(--color-neon-cyan);
   outline-offset: 2px;
 }
 
-button:focus-visible,
-[role="button"]:focus-visible {
+.jarvis-container button:focus-visible,
+.jarvis-container [role="button"]:focus-visible {
   outline: 2px solid var(--color-neon-cyan);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px rgb(6 182 212 / 20%);
 }
 
-a:focus-visible {
+.jarvis-container a:focus-visible {
   outline: 2px solid var(--color-neon-primary);
   outline-offset: 2px;
 }
 
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
+.jarvis-container input:focus-visible,
+.jarvis-container textarea:focus-visible,
+.jarvis-container select:focus-visible {
   outline: 2px solid var(--color-neon-cyan);
   outline-offset: 0;
   border-color: var(--color-neon-cyan);
@@ -108,9 +107,9 @@ select:focus-visible {
 
 /* Accessibility: Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  .jarvis-container *,
+  .jarvis-container *::before,
+  .jarvis-container *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
