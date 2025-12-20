@@ -1,11 +1,14 @@
 /**
- * Supervisor Progress UI
+ * Worker Progress UI
  *
- * Renders visual progress indicators when Jarvis routes tasks to the
- * Zerg Supervisor for investigation. Shows:
- * - "Investigating..." state with animated spinner
- * - Worker spawn/complete status
- * - Final result
+ * Shows live progress when the Supervisor delegates tasks to workers.
+ * Only displays when workers are actively running - does NOT show a
+ * "thinking" indicator (that's handled by the assistant message bubble).
+ *
+ * Shows:
+ * - Worker spawn/start/complete status
+ * - Live tool call activity within workers
+ * - Worker summaries when complete
  */
 
 import { eventBus } from './event-bus';
@@ -34,21 +37,14 @@ interface WorkerState {
 }
 
 /**
- * Two-phase display mode:
- * - 'thinking': Minimal indicator (typing dots) for quick responses
- * - 'delegating': Full modal with worker details for complex tasks
- */
-type ProgressPhase = 'thinking' | 'delegating';
-
-/**
- * Display mode for supervisor progress UI
+ * Display mode for worker progress UI
  * - 'floating': Fixed position toast at bottom-right (always visible)
  * - 'inline': Embedded in chat flow (original behavior, can scroll out of view)
  * - 'sticky': Sticky position at top of chat area (default, stays visible while scrolling)
  */
 type DisplayMode = 'floating' | 'inline' | 'sticky';
 
-export class SupervisorProgressUI {
+export class WorkerProgressUI {
   private container: HTMLElement | null = null;
   private isActive = false;
   private currentRunId: number | null = null;
@@ -59,7 +55,6 @@ export class SupervisorProgressUI {
   private tickerInterval: number | null = null; // For live duration updates
   private clearTimeout: number | null = null; // For delayed clear after complete/error
   private displayMode: DisplayMode = 'floating';
-  private phase: ProgressPhase = 'thinking'; // Two-phase: thinking (minimal) → delegating (full modal)
 
   constructor() {
     this.subscribeToEvents();
@@ -191,22 +186,19 @@ export class SupervisorProgressUI {
 
   /**
    * Handle supervisor started
-   * Starts in 'thinking' phase with minimal indicator (typing dots)
+   * Just tracks the run ID - UI only shows when workers are spawned
    */
   private handleStarted(runId: number, task: string): void {
     // Cancel any pending clear from previous supervisor complete/error
     this.cancelPendingClear();
 
-    this.isActive = true;
+    // Track run but don't show UI yet - wait for workers
     this.currentRunId = runId;
     this.supervisorDone = false;
-    this.phase = 'thinking'; // Start minimal - upgrade on worker spawn
     this.workers.clear();
     this.workersByWorkerId.clear();
-    // Don't start ticker yet - only needed for delegation phase
-    console.log(`[SupervisorProgress] Started run ${runId} (thinking phase): ${task}`);
-    this.render();
-    // No attention pulse for thinking phase - it's subtle
+    console.log(`[WorkerProgress] Tracking run ${runId}: ${task}`);
+    // Don't render or activate - UI only shows when workers spawn
   }
 
   /**
@@ -233,27 +225,27 @@ export class SupervisorProgressUI {
 
   /**
    * Handle supervisor thinking
+   * No-op - the assistant message bubble shows typing indicator
    */
   private handleThinking(message: string): void {
-    // Update UI to show thinking state
-    console.log(`[SupervisorProgress] Thinking: ${message}`);
-    this.render();
+    console.log(`[WorkerProgress] Supervisor thinking: ${message}`);
+    // Don't show UI - assistant bubble handles the typing indicator
   }
 
   /**
    * Handle worker spawned
-   * Upgrades from 'thinking' to 'delegating' phase on first worker
+   * This is when the UI first becomes visible
    */
   private handleWorkerSpawned(jobId: number, task: string): void {
     // A worker spawning means this run is still active; cancel any pending clear
     this.cancelPendingClear();
 
-    // Upgrade to full modal on first worker spawn
-    if (this.phase === 'thinking') {
-      this.phase = 'delegating';
-      this.startTicker(); // Now we need live duration updates
-      this.pulseAttention(); // Draw attention when upgrading to full modal
-      console.log(`[SupervisorProgress] Upgraded to delegating phase`);
+    // Activate UI on first worker
+    if (!this.isActive) {
+      this.isActive = true;
+      this.startTicker(); // Start live duration updates
+      this.pulseAttention(); // Draw attention
+      console.log(`[WorkerProgress] UI activated - workers detected`);
     }
 
     this.workers.set(jobId, {
@@ -263,7 +255,7 @@ export class SupervisorProgressUI {
       startedAt: Date.now(),
       toolCalls: new Map(),
     });
-    console.log(`[SupervisorProgress] Worker spawned: ${jobId} - ${task}`);
+    console.log(`[WorkerProgress] Worker spawned: ${jobId} - ${task}`);
     this.render();
   }
 
@@ -280,7 +272,7 @@ export class SupervisorProgressUI {
         this.workersByWorkerId.set(workerId, worker);
       }
     }
-    console.log(`[SupervisorProgress] Worker started: ${jobId}`);
+    console.log(`[WorkerProgress] Worker started: ${jobId}`);
     this.render();
   }
 
@@ -294,7 +286,7 @@ export class SupervisorProgressUI {
       worker.workerId = workerId;
       worker.completedAt = Date.now();
     }
-    console.log(`[SupervisorProgress] Worker complete: ${jobId} (${status}, ${durationMs}ms)`);
+    console.log(`[WorkerProgress] Worker complete: ${jobId} (${status}, ${durationMs}ms)`);
     this.render();
     this.maybeScheduleClear();
   }
@@ -307,7 +299,7 @@ export class SupervisorProgressUI {
     if (worker) {
       worker.summary = summary;
     }
-    console.log(`[SupervisorProgress] Worker summary: ${jobId} - ${summary}`);
+    console.log(`[WorkerProgress] Worker summary: ${jobId} - ${summary}`);
     this.render();
     this.maybeScheduleClear();
   }
@@ -331,7 +323,7 @@ export class SupervisorProgressUI {
 
     // No worker found - create an orphan worker for this workerId
     // This handles the case where tool events arrive before worker_started
-    console.warn(`[SupervisorProgress] Creating orphan worker for workerId: ${workerId}`);
+    console.warn(`[WorkerProgress] Creating orphan worker for workerId: ${workerId}`);
     const orphanJobId = -Date.now(); // Negative ID to avoid collisions
     worker = {
       jobId: orphanJobId,
@@ -351,7 +343,7 @@ export class SupervisorProgressUI {
    */
   private handleToolStarted(workerId: string, toolCallId: string, toolName: string, argsPreview?: string): void {
     if (!workerId) {
-      console.warn('[SupervisorProgress] Dropping tool_started with empty workerId');
+      console.warn('[WorkerProgress] Dropping tool_started with empty workerId');
       return;
     }
 
@@ -368,7 +360,7 @@ export class SupervisorProgressUI {
       argsPreview,
       startedAt: Date.now(),
     });
-    console.log(`[SupervisorProgress] Tool started: ${toolName} (${toolCallId})`);
+    console.log(`[WorkerProgress] Tool started: ${toolName} (${toolCallId})`);
     this.render();
   }
 
@@ -377,7 +369,7 @@ export class SupervisorProgressUI {
    */
   private handleToolCompleted(workerId: string, toolCallId: string, toolName: string, durationMs: number, resultPreview?: string): void {
     if (!workerId) {
-      console.warn('[SupervisorProgress] Dropping tool_completed with empty workerId');
+      console.warn('[WorkerProgress] Dropping tool_completed with empty workerId');
       return;
     }
 
@@ -391,7 +383,7 @@ export class SupervisorProgressUI {
 
     // Create entry if tool_started was missed
     if (!toolCall) {
-      console.warn(`[SupervisorProgress] Tool completed without prior started: ${toolCallId}`);
+      console.warn(`[WorkerProgress] Tool completed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
         toolName: toolName || 'unknown',
@@ -409,7 +401,7 @@ export class SupervisorProgressUI {
     toolCall.durationMs = durationMs;
     toolCall.resultPreview = resultPreview;
     toolCall.completedAt = Date.now();
-    console.log(`[SupervisorProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
+    console.log(`[WorkerProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
     this.render();
     this.maybeScheduleClear();
   }
@@ -419,7 +411,7 @@ export class SupervisorProgressUI {
    */
   private handleToolFailed(workerId: string, toolCallId: string, toolName: string, durationMs: number, error: string): void {
     if (!workerId) {
-      console.warn('[SupervisorProgress] Dropping tool_failed with empty workerId');
+      console.warn('[WorkerProgress] Dropping tool_failed with empty workerId');
       return;
     }
 
@@ -433,7 +425,7 @@ export class SupervisorProgressUI {
 
     // Create entry if tool_started was missed
     if (!toolCall) {
-      console.warn(`[SupervisorProgress] Tool failed without prior started: ${toolCallId}`);
+      console.warn(`[WorkerProgress] Tool failed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
         toolName: toolName || 'unknown',
@@ -451,7 +443,7 @@ export class SupervisorProgressUI {
     toolCall.durationMs = durationMs;
     toolCall.error = error;
     toolCall.completedAt = Date.now();
-    console.log(`[SupervisorProgress] Tool failed: ${toolCall.toolName} - ${error}`);
+    console.log(`[WorkerProgress] Tool failed: ${toolCall.toolName} - ${error}`);
     this.render();
     this.maybeScheduleClear();
   }
@@ -476,11 +468,10 @@ export class SupervisorProgressUI {
 
   /**
    * Handle supervisor complete
-   * Clears immediately if still in 'thinking' phase (quick response, no workers)
-   * Delays clear if in 'delegating' phase (let user see final state)
+   * Clears quickly if no workers, or waits briefly if workers were shown
    */
   private handleComplete(runId: number, result: string, status: string): void {
-    console.log(`[SupervisorProgress] Complete: ${runId} (${status}, phase: ${this.phase})`);
+    console.log(`[WorkerProgress] Complete: ${runId} (${status})`);
     this.supervisorDone = true;
 
     // If no workers are involved, clear fast; otherwise wait for workers to finish.
@@ -491,7 +482,7 @@ export class SupervisorProgressUI {
    * Handle error
    */
   private handleError(message: string): void {
-    console.error(`[SupervisorProgress] Error: ${message}`);
+    console.error(`[WorkerProgress] Error: ${message}`);
     // Show error briefly then clear
     this.scheduleClear(3000);
   }
@@ -515,7 +506,6 @@ export class SupervisorProgressUI {
     this.isActive = false;
     this.currentRunId = null;
     this.supervisorDone = false;
-    this.phase = 'thinking'; // Reset phase for next run
     this.workers.clear();
     this.workersByWorkerId.clear();
     this.stopTicker();
@@ -552,7 +542,7 @@ export class SupervisorProgressUI {
 
   /**
    * Render the progress UI
-   * Shows minimal "thinking" indicator or full "delegating" modal based on phase
+   * Only shows when workers are active
    */
   private render(): void {
     if (!this.container) return;
@@ -560,31 +550,12 @@ export class SupervisorProgressUI {
     if (!this.isActive) {
       this.container.innerHTML = '';
       this.container.style.display = 'none';
-      this.container.classList.remove('supervisor-progress--thinking', 'supervisor-progress--delegating');
-      return;
-    }
-
-    if (this.phase === 'thinking') {
-      this.container.style.display = 'block';
-      this.container.classList.remove('supervisor-progress--delegating');
-      this.container.classList.add('supervisor-progress--thinking');
-      this.container.innerHTML = `
-        <div class="supervisor-thinking-indicator" aria-label="Supervisor thinking">
-          <div class="thinking-dots">
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-          </div>
-        </div>
-      `;
+      this.container.classList.remove('supervisor-progress--active');
       return;
     }
 
     this.container.style.display = 'block';
-
-    // Update phase classes for CSS styling
-    this.container.classList.remove('supervisor-progress--thinking');
-    this.container.classList.add('supervisor-progress--delegating');
+    this.container.classList.add('supervisor-progress--active');
 
     // Full delegating modal with workers
     const workersArray = Array.from(this.workers.values());
@@ -742,4 +713,8 @@ export class SupervisorProgressUI {
 }
 
 // Export singleton instance
-export const supervisorProgress = new SupervisorProgressUI();
+// Named 'supervisorProgress' for backward compatibility with existing imports
+export const supervisorProgress = new WorkerProgressUI();
+
+// Also export with cleaner name for new code
+export { supervisorProgress as workerProgress };

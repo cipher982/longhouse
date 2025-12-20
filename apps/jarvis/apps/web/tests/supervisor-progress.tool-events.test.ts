@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { SupervisorProgressUI } from '../lib/supervisor-progress';
+import { WorkerProgressUI } from '../lib/supervisor-progress';
 import { eventBus } from '../lib/event-bus';
 
-describe('SupervisorProgressUI tool events', () => {
-  let ui: SupervisorProgressUI;
+describe('WorkerProgressUI tool events', () => {
+  let ui: WorkerProgressUI;
 
   beforeEach(() => {
     document.body.innerHTML = '<div id="supervisor-progress"></div>';
-    ui = new SupervisorProgressUI();
+    ui = new WorkerProgressUI();
     ui.initialize('supervisor-progress');
     eventBus.emit('supervisor:started', { runId: 1, task: 'test task', timestamp: Date.now() });
-    // Progress UI only renders once we enter 'delegating' phase (worker spawned).
+    // Progress UI only renders once workers spawn (isActive becomes true)
     eventBus.emit('supervisor:worker_spawned', { jobId: 1, task: 'worker task', timestamp: Date.now() });
     eventBus.emit('supervisor:worker_started', { jobId: 1, workerId: 'worker-1', timestamp: Date.now() });
   });

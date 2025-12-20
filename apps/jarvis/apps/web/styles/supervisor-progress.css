@@ -1,8 +1,8 @@
 /**
- * Supervisor Progress UI Styles
+ * Worker Progress UI Styles
  *
- * Displays visual progress indicators when Jarvis routes tasks
- * to the Zerg Supervisor for investigation.
+ * Shows live progress when the Supervisor delegates tasks to workers.
+ * Only displays when workers are actively running.
  */
 
 /* Main container */
@@ -356,77 +356,9 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Thinking Phase - Minimal typing dots (like iMessage)                */
+/* Active State - Full modal with workers                              */
 /* ------------------------------------------------------------------ */
 
-.supervisor-progress--thinking {
-  padding: var(--space-2) var(--space-3);
-  background: transparent;
-  border: none;
-  box-shadow: none;
-}
-
-.supervisor-progress--thinking.supervisor-progress--sticky,
-.supervisor-progress--thinking.supervisor-progress--floating {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.supervisor-thinking-indicator {
-  display: inline-flex;
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface-card);
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border-muted);
-}
-
-.thinking-dots {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.thinking-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--color-text-muted);
-  border-radius: 50%;
-  animation: thinking-bounce 1.4s ease-in-out infinite;
-}
-
-.thinking-dot:nth-child(1) {
-  animation-delay: 0s;
-}
-
-.thinking-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.thinking-dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes thinking-bounce {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.4;
-  }
-
-  30% {
-    transform: translateY(-4px);
-    opacity: 1;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Delegating Phase - Full modal with workers                          */
-/* ------------------------------------------------------------------ */
-
-.supervisor-progress--delegating {
-  /* Inherits default styling - full modal appearance */
+.supervisor-progress--active {
+  /* Active class applied when workers are displayed */
 }
