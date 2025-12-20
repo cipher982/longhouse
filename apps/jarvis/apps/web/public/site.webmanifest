@@ -1,7 +1,7 @@
 {
-  "name": "Jarvis - Swarm AI Assistant",
-  "short_name": "Jarvis",
-  "description": "Voice and text AI assistant powered by Swarm",
+  "name": "Swarmlet Chat",
+  "short_name": "Swarmlet",
+  "description": "Voice and text AI assistant powered by Swarmlet",
   "icons": [
     {
       "src": "/chat/maskable-icon-192.png",

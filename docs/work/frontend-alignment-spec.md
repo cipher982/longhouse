@@ -1,0 +1,321 @@
+# Frontend Alignment Spec: Zerg Dashboard + Jarvis Chat
+
+**Status:** Draft
+**Date:** 2025-12-20
+
+## Executive Summary
+
+The Zerg dashboard and Jarvis chat UI were originally separate projects, now unified under the Swarmlet brand. They share the same backend and authentication but have divergent:
+- Branding ("Swarmlet" vs "Jarvis AI")
+- Navigation patterns
+- Design token systems
+- Visual aesthetics
+
+This spec outlines a phased approach to align them as a cohesive product while preserving each UI's strengths.
+
+---
+
+## Current State Analysis
+
+### Zerg Dashboard (`/dashboard`, `/canvas`, etc.)
+| Aspect | Current State |
+|--------|---------------|
+| **Branding** | "Swarmlet" with logo |
+| **Navigation** | Full tab bar (Chat, Dashboard, Canvas, Integrations, Runners, Admin) |
+| **Aesthetic** | Professional dark - solid grays (#18181b surfaces) |
+| **Tokens** | DTCG JSON → auto-generated CSS |
+| **Components** | 29 React components |
+| **CSS** | 11,500 lines, layer-based cascade |
+
+### Jarvis Chat (`/chat`)
+| Aspect | Current State |
+|--------|---------------|
+| **Branding** | "Jarvis AI" title |
+| **Navigation** | Dashboard link button + Sync button only |
+| **Aesthetic** | Cyber/sci-fi - glass morphism, animated backgrounds, neon accents |
+| **Tokens** | Hand-written CSS custom properties |
+| **Components** | 7 React components |
+| **CSS** | 3,000 lines, modular imports |
+
+### What They Share
+- Same primary brand color: `#6366f1` (Electric Indigo)
+- Same fonts: Inter (base), JetBrains Mono (code)
+- Same intent colors: success/error/warning
+- Same backend API + authentication
+- Same nginx reverse proxy routing
+
+---
+
+## Recommended Approach
+
+**Philosophy:** Align without homogenizing. The chat UI benefits from its focused, immersive aesthetic. The dashboard benefits from its information-dense, professional look. We want them to feel like the same app, not clone each other.
+
+### Key Decisions
+
+1. **Single Brand Name**: Swarmlet everywhere
+2. **Unified Navigation Header**: Same structure, adapted styling per context
+3. **Shared Token Foundation**: Common base tokens, context-specific extensions
+4. **Preserve Aesthetics**: Dashboard stays solid, Chat keeps cyber/glass feel
+
+---
+
+## Phased Roadmap
+
+### Phase 1: Brand Consistency (Quick Wins)
+**Scope:** Unify naming without structural changes
+
+**Changes:**
+1. Rename "Jarvis AI" → "Swarmlet" in chat header
+2. Add Swarmlet logo to chat header
+3. Update PWA manifest name
+4. Align favicon if different
+
+**Files to modify:**
+- `apps/jarvis/apps/web/src/components/Header.tsx`
+- `apps/jarvis/apps/web/public/manifest.json`
+- `apps/jarvis/apps/web/index.html` (title tag)
+
+**Effort:** ~1 hour
+
+---
+
+### Phase 2: Navigation Alignment
+**Scope:** Add consistent top-level navigation to chat UI
+
+**Options:**
+
+#### Option A: Shared Header Strip (Recommended)
+Add a minimal global nav bar above the chat UI's existing header:
+```
+┌─────────────────────────────────────────────────┐
+│ [Logo] Swarmlet    Chat │ Dashboard │ ...  [DE]│  ← Global nav (from Zerg)
+├─────────────────────────────────────────────────┤
+│            [Existing Jarvis header]             │  ← Context header
+│         [Conversations]  │  [Chat Area]         │
+│                          │                      │
+└─────────────────────────────────────────────────┘
+```
+
+**Pros:**
+- Clear navigation between app sections
+- Preserves chat's immersive layout
+- Users always know where they are
+
+**Cons:**
+- Adds vertical space overhead
+- Two "headers" might feel redundant
+
+#### Option B: Integrate into Existing Header
+Expand Jarvis header to include navigation tabs:
+```
+┌─────────────────────────────────────────────────┐
+│ [Logo] Swarmlet  │ Chat │ Dashboard │...│ [DE] │
+├─────────────────────────────────────────────────┤
+│ [Conversations]  │        [Chat Area]           │
+└─────────────────────────────────────────────────┘
+```
+
+**Pros:**
+- Single header, less vertical space
+- Cleaner visual hierarchy
+
+**Cons:**
+- Requires more CSS work to match Jarvis aesthetic
+- May feel cramped on mobile
+
+#### Option C: Sidebar Navigation
+Move global nav to a collapsible sidebar:
+```
+┌───┬──────────────────────────────────────────────┐
+│ ☰ │                                              │
+│   │         [Full Chat UI]                       │
+│   │                                              │
+└───┴──────────────────────────────────────────────┘
+```
+
+**Pros:**
+- Maximum chat area
+- Modern pattern (Discord, Slack)
+
+**Cons:**
+- Significant restructure of both UIs
+- Inconsistent with current dashboard tabs
+
+**Recommendation:** Start with **Option B** - integrate nav into Jarvis header. Simplest path to cohesion.
+
+**Files to modify:**
+- `apps/jarvis/apps/web/src/components/Header.tsx`
+- `apps/jarvis/apps/web/styles/layout.css`
+
+**Effort:** ~4 hours
+
+---
+
+### Phase 3: Shared Design Token Foundation
+**Scope:** Create a shared token package both UIs consume
+
+**Structure:**
+```
+packages/design-tokens/
+├── tokens.json           # DTCG-compliant source (merge both systems)
+├── scripts/
+│   └── build.mjs        # Generates outputs
+└── dist/
+    ├── css/
+    │   ├── base.css     # Core tokens (shared)
+    │   ├── theme-solid.css   # Dashboard variant
+    │   └── theme-glass.css   # Chat variant
+    └── ts/
+        └── tokens.ts    # TypeScript exports
+```
+
+**Token Merge Strategy:**
+| Token Category | Shared? | Notes |
+|----------------|---------|-------|
+| Brand colors | Yes | Primary, secondary, accent |
+| Intent colors | Yes | Success, error, warning |
+| Font families | Yes | Inter, JetBrains Mono |
+| Font sizes | Yes | Harmonize scales |
+| Spacing | Yes | Use 4px base unit |
+| Border radius | Yes | Same scale |
+| Surface colors | **No** | Dashboard: solid, Chat: glass |
+| Shadows | Partial | Base shadows shared, glows per-theme |
+| Motion | Partial | Basic durations shared, complex animations per-theme |
+
+**Migration Path:**
+1. Create `packages/design-tokens/` with merged token file
+2. Update Zerg build to consume from shared package
+3. Update Jarvis to import shared base + glass theme
+4. Delete duplicate token definitions
+
+**Effort:** ~8 hours
+
+---
+
+### Phase 4: Shared Component Library (Optional)
+**Scope:** Extract common UI components to shared package
+
+**Candidates for Sharing:**
+- Button (primary, secondary, ghost variants)
+- Input / TextArea
+- Modal / Dialog
+- Avatar
+- Badge / Status indicator
+- Toast notifications
+
+**Not Worth Sharing:**
+- Layout components (fundamentally different)
+- Navigation (different patterns)
+- Chat-specific components
+- Dashboard-specific widgets
+
+**Structure:**
+```
+packages/ui/
+├── src/
+│   ├── Button/
+│   ├── Input/
+│   ├── Modal/
+│   └── index.ts
+├── package.json
+└── tsconfig.json
+```
+
+**Effort:** ~16 hours
+
+**Recommendation:** Defer this phase. The UIs have few overlapping components, and the maintenance burden of a shared library may exceed benefits. Revisit when adding a third frontend or major features.
+
+---
+
+## Styling Guidelines (Post-Alignment)
+
+### Dashboard Context
+- Use solid surface colors (`--color-surface-section`, `--color-surface-card`)
+- Minimal animations (respect `prefers-reduced-motion`)
+- Dense information display
+- Standard shadows, no glows
+
+### Chat Context
+- Use glass/transparent surfaces (`rgba()` with `backdrop-filter`)
+- Immersive animations allowed (background grid, nebula)
+- Conversational flow optimized
+- Neon glow accents on interactive elements
+
+### Shared Rules
+- Same border radius scale everywhere
+- Same spacing scale (4px base)
+- Same font sizing scale
+- Same brand color on primary actions
+- Same focus states for accessibility
+
+---
+
+## Implementation Checklist
+
+### Phase 1: Brand Consistency
+- [ ] Update `Header.tsx` title to "Swarmlet"
+- [ ] Add logo to chat header
+- [ ] Update `manifest.json` name/short_name
+- [ ] Update `index.html` title tag
+- [ ] Verify favicon consistency
+
+### Phase 2: Navigation
+- [ ] Design nav integration mockup
+- [ ] Implement nav tabs in Jarvis Header
+- [ ] Style nav to match cyber aesthetic (glass effect)
+- [ ] Add active state indication
+- [ ] Test mobile responsiveness
+- [ ] Update E2E tests for new nav structure
+
+### Phase 3: Tokens
+- [ ] Create `packages/design-tokens/` package
+- [ ] Merge token definitions
+- [ ] Build script for CSS + TS output
+- [ ] Migrate Zerg to shared tokens
+- [ ] Migrate Jarvis to shared tokens
+- [ ] Remove duplicate token files
+- [ ] Update documentation
+
+### Phase 4: Components (Deferred)
+- [ ] Identify candidate components
+- [ ] Create shared package structure
+- [ ] Migrate Button component
+- [ ] Migrate Input component
+- [ ] Update imports in both apps
+
+---
+
+## Open Questions
+
+1. **Mobile nav pattern?** Hamburger menu vs bottom nav vs drawer?
+2. **Should chat sidebar be collapsible by default?** (Matches dashboard's shelf pattern)
+3. **PWA install prompt?** Should both UIs prompt for install or just chat?
+4. **Offline support?** Currently only chat has service worker - extend to dashboard?
+
+---
+
+## Success Metrics
+
+- Users recognize both UIs as the same product
+- Navigation between sections feels seamless
+- No increase in CSS bundle size > 20%
+- Accessibility audit passes (WCAG 2.1 AA)
+- E2E tests pass for navigation flows
+
+---
+
+## Appendix: Current Token Comparison
+
+| Token | Zerg Dashboard | Jarvis Chat |
+|-------|----------------|-------------|
+| Primary brand | `#6366f1` | `#6366f1` |
+| Primary hover | `#4f46e5` | `#4f46e5` |
+| Secondary | `#818cf8` | `#a855f7` (purple) |
+| Page background | `#09090b` | `#030305` |
+| Card surface | `#27272a` | `rgb(255 255 255 / 3%)` |
+| Text primary | `#fafafa` | `#fff` |
+| Text secondary | `#a1a1aa` | `#94a3b8` |
+| Border subtle | `#27272a` | `rgb(255 255 255 / 5%)` |
+| Success | `#10b981` | `#22c55e` |
+| Error | `#ef4444` | `#ef4444` |
+| Warning | `#f59e0b` | `#f59e0b` |

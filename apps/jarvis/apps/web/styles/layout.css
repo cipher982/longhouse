@@ -76,6 +76,56 @@
   background: linear-gradient(180deg, rgb(0 0 0 / 20%) 0%, transparent 100%);
 }
 
+/* Brand lockup - logo + wordmark */
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.brand-logo-wrapper {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 0 8px rgb(99 102 241 / 40%));
+  transition: filter 0.3s ease;
+}
+
+.brand-logo-wrapper:hover .brand-logo {
+  filter: drop-shadow(0 0 12px rgb(99 102 241 / 60%));
+}
+
+/* Ambient glow behind logo */
+.brand-logo-glow {
+  position: absolute;
+  inset: -4px;
+  background: radial-gradient(
+    circle,
+    rgb(99 102 241 / 25%) 0%,
+    transparent 70%
+  );
+  border-radius: 50%;
+  filter: blur(8px);
+  opacity: 0.6;
+  animation: logo-pulse 3s ease-in-out infinite;
+}
+
+@keyframes logo-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.1); }
+}
+
 .main-header h1 {
   font-size: var(--font-size-xl);
   font-weight: 700;
