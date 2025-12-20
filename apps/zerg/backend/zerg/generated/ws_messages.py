@@ -1,5 +1,5 @@
 # AUTO-GENERATED FILE - DO NOT EDIT
-# Generated from ws-protocol-asyncapi.yml at 2025-12-20T05:30:12.362415Z
+# Generated from ws-protocol-asyncapi.yml
 # Using AsyncAPI 3.0 + Modern Python Code Generation
 #
 # This file contains strongly-typed WebSocket message definitions.
@@ -10,9 +10,6 @@ import jsonschema
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union, Literal, Protocol
 from pydantic import BaseModel, Field, ValidationError
-from pydantic.json_schema import GenerateJsonSchema
-
-import jsonschema
 
 
 class Envelope(BaseModel):
