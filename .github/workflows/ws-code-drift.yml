@@ -3,8 +3,9 @@ name: WebSocket Code Drift Guard
 on:
   pull_request:
     paths:
-      - "asyncapi/**"
+      - "schemas/**"
       - "scripts/regen-ws-code.sh"
+      - "scripts/generate-ws-types-modern.py"
       - "Makefile"
       - ".github/workflows/ws-code-drift.yml"
 
@@ -15,15 +16,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node 18
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
-      - name: Install build essentials
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y make git
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Run drift check
         run: make validate-ws
@@ -31,5 +25,5 @@ jobs:
       - name: Print note if diff detected (should not reach here)
         if: failure()
         run: |
-          echo '❌ WebSocket generated code is out of sync with asyncapi/chat.yml.'
+          echo '❌ WebSocket generated code is out of sync with schemas/ws-protocol-asyncapi.yml.'
           echo '   Please run `make regen-ws` and commit the changes.'
