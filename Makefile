@@ -214,7 +214,8 @@ test-jarvis-e2e: ## Run Jarvis E2E tests (isolated Docker environment)
 
 test-e2e-up: ## Start isolated E2E test environment
 	@echo "🚀 Starting isolated E2E environment..."
-	$(COMPOSE_E2E) up -d --build
+	# Start only the service stack; Playwright runs via `docker compose run ...`
+	$(COMPOSE_E2E) up -d --build postgres zerg-backend jarvis-web reverse-proxy
 	@echo "⏳ Waiting for services to be healthy..."
 	@for i in {1..30}; do \
 		if [ "$$($(COMPOSE_E2E) ps | grep "(healthy)" | wc -l)" -ge 4 ]; then \
