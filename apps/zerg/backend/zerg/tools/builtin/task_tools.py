@@ -1,8 +1,8 @@
 from typing import Optional, List, Type
 from datetime import datetime
 from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
-from zerg.services.user_context import get_worker_context
+from langchain_core.tools import StructuredTool
+from zerg.context import get_worker_context
 from zerg.models.models import UserTask
 from zerg.database import db_session
 from sqlalchemy import select, update, delete
