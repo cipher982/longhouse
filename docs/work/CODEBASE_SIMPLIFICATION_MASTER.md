@@ -158,4 +158,4 @@ Format:
 - 2025-12-20: unify frontend API base URL resolution — commits `eec399a`, `743b035`
 - 2025-12-20: fix `make validate` by updating `.PHONY` list — commit `620aa60`
 - 2025-12-20: update GitHub Actions workflows for Bun/uv — commits `49ef5b3`, `79cffc4`
-- 2025-12-20: pre-commit overhaul for AI agent safety — pending commit (ruff baseline cleanup, new config, ESLint fix)
+- 2025-12-20: pre-commit overhaul completed — commits `b2e4f5a`, `8c1d4e2`
