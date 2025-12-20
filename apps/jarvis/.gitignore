@@ -5,11 +5,7 @@
 .env.staging
 *.env
 
-# API keys and secrets
-*secret*
-*key*
-*token*
-!**/copy-tokens.mjs
+# Certificates and key files
 *.pem
 *.p12
 *.pfx
