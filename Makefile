@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev dev-bg zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -93,6 +93,14 @@ env-check-prod: ## Validate production environment variables
 dev: env-check ## ⭐ Start full platform (Docker + Nginx, isolated ports)
 	@echo "🚀 Starting full platform (Docker)..."
 	@./scripts/dev-docker.sh
+
+dev-bg: env-check ## Start full platform in background (for CI/automation)
+	@echo "🚀 Starting full platform (background)..."
+	$(COMPOSE_DEV) --profile full up -d --build
+	@echo "⏳ Waiting for services..."
+	@sleep 10
+	$(COMPOSE_DEV) --profile full ps
+	@echo "✅ Services started in background. Use 'make logs' to tail."
 
 zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
 	@echo "🚀 Starting Zerg platform..."
