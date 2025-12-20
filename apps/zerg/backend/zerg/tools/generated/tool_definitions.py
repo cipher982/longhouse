@@ -17,7 +17,9 @@ class ToolName(str, Enum):
     CONTAINER_EXEC = "container_exec"
     DATETIME_DIFF = "datetime_diff"
     GENERATE_UUID = "generate_uuid"
+    GET_CURRENT_LOCATION = "get_current_location"
     GET_CURRENT_TIME = "get_current_time"
+    GET_WHOOP_DATA = "get_whoop_data"
     GET_WORKER_METADATA = "get_worker_metadata"
     GITHUB_ADD_COMMENT = "github_add_comment"
     GITHUB_CREATE_ISSUE = "github_create_issue"
@@ -56,6 +58,7 @@ class ToolName(str, Enum):
     RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
     RUNNER_EXEC = "runner_exec"
     RUNNER_LIST = "runner_list"
+    SEARCH_NOTES = "search_notes"
     SEND_DISCORD_WEBHOOK = "send_discord_webhook"
     SEND_EMAIL = "send_email"
     SEND_IMESSAGE = "send_imessage"
@@ -89,6 +92,7 @@ class ServerName(str, Enum):
     LINEAR = "linear"
     MATH = "math"
     NOTION = "notion"
+    PERSONAL = "personal"
     RUNNER = "runner"
     RUNNER_SETUP = "runner_setup"
     SLACK = "slack"
@@ -111,7 +115,9 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
+    ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
+    ToolName.GET_WHOOP_DATA: ServerName.PERSONAL,
     ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
     ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
     ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
@@ -150,6 +156,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
     ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,
+    ToolName.SEARCH_NOTES: ServerName.PERSONAL,
     ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
     ToolName.SEND_EMAIL: ServerName.EMAIL,
     ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,

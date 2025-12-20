@@ -27,7 +27,9 @@ components:
         - container_exec
         - datetime_diff
         - generate_uuid
+        - get_current_location
         - get_current_time
+        - get_whoop_data
         - get_worker_metadata
         - github_add_comment
         - github_create_issue
@@ -66,6 +68,7 @@ components:
         - runner_create_enroll_token
         - runner_exec
         - runner_list
+        - search_notes
         - send_discord_webhook
         - send_email
         - send_imessage
@@ -99,6 +102,7 @@ components:
         - linear
         - math
         - notion
+        - personal
         - runner
         - runner_setup
         - slack
@@ -167,8 +171,12 @@ components:
               const: datetime
             generate_uuid:
               const: uuid
+            get_current_location:
+              const: personal
             get_current_time:
               const: datetime
+            get_whoop_data:
+              const: personal
             get_worker_metadata:
               const: supervisor
             github_add_comment:
@@ -245,6 +253,8 @@ components:
               const: runner
             runner_list:
               const: runner_setup
+            search_notes:
+              const: personal
             send_discord_webhook:
               const: discord
             send_email:
@@ -280,7 +290,9 @@ components:
             - container_exec
             - datetime_diff
             - generate_uuid
+            - get_current_location
             - get_current_time
+            - get_whoop_data
             - get_worker_metadata
             - github_add_comment
             - github_create_issue
@@ -319,6 +331,7 @@ components:
             - runner_create_enroll_token
             - runner_exec
             - runner_list
+            - search_notes
             - send_discord_webhook
             - send_email
             - send_imessage

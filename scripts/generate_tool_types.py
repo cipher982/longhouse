@@ -105,7 +105,8 @@ def main():
         schema_data = yaml.safe_load(f)
 
     # Generate Python types only (Rust frontend removed)
-    python_output_dir = Path("apps/zerg/backend/zerg/tools/generated")
+    repo_root = Path(__file__).resolve().parent.parent
+    python_output_dir = repo_root / "apps/zerg/backend/zerg/tools/generated"
     python_output_dir.mkdir(parents=True, exist_ok=True)
     python_file = python_output_dir / "tool_definitions.py"
 
