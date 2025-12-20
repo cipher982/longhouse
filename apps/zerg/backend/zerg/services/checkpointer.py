@@ -54,6 +54,24 @@ def _get_or_create_bg_loop() -> asyncio.AbstractEventLoop:
         return _bg_loop
 
 
+def _normalize_postgres_url(db_url: str) -> str:
+    """Convert SQLAlchemy URL to psycopg3-compatible format.
+
+    SQLAlchemy uses dialect specifiers like 'postgresql+psycopg://...' but
+    psycopg3's AsyncConnectionPool expects standard postgres URI format
+    'postgresql://...' or libpq connection strings.
+
+    Args:
+        db_url: SQLAlchemy-style database URL
+
+    Returns:
+        psycopg3-compatible connection string
+    """
+    # Strip SQLAlchemy dialect specifiers (+psycopg, +asyncpg, etc.)
+    import re
+    return re.sub(r'^postgresql\+\w+://', 'postgresql://', db_url)
+
+
 def _create_async_checkpointer_in_bg_loop(db_url: str):
     """Create AsyncConnectionPool and AsyncPostgresSaver in the background loop context.
 
@@ -68,10 +86,13 @@ def _create_async_checkpointer_in_bg_loop(db_url: str):
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool
 
+    # Normalize URL for psycopg3 compatibility
+    conninfo = _normalize_postgres_url(db_url)
+
     async def _create_and_setup():
         # Create pool within async context - this ensures proper loop association
         pool = AsyncConnectionPool(
-            conninfo=db_url,
+            conninfo=conninfo,
             min_size=1,
             max_size=10,
             open=False,
@@ -96,7 +117,7 @@ def _create_async_checkpointer_in_bg_loop(db_url: str):
 
                 # Use a direct autocommit connection for migrations
                 async with await psycopg.AsyncConnection.connect(
-                    db_url, autocommit=True
+                    conninfo, autocommit=True
                 ) as conn:
                     # Get migrations from LangGraph
                     migrations = BasePostgresSaver.MIGRATIONS
@@ -170,7 +191,13 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
     except Exception:
         db_url = str(getattr(engine, "url", ""))
 
-    # For SQLite databases, use MemorySaver (tests, local dev)
+    # For tests, always use MemorySaver for speed (checkpointer init is slow)
+    import os
+    if os.environ.get("TESTING") == "1":
+        logger.debug("Using MemorySaver for test environment")
+        return MemorySaver()
+
+    # For SQLite databases, use MemorySaver (local dev)
     if "sqlite" in db_url.lower():
         logger.debug("Using MemorySaver for SQLite database")
         return MemorySaver()

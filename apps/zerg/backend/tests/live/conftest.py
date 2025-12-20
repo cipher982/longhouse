@@ -5,10 +5,7 @@ import pytest
 import requests
 from typing import Generator, Dict, Any, Optional
 
-# Register custom markers/options
-def pytest_addoption(parser):
-    parser.addoption("--live-url", action="store", default="http://localhost:8000", help="Base URL for live server")
-    parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
+# Note: pytest_addoption is defined in root conftest.py
 
 @pytest.fixture(scope="session")
 def base_url(request):
@@ -17,9 +14,9 @@ def base_url(request):
 @pytest.fixture(scope="session")
 def auth_headers(request):
     token = request.config.getoption("--live-token")
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    if not token:
+        pytest.skip("Live tests require --live-token flag")
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
     return headers
 
 class SupervisorClient:

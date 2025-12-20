@@ -6,6 +6,7 @@ implementation based on database type:
 - MemorySaver for SQLite (tests)
 """
 
+import os
 from unittest.mock import MagicMock
 from unittest.mock import Mock
 from unittest.mock import patch
@@ -16,6 +17,18 @@ from sqlalchemy import create_engine
 
 from zerg.services.checkpointer import clear_checkpointer_cache
 from zerg.services.checkpointer import get_checkpointer
+
+
+@pytest.fixture
+def disable_testing_mode():
+    """Temporarily disable TESTING mode to test production code paths."""
+    original = os.environ.get("TESTING")
+    os.environ["TESTING"] = "0"
+    yield
+    if original is not None:
+        os.environ["TESTING"] = original
+    elif "TESTING" in os.environ:
+        del os.environ["TESTING"]
 
 
 class TestCheckpointerFactory:
@@ -39,14 +52,22 @@ class TestCheckpointerFactory:
 
         assert isinstance(checkpointer, MemorySaver)
 
-    @patch("langgraph.checkpoint.postgres.PostgresSaver")
-    def test_postgresql_returns_postgres_saver(self, mock_postgres_saver_cls):
-        """Test that PostgreSQL connections get PostgresSaver."""
-        # Setup mock - from_conn_string returns a context manager in v3.0+
+    def test_postgresql_returns_memory_saver_in_test_mode(self):
+        """Test that PostgreSQL connections get MemorySaver in test mode."""
+        # In test mode (TESTING=1), we always return MemorySaver for speed
+        engine = create_engine("postgresql://user:pass@localhost/testdb")
+        checkpointer = get_checkpointer(engine)
+
+        # Should return MemorySaver since TESTING=1
+        assert isinstance(checkpointer, MemorySaver)
+
+    @patch("zerg.services.checkpointer._create_async_checkpointer_in_bg_loop")
+    def test_postgresql_returns_postgres_saver(self, mock_create_checkpointer, disable_testing_mode):
+        """Test that PostgreSQL connections get AsyncPostgresSaver in production."""
+        # Setup mock to return a fake checkpointer
         mock_saver_instance = MagicMock()
-        mock_context_manager = MagicMock()
-        mock_context_manager.__enter__ = Mock(return_value=mock_saver_instance)
-        mock_postgres_saver_cls.from_conn_string.return_value = mock_context_manager
+        mock_pool = MagicMock()
+        mock_create_checkpointer.return_value = (mock_pool, mock_saver_instance)
 
         # Create PostgreSQL engine
         engine = create_engine("postgresql://user:pass@localhost/testdb")
@@ -54,25 +75,19 @@ class TestCheckpointerFactory:
         # Get checkpointer
         checkpointer = get_checkpointer(engine)
 
-        # Verify PostgresSaver was created with connection string
-        mock_postgres_saver_cls.from_conn_string.assert_called_once()
-        call_args = mock_postgres_saver_cls.from_conn_string.call_args
-        assert "postgresql" in call_args[0][0]
-
-        # Verify __enter__ was called
-        mock_context_manager.__enter__.assert_called_once()
+        # Verify async checkpointer was created
+        mock_create_checkpointer.assert_called_once()
 
         # Verify we got the mocked instance back
         assert checkpointer == mock_saver_instance
 
-    @patch("langgraph.checkpoint.postgres.PostgresSaver")
-    def test_postgresql_caches_instance(self, mock_postgres_saver_cls):
-        """Test that PostgresSaver instances are cached."""
-        # Setup mock - from_conn_string returns a context manager in v3.0+
+    @patch("zerg.services.checkpointer._create_async_checkpointer_in_bg_loop")
+    def test_postgresql_caches_instance(self, mock_create_checkpointer, disable_testing_mode):
+        """Test that AsyncPostgresSaver instances are cached."""
+        # Setup mock to return a fake checkpointer
         mock_saver_instance = MagicMock()
-        mock_context_manager = MagicMock()
-        mock_context_manager.__enter__ = Mock(return_value=mock_saver_instance)
-        mock_postgres_saver_cls.from_conn_string.return_value = mock_context_manager
+        mock_pool = MagicMock()
+        mock_create_checkpointer.return_value = (mock_pool, mock_saver_instance)
 
         engine = create_engine("postgresql://user:pass@localhost/testdb")
 
@@ -81,18 +96,16 @@ class TestCheckpointerFactory:
         checkpointer2 = get_checkpointer(engine)
 
         # Should only create once (cached)
-        assert mock_postgres_saver_cls.from_conn_string.call_count == 1
+        assert mock_create_checkpointer.call_count == 1
 
         # Should return same instance
         assert checkpointer1 == checkpointer2
 
-    @patch("langgraph.checkpoint.postgres.PostgresSaver")
-    def test_postgresql_setup_failure_falls_back_to_memory(self, mock_postgres_saver_cls):
+    @patch("zerg.services.checkpointer._create_async_checkpointer_in_bg_loop")
+    def test_postgresql_setup_failure_falls_back_to_memory(self, mock_create_checkpointer, disable_testing_mode):
         """Test that setup failure falls back to MemorySaver."""
-        # Setup mock to fail when entering context (simulates connection failure)
-        mock_context_manager = MagicMock()
-        mock_context_manager.__enter__.side_effect = Exception("Connection failed")
-        mock_postgres_saver_cls.from_conn_string.return_value = mock_context_manager
+        # Setup mock to fail (simulates connection failure)
+        mock_create_checkpointer.side_effect = Exception("Connection failed")
 
         engine = create_engine("postgresql://user:pass@localhost/testdb")
         checkpointer = get_checkpointer(engine)
@@ -120,33 +133,31 @@ class TestCheckpointerFactory:
         # Should return MemorySaver since test environment uses SQLite
         assert isinstance(checkpointer, MemorySaver)
 
-    def test_clear_cache_resets_postgres_instances(self):
-        """Test that cache clearing forces new PostgresSaver creation."""
-        with patch("langgraph.checkpoint.postgres.PostgresSaver") as mock_postgres_saver_cls:
-            # Setup mock - from_conn_string returns a context manager in v3.0+
+    def test_clear_cache_resets_postgres_instances(self, disable_testing_mode):
+        """Test that cache clearing forces new AsyncPostgresSaver creation."""
+        with patch("zerg.services.checkpointer._create_async_checkpointer_in_bg_loop") as mock_create:
+            # Setup mock to return fake checkpointers
             mock_saver_instance1 = MagicMock()
             mock_saver_instance2 = MagicMock()
-            mock_context_manager1 = MagicMock()
-            mock_context_manager2 = MagicMock()
-            mock_context_manager1.__enter__ = Mock(return_value=mock_saver_instance1)
-            mock_context_manager2.__enter__ = Mock(return_value=mock_saver_instance2)
-            mock_postgres_saver_cls.from_conn_string.side_effect = [
-                mock_context_manager1,
-                mock_context_manager2,
+            mock_pool1 = MagicMock()
+            mock_pool2 = MagicMock()
+            mock_create.side_effect = [
+                (mock_pool1, mock_saver_instance1),
+                (mock_pool2, mock_saver_instance2),
             ]
 
             engine = create_engine("postgresql://user:pass@localhost/testdb")
 
             # Create first instance
             get_checkpointer(engine)
-            assert mock_postgres_saver_cls.from_conn_string.call_count == 1
+            assert mock_create.call_count == 1
 
             # Clear cache
             clear_checkpointer_cache()
 
             # Create second instance - should call factory again
             get_checkpointer(engine)
-            assert mock_postgres_saver_cls.from_conn_string.call_count == 2
+            assert mock_create.call_count == 2
 
 
 class TestCheckpointerIntegration:
