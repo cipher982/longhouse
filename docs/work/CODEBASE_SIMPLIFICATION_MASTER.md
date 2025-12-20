@@ -21,7 +21,7 @@ Rules for this effort:
 
 ## Phase 0 — Tracking + Guardrails (Start Here)
 
-- [ ] Add/maintain this master checklist (this file).
+- [x] Add/maintain this master checklist (this file).
 - [ ] Ensure `make validate`/`make test-zerg` do not rely on dead scripts/paths.
 
 ---
@@ -30,7 +30,7 @@ Rules for this effort:
 
 ### 1.1 Root scripts referencing removed directories
 
-- [ ] Fix `scripts/fast-contract-check.sh` (currently assumes `frontend/` Rust).
+- [x] Fix `scripts/fast-contract-check.sh` (currently assumes `frontend/` Rust).
 - [ ] Fix or remove `scripts/run_all_tests.sh` (assumes `backend/`, `frontend/`, `e2e/`).
 - [ ] Audit and fix any remaining scripts that reference:
   - `backend/` (should be `apps/zerg/backend/`)
@@ -39,18 +39,19 @@ Rules for this effort:
 
 ### 1.2 WebSocket generation + drift scripts
 
-- [ ] Make `scripts/generate-ws-types-modern.py` output to the _actual_ repo locations:
+- [x] Make `scripts/generate-ws-types-modern.py` output to the _actual_ repo locations:
   - `apps/zerg/backend/zerg/generated/ws_messages.py`
   - `apps/zerg/frontend-web/src/generated/ws-messages.ts`
   - `schemas/ws-protocol.schema.json`
   - `schemas/ws-protocol-v1.json`
-- [ ] Fix `scripts/regen-ws-code.sh` to use the modern generator + correct schema path.
-- [ ] Fix `scripts/validate-asyncapi.sh` to validate `schemas/ws-protocol-asyncapi.yml` (not `asyncapi/chat.yml`).
-- [ ] Fix `scripts/check_ws_drift.sh` to check the correct generated filenames.
+- [x] Fix `scripts/regen-ws-code.sh` to use the modern generator + correct schema path.
+- [x] Fix `scripts/validate-asyncapi.sh` to validate `schemas/ws-protocol-asyncapi.yml` (not `asyncapi/chat.yml`).
+- [x] Fix `scripts/check_ws_drift.sh` to check the correct generated filenames.
+- [x] Make WS codegen deterministic so `make validate-ws` stays green (no timestamps / stable newlines).
 
 ### 1.3 Legacy trigger scan script
 
-- [ ] Fix `scripts/check_legacy_triggers.sh` to scan `apps/zerg/frontend-web/src` (not `frontend/src`).
+- [x] Fix `scripts/check_legacy_triggers.sh` to scan `apps/zerg/frontend-web/src` (not `frontend/src`).
 
 ---
 
@@ -123,3 +124,8 @@ Rules for this effort:
 Format:
 
 - YYYY-MM-DD: short note — commit `<hash>`
+
+- 2025-12-20: add codebase simplification master checklist — commit `ffc345a`
+- 2025-12-20: fix fast contract check script — commit `a783c3d`
+- 2025-12-20: canonicalize WebSocket codegen scripts/outputs — commit `36231e3`
+- 2025-12-20: make WebSocket codegen deterministic; `make validate-ws` green — commit `d41a443`
