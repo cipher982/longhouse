@@ -34,7 +34,9 @@ Internal service ports (dev):
 
 ## Package Managers
 
-- **JavaScript**: Bun only. Single `bun.lock` at root. Run `bun install` from repo root.
+- **JavaScript**: Bun only.
+  - Monorepo lockfile: `bun.lock` (repo root) — run `bun install` from repo root.
+  - Jarvis-only lockfile: `apps/jarvis/bun.lock` — used by the Jarvis Docker workspace; run `cd apps/jarvis && bun install` when working inside the Jarvis workspace directly.
 - **Python**: uv only. Run `cd apps/zerg/backend && uv sync`.
 
 Do not use npm, yarn, pip, or poetry.
@@ -81,7 +83,11 @@ make validate      # All validation
 
 ## Docker Compose Profiles
 
-Single unified compose file: `docker/docker-compose.yml`
+Dev compose file (profiles live here): `docker/docker-compose.dev.yml`
+
+Other compose files:
+- Jarvis E2E: `apps/jarvis/docker-compose.test.yml`
+- Standalone production compose: `docker/docker-compose.prod.yml`
 
 | Profile | Services | Use Case |
 |---------|----------|----------|
@@ -91,8 +97,8 @@ Single unified compose file: `docker/docker-compose.yml`
 
 ```bash
 # Direct compose usage (prefer make targets)
-docker compose -f docker/docker-compose.yml --profile full up
-docker compose -f docker/docker-compose.yml --profile zerg up
+docker compose -f docker/docker-compose.dev.yml --profile full up
+docker compose -f docker/docker-compose.dev.yml --profile zerg up
 ```
 
 ## Testing Infrastructure
@@ -112,6 +118,14 @@ Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to p
 ### Running Tests
 - Use `make test-jarvis-e2e` for a full clean run.
 - For active development, use `make test-e2e-up` to keep the environment running, then `make test-e2e-single TEST=<filename>` to iterate quickly on a specific test file.
+- E2E artifacts (screenshots + `error-context.md`) are written to `apps/jarvis/test-results/` (mounted from the Playwright container).
+
+### Debugging E2E Failures (Quick Checklist)
+1. Re-run just the failing spec: `make test-e2e-single TEST=<spec-or-grep>`
+2. Open the failure snapshot: `apps/jarvis/test-results/<test-folder>/error-context.md`
+3. Open the screenshot/video (same folder) to confirm what the DOM looked like
+4. If the UI looks fine but backend events are missing: `make test-e2e-logs` (then focus on `zerg-backend` + `reverse-proxy`)
+5. If you need interactive UI debugging: `make test-jarvis-e2e-ui` (host Playwright UI, not Docker)
 
 ## Conventions
 
@@ -144,6 +158,7 @@ Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to p
 
 - `apps/zerg/frontend-web/src/generated/` — OpenAPI types
 - `apps/zerg/backend/zerg/ws_protocol/generated/` — WebSocket protocol
+- `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` — Tool registry types (from `schemas/tools.yml`)
 - `packages/contracts/` — Shared contract definitions
 
 Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API changes.
@@ -168,7 +183,19 @@ Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API 
 
 9. **Auth in Tests**: When `AUTH_DISABLED=1` (default for tests), the `/api/auth/verify` endpoint always returns 204. This allows the frontend to proceed without a real login.
 
-10. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
+10. **E2E runs on an insecure origin**: Playwright hits `http://reverse-proxy` in Docker (service name), which is **not** a secure context — `crypto.randomUUID()` may be unavailable. Use `apps/jarvis/apps/web/lib/uuid.ts` instead of calling `crypto.randomUUID()` directly.
+
+11. **Prefer Make targets for E2E**: `make` loads/export vars from `.env`. Running `docker compose -f apps/jarvis/docker-compose.test.yml ...` directly can fail if `OPENAI_API_KEY` isn't exported in your shell.
+
+12. **Deterministic UI tests**: For progress-indicator/UI behavior tests, prefer emitting events via `window.__jarvis.eventBus` (DEV only) instead of relying on the LLM to spawn workers/tools.
+
+13. **WebRTC tests in Docker**: When `SKIP_WEBRTC_TESTS=true`, WebRTC-based tests should be *describe-level* skipped so `beforeEach` doesn't fail in the Docker E2E environment.
+
+14. **AGENTS vs CLAUDE**: `CLAUDE.md` is a symlink for tool compatibility. Treat `AGENTS.md` as canonical and only edit `AGENTS.md`.
+
+15. **Generated tool types path**: `scripts/generate_tool_types.py` writes to `apps/zerg/backend/zerg/tools/generated/` relative to repo root (safe from any CWD). If you ever see a duplicate tree like `apps/zerg/backend/apps/...`, it's a stray artifact and can be deleted.
+
+16. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
 
 ## Environment Setup
 
