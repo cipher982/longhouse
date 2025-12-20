@@ -8,6 +8,7 @@
 import { useCallback, useState } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
 import { appController } from '../../lib/app-controller'
+import { uuid } from '../../lib/uuid'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
@@ -38,11 +39,11 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       const trimmedText = text.trim()
       setIsSending(true)
 
-      const correlationId = crypto.randomUUID()
+      const correlationId = uuid()
 
       // Create user message
       const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: 'user',
         content: trimmedText,
         timestamp: new Date(),
@@ -50,7 +51,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
 
       // Create assistant placeholder (queued)
       const assistantPlaceholder: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: uuid(),
         role: 'assistant',
         content: '',
         status: 'queued',

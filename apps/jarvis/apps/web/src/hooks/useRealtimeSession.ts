@@ -18,6 +18,7 @@ import { appController } from '../../lib/app-controller'
 import { sessionHandler } from '../../lib/session-handler'
 import { conversationController } from '../../lib/conversation-controller'
 import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
+import { uuid } from '../../lib/uuid'
 
 export interface UseRealtimeSessionOptions {
   /** Automatically connect on mount (default: true) */
@@ -161,7 +162,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           dispatch({
             type: 'ADD_MESSAGE',
             message: {
-              id: crypto.randomUUID(),
+              id: uuid(),
               role: 'user',
               content: '...',
               timestamp: new Date(),
@@ -181,7 +182,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           for (const turn of event.history) {
             if (turn.userTranscript) {
               messages.push({
-                id: turn.id || crypto.randomUUID(),
+                id: turn.id || uuid(),
                 role: 'user',
                 content: turn.userTranscript,
                 timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
@@ -189,7 +190,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             }
             if (turn.assistantResponse) {
               messages.push({
-                id: `${turn.id}-asst` || crypto.randomUUID(),
+                id: `${turn.id}-asst` || uuid(),
                 role: 'assistant',
                 content: turn.assistantResponse,
                 timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),

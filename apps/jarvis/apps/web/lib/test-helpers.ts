@@ -3,6 +3,8 @@
  * Allows mocking OpenAI Realtime connections for Playwright tests
  */
 
+import { uuid } from './uuid';
+
 interface MockSessionOptions {
   autoConnect?: boolean;
 }
@@ -133,13 +135,13 @@ export async function injectTestCodeword(codeword: string = 'banana'): Promise<v
   }
 
   const userTurn = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     timestamp: new Date(),
     userTranscript: `The secret codeword is ${codeword}`,
   };
 
   const assistantTurn = {
-    id: crypto.randomUUID(),
+    id: uuid(),
     timestamp: new Date(Date.now() + 1000),
     assistantResponse: `Got it! I'll remember that the codeword is "${codeword}".`,
   };

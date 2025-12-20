@@ -6,6 +6,7 @@
 import type { RealtimeSession } from '@openai/agents/realtime';
 import type { SessionManager } from '@jarvis/core';
 import type { VoiceAgentConfig } from '../contexts/types';
+import { uuid } from './uuid';
 
 /**
  * Voice/connection status for React UI
@@ -208,7 +209,7 @@ export class StateManager {
    */
   finalizeMessage(content: string, correlationId?: string): void {
     const message = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       role: 'assistant' as const,
       content,
       timestamp: new Date(),
