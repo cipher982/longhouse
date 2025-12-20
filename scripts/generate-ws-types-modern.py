@@ -24,9 +24,26 @@ from datetime import datetime
 class ModernProtocolGenerator:
     def __init__(self, schema_path: str):
         """Initialize with AsyncAPI 3.0 schema path."""
-        self.schema_path = Path(schema_path)
+        self.repo_root = Path(__file__).resolve().parent.parent
+
+        candidate = Path(schema_path)
+        if not candidate.is_absolute():
+            # Allow running from any CWD; resolve relative to repo root.
+            candidate = (self.repo_root / candidate).resolve()
+
+        self.schema_path = candidate
         self.schema = self._load_schema()
-        self.output_dir = self.schema_path.parent
+
+        # Canonical output locations (independent of schema file location).
+        self.schemas_dir = self.repo_root / "schemas"
+        self.backend_generated_path = (
+            self.repo_root / "apps" / "zerg" / "backend" / "zerg" / "generated" / "ws_messages.py"
+        )
+        self.frontend_generated_path = (
+            self.repo_root / "apps" / "zerg" / "frontend-web" / "src" / "generated" / "ws-messages.ts"
+        )
+        self.json_schema_path = self.schemas_dir / "ws-protocol.schema.json"
+        self.contract_json_path = self.schemas_dir / "ws-protocol-v1.json"
 
     def _load_schema(self) -> Dict[str, Any]:
         """Load and validate AsyncAPI schema."""
@@ -68,7 +85,7 @@ class ModernProtocolGenerator:
         """Generate Python Pydantic models with modern features."""
         print("🐍 Generating Python types...")
 
-        output_path = self.output_dir / "backend" / "zerg" / "generated" / "ws_messages.py"
+        output_path = self.backend_generated_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         code = self._generate_python_header()
@@ -87,7 +104,7 @@ class ModernProtocolGenerator:
         """Generate TypeScript types with discriminated unions."""
         print("📘 Generating TypeScript types...")
 
-        output_path = self.output_dir / "apps" / "zerg" / "frontend-web" / "src" / "generated" / "ws-messages.ts"
+        output_path = self.frontend_generated_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         code = self._generate_typescript_header()
@@ -251,7 +268,8 @@ export interface Envelope<T = unknown> {
         """Generate JSON Schema for IDE integration."""
         print("📋 Generating JSON Schema for IDE...")
 
-        output_path = self.output_dir / "ws-protocol.schema.json"
+        output_path = self.json_schema_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Convert AsyncAPI to JSON Schema
         json_schema = {
@@ -274,7 +292,7 @@ export interface Envelope<T = unknown> {
 
     def _generate_contract_json(self):
         """Generate contract validation JSON."""
-        output_path = self.output_dir / "contracts" / "ws-protocol-v1.json"
+        output_path = self.contract_json_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         contract = {
