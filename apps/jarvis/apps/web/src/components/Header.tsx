@@ -6,11 +6,10 @@
 interface NavItem {
   label: string
   href: string
-  isActive?: boolean
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Chat', href: '/chat', isActive: true },
+  { label: 'Chat', href: '/chat' },
   { label: 'Dashboard', href: '/dashboard' },
   { label: 'Canvas', href: '/canvas' },
   { label: 'Integrations', href: '/settings/integrations' },
@@ -22,6 +21,8 @@ interface HeaderProps {
 }
 
 export function Header({ onSync }: HeaderProps) {
+  const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/chat'
+
   return (
     <div className="main-header">
       <div className="header-brand">
@@ -39,17 +40,24 @@ export function Header({ onSync }: HeaderProps) {
       </div>
 
       <nav className="header-nav" aria-label="Main navigation">
-        {NAV_ITEMS.map(({ label, href, isActive }) => (
-          <a
-            key={href}
-            href={href}
-            className={`nav-tab ${isActive ? 'nav-tab--active' : ''}`}
-            aria-current={isActive ? 'page' : undefined}
-          >
-            <span className="nav-tab-label">{label}</span>
-            {isActive && <span className="nav-tab-indicator" aria-hidden="true" />}
-          </a>
-        ))}
+        {NAV_ITEMS.map(({ label, href }) => {
+          const isActive =
+            currentPath === href ||
+            (href !== '/' && currentPath.startsWith(href)) ||
+            (href === '/chat' && (currentPath === '/' || currentPath === '/chat'))
+
+          return (
+            <a
+              key={href}
+              href={href}
+              className={`nav-tab ${isActive ? 'nav-tab--active' : ''}`}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              <span className="nav-tab-label">{label}</span>
+              {isActive && <span className="nav-tab-indicator" aria-hidden="true" />}
+            </a>
+          )
+        })}
       </nav>
 
       <div className="header-actions">
