@@ -115,7 +115,7 @@ Rules for this effort:
 
 ## Phase 6 — CI / Automation Alignment (Optional but Recommended)
 
-- [ ] Update `.github/workflows/*` to match current repo structure + Bun/uv.
+- [x] Update `.github/workflows/*` to match current repo structure + Bun/uv.
 - [ ] Update or remove stale `.pre-commit-config*.yaml` (currently references old paths + npm).
 
 ---
@@ -137,3 +137,4 @@ Format:
 - 2025-12-20: migrate + delete legacy WS schema module — commits `5e17151`, `e1fc369`
 - 2025-12-20: unify frontend API base URL resolution — commits `eec399a`, `743b035`
 - 2025-12-20: fix `make validate` by updating `.PHONY` list — commit `620aa60`
+- 2025-12-20: update GitHub Actions workflows for Bun/uv — commits `49ef5b3`, `79cffc4`
