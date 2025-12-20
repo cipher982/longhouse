@@ -25,7 +25,7 @@ export function ToolMessage({ message }: ToolMessageProps) {
   if (runnerSetupData) {
     return (
       <div className="tool-message-container tool-message-card" data-tool-call-id={toolCallId}>
-        <RunnerSetupCard data={runnerSetupData} />
+        <RunnerSetupCard data={runnerSetupData} rawContent={message.content} />
       </div>
     );
   }
