@@ -15,11 +15,11 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-FRONTEND_DIR="frontend-web"
-SCHEMA_FILE="openapi.json"
+FRONTEND_DIR="apps/zerg/frontend-web"
+SCHEMA_FILE="apps/zerg/openapi.json"
 VALIDATION_FAILED=0
 
-cd "$(dirname "$0")/.."
+cd "$(git rev-parse --show-toplevel)"
 
 # Step 1: Check if OpenAPI schema exists and is recent
 echo -e "${BLUE}📋 Step 1: OpenAPI Schema Freshness${NC}"
@@ -32,7 +32,7 @@ fi
 SCHEMA_AGE=$(find "$SCHEMA_FILE" -mtime +1 2>/dev/null | wc -l || echo 0)
 if [ "$SCHEMA_AGE" -gt 0 ]; then
     echo -e "${YELLOW}⚠️  OpenAPI schema is more than 1 day old${NC}"
-    echo "   Consider regenerating with: cd backend && uv run python -c \"from zerg.main import app; ...\" "
+    echo "   Consider regenerating with: cd apps/zerg/backend && uv run python -c \"from zerg.main import app; app.openapi()\""
 fi
 
 # Step 2: Validate schema completeness
