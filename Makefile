@@ -17,7 +17,7 @@ JARVIS_WEB_PORT ?= 8080
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
-.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev zerg jarvis jarvis-stop stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-jarvis test-jarvis-unit test-jarvis-watch test-jarvis-e2e test-jarvis-e2e-ui test-jarvis-text test-jarvis-history test-jarvis-grep test-e2e-up test-e2e-down test-e2e-reset test-e2e-single test-e2e-logs test-zerg generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -278,6 +278,11 @@ generate-sdk: ## Generate OpenAPI types from backend schema
 	@cd apps/zerg/backend && uv run python -c "from zerg.main import app; app.openapi()" 2>/dev/null
 	@cd apps/zerg/frontend-web && bun run generate:api
 	@echo "✅ SDK generation complete"
+
+build-tokens: ## Build shared design tokens
+	@echo "🎨 Building design tokens..."
+	@cd packages/design-tokens && node build.mjs
+	@echo "✅ Design tokens built"
 
 seed-agents: ## Seed baseline Zerg agents for Jarvis
 	@echo "🌱 Seeding agents..."
