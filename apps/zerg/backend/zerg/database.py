@@ -21,6 +21,7 @@ from zerg.config import get_settings
 _WORKER_ENGINES: Dict[str, Engine] = {}
 _WORKER_SESSIONMAKERS: Dict[str, sessionmaker] = {}
 _WORKER_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def clear_worker_caches():
@@ -263,20 +264,16 @@ def get_session_factory() -> sessionmaker:
 
                     result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                     tables = [row[0] for row in result]
-                    print(f"[DEBUG] Worker {worker_id} database tables after creation: {sorted(tables)}")
-                    print(f"[DEBUG] Worker {worker_id} database path: {db_url}")
-                    import sys
-
-                    sys.stdout.flush()
+                    logger.debug("Worker %s tables after creation: %s", worker_id, sorted(tables))
+                    logger.debug("Worker %s database path: %s", worker_id, db_url)
 
                     # Specifically check for critical tables
                     required_tables = ["agents", "workflows", "users"]
                     missing_tables = [t for t in required_tables if t not in tables]
                     if missing_tables:
-                        print(f"[ERROR] Worker {worker_id} missing critical tables: {missing_tables}")
+                        logger.error("Worker %s missing critical tables: %s", worker_id, missing_tables)
                         # Try to recreate tables
                         initialize_database(engine)
-                        sys.stdout.flush()
 
                     # Ensure test user exists for foreign key constraints
                     from sqlalchemy import text
@@ -284,7 +281,7 @@ def get_session_factory() -> sessionmaker:
                     result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
                     user_count = result.scalar()
                     if user_count == 0:
-                        print(f"[DEBUG] Worker {worker_id} creating test user...")
+                        logger.debug("Worker %s creating test user...", worker_id)
                         # Create a test user for foreign key references
                         conn.execute(
                             text("""
@@ -295,8 +292,7 @@ def get_session_factory() -> sessionmaker:
                         """)
                         )
                         conn.commit()
-                        print(f"[DEBUG] Worker {worker_id} test user created")
-                        sys.stdout.flush()
+                        logger.debug("Worker %s test user created", worker_id)
 
         session_factory = make_sessionmaker(engine)
 
@@ -427,11 +423,9 @@ def initialize_database(engine: Engine = None) -> None:
     target_engine = engine or default_engine
 
     # Debug: Check what tables will be created
-    import os
-
     if os.getenv("NODE_ENV") == "test":
         table_names = [table.name for table in Base.metadata.tables.values()]
-        print(f"[DEBUG] Creating tables: {sorted(table_names)}")
+        logger.debug("Creating tables: %s", sorted(table_names))
 
     Base.metadata.create_all(bind=target_engine)
 
@@ -443,4 +437,4 @@ def initialize_database(engine: Engine = None) -> None:
             # Check what tables actually exist (SQLite specific)
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             tables = [row[0] for row in result]
-            print(f"[DEBUG] Tables created in database: {sorted(tables)}")
+            logger.debug("Tables created in database: %s", sorted(tables))
