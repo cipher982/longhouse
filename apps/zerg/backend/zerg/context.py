@@ -22,9 +22,12 @@ Usage:
 
 from __future__ import annotations
 
-from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from contextvars import ContextVar
+from contextvars import Token
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 

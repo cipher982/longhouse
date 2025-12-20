@@ -5,13 +5,9 @@ to prompt composition in agents.
 """
 
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
 
-from zerg.crud import crud
-from zerg.prompts.composer import build_supervisor_prompt, build_worker_prompt
-from zerg.models.enums import AgentStatus
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
-
+from zerg.prompts.composer import build_supervisor_prompt
+from zerg.prompts.composer import build_worker_prompt
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -183,7 +179,6 @@ class TestWorkerPromptIntegration:
     @pytest.mark.asyncio
     async def test_worker_runner_uses_user_context(self, db_session, test_user, test_user_context):
         """Test that worker runner includes user context in worker prompt."""
-        from zerg.services.worker_runner import WorkerRunner
 
         # Set user context
         test_user.context = test_user_context
@@ -301,9 +296,7 @@ class TestEndToEndContextFlow:
         assert "server1" in prompt2  # from second patch
 
         # Third patch - add integrations
-        client.patch(
-            "/api/users/me/context", json={"context": {"integrations": {"notes": "Obsidian"}}}
-        )
+        client.patch("/api/users/me/context", json={"context": {"integrations": {"notes": "Obsidian"}}})
         db_session.refresh(test_user)
 
         prompt3 = build_supervisor_prompt(test_user)
@@ -384,8 +377,7 @@ class TestContextEdgeCases:
         """Test that large but valid context works."""
         # Create context near 64KB limit
         large_servers = [
-            {"name": f"server-{i}", "ip": f"10.0.{i//255}.{i%255}", "purpose": f"Purpose {i}"}
-            for i in range(100)
+            {"name": f"server-{i}", "ip": f"10.0.{i//255}.{i%255}", "purpose": f"Purpose {i}"} for i in range(100)
         ]
 
         context = {"context": {"servers": large_servers, "display_name": "Large Context User"}}
@@ -449,4 +441,4 @@ class TestContextEdgeCases:
         # Characters should be preserved
         assert "Test <User>" in prompt
         assert "server & more" in prompt
-        assert "Test \"quoted\" purpose" in prompt or "Test &quot;quoted&quot; purpose" in prompt
+        assert 'Test "quoted" purpose' in prompt or "Test &quot;quoted&quot; purpose" in prompt

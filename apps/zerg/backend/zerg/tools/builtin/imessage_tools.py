@@ -79,7 +79,7 @@ def _require_macos() -> Optional[Dict[str, Any]]:
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message="iMessage tools require macOS with the Messages app installed.",
-            connector="imessage"
+            connector="imessage",
         )
     return None
 
@@ -148,28 +148,24 @@ def send_imessage(
         return tool_error(
             error_type=ErrorType.VALIDATION_ERROR,
             user_message="Recipient (phone or email) is required.",
-            connector="imessage"
+            connector="imessage",
         )
 
     if not message or not message.strip():
-        return tool_error(
-            error_type=ErrorType.VALIDATION_ERROR,
-            user_message="Message cannot be empty.",
-            connector="imessage"
-        )
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="Message cannot be empty.", connector="imessage")
 
     if len(message) > MAX_MESSAGE_LENGTH:
         return tool_error(
             error_type=ErrorType.VALIDATION_ERROR,
             user_message=f"Message too long ({len(message)} chars). Max is {MAX_MESSAGE_LENGTH}.",
-            connector="imessage"
+            connector="imessage",
         )
 
     if shutil.which("osascript") is None:
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message="osascript command not found. Enable AppleScript on macOS.",
-            connector="imessage"
+            connector="imessage",
         )
 
     normalized_recipient = recipient.strip()
@@ -190,36 +186,34 @@ def send_imessage(
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Timed out after {timeout_seconds} seconds.",
-            connector="imessage"
+            connector="imessage",
         )
     except FileNotFoundError:
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message="osascript binary is unavailable. iMessage send requires macOS.",
-            connector="imessage"
+            connector="imessage",
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error running osascript")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"Unexpected error: {exc}",
-            connector="imessage"
-        )
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"Unexpected error: {exc}", connector="imessage")
 
     if completed.returncode != 0:
         stderr = (completed.stderr or "").strip()
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=stderr or "Messages app rejected the request.",
-            connector="imessage"
+            connector="imessage",
         )
 
-    return tool_success({
-        "recipient": normalized_recipient,
-        "chat_guid": chat_guid,
-        "status": "sent",
-        "stdout": (completed.stdout or "").strip() or None,
-    })
+    return tool_success(
+        {
+            "recipient": normalized_recipient,
+            "chat_guid": chat_guid,
+            "status": "sent",
+            "stdout": (completed.stdout or "").strip() or None,
+        }
+    )
 
 
 def list_imessage_messages(
@@ -246,11 +240,7 @@ def list_imessage_messages(
         return env_error
 
     if limit <= 0:
-        return tool_error(
-            error_type=ErrorType.VALIDATION_ERROR,
-            user_message="limit must be greater than zero.",
-            connector="imessage"
-        )
+        return tool_error(error_type=ErrorType.VALIDATION_ERROR, user_message="limit must be greater than zero.", connector="imessage")
     limit = min(limit, MAX_QUERY_LIMIT)
 
     db_path = IMESSAGE_DB_PATH
@@ -258,7 +248,7 @@ def list_imessage_messages(
         return tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
             user_message=f"Messages database not found at {db_path}. Grant Full Disk Access.",
-            connector="imessage"
+            connector="imessage",
         )
 
     temp_path: Optional[Path] = None
@@ -305,7 +295,7 @@ def list_imessage_messages(
             JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
             JOIN chat c ON c.ROWID = cmj.chat_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY m.ROWID DESC
             LIMIT ?
         """
@@ -336,27 +326,25 @@ def list_imessage_messages(
             )
 
         latest_row_id = messages[0]["row_id"] if messages else since_row_id
-        return tool_success({
-            "messages": messages,
-            "limit": limit,
-            "include_outgoing": include_outgoing,
-            "latest_row_id": latest_row_id,
-        })
+        return tool_success(
+            {
+                "messages": messages,
+                "limit": limit,
+                "include_outgoing": include_outgoing,
+                "latest_row_id": latest_row_id,
+            }
+        )
 
     except PermissionError:
         logger.exception("Missing permissions to copy %s", db_path)
         return tool_error(
             error_type=ErrorType.PERMISSION_DENIED,
             user_message="Permission denied copying chat.db. Grant Full Disk Access.",
-            connector="imessage"
+            connector="imessage",
         )
     except sqlite3.Error as exc:
         logger.exception("Failed to query iMessage database")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"SQLite error: {exc}",
-            connector="imessage"
-        )
+        return tool_error(error_type=ErrorType.EXECUTION_ERROR, user_message=f"SQLite error: {exc}", connector="imessage")
     finally:
         try:
             if "conn" in locals():

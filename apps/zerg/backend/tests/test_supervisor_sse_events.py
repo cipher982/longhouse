@@ -5,7 +5,8 @@ import json
 
 import pytest
 
-from zerg.events import EventType, event_bus
+from zerg.events import EventType
+from zerg.events import event_bus
 from zerg.routers.jarvis import _supervisor_event_generator
 
 

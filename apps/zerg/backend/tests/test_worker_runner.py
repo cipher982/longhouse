@@ -1,13 +1,12 @@
 """Tests for WorkerRunner service."""
 
 import tempfile
-from pathlib import Path
 
 import pytest
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.fixture
@@ -36,7 +35,6 @@ async def test_run_worker_simple_task(worker_runner, temp_store, db_session, tes
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -111,7 +109,6 @@ async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session,
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant with access to tools.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -145,8 +142,10 @@ async def test_run_worker_with_tool_calls(worker_runner, temp_store, db_session,
 @pytest.mark.asyncio
 async def test_run_worker_handles_errors(worker_runner, temp_store, db_session, test_user):
     """Test that worker errors are captured properly."""
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
     from zerg.crud import crud
-    from unittest.mock import patch, AsyncMock
 
     # Create test agent
     agent = crud.create_agent(
@@ -156,7 +155,6 @@ async def test_run_worker_handles_errors(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -196,7 +194,6 @@ async def test_worker_message_persistence(worker_runner, temp_store, db_session,
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -241,7 +238,6 @@ async def test_worker_result_extraction(worker_runner, temp_store, db_session, t
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant. Always end your response with 'DONE'.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -279,7 +275,6 @@ async def test_worker_config_persistence(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -316,7 +311,6 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
         model=TEST_WORKER_MODEL,
         system_instructions="You are a helpful assistant.",
         task_instructions="",
-
     )
     db_session.commit()
     db_session.refresh(agent)
@@ -349,12 +343,9 @@ async def test_worker_artifacts_readable(worker_runner, temp_store, db_session, 
 
 
 @pytest.mark.asyncio
-async def test_temporary_agent_has_infrastructure_tools(
-    worker_runner, temp_store, db_session, test_user
-):
+async def test_temporary_agent_has_infrastructure_tools(worker_runner, temp_store, db_session, test_user):
     """Test that temporary agents created for workers have ssh_exec and other infra tools."""
     from zerg.crud import crud
-    from zerg.models.models import Agent
 
     # Run worker without providing an agent (creates temporary agent)
     task = "Test infrastructure tools"
@@ -406,7 +397,8 @@ class TestSynthesizeFromToolOutputs:
 
     def test_synthesize_with_tool_outputs(self, temp_store):
         """Test synthesizing result when tool outputs exist but final message is empty."""
-        from langchain_core.messages import AIMessage, ToolMessage
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import ToolMessage
 
         runner = WorkerRunner(artifact_store=temp_store)
         messages = [
@@ -437,16 +429,20 @@ class TestSynthesizeFromToolOutputs:
 
     def test_synthesize_limits_to_three_tools(self, temp_store):
         """Test that synthesis limits to 3 most recent tool outputs."""
-        from langchain_core.messages import AIMessage, ToolMessage
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import ToolMessage
 
         runner = WorkerRunner(artifact_store=temp_store)
         messages = [
-            AIMessage(content="", tool_calls=[
-                {"id": "call_1", "name": "tool1", "args": {}},
-                {"id": "call_2", "name": "tool2", "args": {}},
-                {"id": "call_3", "name": "tool3", "args": {}},
-                {"id": "call_4", "name": "tool4", "args": {}},
-            ]),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "call_1", "name": "tool1", "args": {}},
+                    {"id": "call_2", "name": "tool2", "args": {}},
+                    {"id": "call_3", "name": "tool3", "args": {}},
+                    {"id": "call_4", "name": "tool4", "args": {}},
+                ],
+            ),
             ToolMessage(content="output1", tool_call_id="call_1", name="tool1"),
             ToolMessage(content="output2", tool_call_id="call_2", name="tool2"),
             ToolMessage(content="output3", tool_call_id="call_3", name="tool3"),
@@ -466,7 +462,8 @@ class TestSynthesizeFromToolOutputs:
 
     def test_synthesize_truncates_long_output(self, temp_store):
         """Test that very long tool outputs are truncated."""
-        from langchain_core.messages import AIMessage, ToolMessage
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import ToolMessage
 
         runner = WorkerRunner(artifact_store=temp_store)
         long_output = "x" * 3000  # Longer than 2000 char limit
@@ -488,8 +485,8 @@ class TestTimestampFix:
 
     def test_empty_assistant_content_no_timestamp(self, db_session, test_user):
         """Test that empty assistant content doesn't get masked by timestamp."""
-        from zerg.services.thread_service import _db_to_langchain
         from zerg.crud import crud
+        from zerg.services.thread_service import _db_to_langchain
 
         # Create a thread message with empty content
         agent = crud.create_agent(
@@ -529,8 +526,8 @@ class TestTimestampFix:
 
     def test_non_empty_assistant_gets_timestamp(self, db_session, test_user):
         """Test that non-empty assistant content does get timestamp."""
-        from zerg.services.thread_service import _db_to_langchain
         from zerg.crud import crud
+        from zerg.services.thread_service import _db_to_langchain
 
         agent = crud.create_agent(
             db=db_session,
@@ -571,8 +568,8 @@ class TestTimestampFix:
 
     def test_whitespace_only_assistant_no_timestamp(self, db_session, test_user):
         """Test that whitespace-only content doesn't get timestamp."""
-        from zerg.services.thread_service import _db_to_langchain
         from zerg.crud import crud
+        from zerg.services.thread_service import _db_to_langchain
 
         agent = crud.create_agent(
             db=db_session,

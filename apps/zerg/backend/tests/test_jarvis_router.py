@@ -3,7 +3,8 @@
 import pytest
 from fastapi import status
 
-from zerg.models.enums import RunStatus, RunTrigger
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.models import AgentRun
 from zerg.services.supervisor_service import SupervisorService
 
@@ -31,9 +32,7 @@ class TestSupervisorCancelEndpoint:
 
         return {"agent": agent, "thread": thread, "run": run}
 
-    def test_cancel_running_run_succeeds(
-        self, client, db_session, test_user, supervisor_components
-    ):
+    def test_cancel_running_run_succeeds(self, client, db_session, test_user, supervisor_components):
         """Test that cancelling a running run succeeds."""
         run = supervisor_components["run"]
 
@@ -50,9 +49,7 @@ class TestSupervisorCancelEndpoint:
         assert run.status == RunStatus.CANCELLED
         assert run.finished_at is not None
 
-    def test_cancel_already_completed_run(
-        self, client, db_session, test_user, supervisor_components
-    ):
+    def test_cancel_already_completed_run(self, client, db_session, test_user, supervisor_components):
         """Test that cancelling an already-completed run returns current status."""
         run = supervisor_components["run"]
 
@@ -68,9 +65,7 @@ class TestSupervisorCancelEndpoint:
         assert data["status"] == "success"
         assert data["message"] == "Run already completed"
 
-    def test_cancel_already_cancelled_run(
-        self, client, db_session, test_user, supervisor_components
-    ):
+    def test_cancel_already_cancelled_run(self, client, db_session, test_user, supervisor_components):
         """Test that cancelling an already-cancelled run returns current status."""
         run = supervisor_components["run"]
 
@@ -93,9 +88,7 @@ class TestSupervisorCancelEndpoint:
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert "not found" in response.json()["detail"].lower()
 
-    def test_cancel_other_user_run_returns_404(
-        self, client, db_session, test_user, other_user, supervisor_components
-    ):
+    def test_cancel_other_user_run_returns_404(self, client, db_session, test_user, other_user, supervisor_components):
         """Test that cancelling another user's run returns 404 (no info leak)."""
         # Create a run for the other user
         service = SupervisorService(db_session)
@@ -118,9 +111,7 @@ class TestSupervisorCancelEndpoint:
         # Should return 404 to not reveal existence
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_cancel_failed_run_returns_current_status(
-        self, client, db_session, test_user, supervisor_components
-    ):
+    def test_cancel_failed_run_returns_current_status(self, client, db_session, test_user, supervisor_components):
         """Test that cancelling a failed run returns current status."""
         run = supervisor_components["run"]
 

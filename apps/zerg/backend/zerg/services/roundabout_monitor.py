@@ -38,20 +38,16 @@ from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
+from zerg.services.llm_decider import DEFAULT_DECISION_MODE
+from zerg.services.llm_decider import DEFAULT_LLM_MAX_CALLS
+from zerg.services.llm_decider import DEFAULT_LLM_MODEL
+from zerg.services.llm_decider import DEFAULT_LLM_POLL_INTERVAL
+from zerg.services.llm_decider import DecisionMode
+from zerg.services.llm_decider import LLMDeciderStats
+from zerg.services.llm_decider import decide_roundabout_action
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-from zerg.services.llm_decider import (
-    DecisionMode,
-    LLMDeciderStats,
-    DEFAULT_DECISION_MODE,
-    DEFAULT_LLM_POLL_INTERVAL,
-    DEFAULT_LLM_MAX_CALLS,
-    DEFAULT_LLM_TIMEOUT_SECONDS,
-    DEFAULT_LLM_MODEL,
-    decide_roundabout_action,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +198,7 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
     if ctx.is_stuck and ctx.stuck_seconds > ROUNDABOUT_STUCK_THRESHOLD:
         # For now, just flag as slow but continue waiting
         # A more sophisticated version might return PEEK
-        logger.debug(
-            f"Job {ctx.job_id} operation slow ({ctx.stuck_seconds:.0f}s) but not cancel-worthy yet"
-        )
+        logger.debug(f"Job {ctx.job_id} operation slow ({ctx.stuck_seconds:.0f}s) but not cancel-worthy yet")
 
     # Default: continue waiting
     return RoundaboutDecision.WAIT, "Continuing to monitor"
@@ -262,13 +256,14 @@ class RoundaboutMonitor:
         # Warn if using deprecated heuristic mode
         if decision_mode in (DecisionMode.HEURISTIC, DecisionMode.HYBRID):
             import warnings
+
             warnings.warn(
                 f"DecisionMode.{decision_mode.name} is deprecated. "
                 "v2.0 uses DecisionMode.LLM (trust the AI to interpret status). "
                 "Heuristic decision engines pre-program the LLM's decisions, which goes against "
                 "the v2.0 philosophy of trusting the AI.",
                 DeprecationWarning,
-                stacklevel=2
+                stacklevel=2,
             )
         self.llm_poll_interval = llm_poll_interval
         self.llm_max_calls = llm_max_calls
@@ -289,9 +284,7 @@ class RoundaboutMonitor:
         self._llm_stats = LLMDeciderStats()
         self._llm_calls_made = 0  # Track calls for budget enforcement
 
-    async def _make_decision(
-        self, ctx: DecisionContext
-    ) -> tuple[RoundaboutDecision, str]:
+    async def _make_decision(self, ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
         """Make a decision using the configured mode.
 
         This method integrates heuristic and LLM decision making based on
@@ -328,9 +321,7 @@ class RoundaboutMonitor:
         # Both say wait
         return RoundaboutDecision.WAIT, f"[hybrid] {heuristic_reason}"
 
-    async def _make_llm_decision(
-        self, ctx: DecisionContext
-    ) -> tuple[RoundaboutDecision, str]:
+    async def _make_llm_decision(self, ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
         """Make a decision using the LLM decider.
 
         Respects budget and interval constraints. Falls back to WAIT on any issue.
@@ -344,17 +335,13 @@ class RoundaboutMonitor:
         # Check budget
         if self._llm_calls_made >= self.llm_max_calls:
             self._llm_stats.record_skip("budget")
-            logger.debug(
-                f"Job {self.job_id}: LLM budget exhausted ({self._llm_calls_made}/{self.llm_max_calls})"
-            )
+            logger.debug(f"Job {self.job_id}: LLM budget exhausted ({self._llm_calls_made}/{self.llm_max_calls})")
             return RoundaboutDecision.WAIT, "LLM budget exhausted, continuing to monitor"
 
         # Check interval (only call every N polls)
         if self._check_count % self.llm_poll_interval != 0:
             self._llm_stats.record_skip("interval")
-            logger.debug(
-                f"Job {self.job_id}: Skipping LLM (poll {self._check_count}, interval {self.llm_poll_interval})"
-            )
+            logger.debug(f"Job {self.job_id}: Skipping LLM (poll {self._check_count}, interval {self.llm_poll_interval})")
             return RoundaboutDecision.WAIT, "Continuing to monitor"
 
         # Make LLM call
@@ -394,7 +381,6 @@ class RoundaboutMonitor:
         Returns:
             RoundaboutResult with final status and result
         """
-        from zerg.events import EventType, event_bus
         from zerg.models.models import WorkerJob
 
         self._start_time = datetime.now(timezone.utc)
@@ -411,16 +397,11 @@ class RoundaboutMonitor:
                 # Check timeout - monitor timeout, not job failure
                 if elapsed > self.timeout_seconds:
                     logger.warning(
-                        f"Roundabout monitor timeout for job {self.job_id} after {elapsed:.1f}s "
-                        "(worker may still be running)"
+                        f"Roundabout monitor timeout for job {self.job_id} after {elapsed:.1f}s " "(worker may still be running)"
                     )
                     # Get current job status to check if still running
                     self.db.expire_all()
-                    job = (
-                        self.db.query(WorkerJob)
-                        .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
-                        .first()
-                    )
+                    job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
                     worker_running = job and job.status in ("queued", "running")
                     return self._create_timeout_result(
                         worker_id=job.worker_id if job else None,
@@ -429,11 +410,7 @@ class RoundaboutMonitor:
 
                 # Get current job status
                 self.db.expire_all()  # Refresh from database
-                job = (
-                    self.db.query(WorkerJob)
-                    .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
-                    .first()
-                )
+                job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
 
                 if not job:
                     logger.error(f"Job {self.job_id} not found in roundabout")
@@ -447,9 +424,7 @@ class RoundaboutMonitor:
 
                 # Check if worker is done (priority check before heuristics)
                 if job.status in ("success", "failed"):
-                    logger.info(
-                        f"Roundabout exit for job {self.job_id}: {job.status} after {elapsed:.1f}s"
-                    )
+                    logger.info(f"Roundabout exit for job {self.job_id}: {job.status} after {elapsed:.1f}s")
                     return await self._create_completion_result(job)
 
                 # Phase 4/5: Build decision context and make decision
@@ -458,21 +433,15 @@ class RoundaboutMonitor:
 
                 # Act on decision
                 if decision == RoundaboutDecision.EXIT:
-                    logger.info(
-                        f"Roundabout early exit for job {self.job_id}: {reason}"
-                    )
+                    logger.info(f"Roundabout early exit for job {self.job_id}: {reason}")
                     return await self._create_early_exit_result(job, reason)
 
                 elif decision == RoundaboutDecision.CANCEL:
-                    logger.warning(
-                        f"Roundabout cancelling job {self.job_id}: {reason}"
-                    )
+                    logger.warning(f"Roundabout cancelling job {self.job_id}: {reason}")
                     return await self._create_cancel_result(job, reason)
 
                 elif decision == RoundaboutDecision.PEEK:
-                    logger.info(
-                        f"Roundabout peek requested for job {self.job_id}: {reason}"
-                    )
+                    logger.info(f"Roundabout peek requested for job {self.job_id}: {reason}")
                     return self._create_peek_result(job, reason)
 
                 # decision == WAIT: continue monitoring
@@ -501,7 +470,8 @@ class RoundaboutMonitor:
 
     async def _subscribe_to_tool_events(self) -> None:
         """Subscribe to tool events for this job."""
-        from zerg.events import EventType, event_bus
+        from zerg.events import EventType
+        from zerg.events import event_bus
 
         async def handle_tool_event(payload: dict[str, Any]) -> None:
             """Handle incoming tool events."""
@@ -526,7 +496,8 @@ class RoundaboutMonitor:
 
     async def _unsubscribe_from_tool_events(self) -> None:
         """Unsubscribe from tool events."""
-        from zerg.events import EventType, event_bus
+        from zerg.events import EventType
+        from zerg.events import event_bus
 
         if self._event_subscription:
             try:
@@ -546,11 +517,7 @@ class RoundaboutMonitor:
         if self._start_time:
             elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
-        job = (
-            self.db.query(WorkerJob)
-            .filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id)
-            .first()
-        )
+        job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
 
         if not job:
             return RoundaboutStatus(
@@ -811,9 +778,7 @@ class RoundaboutMonitor:
             activity_summary=self._build_activity_summary(),
         )
 
-    def _create_timeout_result(
-        self, worker_id: str | None, worker_still_running: bool
-    ) -> RoundaboutResult:
+    def _create_timeout_result(self, worker_id: str | None, worker_still_running: bool) -> RoundaboutResult:
         """Create result for monitor timeout (distinct from job failure)."""
         elapsed = 0.0
         if self._start_time:
@@ -876,9 +841,7 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
                 lines.append("Result (truncated):")
                 lines.append(result.result[:2000])
                 lines.append("...")
-                lines.append(
-                    f"\nFull result available via read_worker_result({result.job_id})"
-                )
+                lines.append(f"\nFull result available via read_worker_result({result.job_id})")
             else:
                 lines.append("Result:")
                 lines.append(result.result)

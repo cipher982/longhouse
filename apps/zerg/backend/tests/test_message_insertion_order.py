@@ -23,8 +23,8 @@ import time
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 # Use the client fixture from conftest.py, which properly sets up the test database

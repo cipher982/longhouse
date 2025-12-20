@@ -1,7 +1,8 @@
 """Contact user tool - allows agents to notify their owner."""
 
 import logging
-from typing import Any, Dict
+from typing import Any
+from typing import Dict
 
 from langchain_core.tools import StructuredTool
 
@@ -9,7 +10,9 @@ from zerg.context import get_worker_context
 from zerg.crud import crud
 from zerg.database import db_session
 from zerg.tools.builtin.email_tools import send_email
-from zerg.tools.error_envelope import ErrorType, tool_error, tool_success
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +62,7 @@ def _convert_markdown_to_html(text: str) -> str:
     return "\n".join(html_lines)
 
 
-def _build_email_template(
-    message: str, priority: str, worker_id: str | None = None
-) -> str:
+def _build_email_template(message: str, priority: str, worker_id: str | None = None) -> str:
     """Build HTML email template with Swarmlet branding.
 
     Args:
@@ -211,8 +212,7 @@ def contact_user(
         if owner_id is None:
             return tool_error(
                 error_type=ErrorType.EXECUTION_ERROR,
-                user_message="No owner information available in worker context. "
-                "Cannot determine who to notify.",
+                user_message="No owner information available in worker context. Cannot determine who to notify.",
             )
 
         # Look up user
@@ -222,8 +222,7 @@ def contact_user(
                 logger.error(f"User {owner_id} not found")
                 return tool_error(
                     error_type=ErrorType.EXECUTION_ERROR,
-                    user_message=f"User account (ID: {owner_id}) not found. "
-                    "This may indicate a database inconsistency.",
+                    user_message=f"User account (ID: {owner_id}) not found. " "This may indicate a database inconsistency.",
                 )
 
             # Check if user has email configured
@@ -236,7 +235,7 @@ def contact_user(
                 )
 
             user_email = user.email
-            user_name = user.display_name or user.email.split("@")[0]
+            _user_name = user.display_name or user.email.split("@")[0]  # Reserved for future personalization
 
         # Build email content
         priority_emoji = PRIORITY_EMOJI.get(priority, "")
@@ -252,9 +251,7 @@ def contact_user(
         text_body = message
 
         # Send email
-        logger.info(
-            f"Sending notification to user {owner_id} ({user_email}): {subject}"
-        )
+        logger.info(f"Sending notification to user {owner_id} ({user_email}): {subject}")
 
         result = send_email(
             to=user_email,
@@ -270,9 +267,7 @@ def contact_user(
 
         # Extract message_id from the data field
         message_id = result.get("data", {}).get("message_id", "unknown")
-        logger.info(
-            f"Successfully sent notification to user {owner_id}: {message_id}"
-        )
+        logger.info(f"Successfully sent notification to user {owner_id}: {message_id}")
         return tool_success({"message_id": message_id})
 
     except Exception as e:

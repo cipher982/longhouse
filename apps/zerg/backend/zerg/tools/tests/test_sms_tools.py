@@ -16,7 +16,7 @@ class TestSendSms:
             auth_token="valid_token_32_chars_long_xxxxx",
             from_number="+15551234567",
             to_number="+15559876543",
-            message="Test message"
+            message="Test message",
         )
         assert result["ok"] is False
         assert "Account SID" in result.get("user_message", "")
@@ -28,7 +28,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="1234567890",  # Missing + and country code
             to_number="+15559876543",
-            message="Test message"
+            message="Test message",
         )
         assert result["ok"] is False
 
@@ -39,7 +39,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="invalid",
-            message="Test message"
+            message="Test message",
         )
         assert result["ok"] is False
 
@@ -50,7 +50,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="+15559876543",
-            message=""
+            message="",
         )
         assert result["ok"] is False
 
@@ -62,7 +62,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="+15559876543",
-            message=long_message
+            message=long_message,
         )
         assert result["ok"] is False
 
@@ -75,7 +75,7 @@ class TestSendSms:
             "sid": "SM123456",
             "status": "queued",
             "num_segments": "1",
-            "price": "-0.0075"
+            "price": "-0.0075",
         }
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
 
@@ -84,7 +84,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="+15559876543",
-            message="Test message"
+            message="Test message",
         )
 
         assert result["ok"] is True
@@ -103,7 +103,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="+15559876543",
-            message="Test message"
+            message="Test message",
         )
 
         assert result["ok"] is False
@@ -121,7 +121,7 @@ class TestSendSms:
             auth_token="x" * 32,
             from_number="+15551234567",
             to_number="+15559876543",
-            message="Test message"
+            message="Test message",
         )
 
         assert result["ok"] is False
@@ -131,10 +131,7 @@ class TestSendSms:
         """Test SMS with status callback URL."""
         mock_response = Mock()
         mock_response.status_code = 201
-        mock_response.json.return_value = {
-            "sid": "SM789012",
-            "status": "queued"
-        }
+        mock_response.json.return_value = {"sid": "SM789012", "status": "queued"}
         mock_post = mock_client.return_value.__enter__.return_value.post
         mock_post.return_value = mock_response
 
@@ -144,7 +141,7 @@ class TestSendSms:
             from_number="+15551234567",
             to_number="+15559876543",
             message="Test message",
-            status_callback="https://example.com/callback"
+            status_callback="https://example.com/callback",
         )
 
         assert result["ok"] is True

@@ -2,13 +2,13 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from tests.conftest import TEST_MODEL
 from zerg.crud import crud as _crud
 from zerg.models.models import Agent
 from zerg.models.models import AgentMessage
 from zerg.schemas.schemas import AgentCreate
 from zerg.schemas.schemas import AgentUpdate
 from zerg.schemas.schemas import MessageCreate
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def test_agent_model(db_session: Session):

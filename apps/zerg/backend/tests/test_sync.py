@@ -1,7 +1,7 @@
 """Tests for conversation sync endpoints."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
+from datetime import timezone
 
 
 def test_push_sync_operations(client, auth_headers):

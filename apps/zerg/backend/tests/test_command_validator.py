@@ -168,9 +168,7 @@ def test_systemctl_no_subcommand_denied(validator):
 
 def test_journalctl_with_no_pager_allowed(validator):
     """journalctl --no-pager -n 100 should be allowed."""
-    allowed, reason = validator.validate(
-        "journalctl --no-pager -n 100", ["exec.readonly"]
-    )
+    allowed, reason = validator.validate("journalctl --no-pager -n 100", ["exec.readonly"])
     assert allowed is True
     assert reason is None
 
@@ -184,9 +182,7 @@ def test_journalctl_without_no_pager_denied(validator):
 
 def test_journalctl_no_pager_flag_order_doesnt_matter(validator):
     """journalctl -n 100 --no-pager should be allowed."""
-    allowed, reason = validator.validate(
-        "journalctl -n 100 --no-pager", ["exec.readonly"]
-    )
+    allowed, reason = validator.validate("journalctl -n 100 --no-pager", ["exec.readonly"])
     assert allowed is True
     assert reason is None
 
@@ -213,53 +209,41 @@ def test_docker_ps_denied_without_capability(validator):
 
 def test_docker_logs_allowed_with_capability(validator):
     """docker logs should be allowed with docker capability."""
-    allowed, reason = validator.validate(
-        "docker logs --tail 100 my-container", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker logs --tail 100 my-container", ["exec.readonly", "docker"])
     assert allowed is True
     assert reason is None
 
 
 def test_docker_stats_allowed_with_capability(validator):
     """docker stats should be allowed with docker capability."""
-    allowed, reason = validator.validate(
-        "docker stats --no-stream", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker stats --no-stream", ["exec.readonly", "docker"])
     assert allowed is True
     assert reason is None
 
 
 def test_docker_inspect_allowed_with_capability(validator):
     """docker inspect should be allowed with docker capability."""
-    allowed, reason = validator.validate(
-        "docker inspect my-container", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker inspect my-container", ["exec.readonly", "docker"])
     assert allowed is True
     assert reason is None
 
 
 def test_docker_run_denied(validator):
     """docker run should be denied even with docker capability."""
-    allowed, reason = validator.validate(
-        "docker run ubuntu echo hello", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker run ubuntu echo hello", ["exec.readonly", "docker"])
     assert allowed is False
     assert "readonly" in reason.lower() or "allowed" in reason.lower()
 
 
 def test_docker_rm_denied(validator):
     """docker rm should be denied even with docker capability."""
-    allowed, reason = validator.validate(
-        "docker rm my-container", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker rm my-container", ["exec.readonly", "docker"])
     assert allowed is False
 
 
 def test_docker_stop_denied(validator):
     """docker stop should be denied even with docker capability."""
-    allowed, reason = validator.validate(
-        "docker stop my-container", ["exec.readonly", "docker"]
-    )
+    allowed, reason = validator.validate("docker stop my-container", ["exec.readonly", "docker"])
     assert allowed is False
 
 
@@ -277,9 +261,7 @@ def test_exec_full_allows_simple_commands(validator):
 
 def test_exec_full_allows_everything(validator):
     """exec.full should allow any command."""
-    allowed, reason = validator.validate(
-        "rm -rf /tmp/test", ["exec.full"]
-    )
+    allowed, reason = validator.validate("rm -rf /tmp/test", ["exec.full"])
     assert allowed is True
     assert reason is None
 
@@ -314,9 +296,7 @@ def test_exec_full_allows_systemctl_restart(validator):
 
 def test_exec_full_allows_docker_run(validator):
     """exec.full should allow docker run."""
-    allowed, reason = validator.validate(
-        "docker run ubuntu echo hello", ["exec.full"]
-    )
+    allowed, reason = validator.validate("docker run ubuntu echo hello", ["exec.full"])
     assert allowed is True
     assert reason is None
 
@@ -356,9 +336,7 @@ def test_command_with_backslash_denied(validator):
 
 def test_multiple_capabilities(validator):
     """Multiple capabilities should work together."""
-    allowed, reason = validator.validate(
-        "docker ps", ["exec.readonly", "docker", "other-capability"]
-    )
+    allowed, reason = validator.validate("docker ps", ["exec.readonly", "docker", "other-capability"])
     assert allowed is True
     assert reason is None
 

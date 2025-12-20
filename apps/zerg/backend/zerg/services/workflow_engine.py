@@ -211,9 +211,7 @@ class WorkflowEngine:
                     route_map[false_targets[0]] = false_targets[0]
                 route_map[END] = END
 
-                graph.add_conditional_edges(
-                    source_node_id, make_conditional_router(true_targets, false_targets), route_map
-                )
+                graph.add_conditional_edges(source_node_id, make_conditional_router(true_targets, false_targets), route_map)
             else:
                 # Regular edges - add them normally
                 for edge in edges:
@@ -274,9 +272,7 @@ class WorkflowEngine:
             execution.finished_at = utc_now_naive()
             db.commit()
 
-            await self._publish_execution_finished(
-                execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution)
-            )
+            await self._publish_execution_finished(execution_id=execution.id, execution=execution, duration_ms=self._duration_ms(execution))
             logger.info(f"[WorkflowEngine] Execution completed – execution_id={execution.id}")
 
         except Exception:
@@ -302,9 +298,7 @@ class WorkflowEngine:
             },
         )
 
-    async def _publish_streaming_progress(
-        self, *, execution_id: int, completed_nodes: List[str], node_outputs: Dict[str, Any], error: str
-    ):
+    async def _publish_streaming_progress(self, *, execution_id: int, completed_nodes: List[str], node_outputs: Dict[str, Any], error: str):
         await publish_event(
             EventType.WORKFLOW_PROGRESS,
             {

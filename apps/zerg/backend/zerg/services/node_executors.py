@@ -356,8 +356,6 @@ def create_node_executor(node, publish_event_callback) -> BaseNodeExecutor:
         class PlaceholderExecutor(BaseNodeExecutor):
             async def _execute_node_logic(self, db, state, execution_id: int):
                 logger.warning(f"[PlaceholderNode] Unknown node type: {self.node_id}")
-                return self._create_envelope_output(
-                    value={"skipped": True}, node_type="placeholder", phase="finished", result="success"
-                )
+                return self._create_envelope_output(value={"skipped": True}, node_type="placeholder", phase="finished", result="success")
 
         return PlaceholderExecutor(node, publish_event_callback, "placeholder")

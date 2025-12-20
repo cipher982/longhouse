@@ -41,9 +41,7 @@ class RunnerConnectionManager:
 
         # If there's an existing connection, it will be replaced
         if key in self._connections:
-            logger.warning(
-                f"Replacing existing connection for runner {runner_id} (owner {owner_id})"
-            )
+            logger.warning(f"Replacing existing connection for runner {runner_id} (owner {owner_id})")
 
         self._connections[key] = ws
         logger.info(f"Registered runner {runner_id} (owner {owner_id})")
@@ -93,9 +91,7 @@ class RunnerConnectionManager:
         key = (owner_id, runner_id)
         return key in self._connections
 
-    async def send_to_runner(
-        self, owner_id: int, runner_id: int, message: Dict[str, Any]
-    ) -> bool:
+    async def send_to_runner(self, owner_id: int, runner_id: int, message: Dict[str, Any]) -> bool:
         """Send a JSON message to a runner.
 
         Args:
@@ -108,9 +104,7 @@ class RunnerConnectionManager:
         """
         ws = self.get_connection(owner_id, runner_id)
         if not ws:
-            logger.warning(
-                f"Cannot send message to offline runner {runner_id} (owner {owner_id})"
-            )
+            logger.warning(f"Cannot send message to offline runner {runner_id} (owner {owner_id})")
             return False
 
         try:
@@ -118,9 +112,7 @@ class RunnerConnectionManager:
             logger.debug(f"Sent message to runner {runner_id}: {message.get('type')}")
             return True
         except Exception as e:
-            logger.error(
-                f"Failed to send message to runner {runner_id} (owner {owner_id}): {e}"
-            )
+            logger.error(f"Failed to send message to runner {runner_id} (owner {owner_id}): {e}")
             # Connection is broken, unregister it
             self.unregister(owner_id, runner_id, ws)
             return False

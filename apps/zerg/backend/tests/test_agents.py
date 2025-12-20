@@ -3,8 +3,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.models.models import Agent
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def test_read_agents_empty(client: TestClient):

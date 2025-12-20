@@ -7,12 +7,17 @@ conversation synchronization.
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Query
+from fastapi import status
+from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.models.models import User
@@ -29,8 +34,7 @@ router = APIRouter(prefix="/api/jarvis/sync", tags=["sync"])
 
 
 # Import the actual dependency function from jarvis router
-from zerg.routers.jarvis import get_current_jarvis_user
-
+from zerg.routers.jarvis import get_current_jarvis_user  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Request/Response Models
@@ -181,13 +185,7 @@ def pull_sync_operations(
         )
 
     # Query operations for this user after cursor
-    operations = (
-        db.query(SyncOperation)
-        .filter(SyncOperation.user_id == current_user.id)
-        .order_by(SyncOperation.id)
-        .offset(cursor)
-        .all()
-    )
+    operations = db.query(SyncOperation).filter(SyncOperation.user_id == current_user.id).order_by(SyncOperation.id).offset(cursor).all()
 
     # Format operations for response
     ops = []
@@ -203,10 +201,6 @@ def pull_sync_operations(
         )
 
     # Calculate next cursor
-    next_cursor = (
-        db.query(SyncOperation)
-        .filter(SyncOperation.user_id == current_user.id)
-        .count()
-    )
+    next_cursor = db.query(SyncOperation).filter(SyncOperation.user_id == current_user.id).count()
 
     return PullResponse(ops=ops, nextCursor=next_cursor)

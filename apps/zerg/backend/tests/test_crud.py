@@ -1,5 +1,7 @@
 from sqlalchemy.orm import Session
 
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud.crud import create_agent
 from zerg.crud.crud import create_agent_message
 from zerg.crud.crud import create_user
@@ -9,7 +11,6 @@ from zerg.crud.crud import get_agent_messages
 from zerg.crud.crud import get_agents
 from zerg.crud.crud import update_agent
 from zerg.models.models import Agent
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 # Ensure we have at least one user – the sample_agent already uses _dev_user.
 

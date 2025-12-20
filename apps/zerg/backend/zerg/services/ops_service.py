@@ -95,9 +95,7 @@ def get_summary(db: Session, current_user: UserModel) -> Dict[str, Any]:
     global_used_usd = float(global_cost_q.scalar() or 0.0)
     global_percent: Optional[float] = None
     if global_budget_cents > 0:
-        global_percent = (
-            min(100.0, (global_used_usd / (global_budget_cents / 100.0)) * 100.0) if global_used_usd else 0.0
-        )
+        global_percent = min(100.0, (global_used_usd / (global_budget_cents / 100.0)) * 100.0) if global_used_usd else 0.0
 
     # Active users (24h): owners of runs started in last 24h or posters of messages in last 24h
     since_24h = now - timedelta(hours=24)
@@ -303,9 +301,7 @@ def get_top_agents(db: Session, window: str = "today", limit: int = 5) -> List[D
         raise ValueError("Unsupported window")
 
     # Base: runs started today per agent
-    base_runs_q = db.query(AgentRunModel.agent_id, func.count(AgentRunModel.id).label("runs")).filter(
-        AgentRunModel.started_at.isnot(None)
-    )
+    base_runs_q = db.query(AgentRunModel.agent_id, func.count(AgentRunModel.id).label("runs")).filter(AgentRunModel.started_at.isnot(None))
     if start_date is not None:
         base_runs_q = base_runs_q.filter(func.date(AgentRunModel.started_at) >= start_date)
     else:

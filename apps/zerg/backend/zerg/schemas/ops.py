@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class BudgetInfo(BaseModel):
     """Budget information with limit and usage."""
+
     limit_cents: int
     used_usd: float
     percent: Optional[float]
@@ -15,12 +16,14 @@ class BudgetInfo(BaseModel):
 
 class LatencyStats(BaseModel):
     """Latency statistics."""
+
     p50: int
     p95: int
 
 
 class OpsTopAgent(BaseModel):
     """Top performing agent information."""
+
     agent_id: int
     name: str
     owner_email: str
@@ -31,6 +34,7 @@ class OpsTopAgent(BaseModel):
 
 class OpsSummary(BaseModel):
     """Operations summary with all KPIs."""
+
     runs_today: int
     cost_today_usd: Optional[float]
     budget_user: BudgetInfo
@@ -45,15 +49,18 @@ class OpsSummary(BaseModel):
 
 class OpsSeriesPoint(BaseModel):
     """Single point in a time series."""
+
     hour_iso: str  # Service returns this field name consistently
     value: float
 
 
 class TimeSeriesResponse(BaseModel):
     """Time series response."""
+
     series: List[OpsSeriesPoint]
 
 
 class TopAgentsResponse(BaseModel):
     """Response containing top agents list."""
+
     top_agents: List[OpsTopAgent]

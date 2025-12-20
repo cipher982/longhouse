@@ -11,7 +11,6 @@ The factory handles database detection, connection pooling, and async initializa
 import asyncio
 import logging
 import threading
-from typing import Union
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Global cache for initialized checkpointer instances
 _postgres_checkpointer_cache: dict[str, BaseCheckpointSaver] = {}
-_async_postgres_pool_cache: dict[str, "AsyncConnectionPool"] = {}
+_async_postgres_pool_cache: dict[str, "AsyncConnectionPool"] = {}  # noqa: F821
 
 # Persistent event loop for async operations (kept alive in background thread)
 _bg_loop: asyncio.AbstractEventLoop | None = None
@@ -49,6 +48,7 @@ def _get_or_create_bg_loop() -> asyncio.AbstractEventLoop:
             _bg_thread.start()
             # Give the loop a moment to start
             import time
+
             time.sleep(0.01)
 
         return _bg_loop
@@ -69,7 +69,8 @@ def _normalize_postgres_url(db_url: str) -> str:
     """
     # Strip SQLAlchemy dialect specifiers (+psycopg, +asyncpg, etc.)
     import re
-    return re.sub(r'^postgresql\+\w+://', 'postgresql://', db_url)
+
+    return re.sub(r"^postgresql\+\w+://", "postgresql://", db_url)
 
 
 def _create_async_checkpointer_in_bg_loop(db_url: str):
@@ -116,17 +117,13 @@ def _create_async_checkpointer_in_bg_loop(db_url: str):
                 from langgraph.checkpoint.postgres.base import BasePostgresSaver
 
                 # Use a direct autocommit connection for migrations
-                async with await psycopg.AsyncConnection.connect(
-                    conninfo, autocommit=True
-                ) as conn:
+                async with await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as conn:
                     # Get migrations from LangGraph
                     migrations = BasePostgresSaver.MIGRATIONS
 
                     # Track which migrations have run
                     try:
-                        result = await conn.execute(
-                            "SELECT v FROM checkpoint_migrations"
-                        )
+                        result = await conn.execute("SELECT v FROM checkpoint_migrations")
                         existing = {row[0] for row in await result.fetchall()}
                     except Exception:
                         existing = set()
@@ -137,10 +134,7 @@ def _create_async_checkpointer_in_bg_loop(db_url: str):
                         try:
                             await conn.execute(migration)
                             # Record migration
-                            await conn.execute(
-                                "INSERT INTO checkpoint_migrations (v) VALUES (%s) ON CONFLICT DO NOTHING",
-                                (i,)
-                            )
+                            await conn.execute("INSERT INTO checkpoint_migrations (v) VALUES (%s) ON CONFLICT DO NOTHING", (i,))
                             logger.debug(f"Applied checkpoint migration {i}")
                         except Exception as mig_err:
                             # Ignore "already exists" errors
@@ -193,6 +187,7 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
 
     # For tests, always use MemorySaver for speed (checkpointer init is slow)
     import os
+
     if os.environ.get("TESTING") == "1":
         logger.debug("Using MemorySaver for test environment")
         return MemorySaver()
@@ -213,8 +208,8 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
         logger.info(f"Initializing AsyncPostgresSaver for PostgreSQL database: {masked_url}")
 
         try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-            from psycopg_pool import AsyncConnectionPool
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver  # noqa: F401
+            from psycopg_pool import AsyncConnectionPool  # noqa: F401
 
             # Create pool and checkpointer in the background loop context
             # This ensures the pool is associated with a running event loop

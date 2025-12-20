@@ -18,7 +18,7 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
         owner_id=test_user.id,
         connector_type=connector_type,
         encrypted_value=encrypt(json.dumps(account_creds)),
-        display_name="Account Slack"
+        display_name="Account Slack",
     )
     db_session.add(account_cred)
     db_session.commit()
@@ -38,7 +38,7 @@ def test_credential_resolver_fallback(db_session, test_user, sample_agent):
         agent_id=sample_agent.id,
         connector_type=connector_type,
         encrypted_value=encrypt(json.dumps(agent_creds)),
-        display_name="Agent Slack"
+        display_name="Agent Slack",
     )
     db_session.add(agent_cred)
     db_session.commit()
@@ -99,7 +99,7 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
     payload = {
         "connector_type": "slack",
         "credentials": {"webhook_url": "https://hooks.slack.com/services/XXX/YYY/ZZZ"},
-        "display_name": "My Company Slack"
+        "display_name": "My Company Slack",
     }
     response = client.post("/api/account/connectors", json=payload)
     assert response.status_code == 201
@@ -123,7 +123,7 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
         mock_test.return_value = {
             "success": True,
             "message": "Connected to Slack",
-            "metadata": {"workspace": "TestWorkspace"}
+            "metadata": {"workspace": "TestWorkspace"},
         }
 
         response = client.post("/api/account/connectors/slack/test")
@@ -140,10 +140,7 @@ def test_account_connectors_api_lifecycle(client, db_session, test_user):
     with patch("zerg.routers.account_connectors.test_connector") as mock_test:
         mock_test.return_value = {"success": False, "message": "Invalid token"}
 
-        test_payload = {
-            "connector_type": "slack",
-            "credentials": {"webhook_url": "bad_url"}
-        }
+        test_payload = {"connector_type": "slack", "credentials": {"webhook_url": "bad_url"}}
         response = client.post("/api/account/connectors/test", json=test_payload)
         assert response.status_code == 200
         assert response.json()["success"] is False

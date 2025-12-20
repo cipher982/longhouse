@@ -16,29 +16,17 @@ class TestNotionCreatePage:
 
     def test_empty_api_key(self):
         """Test that empty API key is rejected."""
-        result = notion_create_page(
-            api_key="",
-            parent_id="page_123",
-            title="Test Page"
-        )
+        result = notion_create_page(api_key="", parent_id="page_123", title="Test Page")
         assert result["ok"] is False
 
     def test_empty_parent_id(self):
         """Test that empty parent ID is rejected."""
-        result = notion_create_page(
-            api_key="secret_test",
-            parent_id="",
-            title="Test Page"
-        )
+        result = notion_create_page(api_key="secret_test", parent_id="", title="Test Page")
         assert result["ok"] is False
 
     def test_empty_title(self):
         """Test that empty title is rejected."""
-        result = notion_create_page(
-            api_key="secret_test",
-            parent_id="page_123",
-            title=""
-        )
+        result = notion_create_page(api_key="secret_test", parent_id="page_123", title="")
         assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
@@ -49,15 +37,11 @@ class TestNotionCreatePage:
         mock_response.json.return_value = {
             "id": "page_456",
             "url": "https://notion.so/Test-Page-123",
-            "created_time": "2025-11-29T00:00:00.000Z"
+            "created_time": "2025-11-29T00:00:00.000Z",
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_create_page(
-            api_key="secret_test",
-            parent_id="page_123",
-            title="Test Page"
-        )
+        result = notion_create_page(api_key="secret_test", parent_id="page_123", title="Test Page")
 
         assert result["ok"] is True
         assert result["data"]["page_id"] == "page_456"
@@ -70,11 +54,7 @@ class TestNotionCreatePage:
         mock_response.json.return_value = {"message": "Invalid API key"}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_create_page(
-            api_key="secret_invalid",
-            parent_id="page_123",
-            title="Test Page"
-        )
+        result = notion_create_page(api_key="secret_invalid", parent_id="page_123", title="Test Page")
 
         assert result["ok"] is False
         assert result["error_type"] == "invalid_credentials"
@@ -85,10 +65,7 @@ class TestNotionGetPage:
 
     def test_empty_page_id(self):
         """Test that empty page ID is rejected."""
-        result = notion_get_page(
-            api_key="secret_test",
-            page_id=""
-        )
+        result = notion_get_page(api_key="secret_test", page_id="")
         assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
@@ -98,16 +75,11 @@ class TestNotionGetPage:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "id": "page_123",
-            "properties": {
-                "title": {"title": [{"plain_text": "Test Page"}]}
-            }
+            "properties": {"title": {"title": [{"plain_text": "Test Page"}]}},
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_get_page(
-            api_key="secret_test",
-            page_id="page_123"
-        )
+        result = notion_get_page(api_key="secret_test", page_id="page_123")
 
         assert result["ok"] is True
         assert result["data"]["page"]["id"] == "page_123"
@@ -120,10 +92,7 @@ class TestNotionGetPage:
         mock_response.json.return_value = {"message": "Page not found"}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_get_page(
-            api_key="secret_test",
-            page_id="page_999"
-        )
+        result = notion_get_page(api_key="secret_test", page_id="page_999")
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"
@@ -137,17 +106,10 @@ class TestNotionUpdatePage:
         """Test successful page update."""
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "id": "page_123",
-            "properties": {}
-        }
+        mock_response.json.return_value = {"id": "page_123", "properties": {}}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_update_page(
-            api_key="secret_test",
-            page_id="page_123",
-            properties={"Status": {"select": {"name": "Done"}}}
-        )
+        result = notion_update_page(api_key="secret_test", page_id="page_123", properties={"Status": {"select": {"name": "Done"}}})
 
         assert result["ok"] is True
 
@@ -159,11 +121,7 @@ class TestNotionUpdatePage:
         mock_response.json.return_value = {"id": "page_123", "archived": True}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_update_page(
-            api_key="secret_test",
-            page_id="page_123",
-            archived=True
-        )
+        result = notion_update_page(api_key="secret_test", page_id="page_123", archived=True)
 
         assert result["ok"] is True
 
@@ -177,18 +135,12 @@ class TestNotionSearch:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "results": [
-                {"id": "page_1", "object": "page"},
-                {"id": "page_2", "object": "page"}
-            ],
-            "has_more": False
+            "results": [{"id": "page_1", "object": "page"}, {"id": "page_2", "object": "page"}],
+            "has_more": False,
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_search(
-            api_key="secret_test",
-            query="test"
-        )
+        result = notion_search(api_key="secret_test", query="test")
 
         assert result["ok"] is True
         assert len(result["data"]["results"]) == 2
@@ -201,11 +153,7 @@ class TestNotionSearch:
         mock_response.json.return_value = {"results": [], "has_more": False}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_search(
-            api_key="secret_test",
-            query="test",
-            filter_type="database"
-        )
+        result = notion_search(api_key="secret_test", query="test", filter_type="database")
 
         assert result["ok"] is True
 
@@ -215,10 +163,7 @@ class TestNotionQueryDatabase:
 
     def test_empty_database_id(self):
         """Test that empty database ID is rejected."""
-        result = notion_query_database(
-            api_key="secret_test",
-            database_id=""
-        )
+        result = notion_query_database(api_key="secret_test", database_id="")
         assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
@@ -227,18 +172,12 @@ class TestNotionQueryDatabase:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "results": [
-                {"id": "row_1", "properties": {}},
-                {"id": "row_2", "properties": {}}
-            ],
-            "has_more": False
+            "results": [{"id": "row_1", "properties": {}}, {"id": "row_2", "properties": {}}],
+            "has_more": False,
         }
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
-        result = notion_query_database(
-            api_key="secret_test",
-            database_id="db_123"
-        )
+        result = notion_query_database(api_key="secret_test", database_id="db_123")
 
         assert result["ok"] is True
         assert len(result["data"]["results"]) == 2
@@ -252,9 +191,7 @@ class TestNotionQueryDatabase:
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
         result = notion_query_database(
-            api_key="secret_test",
-            database_id="db_123",
-            sorts=[{"property": "Created", "direction": "descending"}]
+            api_key="secret_test", database_id="db_123", sorts=[{"property": "Created", "direction": "descending"}]
         )
 
         assert result["ok"] is True
@@ -265,11 +202,7 @@ class TestNotionAppendBlocks:
 
     def test_empty_blocks(self):
         """Test that empty blocks is rejected."""
-        result = notion_append_blocks(
-            api_key="secret_test",
-            page_id="page_123",
-            blocks=[]
-        )
+        result = notion_append_blocks(api_key="secret_test", page_id="page_123", blocks=[])
         assert result["ok"] is False
 
     @patch("zerg.tools.builtin.notion_tools.httpx.Client")
@@ -277,15 +210,13 @@ class TestNotionAppendBlocks:
         """Test successful block append."""
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "results": [{"id": "block_1", "type": "paragraph"}]
-        }
+        mock_response.json.return_value = {"results": [{"id": "block_1", "type": "paragraph"}]}
         mock_client.return_value.__enter__.return_value.request.return_value = mock_response
 
         result = notion_append_blocks(
             api_key="secret_test",
             page_id="page_123",
-            blocks=[{"type": "paragraph", "paragraph": {"text": [{"type": "text", "text": {"content": "Test"}}]}}]
+            blocks=[{"type": "paragraph", "paragraph": {"text": [{"type": "text", "text": {"content": "Test"}}]}}],
         )
 
         assert result["ok"] is True

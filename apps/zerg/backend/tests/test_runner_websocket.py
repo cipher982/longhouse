@@ -4,14 +4,12 @@ Tests the runner WebSocket connection lifecycle, authentication, and message han
 """
 
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch
-
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
-from zerg.models.models import Runner, User
+from zerg.models.models import Runner
+from zerg.models.models import User
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 
 
@@ -55,6 +53,7 @@ class TestRunnerWebSocket:
 
             # Wait a moment for processing
             import time
+
             time.sleep(0.1)
 
             # Check runner status in database
@@ -119,9 +118,7 @@ class TestRunnerWebSocket:
             with pytest.raises(Exception):
                 websocket.receive_json()
 
-    def test_heartbeat_updates_last_seen(
-        self, client: TestClient, db: Session, test_runner: tuple[Runner, str]
-    ):
+    def test_heartbeat_updates_last_seen(self, client: TestClient, db: Session, test_runner: tuple[Runner, str]):
         """Test that heartbeat messages update last_seen_at."""
         runner, secret = test_runner
 
@@ -136,6 +133,7 @@ class TestRunnerWebSocket:
             websocket.send_json(hello_msg)
 
             import time
+
             time.sleep(0.1)
 
             # Get initial last_seen
@@ -155,9 +153,7 @@ class TestRunnerWebSocket:
             db.refresh(runner)
             assert runner.last_seen_at > initial_last_seen
 
-    def test_disconnect_marks_offline(
-        self, client: TestClient, db: Session, test_runner: tuple[Runner, str]
-    ):
+    def test_disconnect_marks_offline(self, client: TestClient, db: Session, test_runner: tuple[Runner, str]):
         """Test that disconnection marks runner as offline."""
         runner, secret = test_runner
 
@@ -172,6 +168,7 @@ class TestRunnerWebSocket:
             websocket.send_json(hello_msg)
 
             import time
+
             time.sleep(0.1)
 
             # Verify online
@@ -180,6 +177,7 @@ class TestRunnerWebSocket:
 
         # WebSocket closed, wait for cleanup
         import time
+
         time.sleep(0.2)
 
         # Check runner is offline
@@ -216,9 +214,7 @@ class TestRunnerWebSocket:
             with pytest.raises(Exception):
                 websocket.receive_json()
 
-    def test_replace_existing_connection(
-        self, client: TestClient, db: Session, test_runner: tuple[Runner, str]
-    ):
+    def test_replace_existing_connection(self, client: TestClient, db: Session, test_runner: tuple[Runner, str]):
         """Test that a new connection replaces an existing one for the same runner."""
         runner, secret = test_runner
 
@@ -233,6 +229,7 @@ class TestRunnerWebSocket:
             websocket1.send_json(hello_msg)
 
             import time
+
             time.sleep(0.1)
 
             # Verify online
@@ -249,6 +246,7 @@ class TestRunnerWebSocket:
 
         # All connections closed
         import time
+
         time.sleep(0.2)
 
         # Should be offline now

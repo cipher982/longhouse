@@ -71,9 +71,7 @@ def list_account_connectors(
     # Get all configured credentials for this user
     configured_creds = {
         c.connector_type: c
-        for c in db.query(AccountConnectorCredential)
-        .filter(AccountConnectorCredential.owner_id == current_user.id)
-        .all()
+        for c in db.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == current_user.id).all()
     }
 
     result = []

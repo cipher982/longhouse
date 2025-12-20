@@ -32,7 +32,8 @@ import uuid
 from typing import List
 
 import pytest
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
+
+from tests.conftest import TEST_WORKER_MODEL
 
 # ``hypothesis`` is optional – auto-skip when missing.
 try:

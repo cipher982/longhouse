@@ -147,9 +147,7 @@ class SafeExpressionEvaluator:
             dangerous_functions = {"exec", "eval", "compile", "open", "__import__"}
             func_name = str(e).split("'")[1] if "'" in str(e) else ""
             if func_name in dangerous_functions:
-                raise ExpressionSecurityError(
-                    f"Dangerous function '{func_name}' not allowed in expression '{expression}'"
-                )
+                raise ExpressionSecurityError(f"Dangerous function '{func_name}' not allowed in expression '{expression}'")
             else:
                 raise ExpressionEvaluationError(f"Undefined function in expression '{expression}': {e}")
 

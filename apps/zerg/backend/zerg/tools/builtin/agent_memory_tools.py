@@ -7,17 +7,21 @@ organization and retrieval.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
+from typing import Dict
+from typing import List
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from pydantic import BaseModel
+from pydantic import Field
 
-from zerg.context import get_worker_context
 from zerg.connectors.context import get_credential_resolver
+from zerg.context import get_worker_context
 from zerg.database import db_session
 from zerg.models.models import AgentMemoryKV
-from zerg.tools.error_envelope import ErrorType, tool_error, tool_success
+from zerg.tools.error_envelope import ErrorType
+from zerg.tools.error_envelope import tool_error
+from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +63,8 @@ def _parse_iso8601(date_str: str | None) -> datetime | None:
 
     try:
         # Try with timezone
-        if date_str.endswith('Z'):
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        if date_str.endswith("Z"):
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         return datetime.fromisoformat(date_str)
     except (ValueError, AttributeError) as e:
         logger.warning(f"Failed to parse date string '{date_str}': {e}")
@@ -69,6 +73,7 @@ def _parse_iso8601(date_str: str | None) -> datetime | None:
 
 class MemorySetInput(BaseModel):
     """Input schema for agent_memory_set."""
+
     key: str = Field(description="Unique key to store the value under")
     value: Any = Field(description="Value to store (can be any JSON-serializable data: dict, list, string, number, etc.)")
     tags: List[str] | None = Field(default=None, description="Optional tags for organizing and filtering memories")
@@ -136,10 +141,7 @@ def agent_memory_set(
         # Store or update the memory
         with db_session() as db:
             # Check if entry exists
-            entry = db.query(AgentMemoryKV).filter(
-                AgentMemoryKV.user_id == user_id,
-                AgentMemoryKV.key == key.strip()
-            ).first()
+            entry = db.query(AgentMemoryKV).filter(AgentMemoryKV.user_id == user_id, AgentMemoryKV.key == key.strip()).first()
 
             if entry:
                 # Update existing entry
@@ -181,6 +183,7 @@ def agent_memory_set(
 
 class MemoryGetInput(BaseModel):
     """Input schema for agent_memory_get."""
+
     key: str | None = Field(default=None, description="Specific key to retrieve. If provided, returns that entry.")
     tags: List[str] | None = Field(default=None, description="Filter by tags. Returns all entries matching ANY of these tags.")
     limit: int = Field(default=100, description="Maximum number of entries to return (default: 100)")
@@ -237,10 +240,7 @@ def agent_memory_get(
         with db_session() as db:
             # Case 1: Fetch specific key
             if key:
-                entry = db.query(AgentMemoryKV).filter(
-                    AgentMemoryKV.user_id == user_id,
-                    AgentMemoryKV.key == key.strip()
-                ).first()
+                entry = db.query(AgentMemoryKV).filter(AgentMemoryKV.user_id == user_id, AgentMemoryKV.key == key.strip()).first()
 
                 if not entry:
                     return tool_success({"key": key, "value": None, "found": False})
@@ -278,21 +278,25 @@ def agent_memory_get(
             # Serialize entries
             entries_data = []
             for entry in entries:
-                entries_data.append({
-                    "key": entry.key,
-                    "value": entry.value,
-                    "tags": entry.tags,
-                    "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
-                    "created_at": entry.created_at.isoformat() if entry.created_at else None,
-                    "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
-                })
+                entries_data.append(
+                    {
+                        "key": entry.key,
+                        "value": entry.value,
+                        "tags": entry.tags,
+                        "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
+                        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+                    }
+                )
 
         logger.info(f"Retrieved {len(entries_data)} memory entries for user {user_id} (tags={tags})")
-        return tool_success({
-            "entries": entries_data,
-            "count": len(entries_data),
-            "limit": limit,
-        })
+        return tool_success(
+            {
+                "entries": entries_data,
+                "count": len(entries_data),
+                "limit": limit,
+            }
+        )
 
     except Exception as e:
         logger.exception("Error retrieving memory")
@@ -304,6 +308,7 @@ def agent_memory_get(
 
 class MemoryDeleteInput(BaseModel):
     """Input schema for agent_memory_delete."""
+
     key: str | None = Field(default=None, description="Specific key to delete")
     tags: List[str] | None = Field(default=None, description="Delete all entries with ANY of these tags")
 
@@ -355,10 +360,7 @@ def agent_memory_delete(
         with db_session() as db:
             # Case 1: Delete specific key
             if key:
-                result = db.query(AgentMemoryKV).filter(
-                    AgentMemoryKV.user_id == user_id,
-                    AgentMemoryKV.key == key.strip()
-                ).delete()
+                result = db.query(AgentMemoryKV).filter(AgentMemoryKV.user_id == user_id, AgentMemoryKV.key == key.strip()).delete()
 
                 logger.info(f"Deleted memory key '{key}' for user {user_id} (count={result})")
                 return tool_success({"deleted_count": result, "key": key})
@@ -387,6 +389,7 @@ def agent_memory_delete(
 
 class MemoryExportInput(BaseModel):
     """Input schema for agent_memory_export."""
+
     pass
 
 
@@ -427,24 +430,28 @@ def agent_memory_export() -> Dict[str, Any]:
             # Serialize entries
             entries_data = []
             for entry in entries:
-                entries_data.append({
-                    "key": entry.key,
-                    "value": entry.value,
-                    "tags": entry.tags,
-                    "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
-                    "created_at": entry.created_at.isoformat() if entry.created_at else None,
-                    "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
-                })
+                entries_data.append(
+                    {
+                        "key": entry.key,
+                        "value": entry.value,
+                        "tags": entry.tags,
+                        "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
+                        "created_at": entry.created_at.isoformat() if entry.created_at else None,
+                        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+                    }
+                )
 
         truncated = total_count > MAX_ENTRIES
         logger.info(f"Exported {len(entries_data)} memory entries for user {user_id} (total={total_count}, truncated={truncated})")
 
-        return tool_success({
-            "entries": entries_data,
-            "count": len(entries_data),
-            "total_count": total_count,
-            "truncated": truncated,
-        })
+        return tool_success(
+            {
+                "entries": entries_data,
+                "count": len(entries_data),
+                "total_count": total_count,
+                "truncated": truncated,
+            }
+        )
 
     except Exception as e:
         logger.exception("Error exporting memory")

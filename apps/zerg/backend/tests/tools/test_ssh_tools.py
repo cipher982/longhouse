@@ -4,8 +4,6 @@ import subprocess
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import pytest
-
 from zerg.tools.builtin.ssh_tools import MAX_OUTPUT_SIZE
 from zerg.tools.builtin.ssh_tools import _parse_host
 from zerg.tools.builtin.ssh_tools import ssh_exec

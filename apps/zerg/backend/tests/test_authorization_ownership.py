@@ -2,9 +2,9 @@ import contextlib
 
 import pytest
 
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.crud import crud
 from zerg.main import app
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _mk_user(db_session, email: str, role: str = "USER"):

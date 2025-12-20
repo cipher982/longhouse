@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
+from typing import Dict
+from typing import List
 
 from langchain_core.tools import StructuredTool
 
@@ -66,7 +68,7 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
-        f"  -d '{{\"enroll_token\": \"{plaintext_token}\", \"name\": \"my-runner\"}}'\n\n"
+        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
         f"# Step 2: Run with credentials from step 1\n"
         f"docker run -d --name swarmlet-runner \\\n"
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"

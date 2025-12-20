@@ -29,7 +29,6 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
-
 from zerg.config import get_settings
 from zerg.crud import crud
 from zerg.utils.time import utc_now

@@ -75,6 +75,7 @@ def test_admin_route_requires_super_admin(monkeypatch, client: TestClient, db_se
 
     # Mock get_settings to return our patched version
     import zerg.dependencies.auth as auth_module
+
     monkeypatch.setattr(auth_module, "get_settings", lambda: settings)
 
     token = _google_login(client, monkeypatch, "alice@example.com")

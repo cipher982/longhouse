@@ -50,9 +50,7 @@ export interface ConnectorSuccessResponse {
  * Account-level connector status (same structure as agent-level).
  * Used for account settings integrations page.
  */
-export interface AccountConnectorStatus extends ConnectorStatus {
-  // Same fields as ConnectorStatus - account-level credentials
-}
+export type AccountConnectorStatus = ConnectorStatus;
 
 export type ConnectorCategory = "notifications" | "project_management";
 

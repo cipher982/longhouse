@@ -291,9 +291,7 @@ async def run_thread(thread_id: int, db: Session = Depends(get_db), current_user
         await topic_manager.broadcast_to_topic(topic, envelope.model_dump())
 
         # Execute the agent turn and record run history/events
-        created_rows = await execute_thread_run_with_history(
-            db=db, agent=agent, thread=thread, runner=runner, trigger="chat"
-        )
+        created_rows = await execute_thread_run_with_history(db=db, agent=agent, thread=thread, runner=runner, trigger="chat")
 
         # We maintain a single *stream* sequence for the entire agent turn so the
         # frontend can group chunks under one progress indicator.

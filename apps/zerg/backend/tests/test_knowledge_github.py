@@ -6,13 +6,11 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
-import httpx
 import pytest
 from sqlalchemy.orm import Session
 
 from zerg.crud import knowledge_crud
 from zerg.models.models import AccountConnectorCredential
-from zerg.models.models import KnowledgeDocument
 from zerg.models.models import User
 from zerg.services import knowledge_sync_service
 from zerg.utils.crypto import encrypt
@@ -84,12 +82,8 @@ class TestGitHubRepoSyncService:
 
         # Mock GitHub API responses
         mock_responses = {
-            "/repos/testuser/testrepo/git/ref/heads/main": {
-                "object": {"sha": "commit123"}
-            },
-            "/repos/testuser/testrepo/git/commits/commit123": {
-                "tree": {"sha": "tree123"}
-            },
+            "/repos/testuser/testrepo/git/ref/heads/main": {"object": {"sha": "commit123"}},
+            "/repos/testuser/testrepo/git/commits/commit123": {"tree": {"sha": "tree123"}},
             "/repos/testuser/testrepo/git/trees/tree123": {
                 "truncated": False,
                 "tree": [
@@ -152,8 +146,10 @@ class TestGitHubRepoSyncService:
 
         # V1.1: Check provenance metadata
         assert readme_doc.doc_metadata["github_commit_sha"] == "commit123"
-        assert readme_doc.doc_metadata["github_permalink_url"] == \
-            "https://github.com/testuser/testrepo/blob/commit123/README.md"
+        assert (
+            readme_doc.doc_metadata["github_permalink_url"]
+            == "https://github.com/testuser/testrepo/blob/commit123/README.md"
+        )
 
     @pytest.mark.asyncio
     async def test_sync_incremental_skip_unchanged(self, db_session: Session, _dev_user: User):
@@ -188,12 +184,8 @@ class TestGitHubRepoSyncService:
 
         # Mock GitHub API responses
         mock_responses = {
-            "/repos/testuser/testrepo/git/ref/heads/main": {
-                "object": {"sha": "commit123"}
-            },
-            "/repos/testuser/testrepo/git/commits/commit123": {
-                "tree": {"sha": "tree123"}
-            },
+            "/repos/testuser/testrepo/git/ref/heads/main": {"object": {"sha": "commit123"}},
+            "/repos/testuser/testrepo/git/commits/commit123": {"tree": {"sha": "tree123"}},
             "/repos/testuser/testrepo/git/trees/tree123": {
                 "truncated": False,
                 "tree": [
@@ -275,12 +267,8 @@ class TestGitHubRepoSyncService:
 
         # Mock GitHub API - tree does NOT include DELETED.md
         mock_responses = {
-            "/repos/testuser/testrepo/git/ref/heads/main": {
-                "object": {"sha": "commit123"}
-            },
-            "/repos/testuser/testrepo/git/commits/commit123": {
-                "tree": {"sha": "tree123"}
-            },
+            "/repos/testuser/testrepo/git/ref/heads/main": {"object": {"sha": "commit123"}},
+            "/repos/testuser/testrepo/git/commits/commit123": {"tree": {"sha": "tree123"}},
             "/repos/testuser/testrepo/git/trees/tree123": {
                 "truncated": False,
                 "tree": [
@@ -352,12 +340,8 @@ class TestGitHubRepoSyncService:
 
         # Mock GitHub API with truncated tree
         mock_responses = {
-            "/repos/testuser/testrepo/git/ref/heads/main": {
-                "object": {"sha": "commit123"}
-            },
-            "/repos/testuser/testrepo/git/commits/commit123": {
-                "tree": {"sha": "tree123"}
-            },
+            "/repos/testuser/testrepo/git/ref/heads/main": {"object": {"sha": "commit123"}},
+            "/repos/testuser/testrepo/git/commits/commit123": {"tree": {"sha": "tree123"}},
             "/repos/testuser/testrepo/git/trees/tree123": {
                 "truncated": True,  # Tree is truncated
                 "tree": [
@@ -413,9 +397,7 @@ class TestGitHubPatternMatching:
         """Test that default patterns include docs only."""
         import pathspec
 
-        include_spec = pathspec.PathSpec.from_lines(
-            "gitwildmatch", knowledge_sync_service.DEFAULT_INCLUDE_PATHS
-        )
+        include_spec = pathspec.PathSpec.from_lines("gitwildmatch", knowledge_sync_service.DEFAULT_INCLUDE_PATHS)
 
         # Should match
         assert include_spec.match_file("README.md")
@@ -434,9 +416,7 @@ class TestGitHubPatternMatching:
         """Test that default patterns exclude secrets."""
         import pathspec
 
-        exclude_spec = pathspec.PathSpec.from_lines(
-            "gitwildmatch", knowledge_sync_service.DEFAULT_EXCLUDE_PATHS
-        )
+        exclude_spec = pathspec.PathSpec.from_lines("gitwildmatch", knowledge_sync_service.DEFAULT_EXCLUDE_PATHS)
 
         # Should match (be excluded)
         assert exclude_spec.match_file(".env")
@@ -572,7 +552,17 @@ class TestGitHubKnowledgeAPI:
 
         async def mock_get(endpoint, **kwargs):
             response = MagicMock()
-            response.json.return_value = [{"full_name": "user/repo", "owner": {"login": "user"}, "name": "repo", "private": False, "default_branch": "main", "description": None, "updated_at": "2024-01-01T00:00:00Z"}]
+            response.json.return_value = [
+                {
+                    "full_name": "user/repo",
+                    "owner": {"login": "user"},
+                    "name": "repo",
+                    "private": False,
+                    "default_branch": "main",
+                    "description": None,
+                    "updated_at": "2024-01-01T00:00:00Z",
+                }
+            ]
             response.status_code = 200
             response.headers = {"Link": '<https://api.github.com/user/repos?page=2>; rel="next"'}
             response.raise_for_status = MagicMock()

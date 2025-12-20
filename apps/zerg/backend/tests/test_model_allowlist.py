@@ -3,10 +3,11 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import TEST_MODEL
+from tests.conftest import TEST_WORKER_MODEL
 from zerg.config import Settings
 from zerg.crud import crud
 from zerg.main import app
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 def _make_admin_user(db_session):

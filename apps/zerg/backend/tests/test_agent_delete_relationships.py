@@ -16,9 +16,9 @@ RecursionError.  This test covers that scenario so we never regress again.
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import TEST_MODEL
 from zerg.events import EventType
 from zerg.events import event_bus
-from tests.conftest import TEST_MODEL, TEST_WORKER_MODEL
 
 
 @pytest.mark.asyncio

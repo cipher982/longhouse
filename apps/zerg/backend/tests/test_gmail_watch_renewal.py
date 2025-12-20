@@ -21,6 +21,7 @@ async def test_gmail_process_connector_updates_history(client, db_session, _dev_
 
     # Encrypt dummy token
     from zerg.utils import crypto
+
     enc_token = crypto.encrypt("dummy_refresh_token")
 
     conn = _crud.create_connector(
