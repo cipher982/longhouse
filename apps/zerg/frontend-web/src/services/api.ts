@@ -1,4 +1,5 @@
 import type { components, operations } from "../generated/openapi-types";
+import { config } from "../lib/config";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -156,84 +157,16 @@ type FetchDashboardParams = {
   limit?: number;
 };
 
-type ApiBaseConfig = {
-  absolute?: string;
-  relative: string;
-};
-
-// Lazy getter for API base - reads window.API_BASE_URL on each call
-// This ensures config.js has time to set the value before first API request
-function getApiBaseOverride(): string | undefined {
-  return typeof window !== "undefined"
-    ? (window as typeof window & { API_BASE_URL?: string }).API_BASE_URL
-    : undefined;
-}
-
-function normalizePathname(pathname: string): string {
-  const trimmed = pathname.replace(/\/+$/, "");
-  if (!trimmed) {
-    return "/api";
-  }
-  if (/\/api(\/|$)/.test(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed}/api`.replace(/\/+/g, "/");
-}
-
-function normalizeRelativeBase(path: string): string {
-  const trimmed = path.trim();
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const withoutTrailing = prefixed.replace(/\/+$/, "");
-  if (!withoutTrailing) {
-    return "/api";
-  }
-  if (/\/api(\/|$)/.test(withoutTrailing)) {
-    return withoutTrailing;
-  }
-  return `${withoutTrailing}/api`.replace(/\/+/g, "/");
-}
-
-function computeApiBase(override?: string): ApiBaseConfig {
-  if (!override) {
-    return { relative: "/api" };
-  }
-
-  if (!override.startsWith("http")) {
-    return { relative: normalizeRelativeBase(override) };
-  }
-
-  try {
-    const url = new URL(override);
-
-    // Fail fast: reject Docker internal hostnames in browser
-    if (typeof window !== 'undefined' && url.hostname === 'backend') {
-      throw new Error(`FATAL: API_BASE_URL='${override}' uses Docker hostname unreachable from browser. Set to '/api' instead.`);
-    }
-
-    const normalizedPath = normalizePathname(url.pathname || "/");
-    const absolute = `${url.origin}${normalizedPath.endsWith("/") ? normalizedPath : `${normalizedPath}/`}`;
-    return {
-      absolute,
-      relative: normalizedPath,
-    };
-  } catch (error) {
-    console.error("Failed to parse API_BASE_URL", error);
-    throw error; // Fail fast
-  }
-}
-
 export function buildUrl(path: string): string {
-  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  // Compute API base lazily on each call to ensure config.js has loaded
-  const override = getApiBaseOverride();
-  const apiBase = computeApiBase(override);
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const base = config.apiBaseUrl.replace(/\/+$/, "");
 
-  if (apiBase.absolute) {
-    return new URL(normalizedPath, apiBase.absolute).toString();
+  if (base.startsWith("http")) {
+    return `${base}${normalizedPath}`;
   }
 
-  const prefix = apiBase.relative.endsWith("/") ? apiBase.relative.slice(0, -1) : apiBase.relative;
-  return `${prefix}/${normalizedPath}`;
+  const prefix = base || "/api";
+  return `${prefix}${normalizedPath}`;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
