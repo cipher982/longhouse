@@ -67,8 +67,8 @@ Rules for this effort:
 
 ### 2.2 WebSocket schema consolidation
 
-- [ ] Migrate remaining usage/tests off `apps/zerg/backend/zerg/schemas/ws_messages.py` → use `apps/zerg/backend/zerg/generated/ws_messages.py`.
-- [ ] Delete `apps/zerg/backend/zerg/schemas/ws_messages.py` once unused.
+- [x] Migrate remaining usage/tests off `apps/zerg/backend/zerg/schemas/ws_messages.py` → use `apps/zerg/backend/zerg/generated/ws_messages.py`.
+- [x] Delete `apps/zerg/backend/zerg/schemas/ws_messages.py` once unused.
 - [ ] Ensure message types used in backend match the generated contracts (avoid “untyped” runtime-only message types).
 
 ### 2.3 Tool resolution consolidation
@@ -134,3 +134,4 @@ Format:
 - 2025-12-20: fix OpenAPI contract scripts to use `apps/zerg/openapi.json` — commit `f6478f1`
 - 2025-12-20: export OpenAPI schema to a single canonical location — commit `e6dfeab`
 - 2025-12-20: remove backend print spam (event bus / ws manager / db) — commits `f69bb07`, `7c38576`, `ddb5c30`
+- 2025-12-20: migrate + delete legacy WS schema module — commits `5e17151`, `e1fc369`
