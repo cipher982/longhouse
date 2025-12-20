@@ -12,6 +12,7 @@ import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import config from "../lib/config";
+import { ZapIcon } from "./icons";
 
 // Types matching backend schema
 interface TokenBreakdown {
@@ -55,13 +56,14 @@ function formatTokens(tokens: number): string {
 
 // Format cost with appropriate precision
 function formatCost(cost: number): string {
-  if (cost >= 1) {
-    return `$${cost.toFixed(2)}`;
+  if (cost === 0) {
+    return "$0.00";
   }
   if (cost >= 0.01) {
-    return `$${cost.toFixed(3)}`;
+    return `$${cost.toFixed(2)}`;
   }
-  return `$${cost.toFixed(4)}`;
+  // For very small amounts, show enough precision to be meaningful
+  return `<$0.01`;
 }
 
 // Get progress bar color based on percentage
@@ -110,7 +112,7 @@ export default function UsageWidget() {
     toast(
       (t) => (
         <div className="usage-warning-toast">
-          <strong>⚠️ Approaching daily limit</strong>
+          <strong>Approaching daily limit</strong>
           <p>
             You've used {usage.limit.used_percent.toFixed(0)}% of your daily LLM budget.
             <br />
@@ -149,8 +151,10 @@ export default function UsageWidget() {
     return (
       <div className="usage-widget usage-widget-loading">
         <div className="usage-widget-header">
-          <span className="usage-widget-icon">📊</span>
-          <span className="usage-widget-title">Today's LLM Usage</span>
+          <div className="usage-widget-icon-wrapper">
+            <ZapIcon className="usage-widget-icon" />
+          </div>
+          <span className="usage-widget-title">Today's Usage</span>
         </div>
         <div className="usage-widget-loading-text">Loading...</div>
       </div>
@@ -162,8 +166,10 @@ export default function UsageWidget() {
     return (
       <div className="usage-widget usage-widget-error">
         <div className="usage-widget-header">
-          <span className="usage-widget-icon">📊</span>
-          <span className="usage-widget-title">Today's LLM Usage</span>
+          <div className="usage-widget-icon-wrapper">
+            <ZapIcon className="usage-widget-icon" />
+          </div>
+          <span className="usage-widget-title">Today's Usage</span>
         </div>
         <div className="usage-widget-error-text">Unable to load usage data</div>
       </div>
@@ -182,8 +188,10 @@ export default function UsageWidget() {
   return (
     <div className={`usage-widget usage-widget-${limit.status}`}>
       <div className="usage-widget-header">
-        <span className="usage-widget-icon">📊</span>
-        <span className="usage-widget-title">Today's LLM Usage</span>
+        <div className="usage-widget-icon-wrapper">
+          <ZapIcon className="usage-widget-icon" />
+        </div>
+        <span className="usage-widget-title">Today's Usage</span>
       </div>
 
       {/* Progress bar (only if limit is set) */}
@@ -235,14 +243,14 @@ export default function UsageWidget() {
       {/* Warning banner */}
       {limit.status === "warning" && (
         <div className="usage-widget-warning">
-          ⚠️ Approaching daily limit
+          Approaching daily limit
         </div>
       )}
 
       {/* Exceeded banner */}
       {limit.status === "exceeded" && (
         <div className="usage-widget-exceeded">
-          🚫 Daily limit reached
+          Daily limit reached
         </div>
       )}
     </div>
