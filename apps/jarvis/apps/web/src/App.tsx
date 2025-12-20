@@ -2,21 +2,18 @@
  * Jarvis PWA - React App
  * Main application component with realtime session integration
  *
- * This is a pure React application. Controllers emit events via stateManager,
- * and React hooks subscribe to those events and update React state.
+ * This is a pure React application. useJarvisApp manages initialization,
+ * connection, and voice state. useTextChannel handles text messaging.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useAppState, useAppDispatch } from './context'
-import { useTextChannel, useRealtimeSession } from './hooks'
+import { useTextChannel } from './hooks'
+import { useJarvisApp } from './hooks/useJarvisApp'
 import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
-import { conversationController } from '../lib/conversation-controller'
-import { stateManager } from '../lib/state-manager'
-import { toSidebarConversations } from '../lib/conversation-list'
 import { supervisorProgress } from '../lib/supervisor-progress'
-import { appController } from '../lib/app-controller'
 
-console.info('[Jarvis] Starting React application with realtime session integration')
+console.info('[Jarvis] Starting React application')
 
 export default function App() {
   const state = useAppState()
@@ -27,34 +24,22 @@ export default function App() {
     supervisorProgress.initialize('supervisor-progress', 'sticky')
   }, [])
 
-  // NOTE: History loading is now handled via SSOT in useRealtimeSession
-  // appController.connect() calls bootstrapSession() which loads history ONCE
-  // and provides it to BOTH the UI (via callback) and Realtime (via hydration)
-  // This eliminates the two-query problem that caused UI/model divergence
+  // Main Jarvis app hook - handles initialization, connection, voice
+  const jarvisApp = useJarvisApp({
+    autoConnect: false, // User must click Connect button
+    onConnected: () => console.log('[App] Connected'),
+    onDisconnected: () => console.log('[App] Disconnected'),
+    onTranscript: (text, isFinal) => {
+      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
+    },
+    onError: (error) => console.error('[App] Error:', error),
+  })
 
   // Text channel handling (always active)
   const textChannel = useTextChannel({
     onMessageSent: (msg) => console.log('[App] Message sent:', msg.content),
     onResponse: (msg) => console.log('[App] Response received:', msg.content),
     onError: (error) => console.error('[App] Text channel error:', error),
-  })
-
-  // Realtime session - manual connect only
-  // Auto-connect disabled to prevent:
-  // 1. Scary "local network scanning" permission prompt on page load
-  // 2. Mic permission request before user wants voice features
-  // 3. Wasted API calls for visitors who just want text chat
-  // User clicks mic button → manually triggers connection
-  const realtimeSession = useRealtimeSession({
-    autoConnect: false,  // User must click Connect button
-    onConnected: () => console.log('[App] Realtime session connected'),
-    onDisconnected: () => console.log('[App] Realtime session disconnected'),
-    onTranscript: (text, isFinal) => {
-      // Transcript events are for preview/logging only
-      // User message is added via USER_VOICE_COMMITTED (placeholder) + USER_VOICE_TRANSCRIPT (content)
-      console.log('[App] Transcript:', text, isFinal ? '(final)' : '(partial)')
-    },
-    onError: (error) => console.error('[App] Realtime error:', error),
   })
 
   // Sidebar handlers
@@ -64,43 +49,26 @@ export default function App() {
 
   const handleNewConversation = useCallback(async () => {
     console.log('[App] Creating new conversation')
-
-    // Clear UI state for new conversation
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-
     console.log('[App] New conversation ready')
   }, [dispatch])
 
   const handleClearAll = useCallback(async () => {
     console.log('[App] Clear all conversations - starting...')
-
-    // Clear server-side history (single source of truth)
     try {
-      await appController.clearServerHistory()
-      console.log('[App] Clear all conversations - server history cleared')
+      await jarvisApp.clearHistory()
+      console.log('[App] Clear all conversations - complete')
     } catch (error) {
-      console.warn('[App] Clear all conversations - server clear failed:', error)
-      return
+      console.warn('[App] Clear all conversations - failed:', error)
     }
-
-    // Clear local UI state
-    dispatch({ type: 'SET_MESSAGES', messages: [] })
-
-    console.log('[App] Clear all conversations - complete')
-  }, [dispatch])
+  }, [jarvisApp])
 
   const handleSelectConversation = useCallback(
     async (id: string) => {
       console.log('[App] Switching to conversation:', id)
-
-      // For Supervisor backend, conversations are just different threads
-      // We don't need to switch local state, just update the UI indicator
       dispatch({ type: 'SET_CONVERSATION_ID', id })
-
-      // Clear current messages - history will be loaded from server
       dispatch({ type: 'SET_MESSAGES', messages: [] })
-
       console.log('[App] Switched to conversation:', id)
     },
     [dispatch]
@@ -113,18 +81,18 @@ export default function App() {
 
   // Voice handlers
   const handleModeToggle = useCallback(() => {
-    realtimeSession.toggleHandsFree()
-  }, [realtimeSession])
+    jarvisApp.toggleHandsFree()
+  }, [jarvisApp])
 
   const handleVoiceButtonPress = useCallback(() => {
-    realtimeSession.handlePTTPress()
-  }, [realtimeSession])
+    jarvisApp.handlePTTPress()
+  }, [jarvisApp])
 
   const handleVoiceButtonRelease = useCallback(() => {
-    realtimeSession.handlePTTRelease()
-  }, [realtimeSession])
+    jarvisApp.handlePTTRelease()
+  }, [jarvisApp])
 
-  // Map voice status for component - now uses full status including idle/connecting
+  // Map voice status for component
   const voiceStatusMap: Record<string, 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
     idle: 'idle',
     connecting: 'connecting',
@@ -137,8 +105,8 @@ export default function App() {
 
   // Handle connect request from VoiceControls
   const handleConnect = useCallback(() => {
-    realtimeSession.reconnect()
-  }, [realtimeSession])
+    jarvisApp.reconnect()
+  }, [jarvisApp])
 
   return (
     <>
