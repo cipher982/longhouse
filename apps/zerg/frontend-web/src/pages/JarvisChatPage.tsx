@@ -1,18 +1,21 @@
 /**
- * JarvisChatPage - Entry point for the chat UI
+ * JarvisChatPage - Entry point for the Jarvis chat UI within the Zerg SPA
  *
- * TODO: This is a placeholder. After copying Jarvis source into src/jarvis/,
- * this will import from ./jarvis/app/App and render the full chat interface.
+ * This wraps the Jarvis React app (formerly standalone) in its context provider
+ * and loads the Jarvis-specific CSS styles.
  */
+
+// Import Jarvis styles
+import '../jarvis/styles/index.css';
+
+// Import Jarvis app and context
+import { AppProvider } from '../jarvis/app/context';
+import App from '../jarvis/app/App';
 
 export default function JarvisChatPage() {
   return (
-    <div className="jarvis-chat-page" data-testid="jarvis-chat-page">
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <h2>Chat (Coming Soon)</h2>
-        <p>Jarvis source needs to be copied into this codebase.</p>
-        <p>See: docs/work/frontend-merge-jarvis-into-zerg-spa.md</p>
-      </div>
-    </div>
+    <AppProvider>
+      <App />
+    </AppProvider>
   );
 }
