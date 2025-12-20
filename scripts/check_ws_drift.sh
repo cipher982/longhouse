@@ -3,7 +3,7 @@
 
 # List of files to check (only those that exist)
 FILES=""
-for file in "apps/zerg/backend/zerg/generated/ws_messages.py" "apps/zerg/frontend-web/src/generated/ws_messages.ts"; do
+for file in "apps/zerg/backend/zerg/generated/ws_messages.py" "apps/zerg/frontend-web/src/generated/ws-messages.ts"; do
   if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
     FILES="$FILES $file"
   fi
