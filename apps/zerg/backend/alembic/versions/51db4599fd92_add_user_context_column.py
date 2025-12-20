@@ -23,6 +23,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add context JSONB column to users table."""
+    # Check if column already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [col['name'] for col in inspector.get_columns('users')]
+    if 'context' in columns:
+        print("context column already exists in users table - skipping")
+        return
+
     op.add_column('users', sa.Column('context', JSONB, server_default='{}', nullable=False))
 
 

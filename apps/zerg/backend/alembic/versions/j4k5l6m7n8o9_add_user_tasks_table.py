@@ -21,6 +21,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create user_tasks table."""
+    # Check if table already exists (may have been created by schema init)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'user_tasks' in inspector.get_table_names():
+        print("user_tasks table already exists - skipping")
+        return
+
     op.create_table(
         'user_tasks',
         sa.Column('id', sa.Integer(), nullable=False),
