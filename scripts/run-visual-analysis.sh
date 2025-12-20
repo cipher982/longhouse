@@ -160,12 +160,12 @@ if eval $PLAYWRIGHT_CMD; then
     echo "✅ Visual analysis completed successfully!"
     echo ""
     echo "📊 Results:"
-    echo "  📄 Test reports: e2e/test-results/"
-    echo "  📄 Visual reports: e2e/visual-reports/"
+    echo "  📄 Test reports: apps/zerg/e2e/test-results/"
+    echo "  📄 Visual reports: apps/zerg/e2e/visual-reports/"
     echo "  📸 Screenshots: attached to test results"
     echo ""
     echo "🔍 To view detailed HTML report:"
-    echo "  cd e2e && bunx playwright show-report"
+    echo "  cd apps/zerg/e2e && bunx playwright show-report"
     echo ""
 else
     echo ""
@@ -175,7 +175,7 @@ else
     echo "  1. Check service logs: visual-backend.log, visual-frontend.log"
     echo "  2. Verify OpenAI API key is set: echo \$OPENAI_API_KEY"
     echo "  3. Run with --verbose for detailed output"
-    echo "  4. View test report: cd e2e && bunx playwright show-report"
+    echo "  4. View test report: cd apps/zerg/e2e && bunx playwright show-report"
     echo ""
     exit 1
 fi
