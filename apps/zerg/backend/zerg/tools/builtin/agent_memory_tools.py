@@ -1,8 +1,8 @@
 from typing import Optional, List, Any, Dict
 from datetime import datetime
 from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
-from zerg.services.user_context import get_worker_context
+from langchain_core.tools import StructuredTool
+from zerg.context import get_worker_context
 from zerg.models.models import AgentMemoryKV
 from zerg.database import db_session
 from sqlalchemy import select, delete
@@ -93,6 +93,32 @@ def agent_memory_get(key: Optional[str] = None, tags: Optional[List[str]] = None
             }
     except Exception as e:
         logger.exception("Error getting memory")
+        return {"error": str(e)}
+
+def agent_memory_export() -> dict:
+    """Export all memory items for the current user."""
+    ctx = get_worker_context()
+    if not ctx:
+        return {"error": "No user context found"}
+
+    try:
+        with db_session() as session:
+            query = select(AgentMemoryKV).where(AgentMemoryKV.user_id == ctx.user_id)
+            results = session.execute(query).scalars().all()
+
+            return {
+                "count": len(results),
+                "items": [
+                    {
+                        "key": r.key,
+                        "value": r.value,
+                        "tags": r.tags,
+                        "created_at": r.created_at.isoformat()
+                    } for r in results
+                ]
+            }
+    except Exception as e:
+        logger.exception("Error exporting memory")
         return {"error": str(e)}
 
 def agent_memory_delete(key: Optional[str] = None, tags: Optional[List[str]] = None) -> dict:
