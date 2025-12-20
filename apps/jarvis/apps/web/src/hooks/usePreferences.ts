@@ -1,49 +1,35 @@
 /**
  * usePreferences hook - Manages chat model and reasoning preferences
  *
- * Listens to stateManager events and syncs with React context.
+ * Reads from React context (populated by useJarvisApp during initialization).
  * Provides methods to update preferences (which sync to server).
  */
 
-import { useEffect, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useAppState, useAppDispatch } from '../context'
-import { stateManager, type ChatPreferences, type ModelInfo } from '../../lib/state-manager'
 import { CONFIG, toAbsoluteUrl } from '../../lib/config'
+import { logger } from '@jarvis/core'
+
+export interface ChatPreferences {
+  chat_model: string
+  reasoning_effort: 'none' | 'low' | 'medium' | 'high'
+}
+
+export interface ModelInfo {
+  id: string
+  display_name: string
+  description: string
+}
 
 export function usePreferences() {
   const state = useAppState()
   const dispatch = useAppDispatch()
-
-  // Listen for preference changes from stateManager
-  useEffect(() => {
-    const handleStateChange = (event: { type: string; preferences?: ChatPreferences; models?: ModelInfo[] }) => {
-      if (event.type === 'PREFERENCES_CHANGED' && event.preferences) {
-        dispatch({ type: 'SET_PREFERENCES', preferences: event.preferences })
-      }
-      if (event.type === 'MODELS_LOADED' && event.models) {
-        dispatch({ type: 'SET_AVAILABLE_MODELS', models: event.models })
-      }
-    }
-
-    stateManager.addListener(handleStateChange)
-
-    // Seed initial state from the current bootstrap (avoids race where bootstrap
-    // loads before this hook subscribes to stateManager events).
-    const bootstrap = stateManager.getBootstrap()
-    if (bootstrap?.available_models) {
-      dispatch({ type: 'SET_AVAILABLE_MODELS', models: bootstrap.available_models })
-    }
-    dispatch({ type: 'SET_PREFERENCES', preferences: stateManager.getPreferences() })
-
-    return () => stateManager.removeListener(handleStateChange)
-  }, [dispatch])
 
   // Update a single preference and sync to server
   const updatePreference = useCallback(
     async (key: keyof ChatPreferences, value: string) => {
       // Update local state immediately for responsiveness
       dispatch({ type: 'UPDATE_PREFERENCE', key, value })
-      stateManager.updatePreferences({ [key]: value })
 
       // Persist to server
       try {
@@ -55,11 +41,10 @@ export function usePreferences() {
         })
 
         if (!response.ok) {
-          console.error('[usePreferences] Failed to save preference:', response.statusText)
-          // Could revert here, but for now just log
+          logger.error('[usePreferences] Failed to save preference:', response.statusText)
         }
       } catch (error) {
-        console.error('[usePreferences] Error saving preference:', error)
+        logger.error('[usePreferences] Error saving preference:', error)
       }
     },
     [dispatch]
@@ -72,7 +57,7 @@ export function usePreferences() {
   )
 
   const setReasoningEffort = useCallback(
-    (effort: string) => updatePreference('reasoning_effort', effort),
+    (effort: string) => updatePreference('reasoning_effort', effort as ChatPreferences['reasoning_effort']),
     [updatePreference]
   )
 

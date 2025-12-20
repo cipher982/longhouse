@@ -1,5 +1,5 @@
 export { useVoice, type UseVoiceOptions } from './useVoice'
 export { useTextChannel, type UseTextChannelOptions } from './useTextChannel'
 export { useJarvisClient, type UseJarvisClientOptions } from './useJarvisClient'
-export { useRealtimeSession, type UseRealtimeSessionOptions } from './useRealtimeSession'
-export { usePreferences } from './usePreferences'
+export { useJarvisApp, type UseJarvisAppOptions } from './useJarvisApp'
+export { usePreferences, type ChatPreferences, type ModelInfo } from './usePreferences'
