@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 
-import { SupervisorProgressUI } from '../lib/supervisor-progress';
+import { WorkerProgressUI } from '../lib/supervisor-progress';
 
-describe('SupervisorProgressUI initialize', () => {
+describe('WorkerProgressUI initialize', () => {
   afterEach(() => {
     document.body.innerHTML = '';
   });
@@ -14,7 +14,7 @@ describe('SupervisorProgressUI initialize', () => {
       </div>
     `;
 
-    const ui = new SupervisorProgressUI();
+    const ui = new WorkerProgressUI();
     ui.initialize('supervisor-progress', 'floating');
 
     const el = document.getElementById('supervisor-progress');
