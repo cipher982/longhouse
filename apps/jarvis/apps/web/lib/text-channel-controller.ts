@@ -18,6 +18,7 @@
 import { eventBus } from './event-bus';
 import type { RealtimeSession } from '@openai/agents/realtime';
 import type { VoiceController } from './voice-controller';
+import { uuid } from './uuid';
 
 export interface TextMessage {
   id: string;
@@ -93,7 +94,7 @@ export class TextChannelController {
 
     // Create message object
     const message: TextMessage = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       text: trimmedText,
       timestamp: Date.now(),
       status: 'pending',

@@ -22,6 +22,7 @@ import { CONFIG, toAbsoluteUrl } from './config';
 import { TextChannelController } from './text-channel-controller';
 import { SupervisorChatController } from './supervisor-chat-controller';
 import { contextLoader } from '../contexts/context-loader';
+import { uuid } from './uuid';
 
 export class AppController {
   private initialized = false;
@@ -94,7 +95,7 @@ export class AppController {
       if (messages.length > 0) {
         // Convert to ConversationTurn format for UI + voice bootstrap (server is SSOT)
         const history: ConversationTurn[] = messages.map(msg => ({
-          id: crypto.randomUUID(),
+          id: uuid(),
           timestamp: msg.timestamp,
           conversationId: stateManager.getState().currentConversationId || undefined,
           userTranscript: msg.role === 'user' ? msg.content : undefined,
