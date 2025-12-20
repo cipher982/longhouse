@@ -1,16 +1,26 @@
 /**
- * Header component - App title and actions
+ * Header component - Swarmlet brand + actions
+ * Cyber/HUD aesthetic with glassmorphic controls
  */
 
 interface HeaderProps {
-  title: string
   onSync: () => void
 }
 
-export function Header({ title, onSync }: HeaderProps) {
+export function Header({ onSync }: HeaderProps) {
   return (
     <div className="main-header">
-      <h1>{title}</h1>
+      <div className="header-brand">
+        <div className="brand-logo-wrapper">
+          <img
+            src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
+            alt=""
+            className="brand-logo"
+          />
+          <div className="brand-logo-glow" aria-hidden="true" />
+        </div>
+        <h1>Swarmlet</h1>
+      </div>
       <div className="header-actions">
         <a href="/dashboard" className="header-button" title="Open Dashboard">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

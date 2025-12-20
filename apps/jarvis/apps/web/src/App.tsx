@@ -122,7 +122,7 @@ export default function App() {
       />
 
       <div className="main-content">
-        <Header title="Jarvis AI" onSync={handleSync} />
+        <Header onSync={handleSync} />
 
         <ChatContainer
           messages={state.messages}
