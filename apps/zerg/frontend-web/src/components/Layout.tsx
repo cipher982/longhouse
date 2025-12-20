@@ -18,6 +18,7 @@ function WelcomeHeader() {
   const { user, logout } = useAuth();
   const { isShelfOpen, toggleShelf } = useShelf();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // Only show shelf toggle on routes that have drawer UI
   const shouldShowShelfToggle =
@@ -45,7 +46,6 @@ function WelcomeHeader() {
     return emailPrefix[0].toUpperCase();
   };
 
-  const displayName = user?.display_name || user?.email || "Unknown User";
   const userInitials = getUserInitials(user);
 
   const handleAvatarClick = () => {
@@ -54,50 +54,108 @@ function WelcomeHeader() {
     }
   };
 
+  const navItems = [
+    { label: 'Chat', href: '/chat', isExternal: true },
+    { label: 'Dashboard', href: '/dashboard' },
+    { label: 'Canvas', href: '/canvas' },
+    { label: 'Integrations', href: '/settings/integrations' },
+    { label: 'Runners', href: '/runners' },
+  ];
+
+  if (user?.role === 'ADMIN') {
+    navItems.push({ label: 'Admin', href: '/admin', isExternal: false });
+  }
+
   return (
-    <header className="header" data-testid="welcome-header">
-      {shouldShowShelfToggle && (
-        <button
-          id="shelf-toggle-btn"
-          aria-label="Open agent panel"
-          aria-controls="agent-shelf"
-          aria-expanded={isShelfOpen}
-          onClick={toggleShelf}
-        >
-          <MenuIcon />
-        </button>
-      )}
-      <div className="header-brand">
-        <img
-          src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
-          alt="Swarmlet"
-          className="header-logo"
-        />
-        <h1 id="header-title">Swarmlet</h1>
+    <header className="main-header" data-testid="welcome-header">
+      <div className="header-left">
+        {shouldShowShelfToggle && (
+          <button
+            id="shelf-toggle-btn"
+            className="header-button shelf-toggle"
+            aria-label="Open agent panel"
+            aria-controls="agent-shelf"
+            aria-expanded={isShelfOpen}
+            onClick={toggleShelf}
+          >
+            <MenuIcon />
+          </button>
+        )}
+        <div className="header-brand">
+          <a href="/dashboard" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/dashboard'); }}>
+            <div className="brand-logo-wrapper">
+              <img
+                src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
+                alt=""
+                className="brand-logo"
+              />
+              <div className="brand-logo-glow" aria-hidden="true" />
+            </div>
+            <h1>Swarmlet</h1>
+          </a>
+        </div>
       </div>
-      <div className="user-menu-container">
-        <div
-          className="avatar-badge"
-          aria-label="User avatar"
-          role="button"
-          tabIndex={0}
-          onClick={handleAvatarClick}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              handleAvatarClick();
-            }
-          }}
-          title="Click to log out"
-        >
-          {user?.avatar_url ? (
-            <img
-              src={user.avatar_url}
-              alt="User avatar"
-              className="avatar-img"
-            />
-          ) : (
-            <span>{userInitials}</span>
-          )}
+
+      <nav className="header-nav" aria-label="Main navigation">
+        {navItems.map(({ label, href, isExternal }) => {
+          const isActive =
+            location.pathname === href ||
+            (href !== '/' && location.pathname.startsWith(href))
+
+          if (isExternal) {
+            return (
+              <a
+                key={href}
+                href={href}
+                className={clsx("nav-tab", { "nav-tab--active": isActive })}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                <span className="nav-tab-label">{label}</span>
+                {isActive && <span className="nav-tab-indicator" aria-hidden="true" />}
+              </a>
+            );
+          }
+
+          return (
+            <button
+              key={href}
+              type="button"
+              className={clsx("nav-tab", { "nav-tab--active": isActive })}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={() => navigate(href)}
+            >
+              <span className="nav-tab-label">{label}</span>
+              {isActive && <span className="nav-tab-indicator" aria-hidden="true" />}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="header-actions">
+        <div className="user-menu-container">
+          <div
+            className="avatar-badge"
+            aria-label="User avatar"
+            role="button"
+            tabIndex={0}
+            onClick={handleAvatarClick}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                handleAvatarClick();
+              }
+            }}
+            title="Click to log out"
+          >
+            {user?.avatar_url ? (
+              <img
+                src={user.avatar_url}
+                alt="User avatar"
+                className="avatar-img"
+              />
+            ) : (
+              <span>{userInitials}</span>
+            )}
+          </div>
         </div>
       </div>
     </header>
@@ -122,86 +180,13 @@ function StatusFooter() {
 }
 
 export default function Layout({ children }: PropsWithChildren) {
-  const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
 
-  const isDashboardRoute =
-    location.pathname === "/" || location.pathname.startsWith("/dashboard");
   const isCanvasRoute = location.pathname.startsWith("/canvas");
-  const isProfileRoute = location.pathname.startsWith("/profile");
-  const isIntegrationsRoute = location.pathname.startsWith("/settings/integrations");
-  const isAdminRoute = location.pathname.startsWith("/admin");
-  const isChatRoute = location.pathname.startsWith("/chat");
-  const isRunnersRoute = location.pathname.startsWith("/runners");
-
-  // Check if user has admin access using authoritative role field
-  const isAdmin = user?.role === 'ADMIN';
-
-  const handleTabClick = (path: string) => {
-    navigate(path);
-  };
 
   return (
     <>
       <WelcomeHeader />
-      <nav id="global-tabs-container" className="tabs-container">
-        <a
-          id="global-chat-tab"
-          href="/chat"
-          data-testid="global-chat-tab"
-          className={clsx("tab-button", { active: isChatRoute })}
-        >
-          Chat
-        </a>
-        <button
-          id="global-dashboard-tab"
-          type="button"
-          data-testid="global-dashboard-tab"
-          className={clsx("tab-button", { active: isDashboardRoute })}
-          onClick={() => handleTabClick("/dashboard")}
-        >
-          Agent Dashboard
-        </button>
-        <button
-          id="global-canvas-tab"
-          type="button"
-          data-testid="global-canvas-tab"
-          className={clsx("tab-button", { active: isCanvasRoute })}
-          onClick={() => handleTabClick("/canvas")}
-        >
-          Canvas Editor
-        </button>
-        <button
-          id="global-integrations-tab"
-          type="button"
-          data-testid="global-integrations-tab"
-          className={clsx("tab-button", { active: isIntegrationsRoute })}
-          onClick={() => handleTabClick("/settings/integrations")}
-        >
-          Integrations
-        </button>
-        <button
-          id="global-runners-tab"
-          type="button"
-          data-testid="global-runners-tab"
-          className={clsx("tab-button", { active: isRunnersRoute })}
-          onClick={() => handleTabClick("/runners")}
-        >
-          Runners
-        </button>
-        {isAdmin && (
-          <button
-            id="global-admin-tab"
-            type="button"
-            data-testid="global-admin-tab"
-            className={clsx("tab-button", { active: isAdminRoute })}
-            onClick={() => handleTabClick("/admin")}
-          >
-            Admin
-          </button>
-        )}
-      </nav>
       <div
         id="app-container"
         className={clsx({ "canvas-view": isCanvasRoute })}
