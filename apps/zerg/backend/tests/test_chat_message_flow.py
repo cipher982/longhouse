@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from zerg.schemas.ws_messages import MessageType
+from zerg.generated.ws_messages import MessageType
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
