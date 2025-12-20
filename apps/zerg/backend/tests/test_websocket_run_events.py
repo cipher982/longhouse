@@ -1,7 +1,5 @@
 import pytest
 
-from zerg.schemas.ws_messages import MessageType
-
 
 @pytest.fixture
 def ws_client(client):
@@ -24,7 +22,7 @@ async def test_run_update_ws_events(ws_client, client, sample_agent):
 
     # Expect initial agent_state message
     init = ws_client.receive_json()
-    assert init.get("type") == MessageType.AGENT_STATE
+    assert init.get("type") == "agent_state"
     assert init.get("data", {}).get("id") == agent_id
 
     # Trigger a manual run via the task endpoint
