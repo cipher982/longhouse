@@ -448,7 +448,7 @@ _INBOUND_SCHEMA_MAP: Dict[str, type[BaseModel]] = {
 
 # ---------------------------------------------------------------------------
 # Dedicated helpers for chat‑centric message types introduced in
-# zerg.schemas.ws_messages.MessageType. They wrap the existing topic
+# the legacy WebSocket protocol. They wrap the existing topic
 # subscription mechanism so the rest of the system (topic_manager &
 # event_bus) continues to operate unchanged.
 
