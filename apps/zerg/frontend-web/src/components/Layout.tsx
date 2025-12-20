@@ -55,7 +55,7 @@ function WelcomeHeader() {
   };
 
   const navItems = [
-    { label: 'Chat', href: '/chat', isExternal: true },
+    { label: 'Chat', href: '/chat' },
     { label: 'Dashboard', href: '/dashboard' },
     { label: 'Canvas', href: '/canvas' },
     { label: 'Integrations', href: '/settings/integrations' },
@@ -63,7 +63,7 @@ function WelcomeHeader() {
   ];
 
   if (user?.role === 'ADMIN') {
-    navItems.push({ label: 'Admin', href: '/admin', isExternal: false });
+    navItems.push({ label: 'Admin', href: '/admin' });
   }
 
   return (
@@ -97,24 +97,10 @@ function WelcomeHeader() {
       </div>
 
       <nav className="header-nav" aria-label="Main navigation">
-        {navItems.map(({ label, href, isExternal }) => {
+        {navItems.map(({ label, href }) => {
           const isActive =
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href))
-
-          if (isExternal) {
-            return (
-              <a
-                key={href}
-                href={href}
-                className={clsx("nav-tab", { "nav-tab--active": isActive })}
-                aria-current={isActive ? 'page' : undefined}
-              >
-                <span className="nav-tab-label">{label}</span>
-                {isActive && <span className="nav-tab-indicator" aria-hidden="true" />}
-              </a>
-            );
-          }
 
           return (
             <button

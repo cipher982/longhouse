@@ -20,6 +20,7 @@ import { AuthGuard } from "../lib/auth";
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
 const CanvasPage = lazy(() => import("../pages/CanvasPage"));
+const JarvisChatPage = lazy(() => import("../pages/JarvisChatPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { usePerformanceMonitoring, useBundleSizeWarning } from "../lib/usePerformance";
@@ -115,6 +116,16 @@ export default function App() {
     {
       element: <AuthenticatedApp />,
       children: [
+        {
+          path: "/chat",
+          element: (
+            <ErrorBoundary>
+              <Suspense fallback={<PageLoader />}>
+                <JarvisChatPage />
+              </Suspense>
+            </ErrorBoundary>
+          )
+        },
         {
           path: "/dashboard",
           element: (

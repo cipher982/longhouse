@@ -18,9 +18,13 @@
     "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run"
   },
   "dependencies": {
+    "@openai/agents": "^0.1.1",
     "@tanstack/react-query": "^5.62.7",
     "@xyflow/react": "^12.8.6",
     "clsx": "^2.1.1",
+    "dompurify": "^3.3.0",
+    "idb": "^8.0.0",
+    "marked": "^17.0.1",
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-hot-toast": "^2.6.0",
@@ -28,13 +32,15 @@
     "react-router-dom": "^6.27.0",
     "react-syntax-highlighter": "^16.1.0",
     "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@testing-library/jest-dom": "^6.4.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.5.2",
+    "@types/dompurify": "^3.2.0",
     "@types/node": "^22.5.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
