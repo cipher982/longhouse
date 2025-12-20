@@ -18,7 +18,6 @@ export interface ConversationState {
   conversationId: string | null;
   streamingMessageId: string | null;
   streamingText: string;
-  pendingUserMessageId: string | null;
   currentCorrelationId: string | null;
 }
 
@@ -34,7 +33,6 @@ export class ConversationController {
     conversationId: null,
     streamingMessageId: null,
     streamingText: '',
-    pendingUserMessageId: null,
     currentCorrelationId: null,
   };
 
@@ -69,40 +67,6 @@ export class ConversationController {
    */
   getConversationId(): string | null {
     return this.state.conversationId;
-  }
-
-  // ============= Turn Management =============
-
-  /**
-   * Update a pending user turn (preview)
-   * NOTE: This is now a no-op since React handles user input display
-   */
-  async updateUserPreview(_transcript: string): Promise<void> {
-    // React handles user input preview via TextInput component
-    // This method kept for backward compatibility but does nothing
-  }
-
-  /**
-   * Add user turn and persist to IndexedDB
-   *
-   * DEPRECATED: Jarvis web now uses server-side persistence (Supervisor/Postgres).
-   * The React UI is responsible for optimistic rendering of user messages.
-   *
-   * Kept as a no-op for backwards compatibility with older call sites/tests.
-   */
-  async addUserTurn(_transcript: string, _timestamp?: Date): Promise<boolean> {
-    this.state.pendingUserMessageId = null;
-    return true;
-  }
-
-  /**
-   * Add assistant turn and persist to IndexedDB
-   *
-   * DEPRECATED: Jarvis web now uses server-side persistence (Supervisor/Postgres).
-   * Kept as a no-op for backwards compatibility.
-   */
-  async addAssistantTurn(_response: string, _timestamp?: Date): Promise<void> {
-    return;
   }
 
   // ============= Streaming Response Management =============
@@ -188,7 +152,6 @@ export class ConversationController {
   clear(): void {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
-    this.state.pendingUserMessageId = null;
     stateManager.setStreamingText('');
   }
 
