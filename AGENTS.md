@@ -16,27 +16,28 @@ Key principles:
 
 Full spec: `docs/specs/super-siri-architecture.md`
 
-## Architecture (Unified)
+## Architecture (Unified SPA)
 
 ```
 User → http://localhost:30080 (nginx)
-  /            → Zerg dashboard (React)
+  /            → Zerg dashboard (React SPA)
   /dashboard   → Zerg dashboard (alias)
-  /chat        → Jarvis web (PWA)
+  /chat        → Jarvis chat UI (part of Zerg SPA)
   /api/*       → FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
   /ws/*        → SSE/WS
 
 Internal service ports (dev):
   Zerg backend       47300
   Zerg frontend      47200
-  Jarvis web         8080
 ```
+
+**Note**: Jarvis chat UI is now integrated into the Zerg frontend SPA at `src/jarvis/`.
+There is no separate jarvis-web service.
 
 ## Package Managers
 
 - **JavaScript**: Bun only.
   - Monorepo lockfile: `bun.lock` (repo root) — run `bun install` from repo root.
-  - Jarvis-only lockfile: `apps/jarvis/bun.lock` — used by the Jarvis Docker workspace; run `cd apps/jarvis && bun install` when working inside the Jarvis workspace directly.
 - **Python**: uv only. Run `cd apps/zerg/backend && uv sync`.
 
 Do not use npm, yarn, pip, or poetry.
@@ -52,7 +53,6 @@ make dev-bg        # Same but background (for CI/automation)
 
 # Start individual services
 make zerg          # Just Zerg with direct ports (profile: zerg)
-make jarvis        # Just Jarvis (native Node)
 
 # Environment validation
 make env-check     # Validate required env vars before starting
@@ -94,7 +94,7 @@ Other compose files:
 
 | Profile | Services | Use Case |
 |---------|----------|----------|
-| `full` | postgres, zerg-*, jarvis-*, reverse-proxy | Full platform via nginx at 30080 |
+| `full` | postgres, zerg-backend, zerg-frontend, reverse-proxy | Full platform via nginx at 30080 |
 | `zerg` | postgres, zerg-backend-exposed, zerg-frontend-exposed | Zerg only, direct ports |
 | `prod` | postgres, zerg-backend-prod, zerg-frontend-prod | Production hardened |
 
@@ -166,10 +166,17 @@ These tests dispatch real tasks to the Supervisor and verify the SSE stream resu
 - **No Global Classes**: Avoid generic class names like `.back-button` or `.empty-state` at the root level.
 - **Tools**: `bun run build:tokens` generates tokens; `bun run build` verifies nesting syntax.
 
-### Jarvis (TypeScript)
-- Web UI: `apps/jarvis/apps/web/`
-- Shared code: `apps/jarvis/packages/core/`
+### Jarvis (TypeScript - integrated into Zerg frontend)
+- Chat UI: `apps/zerg/frontend-web/src/jarvis/` (integrated into Zerg SPA)
+- Entry point: `src/pages/JarvisChatPage.tsx` (renders at `/chat`)
 - BFF endpoints: Served by zerg-backend at `/api/jarvis/*`
+
+The Jarvis code lives in `src/jarvis/` with this structure:
+- `app/` — React components, hooks, context
+- `lib/` — Utilities (voice, session, audio controllers)
+- `core/` — Core utilities (logger, API client)
+- `data/` — IndexedDB storage
+- `styles/` — Jarvis-specific CSS
 
 ## Generated Code — Do Not Edit
 
@@ -237,41 +244,37 @@ If you edit these, your changes will be overwritten by `make regen-ws` or `make 
 
 ## Gotchas
 
-1. **Docker context**: Jarvis Dockerfiles expect repo root context (paths like `COPY apps/jarvis/...`).
+1. **Auth in dev vs prod**: unified compose sets `AUTH_DISABLED=1` backend and `VITE_AUTH_ENABLED=false` frontend for local. Re-enable auth in prod.
 
-2. **Auth in dev vs prod**: unified compose sets `AUTH_DISABLED=1` backend and `VITE_AUTH_ENABLED=false` frontend for local. Re-enable auth in prod.
+2. **CORS/SSE**: same-origin via nginx at 30080; keep run_id on worker tool events for Jarvis ticker.
 
-3. **CORS/SSE**: same-origin via nginx at 30080; keep run_id on worker tool events for Jarvis ticker.
+3. **WebSocket code must stay in sync**: run `make regen-ws` after touching `schemas/ws-protocol.schema.json`.
 
-4. **WebSocket code must stay in sync**: run `make regen-ws` after touching `schemas/ws-protocol.schema.json`.
+4. **Ports**: external entry 30080; service ports (47200/47300) are internal. Avoid binding conflicts if running pieces standalone.
 
-5. **Bun workspace filter syntax**: use `bun run --filter @jarvis/web dev` not `--workspace`.
+5. **Python virtual env**: backend uses `apps/zerg/backend/.venv/`; use `uv run` or activate venv.
 
-6. **Ports**: external entry 30080; service ports (8080/47200/47300) are internal. Avoid binding conflicts if running pieces standalone.
+6. **E2E Test Isolation**: E2E tests run in a separate Docker project (`zerg-e2e`). If tests fail due to "database connection" issues, ensure no other containers are conflicting on the internal network and try `make test-e2e-reset`.
 
-7. **Python virtual env**: backend uses `apps/zerg/backend/.venv/`; use `uv run` or activate venv.
+7. **Auth in Tests**: When `AUTH_DISABLED=1` (default for tests), the `/api/auth/verify` endpoint always returns 204. This allows the frontend to proceed without a real login.
 
-8. **E2E Test Isolation**: E2E tests run in a separate Docker project (`zerg-e2e`). If tests fail due to "database connection" issues, ensure no other containers are conflicting on the internal network and try `make test-e2e-reset`.
+8. **E2E runs on an insecure origin**: Playwright hits `http://reverse-proxy` in Docker (service name), which is **not** a secure context — `crypto.randomUUID()` may be unavailable. Use `src/jarvis/lib/uuid.ts` instead of calling `crypto.randomUUID()` directly.
 
-9. **Auth in Tests**: When `AUTH_DISABLED=1` (default for tests), the `/api/auth/verify` endpoint always returns 204. This allows the frontend to proceed without a real login.
+9. **Prefer Make targets for E2E**: `make` loads/export vars from `.env`. Running `docker compose -f apps/jarvis/docker-compose.test.yml ...` directly can fail if `OPENAI_API_KEY` isn't exported in your shell.
 
-10. **E2E runs on an insecure origin**: Playwright hits `http://reverse-proxy` in Docker (service name), which is **not** a secure context — `crypto.randomUUID()` may be unavailable. Use `apps/jarvis/apps/web/lib/uuid.ts` instead of calling `crypto.randomUUID()` directly.
+10. **Deterministic UI tests**: For progress-indicator/UI behavior tests, prefer emitting events via `window.__jarvis.eventBus` (DEV only) instead of relying on the LLM to spawn workers/tools.
 
-11. **Prefer Make targets for E2E**: `make` loads/export vars from `.env`. Running `docker compose -f apps/jarvis/docker-compose.test.yml ...` directly can fail if `OPENAI_API_KEY` isn't exported in your shell.
+11. **WebRTC tests in Docker**: When `SKIP_WEBRTC_TESTS=true`, WebRTC-based tests should be *describe-level* skipped so `beforeEach` doesn't fail in the Docker E2E environment.
 
-12. **Deterministic UI tests**: For progress-indicator/UI behavior tests, prefer emitting events via `window.__jarvis.eventBus` (DEV only) instead of relying on the LLM to spawn workers/tools.
+12. **AGENTS vs CLAUDE**: `CLAUDE.md` is a symlink for tool compatibility. Treat `AGENTS.md` as canonical and only edit `AGENTS.md`.
 
-13. **WebRTC tests in Docker**: When `SKIP_WEBRTC_TESTS=true`, WebRTC-based tests should be *describe-level* skipped so `beforeEach` doesn't fail in the Docker E2E environment.
+13. **Generated tool types path**: `scripts/generate_tool_types.py` writes to `apps/zerg/backend/zerg/tools/generated/` relative to repo root (safe from any CWD). If you ever see a duplicate tree like `apps/zerg/backend/apps/...`, it's a stray artifact and can be deleted.
 
-14. **AGENTS vs CLAUDE**: `CLAUDE.md` is a symlink for tool compatibility. Treat `AGENTS.md` as canonical and only edit `AGENTS.md`.
+14. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
 
-15. **Generated tool types path**: `scripts/generate_tool_types.py` writes to `apps/zerg/backend/zerg/tools/generated/` relative to repo root (safe from any CWD). If you ever see a duplicate tree like `apps/zerg/backend/apps/...`, it's a stray artifact and can be deleted.
+15. **`make dev` is interactive**: It starts services, then tails logs forever (never exits). Run it in your terminal, not via automated tools expecting completion. To rebuild after Dockerfile changes, just `make stop && make dev` — the `--build` flag is already included.
 
-16. **CSS Collisions**: Global class names (e.g., `.back-button`, `.empty-state`) can leak across pages if not scoped. Always nest page-specific styles under a root container class (e.g., `.dashboard-container { ... }`).
-
-17. **`make dev` is interactive**: It starts services, then tails logs forever (never exits). Run it in your terminal, not via automated tools expecting completion. To rebuild after Dockerfile changes, just `make stop && make dev` — the `--build` flag is already included.
-
-18. **Never use raw `docker compose` for dev**: Always use Make targets (`make dev`, `make stop`, `make logs`). Raw `docker compose` commands use wrong project names, miss env vars from `.env`, and create containers on isolated networks that can't communicate with the rest of the stack. If you must, use the pattern from Makefile line 17: `docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ...`
+16. **Never use raw `docker compose` for dev**: Always use Make targets (`make dev`, `make stop`, `make logs`). Raw `docker compose` commands use wrong project names, miss env vars from `.env`, and create containers on isolated networks that can't communicate with the rest of the stack. If you must, use the pattern from Makefile line 17: `docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ...`
 
 ## Environment Setup
 
