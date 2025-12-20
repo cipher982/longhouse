@@ -34,37 +34,21 @@ This spec removes the remaining “third layer” plumbing (`route_to_supervisor
 
 ---
 
-## 2) Current State (facts from repo)
+## 2) Current State (December 2025 - Post React Migration)
 
-### What already matches the goal
+### What matches the goal (implemented)
 
-- Voice transcripts are routed to Supervisor (`apps/jarvis/apps/web/lib/app-controller.ts`: `handleUserTranscript()` sends to `sendText()`).
-- Typed text is routed to Supervisor (`apps/jarvis/apps/web/lib/app-controller.ts`: `sendText()` uses `SupervisorChatController` → POST `/api/jarvis/chat`).
-- Supervisor is server-side SSOT for history (`apps/jarvis/apps/web/lib/app-controller.ts`: `loadSupervisorHistory()`).
+- Voice transcripts are routed to Supervisor (`apps/jarvis/apps/web/src/hooks/useJarvisApp.ts` handles transcripts)
+- Typed text is routed to Supervisor (`apps/jarvis/apps/web/src/hooks/useTextChannel.ts` uses `SupervisorChatController` → POST `/api/jarvis/chat`)
+- Supervisor is server-side SSOT for history (loaded during initialization)
+- React-only architecture (no bridge mode, no legacy controllers)
 
-### What still violates “one brain”
+### Remaining work
 
-Jarvis web currently renders Realtime model output:
+- `route_to_supervisor` cleanup in backend prompts
+- Personal tools migration to Supervisor (get_current_location, get_whoop_data, search_notes)
 
-- `apps/jarvis/apps/web/lib/app-controller.ts` listens for `response.*` events and appends streaming text to the UI.
-  This is the direct cause of “two brains talking” (Realtime can respond while Supervisor is also processing the same transcript).
-
-### “Third layer” remnants
-
-`route_to_supervisor` exists and is still advertised/assumed:
-
-- Frontend tool: `apps/jarvis/apps/web/lib/tool-factory.ts`
-- Backend bootstrap advertises it: `apps/zerg/backend/zerg/routers/jarvis.py` (`/bootstrap`)
-- Jarvis prompt teaches “two modes” and references it: `apps/zerg/backend/zerg/prompts/templates.py` (`BASE_JARVIS_PROMPT`)
-
-### Known bug
-
-`route_to_supervisor` checks auth incorrectly:
-
-- `apps/jarvis/apps/web/lib/tool-factory.ts` calls `jarvisClient.isAuthenticated()` synchronously
-- but it is `async` in `apps/jarvis/packages/core/src/jarvis-api-client.ts`
-
-### Duplicate Supervisor streaming stacks (technical debt)
+### Supervisor streaming
 
 - `/api/jarvis/chat`: fetch + manual SSE parsing (`apps/jarvis/apps/web/lib/supervisor-chat-controller.ts`)
 - `/api/jarvis/supervisor/events`: EventSource streaming (`apps/jarvis/packages/core/src/jarvis-api-client.ts`)
@@ -299,7 +283,7 @@ Acceptance:
 
 Tasks:
 
-- Remove `route_to_supervisor` tool from Jarvis web (`apps/jarvis/apps/web/lib/tool-factory.ts` and related tests).
+- ~~Remove `route_to_supervisor` tool from Jarvis web~~ (DONE - legacy controllers deleted)
 - Remove it from `/api/jarvis/bootstrap` tool list + prompt text.
 - Update docs/specs that claim the old model (or mark deprecated).
 
@@ -314,7 +298,7 @@ Acceptance:
 Tasks:
 
 - Extend `/api/jarvis/chat` SSE generator to also subscribe to worker + worker tool events (parity with `/supervisor/events`).
-- Update `SupervisorChatController` to handle those events and publish `eventBus` updates for progress UI.
+- Update `SupervisorChatController` (`apps/jarvis/apps/web/lib/supervisor-chat-controller.ts`) to handle those events and publish `stateManager` updates for progress UI.
 - Deprecate any Jarvis web usage of `JarvisAPIClient.executeSupervisorTask()` path.
 
 Acceptance:
