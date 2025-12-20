@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# validate-asyncapi.sh – fails if asyncapi/chat.yml is not spec-valid.
+# validate-asyncapi.sh – sanity-check schemas/ws-protocol-asyncapi.yml.
 # ---------------------------------------------------------------------------
-# The helper mirrors the logic in regen-ws-code.sh but only validates; no
-# code-generation.  We rely on the AsyncAPI CLI if available, otherwise fall
-# back to bunx/npx.
+# Mirrors the schema path used by scripts/regen-ws-code.sh. Uses `uv run`
+# so the backend Python environment (PyYAML) is available.
 
 set -euo pipefail
 
