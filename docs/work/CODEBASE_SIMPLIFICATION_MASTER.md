@@ -31,7 +31,7 @@ Rules for this effort:
 ### 1.1 Root scripts referencing removed directories
 
 - [x] Fix `scripts/fast-contract-check.sh` (currently assumes `frontend/` Rust).
-- [ ] Fix or remove `scripts/run_all_tests.sh` (assumes `backend/`, `frontend/`, `e2e/`).
+- [x] Fix or remove `scripts/run_all_tests.sh` (assumes `backend/`, `frontend/`, `e2e/`).
 - [ ] Audit and fix any remaining scripts that reference:
   - `backend/` (should be `apps/zerg/backend/`)
   - `frontend/` (should be `apps/zerg/frontend-web/` or `apps/zerg/e2e/`)
@@ -129,3 +129,4 @@ Format:
 - 2025-12-20: fix fast contract check script — commit `a783c3d`
 - 2025-12-20: canonicalize WebSocket codegen scripts/outputs — commit `36231e3`
 - 2025-12-20: make WebSocket codegen deterministic; `make validate-ws` green — commit `d41a443`
+- 2025-12-20: update stale `scripts/run_all_tests.sh` to call Make targets — commit `608fbb5`
