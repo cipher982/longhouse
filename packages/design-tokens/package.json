@@ -1,0 +1,32 @@
+{
+  "name": "@swarmlet/design-tokens",
+  "version": "1.0.0",
+  "description": "Shared design tokens for Swarmlet dashboard and chat UIs",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.ts",
+      "import": "./dist/index.ts"
+    },
+    "./core.css": "./dist/core.css",
+    "./theme-solid.css": "./dist/theme-solid.css",
+    "./theme-glass.css": "./dist/theme-glass.css",
+    "./tokens": {
+      "types": "./dist/tokens.ts",
+      "import": "./dist/tokens.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "tokens.json"
+  ],
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "design-tokens",
+    "css",
+    "swarmlet"
+  ]
+}
