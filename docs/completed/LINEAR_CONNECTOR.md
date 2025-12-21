@@ -428,17 +428,20 @@ Linear's GraphQL API may return specific error details:
 
 - **Tools Definition**: `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/linear_tools.py`
 - **Integration**: `/Users/davidrose/git/zerg/apps/zerg/backend/zerg/tools/builtin/__init__.py`
-- **Validation Script**: `/Users/davidrose/git/zerg/scripts/validate_linear_connector.py`
-- **Documentation**: `/Users/davidrose/git/zerg/docs/LINEAR_CONNECTOR.md`
+- **Validation Script**: ~~`/Users/davidrose/git/zerg/scripts/validate_linear_connector.py`~~ _(script was never created or has been removed)_
+- **Documentation**: `/Users/davidrose/git/zerg/docs/LINEAR_CONNECTOR.md` _(moved to `docs/completed/`)_
 
 ## Testing
 
 ### Validation Script
 
-Run the validation script to verify GraphQL patterns without making API calls:
+~~Run the validation script to verify GraphQL patterns without making API calls:~~
+
+**Note**: The validation script referenced below was never created. Test using the actual Linear tools via the backend.
 
 ```bash
-python scripts/validate_linear_connector.py
+# Script no longer exists
+# python scripts/validate_linear_connector.py
 ```
 
 ### Manual Testing

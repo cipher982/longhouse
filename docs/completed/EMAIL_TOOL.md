@@ -263,19 +263,19 @@ for email in email_list:
 
 ### Validation Script (Mock Mode)
 
-Test your email logic without making API calls:
+~~Test your email logic without making API calls:~~
+
+**Note**: Validation scripts were never created. Test via backend with real Resend API key.
 
 ```bash
-python scripts/validate_email_resend.py
+# Scripts no longer exist
+# python scripts/validate_email_resend.py
+# cd apps/zerg/backend && uv run python ../../../scripts/test_email_tool.py
 ```
 
 ### Integration Test
 
-Test the tool registration and invocation:
-
-```bash
-cd apps/zerg/backend && uv run python ../../../scripts/test_email_tool.py
-```
+~~Test the tool registration and invocation~~
 
 ### Send Test Email
 
