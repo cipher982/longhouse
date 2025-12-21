@@ -96,7 +96,7 @@
   outline-offset: 2px;
 }
 
-.jarvis-container input:focus-visible,
+.jarvis-container input:focus-visible:not(.text-input),
 .jarvis-container textarea:focus-visible,
 .jarvis-container select:focus-visible {
   outline: 2px solid var(--color-neon-cyan);
