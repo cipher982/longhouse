@@ -1,69 +1,27 @@
-# Jarvis Voice Agent — simple Makefile
-# Targets: help, install, start, native, test, status, stop, clean
-#
-# NOTE: Jarvis now uses zerg-backend for its BFF endpoints.
-# For full platform, run `make dev` from repo root.
-# This Makefile is for standalone Jarvis web development.
+ROOT_DIR := $(abspath ../..)
 
-.PHONY: help install start native test test-e2e test-clean status stop clean
+.PHONY: help dev zerg test test-e2e test-chat-e2e native
 
 help: ## Show available commands
-	@echo "Jarvis Commands" && echo "" && \
+	@echo "Jarvis (Unified SPA)" && echo "" && \
 	grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
-	awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install all dependencies (run from repo root with bun install)
-	@echo "📦 Dependencies managed by Bun at repo root"
-	@echo "   Run 'bun install' from the repository root"
+dev: ## Start unified stack (recommended)
+	@$(MAKE) -C $(ROOT_DIR) dev
 
-start: ## Start web app (8080) - requires zerg-backend running
-	@echo "🚀 Starting Jarvis web... (Ctrl+C to stop)"; \
-	echo "⚠️  Requires zerg-backend running (use 'make zerg' from repo root)"; \
-	trap 'echo "\n🛑 Stopping..."; $(MAKE) stop; exit 0' INT; \
-	cd apps/web && bun run dev & \
-	echo "⏳ Waiting for services..."; \
-	until curl -sf http://localhost:8080 >/dev/null || curl -sf http://localhost:8081 >/dev/null; do sleep 0.4; done; \
-	echo "✅ Ready: http://localhost:8080"; \
-	open http://localhost:8080 2>/dev/null || open http://localhost:8081 2>/dev/null || true; \
-	wait
+zerg: ## Start direct ports stack (backend + frontend)
+	@$(MAKE) -C $(ROOT_DIR) zerg
 
-native: ## Launch Electron shell (requires web app running)
+test: ## Run unit tests (backend + frontend; no Playwright)
+	@$(MAKE) -C $(ROOT_DIR) test
+
+test-e2e: ## Run Playwright E2E (unified SPA)
+	@$(MAKE) -C $(ROOT_DIR) test-e2e
+
+test-chat-e2e: ## Run chat (/chat) E2E smoke tests
+	@$(MAKE) -C $(ROOT_DIR) test-chat-e2e
+
+native: ## Launch Electron shell (legacy; may be stale)
+	@echo "⚠️  Jarvis is now served inside the unified SPA; native shell may be stale."
 	@cd apps/native && bun run dev
-
-test: ## Run Playwright tests (requires OPENAI_API_KEY)
-	@if [ -z "$$OPENAI_API_KEY" ]; then \
-		echo "❌ Error: OPENAI_API_KEY environment variable required for e2e tests"; \
-		echo "   Export it: export OPENAI_API_KEY=sk-..."; \
-		exit 1; \
-	fi
-	@echo "🧪 Running E2E tests in isolated Docker environment..."
-	@echo "   Building and starting services..."
-	@docker compose -f docker-compose.test.yml build && \
-	docker compose -f docker-compose.test.yml run --rm playwright; \
-	EXIT_CODE=$$?; \
-	echo "🧹 Cleaning up test containers..."; \
-	docker compose -f docker-compose.test.yml down -v --remove-orphans; \
-	exit $$EXIT_CODE
-
-test-e2e: test ## Alias for 'make test'
-
-test-clean: ## Clean up test containers and images
-	@echo "🧹 Removing test containers and volumes..."
-	@docker compose -f docker-compose.test.yml down -v --remove-orphans --rmi local
-	@echo "✅ Test environment cleaned"
-
-status: ## Check if services are up
-	@echo "Jarvis web (8080):"; curl -sf http://localhost:8080 >/dev/null && echo "  ✅" || echo "  ❌"
-	@echo "Zerg backend (/api/jarvis/session):"; curl -sf http://localhost:47300/api/jarvis/session >/dev/null && echo "  ✅" || echo "  ❌"
-
-stop: ## Stop running dev processes (best-effort)
-	@echo "🛑 Stopping Jarvis services..."
-	@pkill -f "/Users/davidrose/git/zerg.*vite" 2>/dev/null || true
-	@pkill -f "jarvis.*electron" 2>/dev/null || true
-	@pkill -f "uvx.*traccar.*jarvis" 2>/dev/null || true
-	@sleep 1
-	@echo "✅ Stopped"
-
-clean: ## Remove node_modules and test artifacts
-	@rm -rf node_modules apps/web/node_modules apps/native/node_modules test-results playwright-report
-	@echo "🧹 Cleaned"

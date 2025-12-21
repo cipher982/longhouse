@@ -1,55 +1,14 @@
-# Jarvis React Migration
+# Jarvis Migration Notes (Historical)
 
-## Status: Complete (December 2025)
+Jarvis chat UI is now integrated into the unified Zerg SPA:
 
-The React migration is **complete**. Jarvis now runs as a pure React application.
+- UI code: `apps/zerg/frontend-web/src/jarvis/`
+- Route: `http://localhost:30080/chat`
 
-## Architecture
+The old standalone `apps/jarvis/apps/web/` frontend has been deleted.
 
-### Current (React-only)
+## See also
 
-- **Entry**: `src/main.tsx` - React root with StrictMode
-- **State**: `src/context/AppContext.tsx` - React Context + useReducer
-- **Logic**: `src/hooks/*.ts` - Custom hooks for business logic
-- **UI**: `src/components/*.tsx` - Declarative React components
-
-### Key Hooks
-
-| Hook              | Purpose                                   |
-| ----------------- | ----------------------------------------- |
-| `useJarvisApp`    | Initialization, connection, voice control |
-| `useVoice`        | OpenAI Realtime API voice I/O             |
-| `useTextChannel`  | Text messaging via SSE                    |
-| `usePreferences`  | Model selection and user preferences      |
-| `useJarvisClient` | Backend API client                        |
-
-## What Was Removed
-
-The following legacy code was deleted:
-
-- **Bridge mode** (`VITE_JARVIS_ENABLE_REALTIME_BRIDGE`) - No longer needed
-- **useRealtimeSession hook** - Replaced by `useJarvisApp`
-- **app-controller.ts** - Logic moved to hooks
-- **Legacy tests** - Rewritten for new architecture
-
-## Development
-
-```bash
-# Start dev server
-cd apps/jarvis/apps/web
-bun run dev
-
-# Type check
-bun run type-check
-
-# Run tests
-bun run test
-
-# Build for production
-bun run build
-```
-
-## See Also
-
-- [LEGACY_CODE_REMOVAL.md](./LEGACY_CODE_REMOVAL.md) - Detailed migration tracking
-- [Main AGENTS.md](../../AGENTS.md) - Project overview
+- `docs/work/session-report-2025-12-20.md`
+- `docs/work/swarmlet-spa-merge-post-merge-review.md`
+- `AGENTS.md`

@@ -14,7 +14,6 @@ ZERG_FRONTEND_PORT ?= 47200
 
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
-COMPOSE_E2E := docker compose --project-name zerg-e2e -f apps/jarvis/docker-compose.test.yml
 
 .PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset \
 	test test-unit test-e2e test-all test-chat-e2e \
@@ -210,14 +209,14 @@ test-chat-e2e: ## Run Jarvis chat E2E tests (inside unified SPA)
 	cd apps/zerg/e2e && bunx playwright test tests/unified-frontend.spec.ts
 
 test-jarvis-e2e: ## Run Jarvis E2E tests (isolated Docker environment)
-	@echo "⚠️  Jarvis standalone E2E (Docker) was removed during the unified SPA merge."
-	@echo "   Use: make test-chat-e2e"
-	@exit 1
+	@echo "⚠️  Deprecated: Jarvis standalone E2E (Docker) was removed during the unified SPA merge."
+	@echo "   Running: make test-chat-e2e"
+	@$(MAKE) test-chat-e2e
 
 test-jarvis: ## Alias (deprecated): use chat E2E in unified SPA
-	@echo "⚠️  'make test-jarvis' is deprecated (Jarvis is inside the unified SPA)."
-	@echo "   Use: make test-chat-e2e"
-	@exit 1
+	@echo "⚠️  Deprecated: 'make test-jarvis' (Jarvis is inside the unified SPA)."
+	@echo "   Running: make test-chat-e2e"
+	@$(MAKE) test-chat-e2e
 
 test-e2e-up: ## Start isolated E2E test environment
 	@echo "⚠️  Deprecated: isolated Jarvis E2E Docker environment referenced the removed standalone Jarvis app."
@@ -233,9 +232,10 @@ test-e2e-reset: ## Reset E2E database and environment
 	@exit 1
 
 test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=supervisor-progress)
+	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-grep>" && exit 1)
 	@echo "⚠️  Deprecated: isolated Jarvis E2E Docker environment referenced the removed standalone Jarvis app."
-	@echo "   Use: cd apps/zerg/e2e && bunx playwright test $(TEST)"
-	@exit 1
+	@echo "   Running: cd apps/zerg/e2e && bunx playwright test $(TEST)"
+	cd apps/zerg/e2e && bunx playwright test $(TEST)
 
 test-e2e-logs: ## View logs for isolated E2E environment
 	@echo "⚠️  Deprecated: isolated Jarvis E2E Docker environment referenced the removed standalone Jarvis app."
@@ -243,23 +243,24 @@ test-e2e-logs: ## View logs for isolated E2E environment
 
 test-jarvis-e2e-ui: ## Run Jarvis E2E tests with interactive UI
 	@echo "⚠️  Deprecated: this referenced the removed standalone Jarvis app."
-	@echo "   Use: cd apps/zerg/e2e && bunx playwright test --ui"
-	@exit 1
+	@echo "   Running: cd apps/zerg/e2e && bunx playwright test --ui"
+	cd apps/zerg/e2e && bunx playwright test --ui
 
 test-jarvis-text: ## Run text message E2E tests only
 	@echo "⚠️  Deprecated: this target referenced the removed standalone Jarvis app."
-	@echo "   Use: make test-chat-e2e (and add new /chat tests under apps/zerg/e2e/tests/)"
-	@exit 1
+	@echo "   Running: make test-chat-e2e"
+	@$(MAKE) test-chat-e2e
 
 test-jarvis-history: ## Run history hydration E2E tests only
 	@echo "⚠️  Deprecated: this target referenced the removed standalone Jarvis app."
-	@echo "   Use: make test-chat-e2e (and add new /chat tests under apps/zerg/e2e/tests/)"
-	@exit 1
+	@echo "   Running: make test-chat-e2e"
+	@$(MAKE) test-chat-e2e
 
 test-jarvis-grep: ## Run specific test by name (usage: make test-jarvis-grep GREP="test name")
+	@test -n "$(GREP)" || (echo "❌ Usage: make test-jarvis-grep GREP='test name'" && exit 1)
 	@echo "⚠️  Deprecated: this target referenced the removed standalone Jarvis app."
-	@echo "   Use: cd apps/zerg/e2e && bunx playwright test --grep \"$(GREP)\""
-	@exit 1
+	@echo "   Running: cd apps/zerg/e2e && bunx playwright test --grep \"$(GREP)\""
+	cd apps/zerg/e2e && bunx playwright test --grep "$(GREP)"
 
 test-zerg: ## Run Zerg tests (backend + frontend + e2e)
 	@echo "🧪 Running Zerg tests..."

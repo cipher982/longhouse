@@ -1,33 +1,24 @@
-# Jarvis Voice Agent Platform
+# Jarvis (Unified SPA)
 
-Personal voice AI assistant with real-time speech interaction and agent orchestration.
+Jarvis chat UI is now part of the unified Zerg SPA.
+
+- UI code: `apps/zerg/frontend-web/src/jarvis/`
+- Route: `http://localhost:30080/chat`
+
+This `apps/jarvis/` directory now mainly contains legacy artifacts and shared packages.
 
 ## Quick Start
 
-### Option A: Unified Docker Compose (Recommended)
-
 ```bash
-# Start all services together (Jarvis + Zerg) from repo root
-cd ../../../
-./start-unified-dev.sh
+# Start the unified stack (nginx + backend + SPA)
+make dev
 
-# Access Jarvis at http://localhost:30080
+# Fast unit tests (no Playwright)
+make test
+
+# E2E smoke tests for /chat in the unified SPA
+make test-chat-e2e
 ```
-
-### Option B: Standalone
-
-```bash
-# Install dependencies
-make install
-
-# Start Jarvis (default personal context)
-make start
-
-# Or start directly
-cd apps/web && npm run dev
-```
-
-Access at **http://localhost:8080** (standalone) or **http://localhost:30080** (unified)
 
 ## Features
 
@@ -67,12 +58,8 @@ Try these voice commands:
 # Required
 OPENAI_API_KEY=sk-your-key-here
 
-# Optional (Unified Setup - uses proxy)
-VITE_ZERG_API_URL=/api/zerg
+# Optional (Dev)
 VITE_JARVIS_DEVICE_SECRET=your-secret
-
-# Optional (Standalone Setup - direct connection)
-# VITE_ZERG_API_URL=http://localhost:47300
 ```
 
 **Task Inbox Setup:**
