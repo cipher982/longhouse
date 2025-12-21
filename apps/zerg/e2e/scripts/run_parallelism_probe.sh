@@ -19,7 +19,7 @@ echo "  Tests:  PROBE_TEST_COUNT=$PROBE_TEST_COUNT"
 echo "  Sleep:  PROBE_SLEEP_MS=$PROBE_SLEEP_MS"
 echo ""
 
-bunx playwright test --config playwright.probe.config.js
+bunx playwright test --config playwright.probe.config.js probes/scheduler_parallelism.probe.spec.ts
 
 echo ""
 node scripts/analyze_parallelism_probe.mjs
