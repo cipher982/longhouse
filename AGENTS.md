@@ -61,16 +61,15 @@ make env-check     # Validate required env vars before starting
 make stop
 
 # Run tests
-make test          # All tests (Unit + E2E)
-make test-zerg     # Backend + frontend + e2e
-make test-jarvis   # Jarvis unit tests
-make test-jarvis-e2e # Jarvis E2E tests (isolated environment)
+make test          # Unit tests only (backend + frontend)
+make test-e2e      # Playwright E2E only
+make test-all      # Unit + Playwright E2E
+make test-chat-e2e # Chat page E2E (unified SPA)
 
 # Targeted E2E testing
-make test-e2e-up     # Start isolated E2E environment
-make test-e2e-single TEST=name # Run single test (e.g. TEST=supervisor-progress)
-make test-e2e-logs   # View E2E service logs
-make test-e2e-down   # Cleanup E2E environment
+make test-e2e-single TEST=tests/unified-frontend.spec.ts # Or any Playwright args
+make test-e2e-grep GREP="test name"
+make test-e2e-ui
 
 # Regenerate generated code
 make generate-sdk  # OpenAPI types
@@ -106,29 +105,25 @@ docker compose -f docker/docker-compose.dev.yml --profile zerg up
 
 ## Testing Infrastructure
 
-Zerg/Jarvis uses a **completely isolated Docker environment** for E2E tests to prevent data corruption in your development database.
+Zerg/Jarvis E2E tests run via Playwright from `apps/zerg/e2e/` and spawn a dedicated backend process for the run.
 
 ### E2E Test Isolation
-- **Project Name**: E2E tests run under the `zerg-e2e` Docker project name.
-- **Network**: All services communicate via an internal `test` network.
-- **Database**: Uses a dedicated `postgres:15-alpine` container with its own volume.
-- **Entry Point**: A dedicated `nginx` reverse proxy handles routing for tests.
+- The backend uses a per-worker SQLite DB file (so Playwright workers don’t share a single DB).
+- Playwright artifacts (screenshots, traces, reports) are written under `apps/zerg/e2e/test-results/` and `apps/zerg/e2e/playwright-report/`.
 
 ### Database Initialization
 - The backend automatically detects missing tables and initializes the schema on startup via `scripts/init_db.py`.
 - No manual migration steps are required for fresh test environments.
 
 ### Running Tests
-- Use `make test-jarvis-e2e` for a full clean run.
-- For active development, use `make test-e2e-up` to keep the environment running, then `make test-e2e-single TEST=<filename>` to iterate quickly on a specific test file.
-- E2E artifacts (screenshots + `error-context.md`) are written to `apps/jarvis/test-results/` (mounted from the Playwright container).
+- Full run: `make test-e2e`
+- Targeted run: `make test-e2e-single TEST=<spec-or-args>`
+- Interactive UI: `make test-e2e-ui`
 
 ### Debugging E2E Failures (Quick Checklist)
 1. Re-run just the failing spec: `make test-e2e-single TEST=<spec-or-grep>`
-2. Open the failure snapshot: `apps/jarvis/test-results/<test-folder>/error-context.md`
-3. Open the screenshot/video (same folder) to confirm what the DOM looked like
-4. If the UI looks fine but backend events are missing: `make test-e2e-logs` (then focus on `zerg-backend` + `reverse-proxy`)
-5. If you need interactive UI debugging: `make test-jarvis-e2e-ui` (host Playwright UI, not Docker)
+2. Open the Playwright report: `cd apps/zerg/e2e && bunx playwright show-report`
+3. If you suspect missing parallelism, use `apps/zerg/e2e/scripts/run_parallelism_probe.sh` and `apps/zerg/e2e/scripts/run_timeline.sh`
 
 ### Live Integration Testing (Backend Tools)
 To verify core supervisor tools (KV memory, Tasks, Web Search) against a running backend:
@@ -348,6 +343,9 @@ python scripts/seed_personal_credentials.py --email your@email.com
 # Or create ~/.config/zerg/personal_credentials.json
 # Then run: python scripts/seed_personal_credentials.py
 ```
+
+### Avoid compats / legacy / shims
+- this app has no users, never launched, and only has one dev. Keep the code simple. If you see anything that is slightly too complex, recommend a complete refactor to start fresh.
 
 ### Credential Security
 

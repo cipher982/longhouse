@@ -22,7 +22,7 @@ Rules for this effort:
 ## Phase 0 — Tracking + Guardrails (Start Here)
 
 - [x] Add/maintain this master checklist (this file).
-- [x] Ensure `make validate`/`make test-zerg` do not rely on dead scripts/paths.
+- [x] Ensure `make validate`/`make test-all` do not rely on dead scripts/paths.
 
 ---
 
