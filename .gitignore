@@ -179,6 +179,7 @@ scratch/
 
 # UV cache
 .uv_cache/
+.uv_tmp*
 
 # Yarn
 .yarn/install-state.gz
