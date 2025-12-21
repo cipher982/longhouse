@@ -88,7 +88,6 @@ make validate      # All validation
 Dev compose file (profiles live here): `docker/docker-compose.dev.yml`
 
 Other compose files:
-- Jarvis E2E: `apps/jarvis/docker-compose.test.yml`
 - Standalone production compose: `docker/docker-compose.prod.yml`
 
 | Profile | Services | Use Case |
@@ -255,7 +254,7 @@ If you edit these, your changes will be overwritten by `make regen-ws` or `make 
 
 8. **E2E runs on an insecure origin**: Playwright hits `http://reverse-proxy` in Docker (service name), which is **not** a secure context — `crypto.randomUUID()` may be unavailable. Use `src/jarvis/lib/uuid.ts` instead of calling `crypto.randomUUID()` directly.
 
-9. **Prefer Make targets for E2E**: `make` loads/export vars from `.env`. Running `docker compose -f apps/jarvis/docker-compose.test.yml ...` directly can fail if `OPENAI_API_KEY` isn't exported in your shell.
+9. **Prefer Make targets for E2E**: `make` loads/export vars from `.env`. Running raw `docker compose` commands directly can fail if environment variables aren't exported in your shell.
 
 10. **Deterministic UI tests**: For progress-indicator/UI behavior tests, prefer emitting events via `window.__jarvis.eventBus` (DEV only) instead of relying on the LLM to spawn workers/tools.
 
