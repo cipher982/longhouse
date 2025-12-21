@@ -17,14 +17,56 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function findDotEnv(startDir) {
+    let dir = startDir;
+    for (let i = 0; i < 8; i++) {
+        const candidate = path.join(dir, '.env');
+        if (fs.existsSync(candidate)) return candidate;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+function loadDotEnv(filePath) {
+    if (!fs.existsSync(filePath)) return;
+    const envContent = fs.readFileSync(filePath, 'utf8');
+    for (const rawLine of envContent.split('\n')) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const idx = line.indexOf('=');
+        if (idx <= 0) continue;
+        const key = line.slice(0, idx).trim();
+        let value = line.slice(idx + 1).trim();
+        const isQuoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
+        if (!isQuoted) {
+            // Strip inline comments for common `.env` style: KEY=value # comment
+            value = value.replace(/\s+#.*$/, '').trim();
+        }
+        if (isQuoted) {
+            value = value.slice(1, -1);
+        }
+        if (process.env[key] === undefined) {
+            process.env[key] = value;
+        }
+    }
+}
+
+// Ensure local runs inherit repo-root .env (Playwright also loads it, but this helps direct execution).
+{
+    const envPath = findDotEnv(__dirname);
+    if (envPath) loadDotEnv(envPath);
+}
+
 // Load dynamic port from .env file
 function getPortsFromEnv() {
     let BACKEND_PORT = 8001;
     let FRONTEND_PORT = 8002;
 
     // Load from .env file
-    const envPath = path.resolve(__dirname, '../.env');
-    if (fs.existsSync(envPath)) {
+    const envPath = findDotEnv(__dirname);
+    if (envPath && fs.existsSync(envPath)) {
         const envContent = fs.readFileSync(envPath, 'utf8');
         const lines = envContent.split('\n');
         for (const line of lines) {

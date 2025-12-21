@@ -8,12 +8,51 @@ import { devices } from '@playwright/test';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load .env file from repo root
-const envPath = path.resolve(__dirname, '../.env');
+function findDotEnv(startDir) {
+  let dir = startDir;
+  for (let i = 0; i < 8; i++) {
+    const candidate = path.join(dir, '.env');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+// Load .env file from repo root (walk upward so this works from any CWD).
+const envPath = findDotEnv(__dirname);
 let BACKEND_PORT = 8001;
 let FRONTEND_PORT = 8002;
 
-if (fs.existsSync(envPath)) {
+function loadDotEnv(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const envContent = fs.readFileSync(filePath, 'utf8');
+  envContent.split('\n').forEach(rawLine => {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) return;
+    const idx = line.indexOf('=');
+    if (idx <= 0) return;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    const isQuoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
+    if (!isQuoted) {
+      // Strip inline comments for common `.env` style: KEY=value # comment
+      value = value.replace(/\s+#.*$/, '').trim();
+    }
+    if (isQuoted) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  });
+}
+
+if (envPath && fs.existsSync(envPath)) {
+  // Ensure Playwright-started web servers inherit your repo-root .env.
+  loadDotEnv(envPath);
+
   const envContent = fs.readFileSync(envPath, 'utf8');
   envContent.split('\n').forEach(line => {
     const [key, value] = line.split('=');
