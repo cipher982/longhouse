@@ -100,7 +100,7 @@ class WsTokenCallback(AsyncCallbackHandler):
     # ------------------------------------------------------------------
 
     async def on_llm_new_token(self, token: str, **_: Any) -> None:  # noqa: D401 – interface defined by LangChain
-        """Broadcast *token* to all subscribers of the current user topic."""
+        """Broadcast *token* to all subscribers via WebSocket and event bus."""
 
         thread_id = current_thread_id_var.get()
         user_id = current_user_id_var.get()
@@ -114,6 +114,31 @@ class WsTokenCallback(AsyncCallbackHandler):
                 self._warned_no_context = True
             return
 
+        # Get supervisor run_id for SSE correlation (may be None for non-supervisor calls)
+        from zerg.services.supervisor_context import get_supervisor_run_id
+
+        run_id = get_supervisor_run_id()
+
+        # Publish to event bus for SSE consumers (Jarvis chat)
+        if run_id is not None:
+            try:
+                from zerg.events import EventType
+                from zerg.events import event_bus
+
+                await event_bus.publish(
+                    EventType.SUPERVISOR_TOKEN,
+                    {
+                        "event_type": EventType.SUPERVISOR_TOKEN,
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "token": token,
+                        "owner_id": user_id,
+                    },
+                )
+            except Exception:  # noqa: BLE001 – token streaming is best-effort
+                logger.exception("Error publishing token to event bus for run %s", run_id)
+
+        # Also broadcast to WebSocket topic for dashboard consumers
         topic = f"user:{user_id}"
 
         try:

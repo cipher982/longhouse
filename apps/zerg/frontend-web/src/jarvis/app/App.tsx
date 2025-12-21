@@ -10,7 +10,7 @@ import { useCallback, useEffect } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { Sidebar, Header, VoiceControls, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
+import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
 import { workerProgress } from '../lib/worker-progress'
 
 console.info('[Jarvis] Starting React application')
@@ -83,34 +83,21 @@ export default function App({ embedded = false }: AppProps) {
     console.log('[App] Sync conversations')
   }, [])
 
-  // Voice handlers
-  const handleModeToggle = useCallback(() => {
-    jarvisApp.toggleHandsFree()
+  // Voice handlers for mic button
+  const handleMicConnect = useCallback(() => {
+    jarvisApp.reconnect()
   }, [jarvisApp])
 
-  const handleVoiceButtonPress = useCallback(() => {
+  const handleMicPressStart = useCallback(() => {
     jarvisApp.handlePTTPress()
   }, [jarvisApp])
 
-  const handleVoiceButtonRelease = useCallback(() => {
+  const handleMicPressEnd = useCallback(() => {
     jarvisApp.handlePTTRelease()
   }, [jarvisApp])
 
-  // Map voice status for component
-  const voiceStatusMap: Record<string, 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'> = {
-    idle: 'idle',
-    connecting: 'connecting',
-    ready: 'ready',
-    listening: 'listening',
-    processing: 'processing',
-    speaking: 'speaking',
-    error: 'error',
-  }
-
-  // Handle connect request from VoiceControls
-  const handleConnect = useCallback(() => {
-    jarvisApp.reconnect()
-  }, [jarvisApp])
+  // Map voice status for mic button
+  const micStatus = state.voiceStatus as 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
   return (
     <>
@@ -128,28 +115,24 @@ export default function App({ embedded = false }: AppProps) {
       <div className="main-content">
         {!embedded && <Header onSync={handleSync} />}
 
+        <div className="chat-settings-bar">
+          <ModelSelector />
+        </div>
+
         <ChatContainer
           messages={state.messages}
           userTranscriptPreview={state.userTranscriptPreview}
         />
 
         <div className="bottom-controls">
-          <VoiceControls
-            mode={state.voiceMode}
-            status={voiceStatusMap[state.voiceStatus] || 'idle'}
-            onModeToggle={handleModeToggle}
-            onVoiceButtonPress={handleVoiceButtonPress}
-            onVoiceButtonRelease={handleVoiceButtonRelease}
-            onConnect={handleConnect}
+          <TextInput
+            onSend={textChannel.sendMessage}
+            disabled={textChannel.isSending}
+            micStatus={micStatus}
+            onMicConnect={handleMicConnect}
+            onMicPressStart={handleMicPressStart}
+            onMicPressEnd={handleMicPressEnd}
           />
-
-          <div className="input-controls">
-            <ModelSelector />
-            <TextInput
-              onSend={textChannel.sendMessage}
-              disabled={textChannel.isSending}
-            />
-          </div>
         </div>
       </div>
 

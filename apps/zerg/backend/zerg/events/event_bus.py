@@ -52,6 +52,7 @@ class EventType(str, Enum):
     # Supervisor/Worker events (Super Siri architecture)
     SUPERVISOR_STARTED = "supervisor_started"
     SUPERVISOR_THINKING = "supervisor_thinking"
+    SUPERVISOR_TOKEN = "supervisor_token"  # Real-time LLM token streaming
     SUPERVISOR_COMPLETE = "supervisor_complete"
     WORKER_SPAWNED = "worker_spawned"
     WORKER_STARTED = "worker_started"

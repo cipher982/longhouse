@@ -1,16 +1,30 @@
 /**
- * TextInput component - Text message input
+ * TextInput component - Text message input with integrated mic button
  */
 
 import { useState, useCallback, KeyboardEvent } from 'react'
+import { MicButton, type VoiceStatus } from './MicButton'
 
 interface TextInputProps {
   onSend: (message: string) => void
   disabled?: boolean
   placeholder?: string
+  // Voice control props
+  micStatus?: VoiceStatus
+  onMicConnect?: () => void
+  onMicPressStart?: () => void
+  onMicPressEnd?: () => void
 }
 
-export function TextInput({ onSend, disabled = false, placeholder = 'Type a message...' }: TextInputProps) {
+export function TextInput({
+  onSend,
+  disabled = false,
+  placeholder = 'Type a message...',
+  micStatus = 'idle',
+  onMicConnect,
+  onMicPressStart,
+  onMicPressEnd,
+}: TextInputProps) {
   const [value, setValue] = useState('')
 
   const handleSend = useCallback(() => {
@@ -33,6 +47,15 @@ export function TextInput({ onSend, disabled = false, placeholder = 'Type a mess
 
   return (
     <div className="text-input-container">
+      {onMicConnect && (
+        <MicButton
+          status={micStatus}
+          disabled={disabled}
+          onConnect={onMicConnect}
+          onPressStart={onMicPressStart || (() => {})}
+          onPressEnd={onMicPressEnd || (() => {})}
+        />
+      )}
       <input
         type="text"
         className="text-input"
