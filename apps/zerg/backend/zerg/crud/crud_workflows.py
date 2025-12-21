@@ -8,9 +8,9 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from zerg.models.models import Workflow
-from zerg.models.models import WorkflowExecution
-from zerg.models.models import WorkflowTemplate
+from zerg.models import Workflow
+from zerg.models import WorkflowExecution
+from zerg.models import WorkflowTemplate
 
 # -------------------------------------------------------------------------
 # Workflows

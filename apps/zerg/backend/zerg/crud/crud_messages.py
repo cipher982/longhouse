@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.models.models import ThreadMessage
+from zerg.models import ThreadMessage
 
 
 def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int = 100):

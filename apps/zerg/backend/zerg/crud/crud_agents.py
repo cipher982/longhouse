@@ -9,13 +9,13 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
-from zerg.models.models import Agent
-from zerg.models.models import AgentMessage
-from zerg.models.models import AgentRun
-from zerg.models.models import Thread
-from zerg.models.models import ThreadMessage
-from zerg.models.models import Trigger
-from zerg.models.models import WorkerJob
+from zerg.models import Agent
+from zerg.models import AgentMessage
+from zerg.models import AgentRun
+from zerg.models import Thread
+from zerg.models import ThreadMessage
+from zerg.models import Trigger
+from zerg.models import WorkerJob
 from zerg.utils.time import utc_now_naive
 
 

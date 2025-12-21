@@ -5,7 +5,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-from zerg.models.models import CanvasLayout
+from zerg.models import CanvasLayout
 
 
 def upsert_canvas_layout(
