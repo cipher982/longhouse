@@ -237,7 +237,6 @@ services:
     restart: "no"
     stop_grace_period: 1s
     environment:
-      JARVIS_WEB_PORT: ${JARVIS_WEB_PORT:-8080}
       ZERG_BACKEND_PORT: ${ZERG_BACKEND_PORT:-8000}
       ZERG_FRONTEND_PORT: ${ZERG_FRONTEND_PORT:-5173}
       JARPXY_PORT: ${JARPXY_PORT:-30080}
