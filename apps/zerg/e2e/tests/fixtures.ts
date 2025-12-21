@@ -9,6 +9,18 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function findDotEnv(startDir: string): string | null {
+  let dir = startDir;
+  for (let i = 0; i < 8; i++) {
+    const candidate = path.join(dir, '.env');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared Playwright *test* object that injects the `X-Test-Worker` header *and*
 // appends `worker=<id>` to every WebSocket URL opened by the front-end.  All
@@ -27,8 +39,8 @@ function getBackendPort(): number {
   }
 
   // Load from .env file
-  const envPath = path.resolve(__dirname, '../../.env');
-  if (fs.existsSync(envPath)) {
+  const envPath = findDotEnv(__dirname);
+  if (envPath && fs.existsSync(envPath)) {
     const envContent = fs.readFileSync(envPath, 'utf8');
     const lines = envContent.split('\n');
     for (const line of lines) {

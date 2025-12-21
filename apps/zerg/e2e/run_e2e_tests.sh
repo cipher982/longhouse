@@ -19,6 +19,7 @@ set -euo pipefail
 MODE="full"
 VERBOSE=false
 PARALLEL=true
+WORKERS_OVERRIDE=""
 REPORTS_DIR="test-reports"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
@@ -45,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             MODE="${1#*=}"
             shift
             ;;
+        --workers=*)
+            WORKERS_OVERRIDE="${1#*=}"
+            shift
+            ;;
         --verbose|-v)
             VERBOSE=true
             shift
@@ -58,6 +63,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --mode=MODE           Test mode: full, basic"
+            echo "  --workers=N           Override Playwright workers (default: use playwright.config.js)"
             echo "  --verbose, -v         Verbose output"
             echo "  --no-parallel         Disable parallel execution"
             echo "  --help, -h           Show this help"
@@ -182,8 +188,11 @@ esac
 
 # Add parallel execution unless disabled
 if [[ "$PARALLEL" == "true" ]]; then
-    PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --workers=2"
+    if [[ -n "$WORKERS_OVERRIDE" ]]; then
+        PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --workers=$WORKERS_OVERRIDE"
+    fi
 else
+    # Explicitly force serial mode (useful for debugging). Otherwise defer to playwright.config.js.
     PLAYWRIGHT_CMD="$PLAYWRIGHT_CMD --workers=1"
 fi
 
