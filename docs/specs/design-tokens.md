@@ -19,7 +19,7 @@
   - Reads `tokens.json` and `aliases.json`.
   - Emits `src/styles/generated/tokens.css` wrapped in `@layer tokens`.
   - Emits `src/styles/generated/tokens.ts` (tree-shaken typed manifest) for consumption in TS/JS.
-- NPM script: `npm run build:tokens` within the frontend workspace.
+- Bun script: `bun run build:tokens` within the frontend workspace.
 - Hooked into `predev` and `prebuild` scripts so tokens regenerate automatically.
 
 ## Typography System
