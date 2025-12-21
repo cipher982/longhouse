@@ -1,0 +1,14 @@
+/* THIS FILE IS AUTO-GENERATED. DO NOT EDIT DIRECTLY. */
+@layer theme-glass {
+  :root {
+    --color-void: #030305;
+    --color-void-light: #0a0a12;
+    --color-surface-page: #030305;
+    --color-surface-card: rgba(255, 255, 255, 0.03);
+    --color-surface-elevated: rgba(255, 255, 255, 0.07);
+    --color-surface-secondary: rgba(10, 10, 15, 0.4);
+    --color-glass: rgba(20, 20, 30, 0.6);
+    --color-glass-border: rgba(255, 255, 255, 0.08);
+    --color-surface-dark: #1a1a2e;
+  }
+}

@@ -4,7 +4,7 @@
 # BUILD CONTEXT: This Dockerfile expects repo root as build context
 # Example: docker build -f apps/zerg/frontend-web/Dockerfile .
 
-# Builder stage - build tokens and frontend
+# Builder stage - build frontend
 FROM oven/bun:alpine AS builder
 
 WORKDIR /app
@@ -20,9 +20,6 @@ RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages
 # Install dependencies (workspace resolution now works)
 RUN bun install
 
-# Build design tokens first (frontend depends on it)
-RUN cd packages/design-tokens && bun run build
-
 # Build args for Vite env vars (baked into JS bundle at build time)
 ARG VITE_UMAMI_WEBSITE_ID
 ARG VITE_UMAMI_SCRIPT_SRC
@@ -34,6 +31,8 @@ ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
 ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
 
 # Build React app for production
+# NOTE: Design tokens are pre-built and committed (dist/ in git)
+# This reduces build memory pressure on resource-constrained servers
 WORKDIR /app/apps/zerg/frontend-web
 RUN bun run build
 
@@ -67,9 +66,6 @@ RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages
 
 # Install dependencies
 RUN bun install
-
-# Build tokens for dev
-RUN cd packages/design-tokens && bun run build
 
 WORKDIR /app/apps/zerg/frontend-web
 
