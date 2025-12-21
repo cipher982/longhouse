@@ -32,7 +32,7 @@ echo ""
 
 # Get API token from clifford
 echo "Fetching Coolify API token..."
-TOKEN=$(ssh clifford "sudo cat /var/lib/docker/data/coolify-api/token.env 2>/dev/null | grep -oP 'COOLIFY_API_TOKEN=\K.*'" 2>/dev/null || true)
+TOKEN=$(ssh clifford "sudo cat /var/lib/docker/data/coolify-api/token.env 2>/dev/null | sed -n 's/^COOLIFY_API_TOKEN=//p'" 2>/dev/null || true)
 
 if [[ -z "$TOKEN" ]]; then
   echo "ERROR: Could not fetch Coolify API token from clifford"
@@ -48,7 +48,7 @@ RESPONSE=$(ssh clifford "curl -s -X POST 'http://localhost:8000/api/v1/deploy?uu
 
 # Check if deploy was triggered successfully
 if echo "$RESPONSE" | grep -q '"message"'; then
-  MESSAGE=$(echo "$RESPONSE" | grep -oP '"message"\s*:\s*"\K[^"]+' || echo "unknown")
+  MESSAGE=$(echo "$RESPONSE" | sed -n 's/.*"message"\s*:\s*"\([^"]*\)".*/\1/p' || echo "unknown")
   echo "Deploy response: $MESSAGE"
 else
   echo "Deploy triggered. Response: $RESPONSE"
