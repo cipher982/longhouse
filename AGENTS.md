@@ -83,6 +83,56 @@ make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidia
 make validate      # All validation
 ```
 
+## Deploying + Coolify Debugging
+
+**When a Coolify deployment fails, ALWAYS follow this sequence:**
+
+### 1. Get Full Logs First (Required)
+```bash
+./scripts/get-coolify-logs.sh 1 > /tmp/coolify-error.log
+```
+- Coolify UI truncates; this gives complete output
+- Searches in `/tmp/coolify-error.log` for actual errors
+- Never guess or patch without seeing the full error
+
+### 2. Verify Repo State (Most Common Issues)
+```bash
+# Check if files are actually in git
+git ls-files <failing-path>
+
+# Check if .gitignore is excluding source code
+git check-ignore -v <failing-path>
+
+# Compare local vs what Coolify clones
+git show HEAD:<path>
+```
+
+**Common footgun:** `.gitignore` patterns like `data/` or `dist/` excluding source code.
+- Use `/data/` for root-level only
+- Use `!packages/specific/dist/` for exceptions
+
+### 3. Test Build Locally (Same Context as Coolify)
+```bash
+docker build -f apps/zerg/frontend-web/Dockerfile --target production .
+docker compose -f docker/docker-compose.prod.yml build
+```
+
+### 4. Categorize the Failure
+
+| Error Pattern | Root Cause | Fix Location |
+|--------------|------------|--------------|
+| "Cannot find module" in TypeScript | Missing files in git | `.gitignore` + `git add` |
+| "Variable not set" warnings | Env vars not at build time | Coolify UI → "Available at Build Time" |
+| "Command failed with no error output (255)" | Coolify SSH/exec bug | Check `docker logs coolify` on clifford |
+| "exit code 137" | OOM killed | Upgrade server or reduce parallelism |
+| "Workspace not found" | Bun monorepo resolution | Check Docker COPY includes all workspaces |
+
+**Never add Docker workarounds before completing steps 1-3.**
+
+**Full guide:** `docs/COOLIFY_DEBUGGING.md`
+**Architecture:** `docs/DEPLOYMENT.md`
+**Known tech debt:** `docs/DEPLOYMENT_CLEANUP_PLAN.md`
+
 ## Docker Compose Profiles
 
 Dev compose file (profiles live here): `docker/docker-compose.dev.yml`
