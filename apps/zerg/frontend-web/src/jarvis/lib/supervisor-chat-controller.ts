@@ -69,6 +69,7 @@ export class SupervisorChatController {
   private currentRunId: number | null = null;
   private lastCorrelationId: string | null = null;
   private watchdogTimer: number | null = null;
+  private isStreaming: boolean = false; // Track if we're receiving real tokens
   private readonly WATCHDOG_TIMEOUT_MS = 60000;
 
   constructor(config: SupervisorChatConfig = {}) {
@@ -416,30 +417,54 @@ export class SupervisorChatController {
         }
         break;
 
+      case 'supervisor_token': {
+        // Real-time token streaming from LLM
+        this.petWatchdog(correlationId);
+        const token = payload.token;
+        if (token && typeof token === 'string') {
+          // Start streaming if not already
+          if (!this.isStreaming) {
+            this.isStreaming = true;
+            conversationController.startStreaming(correlationId);
+          }
+          // Append token immediately (no artificial delay)
+          conversationController.appendStreaming(token, correlationId);
+        }
+        break;
+      }
+
       case 'supervisor_complete': {
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor complete');
         const result = payload.result;
+        const wasStreaming = this.isStreaming;
+        this.isStreaming = false; // Reset for next message
 
         if (payload.status === 'cancelled') {
           if (correlationId) {
             stateManager.updateAssistantStatus(correlationId, 'canceled');
           }
         } else if (result && typeof result === 'string') {
-          // Set streaming text incrementally (simulate streaming for smooth UX)
-          conversationController.startStreaming(correlationId);
+          if (wasStreaming) {
+            // Real tokens were streamed - just finalize the message
+            logger.info('[SupervisorChat] Finalizing real-time streamed response');
+            await conversationController.finalizeStreaming();
+          } else {
+            // Fallback: No real tokens received (LLM_TOKEN_STREAM disabled?)
+            // Stream the result in chunks for smooth UX
+            logger.info('[SupervisorChat] Fallback: simulating streaming for response');
+            conversationController.startStreaming(correlationId);
 
-          // Stream the result in chunks
-          const chunkSize = 10; // characters per chunk
-          for (let i = 0; i < result.length; i += chunkSize) {
-            const chunk = result.substring(i, i + chunkSize);
-            conversationController.appendStreaming(chunk, correlationId);
-            // Small delay for visual effect
-            await new Promise(resolve => setTimeout(resolve, 10));
+            const chunkSize = 10; // characters per chunk
+            for (let i = 0; i < result.length; i += chunkSize) {
+              const chunk = result.substring(i, i + chunkSize);
+              conversationController.appendStreaming(chunk, correlationId);
+              // Small delay for visual effect
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+
+            await conversationController.finalizeStreaming();
           }
-
-          // Finalize the message
-          await conversationController.finalizeStreaming();
 
           if (correlationId) {
             stateManager.updateAssistantStatus(correlationId, 'final', result);
