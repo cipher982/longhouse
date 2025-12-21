@@ -166,13 +166,17 @@ This section documents suggested wiring to existing Jarvis web events as of Dece
 
 ### Likely event sources
 
-- **Supervisor lifecycle (delegation + run):** `apps/jarvis/apps/web/lib/event-bus.ts`
-  - `supervisor:started` → `RUN_STARTED` (good candidate for “confirmed typing” if it fires reliably/quickly)
+> **Note**: Since this spec was written, Jarvis was integrated into the Zerg frontend.
+> Path references below refer to the old standalone structure.
+> Current location: `apps/zerg/frontend-web/src/jarvis/`
+
+- **Supervisor lifecycle (delegation + run):** `apps/jarvis/apps/web/lib/event-bus.ts` _(now: `src/jarvis/lib/event-bus.ts`)_
+  - `supervisor:started` → `RUN_STARTED` (good candidate for "confirmed typing" if it fires reliably/quickly)
   - `supervisor:worker_spawned` → `WORKER_SPAWNED` (top progress UI)
   - `supervisor:complete` → terminal completion (can be used as a fallback to stop typing)
   - `supervisor:error` → `RUN_ERROR`
 
-- **Assistant streaming content:** `apps/jarvis/apps/web/lib/state-manager.ts`
+- **Assistant streaming content:** `apps/jarvis/apps/web/lib/state-manager.ts` _(now: `src/jarvis/lib/state-manager.ts`)_
   - `STREAMING_TEXT_CHANGED` → treat first non-empty update as `ASSISTANT_TOKEN`
   - `MESSAGE_FINALIZED` → `ASSISTANT_FINAL`
 

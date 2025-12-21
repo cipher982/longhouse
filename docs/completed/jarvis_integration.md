@@ -500,7 +500,7 @@ DATABASE_URL="sqlite:///./app.db"
 JWT_SECRET="your-jwt-secret"
 ```
 
-**Jarvis Client (apps/jarvis/.env)**:
+**Jarvis Client** _(was `apps/jarvis/.env`, now integrated at `apps/zerg/frontend-web/`)_:
 
 ```bash
 # Direct connection to Zerg backend
@@ -829,9 +829,9 @@ client.connectEventStream({
 
 ## References
 
-- **Blueprint**: `/swarm_platform_blueprint.md`
-- **Progress Report**: `/JARVIS_INTEGRATION_PROGRESS.md`
-- **Backend Router**: `/apps/zerg/backend/zerg/routers/jarvis.py`
-- **TypeScript Client**: `/apps/jarvis/packages/core/src/jarvis-api-client.ts`
-- **Seed Script**: `/apps/zerg/backend/scripts/seed_jarvis_agents.py`
-- **Migration**: `/apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py`
+- **Blueprint**: `/swarm_platform_blueprint.md` _(archived/removed)_
+- **Progress Report**: `/JARVIS_INTEGRATION_PROGRESS.md` _(archived/removed)_
+- **Backend Router**: `/apps/zerg/backend/zerg/routers/jarvis.py` _(still valid)_
+- **TypeScript Client**: `/apps/jarvis/packages/core/src/jarvis-api-client.ts` _(now: `apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts`)_
+- **Seed Script**: `/apps/zerg/backend/scripts/seed_jarvis_agents.py` _(still valid)_
+- **Migration**: `/apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py` _(example path)_
