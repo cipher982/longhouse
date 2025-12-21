@@ -110,6 +110,7 @@ async def _chat_stream_generator(
     # Subscribe to supervisor events BEFORE starting background task
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)  # Real-time LLM tokens
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
@@ -198,6 +199,7 @@ async def _chat_stream_generator(
         # Unsubscribe from all events
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)

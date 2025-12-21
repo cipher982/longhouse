@@ -311,6 +311,19 @@
   color: var(--color-text-primary);
 }
 
+/* Chat Settings Bar - Model selector at top of chat */
+.jarvis-container .chat-settings-bar {
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-muted);
+  background: rgb(0 0 0 / 20%);
+}
+
+.jarvis-container .chat-settings-bar .model-selector {
+  gap: var(--space-2);
+}
+
 /* Chat Area */
 .jarvis-container .chat-container {
   flex: 1;
@@ -340,35 +353,23 @@
 
 /* Bottom Bar Container */
 .jarvis-container .bottom-controls {
-  display: flex;
-  flex-direction: column;
   background: linear-gradient(to top, var(--color-void) 0%, transparent 100%);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding: var(--space-4) var(--space-6);
+  padding-bottom: max(var(--space-4), env(safe-area-inset-bottom));
   z-index: 10;
 }
 
-/* Input Controls Container */
-.jarvis-container .input-controls {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: 0 var(--space-6) var(--space-4);
+/* When TextInput is directly inside bottom-controls */
+.jarvis-container .bottom-controls .text-input-container {
   max-width: 800px;
   margin: 0 auto;
-  width: 100%;
-}
-
-/* When TextInput is inside input-controls, remove its padding */
-.jarvis-container .input-controls .text-input-container {
   padding: 0;
-  max-width: none;
 }
 
-/* Model Selector Row */
+/* Model Selector - now in header */
 .jarvis-container .model-selector {
   display: flex;
-  gap: var(--space-3);
-  padding: 0 var(--space-2);
+  gap: var(--space-2);
 }
 
 .jarvis-container .model-select,
@@ -423,7 +424,7 @@
   padding: var(--space-3) var(--space-5);
   color: var(--color-text-primary);
   font-size: var(--font-size-base);
-  transition: all 0.3s ease;
+  transition: border-color 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow-md);
 }
@@ -452,14 +453,150 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  transition: background 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease;
   box-shadow: var(--glow-primary);
 }
 
-.jarvis-container .send-button:hover {
+.jarvis-container .send-button:hover:not(:disabled) {
   background: var(--color-neon-primary-dark);
   transform: scale(1.05);
   box-shadow: 0 0 30px rgb(99 102 241 / 60%);
+}
+
+.jarvis-container .send-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================
+   Mic Button - Compact Voice Control
+   ============================ */
+
+.jarvis-container .mic-button {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 5%);
+  border: 1px solid var(--color-border-muted);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+  backdrop-filter: blur(8px);
+}
+
+.jarvis-container .mic-button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 10%);
+  border-color: var(--color-neon-primary);
+  color: var(--color-text-primary);
+}
+
+.jarvis-container .mic-button__icon {
+  width: 16px;
+  height: 16px;
+  transition: color 0.3s ease, filter 0.3s ease;
+}
+
+/* Mic Button States */
+
+/* Idle - muted, waiting to connect */
+.jarvis-container .mic-button--idle {
+  color: var(--color-text-muted);
+}
+
+/* Connecting - indigo pulse */
+.jarvis-container .mic-button--connecting {
+  border-color: var(--color-neon-primary);
+  color: var(--color-neon-primary);
+  animation: mic-pulse 1.5s ease-in-out infinite;
+}
+
+/* Ready - green glow, waiting for PTT */
+.jarvis-container .mic-button--ready {
+  border-color: rgb(34 197 94 / 50%);
+  color: #22c55e;
+  box-shadow: 0 0 12px rgb(34 197 94 / 25%);
+}
+
+.jarvis-container .mic-button--ready:hover:not(:disabled) {
+  border-color: #22c55e;
+  box-shadow: 0 0 20px rgb(34 197 94 / 40%);
+}
+
+/* Listening - cyan glow, active */
+.jarvis-container .mic-button--listening {
+  border-color: var(--color-neon-cyan);
+  color: var(--color-neon-cyan);
+  background: rgb(6 182 212 / 10%);
+  transform: scale(1.08);
+  box-shadow:
+    0 0 0 2px rgb(6 182 212 / 30%),
+    0 0 20px rgb(6 182 212 / 40%);
+}
+
+/* Processing - indigo spin */
+.jarvis-container .mic-button--processing {
+  border-color: var(--color-neon-primary);
+  color: var(--color-neon-primary);
+  animation: mic-processing 1s linear infinite;
+}
+
+/* Speaking - pink glow */
+.jarvis-container .mic-button--speaking {
+  border-color: var(--color-neon-pink);
+  color: var(--color-neon-pink);
+  background: rgb(236 72 153 / 10%);
+  box-shadow: 0 0 15px rgb(236 72 153 / 35%);
+  animation: mic-speaking 1s ease-in-out infinite;
+}
+
+/* Error - red */
+.jarvis-container .mic-button--error {
+  border-color: var(--color-intent-error);
+  color: var(--color-intent-error);
+}
+
+.jarvis-container .mic-button--error:hover:not(:disabled) {
+  box-shadow: 0 0 15px rgb(239 68 68 / 30%);
+}
+
+/* Disabled */
+.jarvis-container .mic-button--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Mic Button Animations */
+@keyframes mic-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgb(99 102 241 / 40%);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 8px rgb(99 102 241 / 0%);
+  }
+}
+
+@keyframes mic-processing {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes mic-speaking {
+  0%, 100% {
+    box-shadow: 0 0 10px rgb(236 72 153 / 25%);
+  }
+  50% {
+    box-shadow: 0 0 20px rgb(236 72 153 / 45%);
+  }
 }
 
 /* Responsive */

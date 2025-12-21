@@ -504,6 +504,11 @@ class SupervisorService:
 
             _supervisor_ctx_token = set_supervisor_run_id(run.id)
 
+            # Set user context for token streaming (required for real-time SSE tokens)
+            from zerg.callbacks.token_stream import set_current_user_id
+
+            _user_ctx_token = set_current_user_id(owner_id)
+
             # Run the agent with timeout
             runner = AgentRunner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
             try:
@@ -516,6 +521,10 @@ class SupervisorService:
             finally:
                 # Always reset context even on timeout
                 reset_supervisor_run_id(_supervisor_ctx_token)
+                # Reset user context
+                from zerg.callbacks.token_stream import current_user_id_var
+
+                current_user_id_var.reset(_user_ctx_token)
 
             # Extract final result (last assistant message)
             result_text = None
