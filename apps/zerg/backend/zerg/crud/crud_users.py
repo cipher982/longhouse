@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.models.models import User
+from zerg.models import User
 
 
 def get_user(db: Session, user_id: int) -> Optional[User]:

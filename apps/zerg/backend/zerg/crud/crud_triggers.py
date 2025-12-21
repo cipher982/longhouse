@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from zerg.models.models import Trigger
+from zerg.models import Trigger
 
 
 def create_trigger(
