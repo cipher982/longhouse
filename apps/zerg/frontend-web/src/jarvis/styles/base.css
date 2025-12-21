@@ -1,8 +1,7 @@
 /* Base styles - Cyber/Holographic Theme */
 
-/* Import shared design tokens (copied from packages/design-tokens/) */
-@import url("./tokens/core.css");
-@import url("./tokens/theme-glass.css");
+/* Import design tokens (glass theme applied via .jarvis-container) */
+@import "../../styles/tokens.css";
 
 .jarvis-container {
   /* Jarvis-specific overrides and aliases */

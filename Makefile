@@ -233,11 +233,6 @@ generate-sdk: ## Generate OpenAPI types from backend schema
 	@cd apps/zerg/frontend-web && bun run generate:api
 	@echo "✅ SDK generation complete"
 
-build-tokens: ## Build shared design tokens
-	@echo "🎨 Building design tokens..."
-	@cd packages/design-tokens && node build.mjs
-	@echo "✅ Design tokens built"
-
 seed-agents: ## Seed baseline Zerg agents for Jarvis
 	@echo "🌱 Seeding agents..."
 	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \

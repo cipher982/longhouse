@@ -1,57 +1,42 @@
-# React Frontend Multi-stage Dockerfile
-# Development and Production targets
-#
-# BUILD CONTEXT: This Dockerfile expects repo root as build context
-# Example: docker build -f apps/zerg/frontend-web/Dockerfile .
+# React Frontend Dockerfile
+# Simple single-app build - no workspace complexity
 
-# Builder stage - build frontend
+# Builder stage - build frontend for production
 FROM oven/bun:alpine AS builder
 
 WORKDIR /app
 
-# Copy only the workspaces we need
-COPY packages/design-tokens ./packages/design-tokens/
-COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
+# Copy package files first for better caching
+COPY apps/zerg/frontend-web/package.json ./
+COPY apps/zerg/frontend-web/bun.lock* ./
 
-# Create minimal workspace config (only declares packages we actually copied)
-# Using echo instead of heredoc to avoid potential issues with Coolify's ARG injection
-RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages/design-tokens","apps/zerg/frontend-web"]}' > package.json
+# Install dependencies
+RUN bun install --frozen-lockfile || bun install
 
-# Install dependencies (workspace resolution now works)
-RUN bun install
+# Copy source
+COPY apps/zerg/frontend-web/ ./
 
 # Build args for Vite env vars (baked into JS bundle at build time)
 ARG VITE_UMAMI_WEBSITE_ID
 ARG VITE_UMAMI_SCRIPT_SRC
 ARG VITE_UMAMI_DOMAINS
 
-# Make args available as env vars during build
 ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
 ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
 ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
 
-# Build design tokens first (generates dist/)
-WORKDIR /app/packages/design-tokens
-RUN bun run build
-
-# Build React app for production
-WORKDIR /app/apps/zerg/frontend-web
+# Build
 RUN bun run build
 
 # Production target - nginx serving static files
 FROM nginx:alpine AS production
 
-# Copy custom nginx configuration
 COPY apps/zerg/frontend-web/nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
-# Copy built React app
-COPY --from=builder /app/apps/zerg/frontend-web/dist/ /usr/share/nginx/html/
-
-# Health check: ensure key files exist
 RUN test -f /usr/share/nginx/html/index.html
 
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]
 
 # Development target - Vite dev server with hot reload
@@ -59,18 +44,15 @@ FROM oven/bun:alpine AS development
 
 WORKDIR /app
 
-# Copy workspaces
-COPY packages/design-tokens ./packages/design-tokens/
-COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
-
-# Create minimal workspace config (using echo to avoid heredoc issues)
-RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages/design-tokens","apps/zerg/frontend-web"]}' > package.json
+# Copy package files
+COPY apps/zerg/frontend-web/package.json ./
+COPY apps/zerg/frontend-web/bun.lock* ./
 
 # Install dependencies
-RUN bun install
+RUN bun install --frozen-lockfile || bun install
 
-WORKDIR /app/apps/zerg/frontend-web
+# Copy source (will be overwritten by volume mount in dev)
+COPY apps/zerg/frontend-web/ ./
 
 EXPOSE 5173
-
 CMD ["bun", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

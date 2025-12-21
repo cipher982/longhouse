@@ -173,8 +173,8 @@ services:
   zerg-frontend:
     profiles: [full]
     build:
-      context: ../apps/zerg/frontend-web
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/zerg/frontend-web/Dockerfile
       target: development
     restart: "no"
     depends_on:
@@ -201,8 +201,8 @@ services:
   zerg-frontend-exposed:
     profiles: [zerg]
     build:
-      context: ../apps/zerg/frontend-web
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/zerg/frontend-web/Dockerfile
       target: development
     restart: "no"
     depends_on:
@@ -315,8 +315,8 @@ services:
   zerg-frontend-prod:
     profiles: [prod]
     build:
-      context: ../apps/zerg/frontend-web
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/zerg/frontend-web/Dockerfile
       target: production
       args:
         # Bake production URLs into build

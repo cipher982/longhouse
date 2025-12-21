@@ -15,7 +15,6 @@
     "precommit": "bun run validate:types && bun run validate:contracts && bun run test -- --run"
   },
   "dependencies": {
-    "@swarmlet/design-tokens": "workspace:*",
     "@openai/agents": "^0.1.1",
     "@tanstack/react-query": "^5.62.7",
     "@xyflow/react": "^12.8.6",
