@@ -28,6 +28,23 @@ export default function App({ embedded = false }: AppProps) {
     workerProgress.initialize('worker-progress', 'sticky')
   }, [])
 
+  // Pause expensive CSS animations when window loses focus (saves CPU/GPU)
+  useEffect(() => {
+    const container = document.querySelector('.jarvis-container')
+    if (!container) return
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        container.classList.add('animations-paused')
+      } else {
+        container.classList.remove('animations-paused')
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
   // Main Jarvis app hook - handles initialization, connection, voice
   const jarvisApp = useJarvisApp({
     autoConnect: false, // User must click Connect button

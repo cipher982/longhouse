@@ -61,12 +61,14 @@
   }
 }
 
-@keyframes grid-move {
+/* Old grid-move used background-position (causes repaint)
+   New grid-drift uses transform (GPU composited) */
+@keyframes grid-drift {
   0% {
-    background-position: 0 0;
+    transform: perspective(500px) rotateX(60deg) translateY(0);
   }
   100% {
-    background-position: 50px 50px;
+    transform: perspective(500px) rotateX(60deg) translateY(50px);
   }
 }
 
