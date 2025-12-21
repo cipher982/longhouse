@@ -193,6 +193,7 @@ These tests dispatch real tasks to the Supervisor and verify the SSE stream resu
 ### Backend (Python)
 - Location: `apps/zerg/backend/zerg/`
 - Tests: `apps/zerg/backend/tests/` — run with `./run_backend_tests.sh`
+- Debug scripts: `scripts/debug_*.py` — helpers for workflow/execution debugging
 - Uses FastAPI with Pydantic models
 - Agent logic uses LangGraph
 - Routers in `routers/`, services in `services/`, models in `models/`
