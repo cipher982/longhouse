@@ -14,14 +14,8 @@ COPY packages/design-tokens ./packages/design-tokens/
 COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
 
 # Create minimal workspace config (only declares packages we actually copied)
-# This avoids "workspace not found" errors from the full monorepo package.json
-RUN cat > package.json << 'EOF'
-{
-  "name": "@swarm/frontend-build",
-  "private": true,
-  "workspaces": ["packages/design-tokens", "apps/zerg/frontend-web"]
-}
-EOF
+# Using echo instead of heredoc to avoid potential issues with Coolify's ARG injection
+RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages/design-tokens","apps/zerg/frontend-web"]}' > package.json
 
 # Install dependencies (workspace resolution now works)
 RUN bun install
@@ -68,14 +62,8 @@ WORKDIR /app
 COPY packages/design-tokens ./packages/design-tokens/
 COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
 
-# Create minimal workspace config
-RUN cat > package.json << 'EOF'
-{
-  "name": "@swarm/frontend-build",
-  "private": true,
-  "workspaces": ["packages/design-tokens", "apps/zerg/frontend-web"]
-}
-EOF
+# Create minimal workspace config (using echo to avoid heredoc issues)
+RUN echo '{"name":"@swarm/frontend-build","private":true,"workspaces":["packages/design-tokens","apps/zerg/frontend-web"]}' > package.json
 
 # Install dependencies
 RUN bun install
