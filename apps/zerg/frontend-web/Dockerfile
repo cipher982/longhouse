@@ -1,17 +1,28 @@
 # React Frontend Multi-stage Dockerfile
 # Development and Production targets
+#
+# BUILD CONTEXT: This Dockerfile expects repo root as build context
+# Example: docker build -f apps/zerg/frontend-web/Dockerfile .
 
-# Builder stage - shared dependencies
+# Builder stage - build tokens and frontend
 FROM oven/bun:alpine AS builder
 
 WORKDIR /app
 
-# Copy package files and install dependencies
-COPY package*.json ./
-RUN bun install
+# Copy workspace config for proper dependency resolution
+COPY package.json bun.lock ./
 
-# Copy source code
-COPY . .
+# Copy design-tokens package (workspace dependency)
+COPY packages/design-tokens ./packages/design-tokens/
+
+# Copy frontend-web app
+COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
+
+# Install all workspace dependencies
+RUN bun install --frozen-lockfile
+
+# Build design tokens first (frontend depends on it)
+RUN cd packages/design-tokens && bun run build
 
 # Build args for Vite env vars (baked into JS bundle at build time)
 ARG VITE_UMAMI_WEBSITE_ID
@@ -23,17 +34,18 @@ ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
 ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
 ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
 
-# Build React app for production
+# Build React app for production (skip the copy:tokens prebuild - we import from package)
+WORKDIR /app/apps/zerg/frontend-web
 RUN bun run build
 
 # Production target - nginx serving static files
 FROM nginx:alpine AS production
 
 # Copy custom nginx configuration
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY apps/zerg/frontend-web/nginx.conf /etc/nginx/nginx.conf
 
 # Copy built React app (production build uses base: "/" so copy to root)
-COPY --from=builder /app/dist/ /usr/share/nginx/html/
+COPY --from=builder /app/apps/zerg/frontend-web/dist/ /usr/share/nginx/html/
 
 # Health check: ensure key files exist
 RUN test -f /usr/share/nginx/html/index.html
@@ -49,12 +61,18 @@ FROM oven/bun:alpine AS development
 
 WORKDIR /app
 
-# Install dependencies
-COPY package*.json ./
-RUN bun install
+# Copy workspace config
+COPY package.json bun.lock ./
+COPY packages/design-tokens ./packages/design-tokens/
+COPY apps/zerg/frontend-web ./apps/zerg/frontend-web/
 
-# Copy source code (will be overridden by volume mount in docker-compose)
-COPY . .
+# Install dependencies
+RUN bun install --frozen-lockfile
+
+# Build tokens for dev
+RUN cd packages/design-tokens && bun run build
+
+WORKDIR /app/apps/zerg/frontend-web
 
 # Expose Vite dev server port
 EXPOSE 5173
