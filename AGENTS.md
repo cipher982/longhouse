@@ -365,6 +365,34 @@ Run `make env-check` to validate your environment before starting.
 
 Dev auth defaults (`AUTH_DISABLED=1`, `VITE_AUTH_ENABLED=false`) are set in compose. For production, set `AUTH_DISABLED=0` and configure Google OAuth credentials.
 
+## Auto-Seeding (User Context & Credentials)
+
+On startup, the backend automatically seeds user context and credentials from local config files. This is **idempotent** (safe to run repeatedly).
+
+### Config File Locations (checked in order)
+| File | Dev Path | Prod Path |
+|------|----------|-----------|
+| User context | `scripts/user_context.local.json` | `~/.config/zerg/user_context.json` |
+| Credentials | `scripts/personal_credentials.local.json` | `~/.config/zerg/personal_credentials.json` |
+
+### Setup (First Time)
+```bash
+# Copy examples and edit with your details
+cp apps/zerg/backend/scripts/user_context.example.json \
+   apps/zerg/backend/scripts/user_context.local.json
+
+cp apps/zerg/backend/scripts/personal_credentials.example.json \
+   apps/zerg/backend/scripts/personal_credentials.local.json
+
+# Edit the files with your servers, integrations, and credentials
+# Then restart the backend (or it will seed on next `make dev`)
+```
+
+The `.local.json` files are git-ignored. User context includes:
+- **servers**: Names, IPs, purposes (injected into supervisor/worker prompts)
+- **integrations**: Health trackers, notes apps, backup systems
+- **custom_instructions**: Personal preferences for AI responses
+
 ## Personal Tools & Credentials (v2.1 Phase 4)
 
 Jarvis supports personal integrations for location, health, and notes. These are **Supervisor-owned tools** that use per-user encrypted credentials.
