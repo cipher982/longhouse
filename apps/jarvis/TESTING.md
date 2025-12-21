@@ -2,18 +2,18 @@
 
 Fast iteration guide for Jarvis testing. Get results in seconds, not minutes.
 
+> NOTE (2025-12-20): Jarvis is now served inside the unified Zerg SPA at `apps/zerg/frontend-web/src/jarvis/`.
+> The old standalone `apps/jarvis/apps/web/` frontend was deleted, so the legacy Jarvis E2E instructions below are historical.
+> Use `make test-chat-e2e` (or `make test-e2e`) for Playwright tests against `/chat`.
+
 ## Quick Start (What You Probably Want)
 
 ```bash
-# Fast unit tests (2-3 seconds)
-make test-jarvis-unit
+# Unit tests (backend + frontend)
+make test
 
-# Watch mode for TDD (auto-rerun on save)
-make test-jarvis-watch
-
-# Run specific E2E test (with hot reload)
-make test-jarvis-text        # Text message flow
-make test-jarvis-history     # History hydration
+# Chat E2E smoke tests (/chat inside unified SPA)
+make test-chat-e2e
 ```
 
 ## Speed Comparison
