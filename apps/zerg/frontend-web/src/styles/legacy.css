@@ -1,7 +1,7 @@
-/* Shared Design Tokens */
-@import url("./tokens/core.css");
-@import url("./tokens/theme-solid.css");
-@import url("./tokens/legacy-aliases.css");
+/* Shared Design Tokens - imported from workspace package */
+@import "@swarmlet/design-tokens/core.css";
+@import "@swarmlet/design-tokens/theme-solid.css";
+@import "@swarmlet/design-tokens/legacy-aliases.css";
 
 /* All legacy CSS using spec-compliant layer() syntax */
 @import url("./styles.css") layer(legacy);

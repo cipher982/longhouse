@@ -11,6 +11,7 @@
     "./core.css": "./dist/core.css",
     "./theme-solid.css": "./dist/theme-solid.css",
     "./theme-glass.css": "./dist/theme-glass.css",
+    "./legacy-aliases.css": "./dist/legacy-aliases.css",
     "./tokens": {
       "types": "./dist/tokens.ts",
       "import": "./dist/tokens.ts"
