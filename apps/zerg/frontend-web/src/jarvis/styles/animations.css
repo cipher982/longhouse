@@ -68,7 +68,7 @@
     transform: perspective(500px) rotateX(60deg) translateY(0);
   }
   100% {
-    transform: perspective(500px) rotateX(60deg) translateY(50px);
+    transform: perspective(500px) rotateX(60deg) translateY(60px);
   }
 }
 
