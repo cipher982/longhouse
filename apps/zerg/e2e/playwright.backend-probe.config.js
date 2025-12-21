@@ -39,7 +39,9 @@ function readEnvVarFromFile(envPath, key, fallback) {
 const envPath = findDotEnv(__dirname);
 const BACKEND_PORT = Number.parseInt(process.env.BACKEND_PORT ?? readEnvVarFromFile(envPath, "BACKEND_PORT", "8001"), 10);
 
-const workers = process.env.CI ? 4 : os.cpus().length;
+const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
+const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+const workers = Number.isFinite(envWorkers) && envWorkers > 0 ? envWorkers : (process.env.CI ? 4 : cpuCount);
 
 export default {
   testDir: "./probes",
