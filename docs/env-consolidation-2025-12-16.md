@@ -3,6 +3,9 @@
 **Date:** 2025-12-16
 **Status:** ✅ Complete
 
+> Note (2025-12-20): `apps/jarvis/apps/web/` was deleted during the unified SPA merge.
+> This doc is still accurate as a record of what was backed up on 2025-12-16.
+
 ## Overview
 
 All `.env` files in the Zerg monorepo have been consolidated into a single root-level `.env` file at:

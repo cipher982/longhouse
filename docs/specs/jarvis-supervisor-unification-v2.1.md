@@ -38,8 +38,8 @@ This spec removes the remaining “third layer” plumbing (`route_to_supervisor
 
 ### What matches the goal (implemented)
 
-- Voice transcripts are routed to Supervisor (`apps/jarvis/apps/web/src/hooks/useJarvisApp.ts` handles transcripts)
-- Typed text is routed to Supervisor (`apps/jarvis/apps/web/src/hooks/useTextChannel.ts` uses `SupervisorChatController` → POST `/api/jarvis/chat`)
+- Voice transcripts are routed to Supervisor (`apps/zerg/frontend-web/src/jarvis/app/hooks/useJarvisApp.ts` handles transcripts)
+- Typed text is routed to Supervisor (`apps/zerg/frontend-web/src/jarvis/app/hooks/useTextChannel.ts` uses `SupervisorChatController` → POST `/api/jarvis/chat`)
 - Supervisor is server-side SSOT for history (loaded during initialization)
 - React-only architecture (no bridge mode, no legacy controllers)
 
@@ -50,7 +50,7 @@ This spec removes the remaining “third layer” plumbing (`route_to_supervisor
 
 ### Supervisor streaming
 
-- `/api/jarvis/chat`: fetch + manual SSE parsing (`apps/jarvis/apps/web/lib/supervisor-chat-controller.ts`)
+- `/api/jarvis/chat`: fetch + manual SSE parsing (`apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`)
 - `/api/jarvis/supervisor/events`: EventSource streaming (`apps/jarvis/packages/core/src/jarvis-api-client.ts`)
 
 ---
@@ -103,7 +103,7 @@ This is the single most important implementation requirement.
 Implementation requirements:
 
 1. Configure Realtime turn detection with **`create_response=false`** so the server does not automatically create a response at end-of-turn.
-   - Code lives in `apps/jarvis/apps/web/lib/session-handler.ts` (`SESSION_CONFIG.turnDetection`).
+   - Code lives in `apps/zerg/frontend-web/src/jarvis/lib/session-handler.ts` (`SESSION_CONFIG.turnDetection`).
    - With the current SDK, this maps to `turn_detection.create_response` under the hood.
 2. Ensure Jarvis web never calls APIs that create a Realtime response:
    - Do not call `session.sendMessage(...)` for typed chat (typed chat goes to Supervisor).
@@ -298,7 +298,7 @@ Acceptance:
 Tasks:
 
 - Extend `/api/jarvis/chat` SSE generator to also subscribe to worker + worker tool events (parity with `/supervisor/events`).
-- Update `SupervisorChatController` (`apps/jarvis/apps/web/lib/supervisor-chat-controller.ts`) to handle those events and publish `stateManager` updates for progress UI.
+- Update `SupervisorChatController` (`apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`) to handle those events and publish `stateManager` updates for progress UI.
 - Deprecate any Jarvis web usage of `JarvisAPIClient.executeSupervisorTask()` path.
 
 Acceptance:

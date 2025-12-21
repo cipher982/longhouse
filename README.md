@@ -16,18 +16,18 @@ Zerg is the supervisor/worker orchestration backend. Jarvis is the voice/text UI
 
 ```
 User → http://localhost:30080 (nginx)
-  /            → Zerg dashboard (React)
+  /            → Unified React SPA (dashboard + /chat)
   /dashboard   → Zerg dashboard (alias)
-  /chat        → Jarvis web (PWA)
+  /chat        → Jarvis chat UI (SPA route)
   /api/*       → Zerg FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
   /ws/*        → Zerg WS (SSE/WS)
 
 Backend: FastAPI + LangGraph supervisor/worker agents
 Workers: disposable agents, artifacts under /data/workers
-Frontend: React (Zerg) + Vite PWA (Jarvis), served same-origin
+Frontend: Unified React SPA (Zerg dashboard + Jarvis chat), served same-origin
 ```
 
-Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (backend), 8080 (jarvis web) stay internal.
+Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backend).
 
 ---
 
@@ -43,8 +43,8 @@ Ports (dev): nginx 30080 external; service ports 47200 (zerg-frontend), 47300 (b
 ## Commands
 
 - `make dev` – brings up unified stack with nginx front.
-- `make zerg` / `make jarvis` – individual stacks.
-- Tests: `make test-zerg` (backend + frontend + e2e), `make test-jarvis`.
+- `make zerg` – direct ports stack (backend + frontend).
+- Tests: `make test` (unit), `make test-e2e`, `make test-all`, `make test-chat-e2e`.
 - Codegen: `make generate-sdk`, `make regen-ws`.
 
 ---
@@ -57,7 +57,7 @@ apps/
 │   ├── backend/        # FastAPI + LangGraph supervisor/worker
 │   ├── frontend-web/   # React dashboard
 │   └── e2e/            # Playwright unified tests
-└── jarvis/             # Voice/text PWA UI
+└── jarvis/             # Legacy artifacts + shared packages
 
 docker/                 # Compose files + nginx reverse-proxy configs
 docs/                   # Specs/PRDs (see below)
