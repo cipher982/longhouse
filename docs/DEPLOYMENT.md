@@ -688,7 +688,7 @@ git pull origin main
 
 # 3. Update dependencies
 cd apps/zerg/backend && uv sync
-cd apps/jarvis && npm install
+cd /opt/swarm && bun install
 
 # 4. Run migrations
 cd apps/zerg/backend && uv run alembic upgrade head
