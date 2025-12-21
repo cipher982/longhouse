@@ -30,9 +30,11 @@ ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
 ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
 ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
 
+# Build design tokens first (generates dist/)
+WORKDIR /app/packages/design-tokens
+RUN bun run build
+
 # Build React app for production
-# NOTE: Design tokens are pre-built and committed (dist/ in git)
-# This reduces build memory pressure on resource-constrained servers
 WORKDIR /app/apps/zerg/frontend-web
 RUN bun run build
 

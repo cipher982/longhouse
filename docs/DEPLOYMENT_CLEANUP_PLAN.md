@@ -9,8 +9,15 @@
 - Added Coolify API docs to COOLIFY_DEBUGGING.md (architecture, deploy trigger)
 - Consolidated AGENTS.md as primary quick reference for agents
 
+### ✅ Design Tokens Hack Removed
+- Removed pre-built `packages/design-tokens/dist/` from git
+- Added build step to frontend Dockerfile (builds tokens fresh)
+- Server has 16GB RAM now, no need for memory optimization
+
 ### Remaining Decisions (Optional)
-The Docker hacks below are **pragmatic and working**. Clean up only if they become painful.
+The remaining Docker hacks are **pragmatic and working**:
+- Package.json echo workaround (fine, simple)
+- Simplified nginx.dockerfile (harmless)
 
 ---
 
