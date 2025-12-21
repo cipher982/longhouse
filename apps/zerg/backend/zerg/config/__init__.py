@@ -159,10 +159,15 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     # Load environment files using python-dotenv (proper parsing)
     # ------------------------------------------------------------------
 
-    # Load environment file based on NODE_ENV
+    # Load environment file based on NODE_ENV.
+    #
+    # Unit tests / CI tend to set NODE_ENV=test and expect `.env.test`.
+    # E2E runs set ENVIRONMENT=test:e2e and need the full repo-root `.env`.
     node_env = os.getenv("NODE_ENV", "development")
+    explicit_env = os.getenv("ENVIRONMENT") or ""
+    is_e2e_runtime = "e2e" in explicit_env.lower()
 
-    if node_env == "test":
+    if node_env == "test" and not is_e2e_runtime:
         env_path = _REPO_ROOT / ".env.test"
         if not env_path.exists():
             env_path = _REPO_ROOT / ".env"  # Fallback to main .env
@@ -173,16 +178,31 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Preserve ENVIRONMENT and TESTING if explicitly set for E2E test isolation
         # (E2E tests set these to specific values which should not be overridden by .env)
         current_env = os.getenv("ENVIRONMENT")
-        current_testing = os.getenv("TESTING")
         is_e2e_test_env = current_env and ("test" in current_env or "e2e" in current_env)
+        preserved: dict[str, str | None] = {}
+        if is_e2e_test_env:
+            # E2E runs intentionally override a handful of vars (e.g. DATABASE_URL="", DEV_ADMIN=1)
+            # and should not have those overridden by repo-root `.env`.
+            for key in [
+                "ENVIRONMENT",
+                "TESTING",
+                "DEV_ADMIN",
+                "DATABASE_URL",
+                "AUTH_DISABLED",
+                "ALLOWED_MODELS_NON_ADMIN",
+                "ADMIN_EMAILS",
+                "ADMIN_EMAIL",
+            ]:
+                preserved[key] = os.getenv(key)
 
         load_dotenv(env_path, override=True)  # Project .env is authoritative for development
 
         # Restore E2E test environment variables if they were explicitly set
         if is_e2e_test_env:
-            os.environ["ENVIRONMENT"] = current_env
-        if current_testing:  # Preserve TESTING if it was explicitly set
-            os.environ["TESTING"] = current_testing
+            for key, value in preserved.items():
+                # Preserve empty-string overrides as well (only skip when truly unset).
+                if value is not None:
+                    os.environ[key] = value
 
     return Settings(
         testing=testing,
