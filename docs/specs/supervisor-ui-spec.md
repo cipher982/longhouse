@@ -33,7 +33,7 @@ This document covers UI components for supervisor tasks. For the current archite
 
 **Hides:** Worker IDs, job IDs, phase labels.
 
-**Location:** `apps/jarvis/apps/web/lib/supervisor-progress.ts`
+**Location:** `apps/zerg/frontend-web/src/jarvis/lib/worker-progress.ts`
 
 ### 2. Result Display
 
@@ -137,14 +137,14 @@ Jarvis: "The backup ran at 3am successfully."
 
 ## Current Implementation
 
-Already correct in `apps/jarvis/apps/web/lib/supervisor-progress.ts`:
+Implemented in `apps/zerg/frontend-web/src/jarvis/lib/worker-progress.ts`:
 
 - Shows task descriptions directly
 - Displays tool calls with simple status icons
 - Uses floating toast (always visible)
 - No phase labels or invented terminology
 
-**No changes needed.**
+**No changes needed for the core progress toast behavior.**
 
 ---
 

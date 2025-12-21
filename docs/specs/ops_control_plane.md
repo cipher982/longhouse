@@ -222,7 +222,7 @@ For agent diagnostics, SSH access is more flexible:
 **Keep the frontend beacon idea (it's good):**
 
 ```typescript
-// apps/jarvis/apps/web/lib/error-beacon.ts
+// apps/zerg/frontend-web/src/jarvis/lib/error-beacon.ts (example location)
 window.addEventListener("error", (event) => {
   navigator.sendBeacon(
     "/api/ops/frontend-log",

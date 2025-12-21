@@ -1,3 +1,6 @@
+> ⚠️ **HISTORICAL (Dec 2024):** This document predates the unified SPA merge (2025-12-20).
+> Jarvis no longer has a standalone `apps/jarvis/apps/web/` frontend; the chat UI lives in `apps/zerg/frontend-web/src/jarvis/` and is served at `/chat`.
+
 ⏺ Zerg Platform Refactor - Phase 2: Shared Packages (Ready to Start)
 
 ## Project Background
