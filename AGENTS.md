@@ -447,17 +447,13 @@ clifford (Coolify master)      zerg (build/runtime)
 
 ### Deployment Commands (Agent-Friendly)
 ```bash
-# Standard: push to main
-git push origin main
+# Full automated deploy (trigger + poll + smoke tests)
+./scripts/deploy-prod.sh
 
-# Programmatic: trigger via Coolify API (see docs/COOLIFY_DEBUGGING.md)
-ssh clifford "curl -X POST http://localhost:8000/api/v1/deploy ..."
-
-# Check deployment status
-./scripts/get-coolify-logs.sh 1
-
-# Post-deploy validation
-./scripts/smoke-prod.sh
+# Or step by step:
+git push origin main                    # Triggers auto-deploy
+./scripts/get-coolify-logs.sh 1         # Check status
+./scripts/smoke-prod.sh                 # Validate endpoints
 ```
 
 ### Server Access
