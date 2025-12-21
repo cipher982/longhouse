@@ -396,7 +396,7 @@ async def get_available_tools(
             parts = tool.name.split("_", 2)
             if len(parts) >= 3:
                 server_name = parts[1]
-                _ = parts[2]  # TODO: why is this not used?
+                # Tool name (parts[2]) not needed - using full tool.name instead
                 if server_name not in mcp_tools:
                     mcp_tools[server_name] = []
                 mcp_tools[server_name].append(tool.name)
