@@ -17,10 +17,16 @@ clifford (master)           zerg (build server)
 
 ## Triggering Deploys (Agent-Friendly)
 
+### Automated Deploy Script (Recommended)
+```bash
+./scripts/deploy-prod.sh           # Deploy + poll + smoke tests
+./scripts/deploy-prod.sh --skip-smoke  # Deploy only
+```
+
 ### Via Git Push (Standard)
 Push to `main` → Coolify auto-deploys
 
-### Via Coolify API (Programmatic)
+### Via Coolify API (Manual)
 ```bash
 # Get API token from clifford
 TOKEN=$(ssh clifford "sudo cat /var/lib/docker/data/coolify-api/token.env | cut -d= -f2")
