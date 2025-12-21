@@ -90,7 +90,11 @@ const { BACKEND_PORT } = getPortsFromEnv();
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
 // If specific workerId is set, run single process. Otherwise (global backend mode), scale workers.
-const uvicornWorkers = workerId ? 1 : (process.env.CI ? 4 : os.cpus().length);
+  const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
+  const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
+  const uvicornWorkers = workerId
+    ? 1
+    : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : (process.env.CI ? 4 : cpuCount));
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
