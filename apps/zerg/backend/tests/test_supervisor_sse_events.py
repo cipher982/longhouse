@@ -7,7 +7,7 @@ import pytest
 
 from zerg.events import EventType
 from zerg.events import event_bus
-from zerg.routers.jarvis import _supervisor_event_generator
+from zerg.routers.jarvis_supervisor import _supervisor_event_generator
 
 
 @pytest.mark.asyncio
