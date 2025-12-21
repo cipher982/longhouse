@@ -1,5 +1,19 @@
 # Deployment Architecture Cleanup Plan
 
+## Status (December 2025)
+
+### ✅ Documentation Cleanup Complete
+- Removed duplicate Monitoring section from DEPLOYMENT.md
+- Removed DEPRECATED api subdomain section
+- Trimmed Manual Deployment (Option 2) to a note
+- Added Coolify API docs to COOLIFY_DEBUGGING.md (architecture, deploy trigger)
+- Consolidated AGENTS.md as primary quick reference for agents
+
+### Remaining Decisions (Optional)
+The Docker hacks below are **pragmatic and working**. Clean up only if they become painful.
+
+---
+
 ## Current State Analysis
 
 ### The ONE Real Bug (Fixed)

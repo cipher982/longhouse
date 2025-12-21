@@ -70,49 +70,11 @@ Deploy to Coolify:
 4. Set environment variables in Coolify UI
 5. Deploy
 
-### Option 2: Manual Deployment
+### Option 2: Manual Deployment (Legacy)
 
-#### Backend (Zerg)
-
-```bash
-# 1. Clone repository on server
-git clone <repo-url> /opt/swarm
-cd /opt/swarm
-
-# 2. Install Python dependencies
-cd apps/zerg/backend
-uv sync --frozen
-
-# 3. Configure environment
-cp .env.example /opt/swarm/.env
-nano /opt/swarm/.env
-
-# 4. Run migrations
-uv run alembic upgrade head
-
-# 5. Seed agents
-uv run python scripts/seed_jarvis_agents.py
-
-# 6. Start with systemd
-sudo cp /opt/swarm/deploy/zerg-backend.service /etc/systemd/system/
-sudo systemctl enable zerg-backend
-sudo systemctl start zerg-backend
-```
-
-#### Frontend (Unified SPA)
-
-```bash
-# 1. Build unified SPA (dashboard + /chat)
-cd /opt/swarm
-bun install  # From repo root
-cd apps/zerg/frontend-web
-bun run build
-
-# 2. Serve static files with nginx
-sudo cp /opt/swarm/deploy/nginx-jarvis.conf /etc/nginx/sites-available/jarvis
-sudo ln -s /etc/nginx/sites-available/jarvis /etc/nginx/sites-enabled/
-sudo systemctl reload nginx
-```
+> **Note**: Manual deployment is rarely needed. Use Coolify (Option 1) for all
+> production deployments. The sections below (Systemd Services, Nginx Configuration)
+> provide reference configs if you need to run outside of Docker.
 
 ## Environment Configuration
 
@@ -313,36 +275,6 @@ server {
         # SSE specific
         proxy_buffering off;
         proxy_cache off;
-        proxy_read_timeout 24h;
-    }
-}
-```
-
-### Zerg API (DEPRECATED - use same-origin)
-
-> **Note**: As of December 2025, the frontend uses same-origin `/api` proxying
-> (via nginx on the main domain). A separate `api.swarmlet.com` subdomain is
-> no longer needed and should be retired. The configuration below is kept
-> for reference only.
-
-If you still need a separate API subdomain for non-browser clients:
-
-```nginx
-# DEPRECATED - prefer same-origin /api/ via main domain nginx
-server {
-    listen 443 ssl http2;
-    server_name api.yourdomain.com;
-
-    ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
-
-    location / {
-        proxy_pass http://localhost:47300;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_buffering off;
         proxy_read_timeout 24h;
     }
 }
@@ -576,46 +508,6 @@ uv run python -m zerg.workers.dispatch_worker
 
 # Worker 3: Email triggers
 uv run python -m zerg.services.email_trigger_service
-```
-
-## Monitoring
-
-### Uptime Monitoring
-
-Add health check endpoints to your monitoring service:
-
-```bash
-# Backend health (same-origin)
-GET https://swarmlet.com/api/health
-# Expected: 200 OK
-
-# Database health
-GET https://swarmlet.com/api/health/db
-# Expected: 200 OK
-```
-
-### Application Metrics
-
-Integrate Prometheus:
-
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: "zerg-backend"
-    static_configs:
-      - targets: ["localhost:47300"]
-    metrics_path: "/metrics"
-```
-
-### Log Aggregation
-
-Send logs to centralized service:
-
-```bash
-# Using Loki
-sudo apt install promtail
-sudo nano /etc/promtail/config.yml
-# Configure to scrape journald logs
 ```
 
 ## Troubleshooting
