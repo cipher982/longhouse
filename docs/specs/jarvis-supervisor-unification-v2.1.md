@@ -51,7 +51,7 @@ This spec removes the remaining “third layer” plumbing (`route_to_supervisor
 ### Supervisor streaming
 
 - `/api/jarvis/chat`: fetch + manual SSE parsing (`apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`)
-- `/api/jarvis/supervisor/events`: EventSource streaming (`apps/jarvis/packages/core/src/jarvis-api-client.ts`)
+- `/api/jarvis/supervisor/events`: EventSource streaming (Jarvis API client in `apps/zerg/frontend-web/src/jarvis/`)
 
 ---
 
