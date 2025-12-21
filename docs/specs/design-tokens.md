@@ -8,19 +8,20 @@
 
 ## Token Source
 
-- Directory: `apps/zerg/frontend-web/design-tokens/`
+- Package: `packages/design-tokens/` (npm: `@swarmlet/design-tokens`)
 - Format: [Design Tokens Community Group 1.0 schema](https://design-tokens.org/) for forward compatibility with industry tooling (Style Dictionary, Token Studio, Specify, etc.).
 - File: `tokens.json` containing nested categories (color, font, space, radius, shadow, motion, zIndex, component).
-- Alias file: `aliases.json` mapping legacy CSS variables (e.g. `--primary`) to semantic tokens (`color.brand.primary`), letting the build pipeline emit `--primary: var(--color-brand-primary);`.
 
 ## Build Pipeline
 
-- Script: `apps/zerg/frontend-web/scripts/build-design-tokens.mjs`
-  - Reads `tokens.json` and `aliases.json`.
-  - Emits `src/styles/generated/tokens.css` wrapped in `@layer tokens`.
-  - Emits `src/styles/generated/tokens.ts` (tree-shaken typed manifest) for consumption in TS/JS.
-- Bun script: `bun run build:tokens` within the frontend workspace.
-- Hooked into `predev` and `prebuild` scripts so tokens regenerate automatically.
+- Script: `packages/design-tokens/build.mjs`
+  - Reads `tokens.json`.
+  - Emits to `dist/`:
+    - `core.css` - Core token CSS variables wrapped in `@layer tokens`
+    - `legacy-aliases.css` - Backward-compatible aliases for existing CSS variables
+    - `theme-solid.css`, `theme-glass.css` - Theme variants
+    - `tokens.ts` - TypeScript manifest for consumption in TS/JS
+- Build command: `cd packages/design-tokens && bun run build`
 
 ## Typography System
 

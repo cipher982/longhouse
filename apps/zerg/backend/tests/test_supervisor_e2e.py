@@ -79,8 +79,7 @@ class TestSupervisorE2EFlow:
         2. By the time we connect to SSE, the supervisor run has already completed
         3. No events will arrive because the run finished before subscription
 
-        SSE functionality is properly tested via Playwright in:
-        - apps/jarvis/tests/supervisor-flow.spec.ts
+        SSE functionality is properly tested via Playwright E2E tests in apps/zerg/e2e/.
         """
         # First create a run
         response = client.post(
