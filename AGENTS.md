@@ -161,14 +161,14 @@ docker compose -f docker/docker-compose.dev.yml --profile zerg up
 | Command | What It Runs | Duration | CPU Usage |
 |---------|--------------|----------|-----------|
 | `make test` | Unit tests (backend + frontend) | ~40s | Parallel (all cores) |
-| `make test-e2e` | Playwright E2E tests | ~2-3 min | Parallel (4 workers) |
+| `make test-e2e` | Playwright E2E tests | ~2-3 min | Parallel (all cores) |
 | `make test-all` | Unit + E2E combined | ~3-4 min | Parallel |
 | `make test-e2e-single TEST=<spec>` | Single E2E test file | ~10-30s | Single worker |
 | `make test-e2e-grep GREP="name"` | E2E tests matching name | Varies | Parallel |
 | `make test-e2e-ui` | Interactive Playwright UI | N/A | Interactive |
 
 **Backend tests use pytest-xdist (`-n auto`)** - parallel execution across all CPU cores
-**E2E tests use Playwright workers** - 4 parallel workers by default
+**E2E tests use Playwright workers** - uses all CPU cores locally (4 workers in CI only)
 
 ### E2E Test Isolation
 - The backend uses a per-worker SQLite DB file (so Playwright workers don't share a single DB).
