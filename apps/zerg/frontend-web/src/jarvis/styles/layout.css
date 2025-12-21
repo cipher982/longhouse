@@ -349,6 +349,9 @@
   position: relative;
   display: flex;
   gap: var(--space-3);
+  /* Stabilize GPU layer to prevent animation interference from parent */
+  isolation: isolate;
+  will-change: transform;
 }
 
 /* Bottom Bar Container */
@@ -357,6 +360,9 @@
   padding: var(--space-4) var(--space-6);
   padding-bottom: max(var(--space-4), env(safe-area-inset-bottom));
   z-index: 10;
+  /* Isolate from parent animations to prevent GPU layer interference */
+  isolation: isolate;
+  contain: layout style;
 }
 
 /* When TextInput is directly inside bottom-controls */
@@ -424,12 +430,20 @@
   padding: var(--space-3) var(--space-5);
   color: var(--color-text-primary);
   font-size: var(--font-size-base);
-  transition: border-color 0.3s ease, background 0.3s ease, box-shadow 0.3s ease;
-  backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-md);
+  /* Smooth transitions for all focus-related properties */
+  transition:
+    border-color 0.15s ease-out,
+    background 0.15s ease-out,
+    box-shadow 0.15s ease-out;
+  /* Stabilize compositing layer - prevents flicker from parent animations */
+  transform: translateZ(0);
+  /* Start with transparent glow so transition is smooth */
+  box-shadow: 0 0 0 0 transparent, 0 0 0 transparent;
 }
 
-.jarvis-container .text-input:focus {
+/* Custom focus styling for chat input (excluded from base.css generic rule) */
+.jarvis-container .text-input:focus,
+.jarvis-container .text-input:focus-visible {
   outline: none;
   border-color: var(--color-neon-primary);
   background: rgb(30 30 45 / 80%);
