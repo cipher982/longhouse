@@ -42,12 +42,6 @@ check_info() {
 echo "1. Directory Structure"
 echo "----------------------"
 
-if [ -d "apps/jarvis" ]; then
-    check_pass "apps/jarvis/ exists"
-else
-    check_fail "apps/jarvis/ missing"
-fi
-
 if [ -d "apps/zerg" ]; then
     check_pass "apps/zerg/ exists"
 else
@@ -155,12 +149,9 @@ echo "------------"
 
 KEY_FILES=(
     "apps/zerg/backend/zerg/routers/jarvis.py"
-    "apps/jarvis/packages/core/src/jarvis-api-client.ts"
     "apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx"
     "apps/zerg/frontend-web/src/jarvis/lib/state-manager.ts"
     "apps/zerg/backend/scripts/seed_jarvis_agents.py"
-    "scripts/test-jarvis-integration.sh"
-    "docs/completed/jarvis_integration.md"
     "docs/DEPLOYMENT.md"
 )
 
