@@ -433,14 +433,38 @@ make seed-credentials ARGS="--force"
 | Backend API | https://api.swarmlet.com | zerg (Hetzner VPS) |
 | Jarvis Chat | https://swarmlet.com/chat | zerg (Hetzner VPS) |
 
-**Deployment**: Coolify on the `zerg` server manages all containers via Docker Compose.
+### Infrastructure Architecture
+```
+clifford (Coolify master)      zerg (build/runtime)
+├─ Coolify PHP + DB            ├─ Docker containers
+├─ API at localhost:8000       ├─ Build artifacts
+└─ SSH → zerg for deploys      └─ App runtime
+```
 
-- **Server access**: `ssh zerg` (via Tailscale at 100.120.197.80)
-- **Container inspection**: `docker ps`, `docker logs <container>`
-- **Auto-deploy**: Push to `main` → Coolify detects → rebuilds containers
-- **Health check**: `curl https://api.swarmlet.com/health`
+- **Coolify runs on clifford** - orchestrates deploys, stores logs in `coolify-db`
+- **Containers run on zerg** - target server for Swarmlet
+- **Auto-deploy**: Push to `main` → Coolify detects → SSH to zerg → rebuild
 
-See `docs/DEPLOYMENT.md` for full deployment guide.
+### Deployment Commands (Agent-Friendly)
+```bash
+# Standard: push to main
+git push origin main
+
+# Programmatic: trigger via Coolify API (see docs/COOLIFY_DEBUGGING.md)
+ssh clifford "curl -X POST http://localhost:8000/api/v1/deploy ..."
+
+# Check deployment status
+./scripts/get-coolify-logs.sh 1
+
+# Post-deploy validation
+./scripts/smoke-prod.sh
+```
+
+### Server Access
+- **ssh zerg** - Container logs, runtime state
+- **ssh clifford** - Coolify DB, deployment logs, API
+
+See `docs/COOLIFY_DEBUGGING.md` for full debugging workflow.
 
 ### Vite Environment Variables
 

@@ -1,5 +1,47 @@
 # Coolify Debugging Guide
 
+## Architecture
+
+```
+clifford (master)           zerg (build server)
+┌─────────────────┐         ┌─────────────────┐
+│ Coolify PHP     │  SSH→   │ Docker daemon   │
+│ coolify-db      │         │ Container logs  │
+│ API (localhost) │         │ Build artifacts │
+└─────────────────┘         └─────────────────┘
+```
+
+- **Coolify master runs on clifford** - manages deployments, stores logs in PostgreSQL
+- **Builds/containers run on zerg** - target server for Swarmlet deployment
+- **App ID**: 30 (zerg/swarmlet application in Coolify)
+
+## Triggering Deploys (Agent-Friendly)
+
+### Via Git Push (Standard)
+Push to `main` → Coolify auto-deploys
+
+### Via Coolify API (Programmatic)
+```bash
+# Get API token from clifford
+TOKEN=$(ssh clifford "sudo cat /var/lib/docker/data/coolify-api/token.env | cut -d= -f2")
+
+# Trigger rebuild (force=true rebuilds even if no changes)
+ssh clifford "curl -s -X POST http://localhost:8000/api/v1/deploy \
+  -H 'Authorization: Bearer $TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{\"uuid\": \"mosksc0ogk0cssokckw0c8sc\", \"force\": true}'"
+```
+
+### Check Deployment Status
+```bash
+# List recent deployments (from database)
+./scripts/get-coolify-logs.sh 5
+```
+
+**Note**: Coolify API has limited status polling. For deployment progress, check:
+- Container logs on zerg: `ssh zerg 'docker logs -f <container>'`
+- Coolify UI at `http://clifford:8000` (internal only)
+
 ## Quick Log Access
 
 **Fetch latest deployment logs:**
@@ -10,7 +52,7 @@
 This queries the Coolify database directly:
 - Application ID: 30 (zerg)
 - Stored on clifford → coolify-db container
-- Full build output including all docker compose build stderr
+- Full build output (for each of the last N deployments) including all docker compose build stderr
 
 ## Why Coolify Debugging Is Hard
 
