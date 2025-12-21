@@ -128,14 +128,14 @@ else:
 ## Files
 
 - **Implementation**: `apps/zerg/backend/zerg/tools/builtin/linear_tools.py`
-- **Full Docs**: `docs/LINEAR_CONNECTOR.md`
-- **Validation**: `scripts/validate_linear_connector.py`
+- **Full Docs**: `docs/completed/LINEAR_CONNECTOR.md`
+- **Validation**: ~~`scripts/validate_linear_connector.py`~~ _(script never created)_
 
 ## Testing
 
 ```bash
-# Validate implementation
-python scripts/validate_linear_connector.py
+# Validate implementation (script no longer exists)
+# python scripts/validate_linear_connector.py
 
 # Syntax check
 python -m py_compile apps/zerg/backend/zerg/tools/builtin/linear_tools.py

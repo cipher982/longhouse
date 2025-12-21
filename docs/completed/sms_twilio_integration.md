@@ -7,7 +7,7 @@ The Zerg platform now includes SMS messaging capability via Twilio's Programmabl
 ## Implementation Location
 
 - **Tool Implementation**: `/apps/zerg/backend/zerg/tools/builtin/sms_tools.py`
-- **Validation Script**: `/scripts/validate_twilio_sms.py`
+- **Validation Script**: ~~`/scripts/validate_twilio_sms.py`~~ _(script never created)_
 - **Registration**: Automatically registered in `/apps/zerg/backend/zerg/tools/builtin/__init__.py`
 
 ## Tool: `send_sms`
@@ -247,20 +247,23 @@ To implement delivery tracking:
 
 ### Validation Script
 
-Run the validation script to test SMS tool logic without sending real messages:
+~~Run the validation script to test SMS tool logic without sending real messages:~~
+
+**Note**: The validation script was never created. Test using real Twilio credentials via the backend.
 
 ```bash
-cd /Users/davidrose/git/zerg
-python scripts/validate_twilio_sms.py
+# Script no longer exists
+# cd /Users/davidrose/git/zerg
+# python scripts/validate_twilio_sms.py
 ```
 
-This validates:
+~~This validates:~~
 
-- Phone number formatting
-- Message validation
-- Credential format checking
-- Payload building
-- Segment estimation
+- ~~Phone number formatting~~
+- ~~Message validation~~
+- ~~Credential format checking~~
+- ~~Payload building~~
+- ~~Segment estimation~~
 
 ### Test Accounts
 
@@ -313,7 +316,7 @@ print(result)
 
 For issues with the SMS tool implementation:
 
-1. Check validation script passes: `python scripts/validate_twilio_sms.py`
+1. ~~Check validation script passes: `python scripts/validate_twilio_sms.py`~~ _(script never created)_
 2. Verify Twilio credentials are correct
 3. Check phone numbers are in E.164 format
 4. Review Twilio error codes in response

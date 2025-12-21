@@ -352,10 +352,13 @@ Jira Cloud enforces per-tenant burst rate limits:
 
 ## Validation Script
 
-A validation script is available at `/scripts/validate_jira_connector.py` to test the implementation logic without requiring real credentials:
+~~A validation script is available at `/scripts/validate_jira_connector.py` to test the implementation logic without requiring real credentials:~~
+
+**Note**: The validation script was never created. Test using real JIRA credentials via the backend.
 
 ```bash
-python scripts/validate_jira_connector.py
+# Script no longer exists
+# python scripts/validate_jira_connector.py
 ```
 
 This script validates:
