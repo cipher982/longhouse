@@ -15,9 +15,7 @@
   ],
   "scripts": {
     "dev": "make dev",
-    "start": "make swarm-dev",
-    "jarvis": "make jarvis-dev",
-    "zerg": "make zerg-dev",
+    "zerg": "make zerg",
     "test": "make test",
     "generate-sdk": "make generate-sdk",
     "validate:css": "node scripts/validate-css-classes.js",
