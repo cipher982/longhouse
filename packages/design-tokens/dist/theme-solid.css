@@ -1,0 +1,13 @@
+/* THIS FILE IS AUTO-GENERATED. DO NOT EDIT DIRECTLY. */
+@layer theme-solid {
+  :root {
+    --color-surface-page: #09090b;
+    --color-surface-section: #18181b;
+    --color-surface-card: #27272a;
+    --color-surface-elevated: #3f3f46;
+    --color-surface-overlay: rgba(250, 250, 250, 0.03);
+    --color-surface-primary: #27272a;
+    --color-surface-secondary: #18181b;
+    --color-surface-tertiary: #3f3f46;
+  }
+}

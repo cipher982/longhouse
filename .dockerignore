@@ -30,6 +30,7 @@ e2e/playwright-report/
 **/node_modules/
 **/target/
 **/dist/
+!packages/design-tokens/dist/
 **/pkg/
 
 # Environment files (should be passed as build args)
