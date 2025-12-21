@@ -88,8 +88,8 @@ services:
   # Frontend Service - React UI (switched from Rust/WASM)
   frontend:
     build:
-      context: ./apps/zerg/frontend-web
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/zerg/frontend-web/Dockerfile
       target: production
       args:
         VITE_UMAMI_WEBSITE_ID: ${VITE_UMAMI_WEBSITE_ID}
