@@ -60,16 +60,16 @@ make env-check     # Validate required env vars before starting
 # Stop everything
 make stop
 
-# Run tests
-make test          # Unit tests only (backend + frontend)
-make test-e2e      # Playwright E2E only
-make test-all      # Unit + Playwright E2E
-make test-chat-e2e # Chat page E2E (unified SPA)
+# Run tests (ALWAYS use Make targets, never direct pytest/bun commands)
+make test          # Unit tests only (backend + frontend) [~40s, parallel]
+make test-e2e      # Playwright E2E only [~2-3 min]
+make test-all      # Unit + Playwright E2E [~3-4 min]
+make test-chat-e2e # Chat page E2E (unified SPA) [~30s]
 
 # Targeted E2E testing
 make test-e2e-single TEST=tests/unified-frontend.spec.ts # Or any Playwright args
 make test-e2e-grep GREP="test name"
-make test-e2e-ui
+make test-e2e-ui   # Interactive mode
 
 # Regenerate generated code
 make generate-sdk  # OpenAPI types
@@ -154,20 +154,29 @@ docker compose -f docker/docker-compose.dev.yml --profile zerg up
 
 ## Testing Infrastructure
 
-Zerg/Jarvis E2E tests run via Playwright from `apps/zerg/e2e/` and spawn a dedicated backend process for the run.
+**CRITICAL:** ALWAYS use Make targets for testing. Never run pytest/bun commands directly (they miss env vars, wrong CWD, no parallelism).
+
+### Test Commands (with expected duration)
+
+| Command | What It Runs | Duration | CPU Usage |
+|---------|--------------|----------|-----------|
+| `make test` | Unit tests (backend + frontend) | ~40s | Parallel (all cores) |
+| `make test-e2e` | Playwright E2E tests | ~2-3 min | Parallel (4 workers) |
+| `make test-all` | Unit + E2E combined | ~3-4 min | Parallel |
+| `make test-e2e-single TEST=<spec>` | Single E2E test file | ~10-30s | Single worker |
+| `make test-e2e-grep GREP="name"` | E2E tests matching name | Varies | Parallel |
+| `make test-e2e-ui` | Interactive Playwright UI | N/A | Interactive |
+
+**Backend tests use pytest-xdist (`-n auto`)** - parallel execution across all CPU cores
+**E2E tests use Playwright workers** - 4 parallel workers by default
 
 ### E2E Test Isolation
-- The backend uses a per-worker SQLite DB file (so Playwright workers don’t share a single DB).
+- The backend uses a per-worker SQLite DB file (so Playwright workers don't share a single DB).
 - Playwright artifacts (screenshots, traces, reports) are written under `apps/zerg/e2e/test-results/` and `apps/zerg/e2e/playwright-report/`.
 
 ### Database Initialization
 - The backend automatically detects missing tables and initializes the schema on startup via `scripts/init_db.py`.
 - No manual migration steps are required for fresh test environments.
-
-### Running Tests
-- Full run: `make test-e2e`
-- Targeted run: `make test-e2e-single TEST=<spec-or-args>`
-- Interactive UI: `make test-e2e-ui`
 
 ### Debugging E2E Failures (Quick Checklist)
 1. Re-run just the failing spec: `make test-e2e-single TEST=<spec-or-grep>`
@@ -181,18 +190,17 @@ To verify core supervisor tools (KV memory, Tasks, Web Search) against a running
 # 1. Start backend
 make dev
 
-# 2. Run live tests (from apps/zerg/backend)
-cd apps/zerg/backend
-uv run python -m pytest tests/live --live-token <YOUR_JWT>
+# 2. Run live tests (requires running backend + auth token)
+cd apps/zerg/backend && uv run python -m pytest tests/live --live-token <YOUR_JWT>
 ```
 
-These tests dispatch real tasks to the Supervisor and verify the SSE stream results.
+**Note**: No Make target for live tests (requires manual JWT token). These dispatch real tasks to the Supervisor and verify the SSE stream results.
 
 ## Conventions
 
 ### Backend (Python)
 - Location: `apps/zerg/backend/zerg/`
-- Tests: `apps/zerg/backend/tests/` — run with `./run_backend_tests.sh`
+- Tests: `apps/zerg/backend/tests/` — run with `make test` (parallel, ~40s)
 - Debug scripts: `scripts/debug_*.py` — helpers for workflow/execution debugging
 - Uses FastAPI with Pydantic models
 - Agent logic uses LangGraph
@@ -320,6 +328,13 @@ If you edit these, your changes will be overwritten by `make regen-ws` or `make 
 15. **`make dev` is interactive**: It starts services, then tails logs forever (never exits). Run it in your terminal, not via automated tools expecting completion. To rebuild after Dockerfile changes, just `make stop && make dev` — the `--build` flag is already included.
 
 16. **Never use raw `docker compose` for dev**: Always use Make targets (`make dev`, `make stop`, `make logs`). Raw `docker compose` commands use wrong project names, miss env vars from `.env`, and create containers on isolated networks that can't communicate with the rest of the stack. If you must, use the pattern from Makefile line 17: `docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ...`
+
+17. **Never run tests directly**: Always use `make test` / `make test-e2e` instead of direct `pytest` / `bun test` commands. Make targets ensure:
+   - Correct working directory
+   - Environment variables loaded from `.env`
+   - Parallel execution enabled (pytest uses `-n auto`, Playwright uses 4 workers)
+   - Proper test isolation (separate DB per worker)
+   - ~40s for unit tests (vs 3+ minutes without parallelism)
 
 ## Environment Setup
 
