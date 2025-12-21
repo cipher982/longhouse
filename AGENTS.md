@@ -16,6 +16,25 @@ Key principles:
 
 Full spec: `docs/specs/super-siri-architecture.md`
 
+## For AI Agents
+
+**Assume `make dev` is running** — during coding sessions, the dev stack is typically already up.
+
+When running, you have live access to:
+| URL | What |
+|-----|------|
+| http://localhost:30080 | Main entry (nginx) |
+| http://localhost:30080/dashboard | Dashboard UI |
+| http://localhost:30080/chat | Jarvis chat |
+| http://localhost:30080/api/* | Backend API |
+
+**Debug with:**
+- **Playwright MCP** — snapshot pages, click elements, check console errors
+- **API calls** — `curl localhost:30080/api/health` or WebFetch tool
+- **Logs** — `make logs` to tail all services
+
+**If not running:** `make dev-bg` (background, non-blocking) — wait ~15s for init.
+
 ## Architecture (Unified SPA)
 
 ```
