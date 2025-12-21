@@ -106,10 +106,10 @@ if [[ "$DRY_RUN" == "true" ]]; then
     echo "  SSH_MUX_MAX_AGE=3600"
     echo "  SSH_MAX_RETRIES=5"
 else
-    # Create a script to run inside the container
+    # Create a script to run on the host (file is mounted from /data/coolify/source/.env)
     CONFIG_SCRIPT=$(cat <<'EOF'
 #!/bin/bash
-ENV_FILE="/var/www/html/.env"
+ENV_FILE="/data/coolify/source/.env"
 
 # Function to set or update env var
 set_env_var() {
@@ -127,9 +127,6 @@ set_env_var() {
     fi
 }
 
-# Ensure .env exists
-touch "$ENV_FILE"
-
 # Apply settings
 set_env_var "SSH_MUX_HEALTH_CHECK_ENABLED" "false"
 set_env_var "SSH_MUX_PERSIST_TIME" "7200"
@@ -140,8 +137,8 @@ echo "Configuration applied successfully"
 EOF
 )
 
-    echo "Updating .env file in container..."
-    ssh "$SERVER" "docker exec $CONTAINER bash -c '$CONFIG_SCRIPT'"
+    echo "Updating .env file on host..."
+    ssh "$SERVER" "sudo bash -c '$CONFIG_SCRIPT'"
     print_success "Configuration applied"
 fi
 echo
