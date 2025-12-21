@@ -107,8 +107,9 @@ if [[ "$SKIP_SMOKE" == "false" ]]; then
   echo "=== Running Smoke Tests ==="
   echo ""
 
-  # Wait a few seconds for containers to be fully ready
-  sleep 5
+  # Wait for backend health check to pass (has 60s start-period)
+  echo "Waiting 60s for backend health checks..."
+  sleep 60
 
   if "${SCRIPT_DIR}/smoke-prod.sh"; then
     echo ""
