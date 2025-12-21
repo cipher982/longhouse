@@ -245,6 +245,17 @@ async def lifespan(app: FastAPI):
             raise
         logger.info("Database tables initialized")
 
+        # Auto-seed user context and credentials (idempotent)
+        # Loads from scripts/*.local.json or ~/.config/zerg/*.json
+        if not _settings.testing:
+            try:
+                from zerg.services.auto_seed import run_auto_seed
+
+                seed_results = run_auto_seed()
+                logger.info(f"Auto-seed complete: {seed_results}")
+            except Exception as e:
+                logger.warning(f"Auto-seed failed (non-fatal): {e}")
+
         # Initialize agent state recovery system
         if not _settings.testing:
             from zerg.services.agent_state_recovery import initialize_agent_state_system
