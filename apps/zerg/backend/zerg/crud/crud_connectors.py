@@ -7,7 +7,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from zerg.models.models import Connector
+from zerg.models import Connector
 
 
 def create_connector(

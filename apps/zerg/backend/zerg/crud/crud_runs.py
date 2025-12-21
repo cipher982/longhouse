@@ -5,10 +5,10 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from zerg.models import Agent
+from zerg.models import AgentRun
+from zerg.models import ThreadMessage
 from zerg.models.enums import RunStatus
-from zerg.models.models import Agent
-from zerg.models.models import AgentRun
-from zerg.models.models import ThreadMessage
 from zerg.schemas.schemas import RunTrigger
 from zerg.utils.time import utc_now_naive
 

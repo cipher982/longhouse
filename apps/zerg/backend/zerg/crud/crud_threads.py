@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
-from zerg.models.models import Thread
+from zerg.models import Thread
 from zerg.utils.time import utc_now_naive
 
 

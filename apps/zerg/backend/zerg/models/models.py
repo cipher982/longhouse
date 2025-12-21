@@ -5,8 +5,6 @@ from sqlalchemy import Boolean
 from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import DateTime
-from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Float
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -19,181 +17,22 @@ from sqlalchemy.sql import func
 
 # Local helpers / enums
 from zerg.database import Base
-from zerg.models.enums import AgentStatus
 from zerg.models.enums import Phase
-from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
-from zerg.models.enums import ThreadType
-from zerg.models.enums import UserRole
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 
-# ---------------------------------------------------------------------------
-# Authentication – User table (Stage 1)
-# ---------------------------------------------------------------------------
-
-
-class User(Base):
-    """Application user.
-
-    For the MVP we only support Google sign-in, but we leave provider fields
-    generic to allow future providers (e.g. GitHub, email, etc.).
-    """
-
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    # OAuth provider details -------------------------------------------------
-    provider = Column(String, nullable=True, default="google")
-    provider_user_id = Column(String, nullable=True, index=True)
-
-    # Core identity ----------------------------------------------------------
-    email = Column(String, unique=True, nullable=False, index=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-
-    # Role / permission level – backed by :class:`zerg.models.enums.UserRole`.
-    role = Column(
-        SAEnum(UserRole, native_enum=False, name="user_role_enum"),
-        nullable=False,
-        default=UserRole.USER.value,
-    )
-
-    # -------------------------------------------------------------------
-    # Personalisation fields (introduced in *User Personalisation* feature)
-    # -------------------------------------------------------------------
-    # Optional display name shown in the UI (fallback: e-mail)
-    display_name = Column(String, nullable=True)
-    # User-supplied avatar URL (fallback: generated initial)
-    avatar_url = Column(String, nullable=True)
-    # Store arbitrary UI preferences (theme, timezone, etc.)
-    prefs = Column(MutableDict.as_mutable(JSON), nullable=True, default={})
-
-    # User context for prompt composition (servers, integrations, preferences)
-    context = Column(MutableDict.as_mutable(JSON), nullable=False, default={})
-
-    # Login tracking
-    last_login = Column(DateTime, nullable=True)
-
-    # -------------------------------------------------------------------
-    # Google Mail integration (Phase-2 Email Triggers)
-    # -------------------------------------------------------------------
-    # When a user connects their Gmail account with *offline_access* scope we
-    # receive a **refresh token** that allows the backend to fetch short-lived
-    # access-tokens without further user interaction.  Persist the token
-    # encrypted-at-rest in a future iteration – for now we store the raw value
-    # because unit-tests run against an ephemeral in-memory SQLite database.
-
-    gmail_refresh_token = Column(String, nullable=True)
-
-    # -------------------------------------------------------------------
-    # Convenience property used by the API layer / Pydantic models.
-    # -------------------------------------------------------------------
-
-    @property
-    def gmail_connected(self) -> bool:  # noqa: D401 – simple boolean accessor
-        """Return *True* if the user granted offline Gmail access (refresh token stored)."""
-
-        return self.gmail_refresh_token is not None
-
-    # Timestamps -------------------------------------------------------------
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
+# Re-export models that have been split into separate files for backwards compatibility
+from .agent import Agent  # noqa: F401
+from .agent import AgentMessage  # noqa: F401
+from .connector import Connector  # noqa: F401
+from .run import AgentRun  # noqa: F401
+from .thread import Thread  # noqa: F401
+from .thread import ThreadMessage  # noqa: F401
+from .trigger import Trigger  # noqa: F401
+from .user import User  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Integrations – Connectors (single source of truth for provider creds)
 # ---------------------------------------------------------------------------
-
-
-class Connector(Base):
-    """External integration connector.
-
-    Stores provider credentials/config for both inbound (triggers) and
-    outbound (notifications/actions). This becomes the single source of
-    truth – triggers reference a connector, and providers operate strictly
-    via a connector id.
-    """
-
-    __tablename__ = "connectors"
-    __table_args__ = (
-        # Ensure a user cannot create duplicate connectors for the same
-        # (type, provider) pair. Prevents accidental duplicates during
-        # repeated connect flows.
-        UniqueConstraint("owner_id", "type", "provider", name="uix_connector_owner_type_provider"),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    # Ownership – the user who created/owns this connector
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    owner = relationship("User", backref="connectors")
-
-    # High-level type and provider identifier
-    # Examples: type="email", provider="gmail" | provider="smtp"
-    type = Column(String, nullable=False)
-    provider = Column(String, nullable=False)
-
-    # Provider-specific configuration (encrypted secrets, meta, watch info, etc.)
-    config = Column(MutableDict.as_mutable(JSON), nullable=True)
-
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-
-class Agent(Base):
-    __tablename__ = "agents"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    status = Column(
-        SAEnum(AgentStatus, native_enum=False, name="agent_status_enum"),
-        default=AgentStatus.IDLE.value,
-    )
-    system_instructions = Column(Text, nullable=False)
-    task_instructions = Column(Text, nullable=False)
-    schedule = Column(String, nullable=True)  # CRON expression or interval
-    model = Column(String, nullable=False)  # Model to use (no default)
-    config = Column(MutableDict.as_mutable(JSON), nullable=True)  # Additional configuration as JSON
-
-    # -------------------------------------------------------------------
-    # Tool allowlist – controls which tools this agent can use
-    # -------------------------------------------------------------------
-    # Empty/NULL means all tools are allowed. Otherwise, it's a JSON array
-    # of tool names that the agent is allowed to use. Supports wildcards
-    # like "http_*" to allow all HTTP tools.
-    allowed_tools = Column(MutableList.as_mutable(JSON), nullable=True)
-
-    # -------------------------------------------------------------------
-    # Ownership – every agent belongs to *one* user (creator / owner).
-    # -------------------------------------------------------------------
-
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    # Bidirectional relationship so ``agent.owner`` returns the User row and
-    # ``user.agents`` lists all agents owned by the user.
-    owner = relationship("User", backref="agents")
-    # Scheduling metadata
-    # Next time this agent is currently expected to run.  Updated by the
-    # SchedulerService whenever a cron job is (re)scheduled.
-    next_run_at = Column(DateTime, nullable=True)
-    # Last time a scheduled (or manual) run actually finished successfully.
-    last_run_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    # --------------------------------------------------
-    # *run_on_schedule* has been removed – the presence of a non-NULL cron string
-    # in the *schedule* column now **alone** determines whether the Scheduler
-    # service will run the agent.  A NULL / empty schedule means "disabled".
-    # --------------------------------------------------
-    last_error = Column(Text, nullable=True)  # Store the last error message
-
-    # Define relationship with AgentMessage
-    messages = relationship("AgentMessage", back_populates="agent", cascade="all, delete-orphan")
-    # Define relationship with Thread
-    threads = relationship("Thread", back_populates="agent", cascade="all, delete-orphan")
-
-    # Relationship to execution runs (added in the *Run History* feature).
-    runs = relationship("AgentRun", back_populates="agent", cascade="all, delete-orphan")
-
 
 # ---------------------------------------------------------------------------
 # CanvasLayout – persist per-user canvas/UI state (Phase-B)
@@ -261,187 +100,13 @@ class CanvasLayout(Base):
     workflow = relationship("Workflow", backref="canvas_layouts", uselist=False)
 
 
-class AgentMessage(Base):
-    __tablename__ = "agent_messages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"))
-    role = Column(String, nullable=False)  # "system", "user", "assistant"
-    content = Column(Text, nullable=False)
-    timestamp = Column(DateTime, server_default=func.now())
-
-    # Define relationship with Agent
-    agent = relationship("Agent", back_populates="messages")
-
-
-class Thread(Base):
-    __tablename__ = "agent_threads"
-
-    id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"))
-    title = Column(String, nullable=False)
-    active = Column(Boolean, default=True)
-    # Store additional metadata like agent state
-    agent_state = Column(MutableDict.as_mutable(JSON), nullable=True)
-    memory_strategy = Column(String, default="buffer", nullable=True)
-    thread_type = Column(
-        SAEnum(ThreadType, native_enum=False, name="thread_type_enum"),
-        default=ThreadType.CHAT.value,
-        nullable=False,
-    )  # Types: chat, scheduled, manual
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    # Define relationship with Agent
-    agent = relationship("Agent", back_populates="threads")
-    # Define relationship with ThreadMessage
-    messages = relationship("ThreadMessage", back_populates="thread", cascade="all, delete-orphan")
-
-
 # ------------------------------------------------------------
 # Triggers
 # ------------------------------------------------------------
 
-
-class Trigger(Base):
-    """A trigger that can fire an agent (e.g. via webhook).
-
-    Currently only the *webhook* type is implemented.  Each trigger owns a
-    unique secret token that must be supplied when the webhook is invoked.
-    """
-
-    __tablename__ = "triggers"
-
-    id = Column(Integer, primary_key=True, index=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
-
-    # For now we only support webhook triggers but leave room for future
-    # extension (e.g. kafka, email, slack, etc.).
-    type = Column(String, default="webhook", nullable=False)
-
-    # Shared secret that must accompany incoming webhook calls.  Very simple
-    # scheme for now – a random hex string.
-    secret = Column(String, nullable=False, unique=True, index=True)
-
-    # Optional JSON blob with trigger-specific configuration.  This keeps the
-    # model forward-compatible so new trigger types (e.g. *email*, *slack*)
-    # can persist arbitrary settings without schema migrations.  For webhook
-    # triggers the column is generally **NULL**.
-    config = Column(MutableDict.as_mutable(JSON), nullable=True)
-
-    # -------------------------------------------------------------------
-    # Typed *config* accessor
-    # -------------------------------------------------------------------
-
-    @property
-    def config_obj(self):  # noqa: D401 – typed accessor
-        """Return a :class:`TriggerConfig` parsed from ``config`` JSON.
-
-        No caching / fallback logic – we simply construct a new model every
-        call because the cost is negligible and keeps the implementation
-        straightforward.
-        """
-
-        from zerg.models.trigger_config import TriggerConfig  # local import
-
-        return TriggerConfig(**(self.config or {}))  # type: ignore[arg-type]
-
-    def set_config_obj(self, cfg):  # noqa: D401 – mutator, TriggerConfig param
-        """Assign *cfg* and persist its dict representation."""
-
-        # Persist as raw dict so DB schema remains unchanged
-        raw = cfg.model_dump()  # type: ignore[attr-defined]
-
-        self.config = raw  # type: ignore[assignment]
-
-    created_at = Column(DateTime, server_default=func.now())
-
-    # ORM relationships
-    agent = relationship("Agent", backref="triggers")
-
-
-class ThreadMessage(Base):
-    __tablename__ = "thread_messages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    thread_id = Column(Integer, ForeignKey("agent_threads.id"))
-    role = Column(String, nullable=False)  # "system", "user", "assistant", "tool"
-    content = Column(Text, nullable=False)
-    # Store *list* of tool call dicts emitted by OpenAI ChatCompleteion
-    tool_calls = Column(MutableList.as_mutable(JSON), nullable=True)
-    tool_call_id = Column(String, nullable=True)  # For tool responses
-    name = Column(String, nullable=True)  # For tool messages
-    sent_at = Column(DateTime(timezone=True), server_default=func.now())  # When user sent the message (UTC)
-    processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by agent
-    message_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)  # Store additional metadata
-    parent_id = Column(Integer, ForeignKey("thread_messages.id"), nullable=True)
-
-    # Define relationship with Thread
-    thread = relationship("Thread", back_populates="messages")
-
-
 # ---------------------------------------------------------------------------
 # AgentRun – lightweight execution telemetry row
 # ---------------------------------------------------------------------------
-
-
-class AgentRun(Base):
-    """Represents a single *execution* of an Agent.
-
-    An AgentRun is created whenever an agent task is executed either manually,
-    via the scheduler or through an external trigger.  It references the
-    underlying *Thread* that captures the chat transcript but keeps
-    additional execution-level metadata (status, timing, cost, etc.) that is
-    cumbersome to derive from the chat model alone.
-    """
-
-    __tablename__ = "agent_runs"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    # Foreign keys -------------------------------------------------------
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
-    thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
-
-    # Lifecycle ----------------------------------------------------------
-    status = Column(
-        SAEnum(RunStatus, native_enum=False, name="run_status_enum"),
-        default=RunStatus.QUEUED.value,
-        nullable=False,
-    )  # queued → running → success|failed
-    trigger = Column(
-        SAEnum(RunTrigger, native_enum=False, name="run_trigger_enum"),
-        default=RunTrigger.MANUAL.value,
-        nullable=False,
-    )  # manual / schedule / api
-
-    # Timing -------------------------------------------------------------
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-    duration_ms = Column(Integer, nullable=True)
-
-    # Usage --------------------------------------------------------------
-    total_tokens = Column(Integer, nullable=True)
-    total_cost_usd = Column(Float, nullable=True)
-
-    # Failure ------------------------------------------------------------
-    error = Column(Text, nullable=True)
-    cancel_reason = Column(Text, nullable=True)
-
-    # Summary ------------------------------------------------------------
-    # Brief summary of the run for Jarvis Task Inbox (first assistant response or truncated output)
-    summary = Column(Text, nullable=True)
-
-    # Timestamps ---------------------------------------------------------
-    # Note: nullable=True for SQLite compatibility with existing tables
-    # New rows will have defaults, existing rows backfilled by migration
-    created_at = Column(DateTime, server_default=func.now(), nullable=True)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)
-
-    # Relationships ------------------------------------------------------
-    agent = relationship("Agent", back_populates="runs")
-    thread = relationship("Thread", backref="runs")
-
 
 # ---------------------------------------------------------------------------
 # Workflow – visual workflow definition and persistence
