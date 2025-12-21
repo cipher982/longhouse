@@ -99,13 +99,13 @@ sudo systemctl enable zerg-backend
 sudo systemctl start zerg-backend
 ```
 
-#### Frontend (Jarvis)
+#### Frontend (Unified SPA)
 
 ```bash
-# 1. Build Jarvis PWA
+# 1. Build unified SPA (dashboard + /chat)
 cd /opt/swarm
 bun install  # From repo root
-cd apps/jarvis/apps/web
+cd apps/zerg/frontend-web
 bun run build
 
 # 2. Serve static files with nginx
@@ -291,8 +291,8 @@ server {
     ssl_certificate /etc/letsencrypt/live/jarvis.yourdomain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/jarvis.yourdomain.com/privkey.pem;
 
-    # PWA static files
-    root /opt/swarm/apps/jarvis/apps/web/dist;
+    # SPA static files (includes /chat)
+    root /opt/swarm/apps/zerg/frontend-web/dist;
     index index.html;
 
     location / {

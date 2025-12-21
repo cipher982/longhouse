@@ -99,10 +99,10 @@ else
     check_warn "Dependencies not installed - run: bun install"
 fi
 
-if [ -d "apps/jarvis/apps/web/node_modules" ] || [ -d "node_modules/@jarvis" ]; then
-    check_pass "Jarvis dependencies installed"
+if [ -d "apps/zerg/frontend-web/src/jarvis" ]; then
+    check_pass "Jarvis UI present (unified SPA)"
 else
-    check_warn "Jarvis dependencies not installed - run: bun install (from repo root)"
+    check_fail "Jarvis UI missing (expected apps/zerg/frontend-web/src/jarvis)"
 fi
 
 if [ -f "apps/zerg/backend/.venv/bin/python" ] || [ -f "apps/zerg/backend/uv.lock" ]; then
@@ -156,10 +156,11 @@ echo "------------"
 KEY_FILES=(
     "apps/zerg/backend/zerg/routers/jarvis.py"
     "apps/jarvis/packages/core/src/jarvis-api-client.ts"
-    "apps/jarvis/apps/web/lib/task-inbox.ts"
+    "apps/zerg/frontend-web/src/pages/JarvisChatPage.tsx"
+    "apps/zerg/frontend-web/src/jarvis/lib/state-manager.ts"
     "apps/zerg/backend/scripts/seed_jarvis_agents.py"
     "scripts/test-jarvis-integration.sh"
-    "docs/jarvis_integration.md"
+    "docs/completed/jarvis_integration.md"
     "docs/DEPLOYMENT.md"
 )
 

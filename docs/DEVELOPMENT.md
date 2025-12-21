@@ -39,27 +39,23 @@ Internal service ports exist, but are not exposed to the host in `make dev`.
 ### Start Individual Services
 
 ```bash
-# Just Zerg (Docker, direct ports)
+# Zerg only (Docker, direct ports)
 make zerg
-
-# Just Jarvis (native mode, no Docker)
-make jarvis
-make jarvis-stop
 ```
 
 ### Monitoring
 
 ```bash
-# View Zerg logs
-make zerg-logs
+# Tail all service logs
+make logs
 
-# Check service status
-cd apps/jarvis && make status
+# Tail app logs (excludes Postgres)
+make logs-app
 
 # Check what's running
 docker ps
-lsof -i :8080  # Jarvis UI
-lsof -i :47300 # Zerg backend (includes Jarvis BFF)
+lsof -i :30080 # nginx entrypoint
+lsof -i :47300 # backend (direct mode / tests)
 ```
 
 ### Debugging
@@ -68,8 +64,8 @@ lsof -i :47300 # Zerg backend (includes Jarvis BFF)
 # View help
 make help
 
-# Check Jarvis status
-cd apps/jarvis && make status
+# Quick diagnostics (ports, containers, env)
+make doctor
 
 # Reset Zerg database (DESTROYS DATA)
 make dev-reset-db
@@ -96,7 +92,7 @@ make dev
 The zerg-backend isn't running or the proxy isn't working:
 
 1. Check if it started: `lsof -i :47300` or `docker ps | grep backend`
-2. Check Vite config has proxy: `cat apps/jarvis/apps/web/vite.config.ts`
+2. Check Vite config has proxy: `cat apps/zerg/frontend-web/vite.config.ts`
 3. Restart: Ctrl+C, then `make dev`
 
 ### "SyntaxError: Unexpected token '<'"
@@ -114,18 +110,17 @@ Check the browser console for the full error with URL and response body.
 ## Testing
 
 ```bash
-# Run all tests
+# Unit tests (backend + frontend; no Playwright)
 make test
 
-# Just Jarvis tests
-make test-jarvis
+# Playwright E2E (unified SPA)
+make test-e2e
 
-# Just Zerg tests
-make test-zerg
+# Full suite (unit + E2E)
+make test-all
 
-# Jarvis E2E tests (with Playwright UI)
-cd apps/jarvis/e2e
-bunx playwright test --ui
+# Just chat (/chat) E2E smoke tests
+make test-chat-e2e
 ```
 
 ---
@@ -148,54 +143,31 @@ Ctrl+C
 
 ### Making Changes
 
-**Frontend changes** (Jarvis UI):
+**Frontend changes** (unified SPA: dashboard + Jarvis chat):
 
-- Edit files in `apps/jarvis/apps/web/`
+- Edit files in `apps/zerg/frontend-web/src/` (Jarvis lives in `apps/zerg/frontend-web/src/jarvis/`)
 - Browser auto-refreshes (Vite HMR)
 
-**Backend changes** (Zerg backend includes Jarvis BFF):
+**Backend changes** (FastAPI, includes `/api/jarvis/*`):
 
 - Edit files in `apps/zerg/backend/`
 - Hot-reloads in dev mode (RELOAD=true)
-
-**Frontend changes** (Zerg or Jarvis):
-
-- Edit files in `apps/zerg/backend/` or `apps/zerg/frontend-web/`
-- Typically hot-reloads; if you need a clean rebuild: `make dev-clean && make dev`
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│         Nginx Reverse Proxy (30080)             │
-│                                                 │
-│  /chat/*      → Jarvis UI (8080)                │
-│  /dashboard/* → Zerg Dashboard (5173)           │
-│  /api/*       → Zerg Backend (8000)             │
-└─────────────────────────────────────────────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-          ▼              ▼              ▼
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ Jarvis UI   │  │   Zerg      │  │   Zerg      │
-│ (React PWA) │  │ Dashboard   │  │  Backend    │
-│             │  │ (React)     │  │  (FastAPI)  │
-│ - Voice UI  │  │             │  │             │
-│ - Chat UI   │  │ - Agents    │  │ - Jarvis    │
-│             │  │ - Runs      │  │   BFF       │
-└─────────────┘  └─────────────┘  │ - OpenAI    │
-                                  │   Realtime  │
-                                  │ - Agents    │
-                                  │ - Workers   │
-                                  └──────┬──────┘
-                                         │
-                                         ▼
-                                  ┌─────────────┐
-                                  │  Postgres   │
-                                  └─────────────┘
+User → http://localhost:30080 (nginx)
+  /            → Unified React SPA (dashboard + /chat)
+  /dashboard   → Zerg dashboard (SPA route)
+  /chat        → Jarvis chat UI (SPA route)
+  /api/*       → FastAPI backend (includes /api/jarvis/*)
+  /ws/*        → SSE/WS
+
+Internal service ports (dev):
+  Zerg backend       47300
+  Zerg frontend      47200
 ```
 
 ---
@@ -205,24 +177,16 @@ Ctrl+C
 ```
 zerg/
 ├── apps/
-│   ├── jarvis/              # Voice UI
-│   │   ├── apps/
-│   │   │   └── web/         # Vite frontend (8080)
-│   │   ├── packages/
-│   │   │   ├── core/        # Shared models/config
-│   │   │   └── data/        # IndexedDB persistence
-│   │   └── Makefile
+│   ├── jarvis/              # Legacy Jarvis artifacts (no standalone web app)
 │   └── zerg/                # Agent platform
-│       ├── backend/         # FastAPI (8000)
-│       │   └── routers/
-│       │       └── jarvis.py  # Jarvis BFF endpoints
-│       ├── frontend-web/    # React (5173)
-│       └── e2e/            # Playwright tests
+│       ├── backend/         # FastAPI (includes /api/jarvis/*)
+│       ├── frontend-web/    # Unified React SPA (dashboard + /chat)
+│       └── e2e/             # Playwright E2E (unified SPA)
 ├── docker/
 │   ├── docker-compose.dev.yml  # Dev profiles
 │   └── nginx/                  # Reverse proxy configs
 ├── scripts/
-│   └── dev-docker.sh          # Unified dev script
+│   └── dev-docker.sh          # Unified dev script (legacy)
 ├── Makefile                   # Main commands
 └── docs/
     └── DEVELOPMENT.md         # This file
@@ -236,8 +200,7 @@ Key variables in `.env`:
 
 ```bash
 # Proxy & Services
-JARPXY_PORT=30080           # Nginx entry point
-JARVIS_WEB_PORT=8080        # Jarvis UI (internal)
+JARPXY_PORT=30080           # Nginx entry point (reverse-proxy)
 BACKEND_PORT=47300          # Zerg backend (internal)
 FRONTEND_PORT=47200         # Zerg frontend (internal)
 
@@ -260,21 +223,20 @@ Copy from `.env.example` if missing.
 
 - [ ] Is Docker running? (`docker ps`)
 - [ ] Is port 30080 free? (`lsof -i :30080`) - nginx proxy
-- [ ] Is port 8080 free? (`lsof -i :8080`) - Jarvis UI
 - [ ] Is port 47300 free? (`lsof -i :47300`) - Zerg backend
 - [ ] Do you have `.env` configured? (`cat .env`)
 - [ ] Are node_modules installed? (`bun install` from repo root)
-- [ ] Is Vite proxy configured? (`cat apps/jarvis/apps/web/vite.config.ts`)
+- [ ] Is Vite proxy configured? (`cat apps/zerg/frontend-web/vite.config.ts`)
 
 ---
 
 ## Getting Help
 
 1. **Check logs**: Browser console + terminal output
-2. **Run diagnostics**: `cd apps/jarvis && make status`
-3. **Check Docker**: `docker ps` and `make zerg-logs`
+2. **Run diagnostics**: `make doctor`
+3. **Check Docker**: `docker ps` and `make logs-app`
 4. **Nuclear restart**: `make dev-reset-db && make dev`
 
 ---
 
-**Last Updated**: 2025-11-13
+**Last Updated**: 2025-12-20

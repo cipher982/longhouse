@@ -3,13 +3,13 @@
 # Master Test Runner – Execute all test suites for Zerg Agent Platform
 # ---------------------------------------------------------------------------
 # This script orchestrates the complete test suite:
-# 1. Jarvis tests (bun)
-# 2. Zerg tests (backend + frontend + e2e)
+# 1. Unit tests (backend + frontend)
+# 2. E2E tests (Playwright, unified SPA)
 #
 # Prefer the Make targets directly:
-#   make test
-#   make test-jarvis
-#   make test-zerg
+#   make test        # unit only
+#   make test-e2e
+#   make test-all
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -36,8 +36,8 @@ run_test_suite() {
     fi
 }
 
-run_test_suite "Jarvis" "cd '$ROOT_DIR' && make test-jarvis"
-run_test_suite "Zerg" "cd '$ROOT_DIR' && make test-zerg"
+run_test_suite "Unit" "cd '$ROOT_DIR' && make test"
+run_test_suite "E2E" "cd '$ROOT_DIR' && make test-e2e"
 
 # Summary
 echo "" >&2
