@@ -72,12 +72,11 @@
   object-fit: contain;
   position: relative;
   z-index: 1;
-  filter: drop-shadow(0 0 8px rgb(99 102 241 / 40%));
-  transition: filter 0.3s ease;
+  transition: opacity 0.2s ease;
 }
 
 .brand-logo-wrapper:hover .brand-logo {
-  filter: drop-shadow(0 0 12px rgb(99 102 241 / 60%));
+  opacity: 0.95;
 }
 
 .brand-logo-glow {
@@ -89,8 +88,8 @@
     transparent 70%
   );
   border-radius: 50%;
-  filter: blur(8px);
-  opacity: 0.6;
+  opacity: 0.35;
+  transition: opacity 0.2s ease;
 }
 
 #react-root[data-ui-effects="on"] .brand-logo-glow {
@@ -98,9 +97,12 @@
 }
 
 @keyframes logo-pulse {
-  /* Only animate opacity - scale invalidates blur cache, forcing re-blur every frame */
-  0%, 100% { opacity: 0.4; }
+  0%, 100% { opacity: 0.35; }
   50% { opacity: 0.7; }
+}
+
+.brand-logo-wrapper:hover .brand-logo-glow {
+  opacity: 0.7;
 }
 
 .brand-link {
@@ -181,15 +183,21 @@
   box-shadow:
     0 0 8px var(--color-brand-primary),
     0 0 16px rgb(99 102 241 / 40%);
+  opacity: 0.9;
+  transition: opacity 0.2s ease;
 }
 
 #react-root[data-ui-effects="on"] .nav-tab-indicator {
-  animation: indicator-glow 2s ease-in-out infinite;
+  animation: indicator-glow 2.4s ease-in-out infinite;
 }
 
 @keyframes indicator-glow {
-  0%, 100% { opacity: 0.8; }
+  0%, 100% { opacity: 0.65; }
   50% { opacity: 1; }
+}
+
+.nav-tab:hover .nav-tab-indicator {
+  opacity: 1;
 }
 
 .header-actions {
@@ -203,7 +211,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  background: rgb(255 255 255 / 3%);
+  background: rgb(255 255 255 / 5%);
+  backdrop-filter: blur(8px);
   border: 1px solid var(--color-border-muted);
   color: var(--color-text-secondary);
   padding: var(--space-2) var(--space-3);
@@ -212,7 +221,6 @@
   text-decoration: none;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
-  backdrop-filter: blur(4px);
   font-family: var(--font-family-base);
 }
 

@@ -15,7 +15,7 @@ ZERG_FRONTEND_PORT ?= 47200
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu
+.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -358,3 +358,19 @@ perf-gpu: ## Measure actual GPU utilization % for landing page effects (macOS)
 	@echo "   - gpu-report.md: Human-readable summary"
 	@echo "   - gpu-summary.json: Stats per variant"
 	@echo "   - gpu-samples.json: Raw sample data"
+
+perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects on/off (macOS)
+	@echo "🔬 Measuring GPU utilization (dashboard)..."
+	@echo "   Ensure 'make dev' is running first!"
+	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
+	@echo ""
+	cd apps/zerg/e2e && bun run scripts/gpu-profiler-dashboard.ts \
+		--url=http://localhost:30080 \
+		--duration=10 \
+		--output=./perf-results \
+		$(ARGS)
+	@echo ""
+	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "   - gpu-dashboard-report.md: Human-readable summary"
+	@echo "   - gpu-dashboard-summary.json: Stats per variant"
+	@echo "   - gpu-dashboard-samples.json: Raw sample data"

@@ -83,61 +83,37 @@
     z-index: 0;
   }
 
-  /* Living Void Layer 2: Moving Grid (Only when effects are on) */
+  /* Ambient visuals (Static)
+     Static backgrounds allow glass panels (backdrop-filter) without GPU cost.
+     Landing page has its own animated effects via data-fx-* attributes. */
+
+  /* Living Void Layer 1: Grid (static) */
   #react-root[data-ui-effects="on"]::before {
     content: "";
     position: absolute;
-    inset: -100%;
-    width: 300%;
-    height: 300%;
+    inset: 0;
     background-image:
-      linear-gradient(rgba(99, 102, 241, 0.2) 2px, transparent 2px),
-      linear-gradient(90deg, rgba(99, 102, 241, 0.2) 2px, transparent 2px);
-    background-size: 100px 100px;
-    transform: perspective(1000px) rotateX(60deg);
-    animation: grid-move 40s linear infinite;
+      linear-gradient(rgba(99, 102, 241, 0.15) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99, 102, 241, 0.15) 1px, transparent 1px);
+    background-size: 80px 80px;
     pointer-events: none;
     z-index: -1;
-    opacity: 0.8;
+    opacity: 0.5;
+    mask-image: radial-gradient(circle at 50% 40%, black 0%, black 40%, transparent 70%);
   }
 
-  /* Living Void Layer 3: Global Nebula Drift (Only when effects are on) */
+  /* Living Void Layer 2: Nebula glow (static) */
   #react-root[data-ui-effects="on"]::after {
     content: "";
     position: absolute;
-    top: -20%;
-    left: -20%;
-    width: 140%;
-    height: 140%;
+    inset: 0;
     background:
-      radial-gradient(circle at 20% 80%, rgb(99 102 241 / 30%), transparent 40%),
-      radial-gradient(circle at 80% 20%, rgb(6 182 212 / 25%), transparent 35%),
-      radial-gradient(circle at 50% 50%, rgb(236 72 153 / 20%), transparent 45%);
-    animation: nebula-drift 80s ease-in-out infinite;
+      radial-gradient(ellipse at 25% 75%, rgb(99 102 241 / 20%), transparent 50%),
+      radial-gradient(ellipse at 75% 25%, rgb(6 182 212 / 15%), transparent 45%),
+      radial-gradient(ellipse at 50% 50%, rgb(236 72 153 / 12%), transparent 55%);
     pointer-events: none;
     z-index: -2;
-    filter: blur(80px);
-    will-change: transform, opacity;
-    mix-blend-mode: screen;
-  }
-
-  /* Disable animations for reduced motion */
-  @media (prefers-reduced-motion: reduce) {
-    #react-root::before,
-    #react-root::after {
-      animation: none !important;
-    }
-  }
-
-  @keyframes grid-move {
-    from { transform: perspective(500px) rotateX(60deg) translateY(0); }
-    to { transform: perspective(500px) rotateX(60deg) translateY(50px); }
-  }
-
-  @keyframes nebula-drift {
-    /* Only animate opacity - transform on blur(80px) forces re-blur every frame */
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.55; }
+    opacity: 0.6;
   }
 
   /* Place elements explicitly so order in DOM does not matter */
@@ -161,9 +137,15 @@
     overflow-y: auto;
     position: relative;
     z-index: 1;
-    /* Glass panel effect over the void */
-    background: rgba(3, 3, 5, 0.2);
-    backdrop-filter: blur(var(--blur-sm, 8px));
+    /* Glass panel - safe because ambient backgrounds are now static */
+    background: rgba(3, 3, 5, 0.25);
+    backdrop-filter: blur(12px);
+  }
+
+  /* Fallback: opaque when effects disabled (no ambient to see through) */
+  #react-root[data-ui-effects="off"] #app-container {
+    background: rgba(3, 3, 5, 0.95);
+    backdrop-filter: none;
   }
 
   /* Ensure direct children fill available space */
