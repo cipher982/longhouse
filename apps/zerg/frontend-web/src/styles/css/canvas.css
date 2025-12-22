@@ -35,7 +35,7 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  background: var(--dark-lighter);
+  background: transparent;
   position: relative;
   padding: 0;
 }
@@ -54,16 +54,8 @@
   min-height: 0;
 }
 
-/* Light grid overlay */
 #canvas-container::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgb(0 0 0 / 3%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(0 0 0 / 3%) 1px, transparent 1px);
-  background-size: 20px 20px;
-  pointer-events: none;
+  display: none;
 }
 
 #node-canvas {
@@ -71,7 +63,7 @@
   height: 100%;
   position: relative;
   z-index: var(--z-canvas);
-  background-color: #33334a !important;
+  background-color: transparent !important;
 }
 
 /* Input toolbar anchored to top of canvas */
@@ -150,8 +142,9 @@
   align-items: center;
   justify-content: flex-start;
   height: 48px;
-  background: rgb(24 24 27 / 90%);
-  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--surface-glass-1);
+  backdrop-filter: blur(var(--blur-md));
+  border-bottom: 1px solid var(--border-glass-1);
   padding: 0 var(--spacing-md);
   overflow-x: auto;
   flex-shrink: 0;
