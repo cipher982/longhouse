@@ -48,7 +48,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     (event: MessageEvent) => {
       // Validate message structure
       if (!event.data || typeof event.data !== "object") return;
-      const { success, provider, username, error } = event.data;
+      const { success, provider, error } = event.data;
 
       // Only handle OAuth results
       if (provider !== oauthPending) return;

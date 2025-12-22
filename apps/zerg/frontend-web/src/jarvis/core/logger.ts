@@ -72,28 +72,28 @@ class Logger {
   }
 
   // Performance logs - summarized
-  performance(operation: string, duration: number, details?: any): void {
+  performance(operation: string, duration: number, details?: unknown): void {
     if (!this.config.performance) return;
     console.log(`⚡ ${operation}: ${duration}ms`, details || '');
   }
 
   // Error logs - always shown
-  error(message: string, error?: any): void {
+  error(message: string, error?: unknown): void {
     console.error(`❌ ${message}`, error || '');
   }
 
   // Warning logs - always shown
-  warn(message: string, data?: any): void {
+  warn(message: string, data?: unknown): void {
     console.warn(`⚠️ ${message}`, data || '');
   }
 
   // Info logs - context aware
-  info(message: string, data?: any): void {
+  info(message: string, data?: unknown): void {
     console.log(`ℹ️ ${message}`, data || '');
   }
 
   // Context loading logs
-  context(message: string, data?: any): void {
+  context(message: string, data?: unknown): void {
     if (!this.config.context) return;
     console.log(`🎨 ${message}`, data || '');
   }
@@ -107,18 +107,18 @@ class Logger {
   }
 
   // Tool execution logs
-  tool(toolName: string, message: string, data?: any): void {
+  tool(toolName: string, message: string, data?: unknown): void {
     if (!this.config.tools) return;
     console.log(`🔧 ${toolName}: ${message}`, data || '');
   }
 
   // Success/completion logs
-  success(message: string, data?: any): void {
+  success(message: string, data?: unknown): void {
     console.log(`✅ ${message}`, data || '');
   }
 
   // Debug logs - only in verbose mode
-  debug(message: string, data?: any): void {
+  debug(message: string, data?: unknown): void {
     if (this.config.level !== 'verbose') return;
     console.debug(`🐛 ${message}`, data || '');
   }

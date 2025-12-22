@@ -41,7 +41,6 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   const { data: agent } = useAgentDetails(isOpen ? agentId : null);
   const { data: policy } = useContainerPolicy();
   const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? agentId : null);
-  const { data: availableTools } = useAvailableTools(isOpen ? agentId : null);
   const toolOptions = useToolOptions(isOpen ? agentId : null) as AllowedToolOption[];
   const debouncedUpdateAllowedTools = useDebouncedUpdateAllowedTools(isOpen ? agentId : null);
   const addMcpServer = useAddMcpServer(isOpen ? agentId : null);

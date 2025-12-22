@@ -97,9 +97,6 @@ export interface JarvisEventData {
   timestamp: string;
 }
 
-// Session cookie name (for reference only - cookie is HttpOnly and managed by server)
-const SESSION_COOKIE_NAME = 'swarmlet_session';
-
 /**
  * Prepare fetch options for cookie-based auth.
  * Auth is now handled via HttpOnly swarmlet_session cookie.

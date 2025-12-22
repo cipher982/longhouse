@@ -1,6 +1,12 @@
 import React from 'react';
 
-export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
+export function HeroVisual({
+  hideCore = false,
+  animationsDisabled = false,
+}: {
+  hideCore?: boolean;
+  animationsDisabled?: boolean;
+}) {
   return (
     <svg viewBox="0 0 500 500" className="hero-visual-svg">
       <defs>
@@ -25,10 +31,16 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
       </defs>
 
       {/* Deep Background Glow */}
-      <circle cx="250" cy="250" r="200" fill="url(#hero-glow-grad)" className="hero-bg-pulse" />
+      <circle
+        cx="250"
+        cy="250"
+        r="200"
+        fill="url(#hero-glow-grad)"
+        className={animationsDisabled ? undefined : "hero-bg-pulse"}
+      />
 
       {/* Rotating Starfield (Background) */}
-      <g className="hero-starfield">
+      <g className={animationsDisabled ? undefined : "hero-starfield"}>
         <circle cx="100" cy="100" r="1.5" fill="white" opacity="0.3" />
         <circle cx="400" cy="400" r="1.5" fill="white" opacity="0.3" />
         <circle cx="150" cy="400" r="1" fill="white" opacity="0.2" />
@@ -40,7 +52,7 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
       </g>
 
       {/* Scanner Sweep Effect */}
-      <g className="hero-scanner">
+      <g className={animationsDisabled ? undefined : "hero-scanner"}>
         <path d="M250 250 L500 250 A 250 250 0 0 1 250 500 Z" fill="url(#hero-scan-grad)" opacity="0.3" />
       </g>
 
@@ -56,31 +68,45 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
           <path d="M0 -60 L52 -30 L52 30 L0 60 L-52 30 L-52 -30 Z" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
 
           {/* Main Hex Core */}
-          <path d="M0 -50 L43 -25 L43 25 L0 50 L-43 25 L-43 -25 Z" className="hero-hex-core" />
+          <path
+            d="M0 -50 L43 -25 L43 25 L0 50 L-43 25 L-43 -25 Z"
+            fill="url(#hero-core-grad)"
+            className={animationsDisabled ? undefined : "hero-hex-core"}
+          />
 
           {/* Inner Geometric Detail */}
-          <path d="M0 -30 L26 -15 L26 15 L0 30 L-26 15 L-26 -15 Z" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1" className="hero-hex-inner" />
+          <path
+            d="M0 -30 L26 -15 L26 15 L0 30 L-26 15 L-26 -15 Z"
+            fill="none"
+            stroke="rgba(255,255,255,0.3)"
+            strokeWidth="1"
+            className={animationsDisabled ? undefined : "hero-hex-inner"}
+          />
 
           {/* Center Pulse */}
-          <circle r="8" fill="white" className="hero-core-pulse" />
+          <circle r="8" fill="white" className={animationsDisabled ? undefined : "hero-core-pulse"} />
         </g>
       )}
 
       {/* Main Orbiting System */}
-      <g className="hero-orbit-group">
+      <g className={animationsDisabled ? undefined : "hero-orbit-group"}>
         {/* ================= ICON 1 (Top) ================= */}
         <path id="path1" d="M250 250 L250 90" className="hero-connector-line" />
         {/* Data Packet */}
-        <circle r="3" fill="white">
-          <animateMotion dur="3s" repeatCount="indefinite" rotate="auto">
-            <mpath href="#path1" />
-          </animateMotion>
-          <animate attributeName="opacity" values="0;1;0" dur="3s" repeatCount="indefinite" />
-          <animate attributeName="fill" values="#fff;#a855f7;#fff" dur="3s" repeatCount="indefinite" />
-        </circle>
+        {animationsDisabled ? (
+          <circle cx="250" cy="90" r="3" fill="#a855f7" opacity="0.6" />
+        ) : (
+          <circle r="3" fill="white">
+            <animateMotion dur="3s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path1" />
+            </animateMotion>
+            <animate attributeName="opacity" values="0;1;0" dur="3s" repeatCount="indefinite" />
+            <animate attributeName="fill" values="#fff;#a855f7;#fff" dur="3s" repeatCount="indefinite" />
+          </circle>
+        )}
 
         <g transform="translate(250, 90)">
-          <g className="hero-orbit-icon">
+          <g className={animationsDisabled ? undefined : "hero-orbit-icon"}>
             <g className="hero-icon-scale">
               <circle r="24" className="hero-icon-bg" />
               <path d="M-12 -8 L0 4 L12 -8 M-12 -8 L-12 10 L12 10 L12 -8" stroke="white" strokeWidth="2" fill="none" />
@@ -91,15 +117,19 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
         {/* ================= ICON 2 (Bottom Right) ================= */}
         <path id="path2" d="M250 250 L388 330" className="hero-connector-line" />
         {/* Data Packet */}
-        <circle r="3" fill="#ec4899">
-          <animateMotion dur="4s" repeatCount="indefinite" rotate="auto" keyPoints="1;0" keyTimes="0;1" calcMode="linear">
-            <mpath href="#path2" />
-          </animateMotion>
-          <animate attributeName="opacity" values="0;1;0" dur="4s" repeatCount="indefinite" />
-        </circle>
+        {animationsDisabled ? (
+          <circle cx="388" cy="330" r="3" fill="#ec4899" opacity="0.6" />
+        ) : (
+          <circle r="3" fill="#ec4899">
+            <animateMotion dur="4s" repeatCount="indefinite" rotate="auto" keyPoints="1;0" keyTimes="0;1" calcMode="linear">
+              <mpath href="#path2" />
+            </animateMotion>
+            <animate attributeName="opacity" values="0;1;0" dur="4s" repeatCount="indefinite" />
+          </circle>
+        )}
 
         <g transform="translate(388, 330)">
-          <g className="hero-orbit-icon">
+          <g className={animationsDisabled ? undefined : "hero-orbit-icon"}>
             <g className="hero-icon-scale">
               <circle r="24" className="hero-icon-bg" />
               <path d="M-10 -7 H10 V7 H0 L-5 12 V7 H-10 Z" stroke="white" strokeWidth="2" fill="none" />
@@ -110,15 +140,19 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
         {/* ================= ICON 3 (Bottom Left) ================= */}
         <path id="path3" d="M250 250 L112 330" className="hero-connector-line" />
         {/* Data Packet */}
-        <circle r="3" fill="#6366f1">
-          <animateMotion dur="3.5s" repeatCount="indefinite" rotate="auto">
-            <mpath href="#path3" />
-          </animateMotion>
-          <animate attributeName="opacity" values="0;1;0" dur="3.5s" repeatCount="indefinite" />
-        </circle>
+        {animationsDisabled ? (
+          <circle cx="112" cy="330" r="3" fill="#6366f1" opacity="0.6" />
+        ) : (
+          <circle r="3" fill="#6366f1">
+            <animateMotion dur="3.5s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#path3" />
+            </animateMotion>
+            <animate attributeName="opacity" values="0;1;0" dur="3.5s" repeatCount="indefinite" />
+          </circle>
+        )}
 
         <g transform="translate(112, 330)">
-          <g className="hero-orbit-icon">
+          <g className={animationsDisabled ? undefined : "hero-orbit-icon"}>
             <g className="hero-icon-scale">
               <circle r="24" className="hero-icon-bg" />
               <rect x="-10" y="-9" width="20" height="18" rx="3" stroke="white" strokeWidth="2" fill="none" />
@@ -131,12 +165,14 @@ export function HeroVisual({ hideCore = false }: { hideCore?: boolean }) {
 
       {/* Foreground Floating Particles (Subtle) */}
       <g className="hero-particles-fg">
-         <circle cx="300" cy="200" r="2" fill="#ec4899" opacity="0.6">
-            <animate attributeName="opacity" values="0;0.8;0" dur="4s" repeatCount="indefinite" />
-         </circle>
-         <circle cx="200" cy="300" r="2" fill="#6366f1" opacity="0.6">
+        <circle cx="300" cy="200" r="2" fill="#ec4899" opacity="0.6">
+          {!animationsDisabled && <animate attributeName="opacity" values="0;0.8;0" dur="4s" repeatCount="indefinite" />}
+        </circle>
+        <circle cx="200" cy="300" r="2" fill="#6366f1" opacity="0.6">
+          {!animationsDisabled && (
             <animate attributeName="opacity" values="0;0.8;0" dur="5s" begin="2s" repeatCount="indefinite" />
-         </circle>
+          )}
+        </circle>
       </g>
     </svg>
   );

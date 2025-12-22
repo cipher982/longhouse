@@ -41,7 +41,7 @@ export interface OutboxOp {
   opId: string;
   deviceId: string;
   type: OutboxOpType;
-  body: any; // Narrow per-op when needed
+  body: unknown; // Narrow per-op when needed
   lamport: number;
   ts: Date;
 }

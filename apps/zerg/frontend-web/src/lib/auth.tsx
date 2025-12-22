@@ -94,7 +94,6 @@ interface AuthProviderProps {
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [hasCheckedAuth, setHasCheckedAuth] = useState(false);
   const queryClient = useQueryClient();
 
   // Clean up any legacy localStorage token on mount
@@ -126,11 +125,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (userData) {
       setUser(userData);
       setIsAuthenticated(true);
-      setHasCheckedAuth(true);
     } else if (error) {
       setUser(null);
       setIsAuthenticated(false);
-      setHasCheckedAuth(true);
     }
   }, [userData, error]);
 
@@ -273,7 +270,6 @@ interface LoginOverlayProps {
 
 export function LoginOverlay({ clientId }: LoginOverlayProps) {
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
-  const { login } = useAuth();
 
   const handleLoginSuccess = () => {
     // The AuthProvider will handle updating the authentication state

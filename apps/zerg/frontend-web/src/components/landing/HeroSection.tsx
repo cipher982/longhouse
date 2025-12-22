@@ -6,11 +6,11 @@ import { HeroVisual } from "./HeroVisual";
 
 interface HeroSectionProps {
   onScrollToScenarios: () => void;
+  heroAnimationsEnabled: boolean;
 }
 
-export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
+export function HeroSection({ onScrollToScenarios, heroAnimationsEnabled }: HeroSectionProps) {
   const [showLogin, setShowLogin] = useState(false);
-  const { login } = useAuth();
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
 
   const handleStartFree = () => {
@@ -71,7 +71,7 @@ export function HeroSection({ onScrollToScenarios }: HeroSectionProps) {
     <section className="landing-hero">
       <div className="landing-hero-content">
         <div className="landing-hero-visual-wrapper">
-          <HeroVisual hideCore={true} />
+          <HeroVisual hideCore={true} animationsDisabled={!heroAnimationsEnabled} />
           <SwarmLogo size={120} className="landing-hero-logo" />
         </div>
 
@@ -146,7 +146,7 @@ function GoogleSignInButtonWrapper() {
       }
 
       try {
-        const loginResult = await login(response.credential);
+        await login(response.credential);
 
         // Track signup completed and stitch visitor to user
         if (window.SwarmletFunnel) {

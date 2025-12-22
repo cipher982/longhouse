@@ -384,7 +384,6 @@ export default function DashboardPage() {
   const {
     data: dashboardData,
     isLoading,
-    isFetching,
     error,
   } = useQuery<DashboardSnapshot>({
     queryKey: dashboardQueryKey,

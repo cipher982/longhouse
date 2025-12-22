@@ -36,4 +36,3 @@ export function getNodeIcon(
       return <WrenchIcon {...options} />;
   }
 }
-

@@ -60,7 +60,7 @@ export class MemoryVectorStore {
     const results: SearchResult[] = []
 
     // Calculate cosine similarity for each document
-    for (const [id, document] of this.documents) {
+    for (const [_id, document] of this.documents) {
       // Apply filters
       if (type && document.metadata.type !== type) continue
       if (category && document.metadata.category !== category) continue
@@ -102,7 +102,7 @@ export class MemoryVectorStore {
     const results: SearchResult[] = []
 
     // Simple text matching with relevance scoring
-    for (const [id, document] of this.documents) {
+    for (const [_id, document] of this.documents) {
       // Apply filters
       if (type && document.metadata.type !== type) continue
       if (category && document.metadata.category !== category) continue
@@ -151,7 +151,7 @@ export class MemoryVectorStore {
     const { type, category } = filters
     const results: CompanyDocument[] = []
 
-    for (const [id, document] of this.documents) {
+    for (const [_id, document] of this.documents) {
       if (type && document.metadata.type !== type) continue
       if (category && document.metadata.category !== category) continue
       results.push(document)
@@ -189,7 +189,7 @@ export class MemoryVectorStore {
     const types: Record<string, number> = {}
     let totalSize = 0
 
-    for (const [id, doc] of this.documents) {
+    for (const [_id, doc] of this.documents) {
       const type = doc.metadata.type
       types[type] = (types[type] || 0) + 1
       totalSize += JSON.stringify(doc).length * 2 // UTF-16 encoding

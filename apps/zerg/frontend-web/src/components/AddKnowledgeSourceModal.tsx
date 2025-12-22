@@ -19,7 +19,7 @@ export function AddKnowledgeSourceModal({
   onClose,
 }: AddKnowledgeSourceModalProps) {
   const [step, setStep] = useState<Step>("type");
-  const [sourceType, setSourceType] = useState<SourceType | null>(null);
+  const [_sourceType, setSourceType] = useState<SourceType | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [page, setPage] = useState(1);
   const [searchFilter, setSearchFilter] = useState("");
@@ -111,7 +111,7 @@ export function AddKnowledgeSourceModal({
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await createMutation.mutateAsync({
       name: sourceName || selectedRepo.name,
       source_type: "github_repo",
@@ -129,7 +129,7 @@ export function AddKnowledgeSourceModal({
   const handleSubmitUrl = async () => {
     if (!url) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await createMutation.mutateAsync({
       name: sourceName || new URL(url).hostname,
       source_type: "url",
