@@ -1,0 +1,28 @@
+name: Self-hosted Runner Smoke Test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  smoke:
+    name: "🧪 Smoke (self-hosted on cube)"
+    runs-on: [self-hosted, Linux, X64, cube]
+    timeout-minutes: 10
+
+    steps:
+      - name: Basic host info
+        run: |
+          set -euo pipefail
+          echo "Runner: $RUNNER_NAME"
+          echo "OS: $RUNNER_OS"
+          echo "Arch: $RUNNER_ARCH"
+          uname -a
+          id
+          nproc || true
+          df -h /
+
+      - name: Docker availability
+        run: |
+          set -euo pipefail
+          command -v docker
+          docker version
