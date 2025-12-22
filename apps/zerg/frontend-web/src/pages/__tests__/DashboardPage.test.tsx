@@ -294,7 +294,7 @@ describe("DashboardPage", () => {
     const rows = await screen.findAllByRole("row");
     expect(rows[1]).toHaveTextContent("Alpha");
 
-    const statusHeader = document.querySelector<HTMLElement>('th[data-column="status"]');
+    const statusHeader = document.querySelector<HTMLElement>('[data-column="status"]');
     expect(statusHeader).not.toBeNull();
     if (!statusHeader) {
       throw new Error("Status header not found");
@@ -305,14 +305,18 @@ describe("DashboardPage", () => {
     });
 
     await waitFor(() => {
-      const rowOrder = Array.from(document.querySelectorAll<HTMLTableRowElement>("tr[data-agent-id]")).map((row) => row.getAttribute("data-agent-id")).slice(0, agents.length);
+      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-agent-id]'))
+        .map((row) => row.getAttribute("data-agent-id"))
+        .slice(0, agents.length);
       expect(rowOrder).toEqual(["2", "1"]);
     });
 
     fireEvent.click(statusHeader);
 
     await waitFor(() => {
-      const rowOrder = Array.from(document.querySelectorAll<HTMLTableRowElement>("tr[data-agent-id]")).map((row) => row.getAttribute("data-agent-id")).slice(0, agents.length);
+      const rowOrder = Array.from(document.querySelectorAll<HTMLElement>('[data-agent-id]'))
+        .map((row) => row.getAttribute("data-agent-id"))
+        .slice(0, agents.length);
       expect(rowOrder).toEqual(["1", "2"]);
     });
   });
@@ -340,7 +344,7 @@ describe("DashboardPage", () => {
       expect(socket.send).toHaveBeenCalledWith(expect.stringContaining("\"type\":\"subscribe\""));
     });
 
-    const statusCell = document.querySelector<HTMLTableCellElement>('tr[data-agent-id="42"] td[data-label="Status"]');
+    const statusCell = document.querySelector<HTMLElement>('[data-agent-id="42"] [data-label="Status"]');
     expect(statusCell).not.toBeNull();
     if (!statusCell) {
       throw new Error("Status cell not found");
