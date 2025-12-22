@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { useQuery } from "@tanstack/react-query";
 import { useShelf } from "../../lib/useShelfState";
 import { fetchAgents, type AgentSummary } from "../../services/api";
-import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon } from "../../components/icons";
+import { getNodeIcon } from "../../lib/iconUtils";
 
 type ToolPaletteItem = {
   type: string;
@@ -147,7 +147,7 @@ export function AgentShelf({ onAgentDragStart, onToolDragStart, onAgentPointerDo
                     onPointerDown={(event) => onAgentPointerDown(event as React.PointerEvent<HTMLDivElement>, { id: agent.id, name: agent.name })}
                   >
                     <div className="agent-pill-icon">
-                      <AgentIcon width={18} height={18} />
+                      {getNodeIcon("agent", undefined, { width: 18, height: 18 })}
                     </div>
                     <div className="agent-name">{agent.name}</div>
                   </div>
@@ -180,7 +180,6 @@ export function AgentShelf({ onAgentDragStart, onToolDragStart, onAgentPointerDo
             (filteredTools.length > 0 ? (
               <div id="shelf-tool-list" className="tool-palette-content">
                 {filteredTools.map((tool) => {
-                  const ToolIcon = tool.type === "http-request" ? GlobeIcon : tool.type === "url-fetch" ? SignalIcon : WrenchIcon;
                   return (
                     <div
                       key={tool.type}
@@ -200,7 +199,7 @@ export function AgentShelf({ onAgentDragStart, onToolDragStart, onAgentPointerDo
                       onPointerDown={(event) => onToolPointerDown(event as React.PointerEvent<HTMLDivElement>, tool)}
                     >
                       <div className="tool-icon">
-                        <ToolIcon width={18} height={18} />
+                        {getNodeIcon("tool", tool.type, { width: 18, height: 18 })}
                       </div>
                       <div className="tool-name">{tool.name}</div>
                     </div>
