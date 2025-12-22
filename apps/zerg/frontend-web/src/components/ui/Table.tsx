@@ -46,7 +46,8 @@ Table.Row = ({ children, className, onClick, onKeyDown, style, ...props }) => {
       onKeyDown={onClick ? handleKeyDown : onKeyDown}
       style={style}
       tabIndex={onClick ? 0 : undefined}
-      role={onClick ? 'button' : undefined}
+      // Note: Don't add role="button" as it breaks table semantics.
+      // Clickable rows use tabIndex for keyboard focus instead.
       {...props}
     >
       {children}
