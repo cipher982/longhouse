@@ -22,4 +22,4 @@ cd "$SCRIPT_DIR"
 # Run unit tests (excluding integration tests which require real API credentials)
 # To run integration tests: pytest tests/integration/ -v
 # -n auto: parallel execution using all CPU cores (requires pytest-xdist)
-uv run pytest tests/ --ignore=tests/integration/ -n auto -p no:warnings --tb=short "$@"
+uv run pytest tests/ --ignore=tests/integration/ -n "${PYTEST_XDIST_WORKERS:-auto}" -p no:warnings --tb=short "$@"

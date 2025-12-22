@@ -41,6 +41,9 @@ jobs:
     runs-on: [self-hosted, Linux, X64, cube]
     needs: validate
     name: "🐍 Backend Tests"
+    env:
+      # cube has 24 cores; xdist -n auto can be too aggressive and crash workers in E2E-ish tests.
+      PYTEST_XDIST_WORKERS: "8"
 
     steps:
     - uses: actions/checkout@v4
