@@ -15,11 +15,11 @@
 
   /* Override React Flow default styles for refined dark theme */
   .react-flow {
-    background: var(--color-surface-page) !important;
+    background: transparent !important;
   }
 
   .react-flow__background {
-    background: var(--color-surface-page) !important;
+    background: transparent !important;
   }
 
   /* Canvas workspace container */
@@ -27,7 +27,7 @@
     flex: 1;
     min-height: 0;
     display: flex;
-    background: var(--color-surface-page);
+    background: transparent;
     position: relative;
     padding: 0;
   }
@@ -46,8 +46,9 @@
   .execution-logs-drawer {
     flex: 0 0 clamp(280px, 25vw, 350px);
     height: 100%;
-    background: var(--color-surface-card);
-    border-left: 1px solid var(--color-border-subtle);
+    background: var(--surface-glass-1);
+    backdrop-filter: blur(var(--blur-md));
+    border-left: 1px solid var(--border-glass-1);
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-xl);
@@ -95,17 +96,18 @@
 
   /* Custom Node Styles - refined for modern aesthetic */
   .agent-node {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
     border-left: 3px solid var(--color-brand-primary);
-    border-radius: var(--radius-lg);
+    backdrop-filter: blur(var(--blur-sm));
+    border-radius: var(--radius-md);
     padding: var(--space-3) var(--space-4);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: 500;
     font-family: var(--font-family-base);
     min-width: 140px;
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-md);
     display: flex;
     align-items: center;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -113,7 +115,7 @@
 
   .agent-node:hover {
     border-color: var(--color-brand-primary);
-    box-shadow: var(--shadow-glow);
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
     transform: translateY(-2px);
   }
 
@@ -124,17 +126,18 @@
   }
 
   .tool-node {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
     border-left: 3px solid var(--color-intent-success);
-    border-radius: var(--radius-lg);
+    backdrop-filter: blur(var(--blur-sm));
+    border-radius: var(--radius-md);
     padding: var(--space-3) var(--space-4);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: 500;
     font-family: var(--font-family-base);
     min-width: 140px;
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-md);
     display: flex;
     align-items: center;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -142,7 +145,7 @@
 
   .tool-node:hover {
     border-color: var(--color-intent-success);
-    box-shadow: 0 0 16px rgb(16 185 129 / 20%);
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.2);
     transform: translateY(-2px);
   }
 
@@ -152,17 +155,18 @@
   }
 
   .trigger-node {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
+    background: var(--surface-glass-2);
+    border: 1px solid var(--border-glass-1);
     border-left: 3px solid var(--color-intent-warning);
-    border-radius: var(--radius-lg);
+    backdrop-filter: blur(var(--blur-sm));
+    border-radius: var(--radius-md);
     padding: var(--space-3) var(--space-4);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     font-weight: 500;
     font-family: var(--font-family-base);
     min-width: 140px;
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--shadow-md);
     display: flex;
     align-items: center;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -170,7 +174,7 @@
 
   .trigger-node:hover {
     border-color: var(--color-intent-warning);
-    box-shadow: 0 0 16px rgb(245 158 11 / 20%);
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.2);
     transform: translateY(-2px);
   }
 
@@ -267,7 +271,7 @@
     display: flex;
     flex-direction: row;
     height: 100%;
-    background: var(--color-surface-section);
+    background: transparent;
   }
 
   /* Agent shelf layout */
@@ -308,8 +312,9 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-3) var(--space-5);
-    background: var(--color-surface-section);
-    border-bottom: 1px solid var(--color-border-subtle);
+    background: var(--surface-glass-1);
+    backdrop-filter: blur(var(--blur-md));
+    border-bottom: 1px solid var(--border-glass-1);
     margin-bottom: 0;
   }
 
