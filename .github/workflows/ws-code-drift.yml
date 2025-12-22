@@ -8,10 +8,11 @@ on:
       - "scripts/generate-ws-types-modern.py"
       - "Makefile"
       - ".github/workflows/ws-code-drift.yml"
+  workflow_dispatch: {}
 
 jobs:
   codegen-diff:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cube]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

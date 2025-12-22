@@ -5,6 +5,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch: {}
 
 # Cancel previous runs for the same PR
 concurrency:
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cube]
     name: "🔍 Validate (WS + Makefile)"
 
     steps:
@@ -31,7 +32,7 @@ jobs:
       run: make validate
 
   backend-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cube]
     needs: validate
     name: "🐍 Backend Tests"
 
@@ -52,7 +53,7 @@ jobs:
         ./run_backend_tests.sh
 
   frontend-tests:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cube]
     needs: validate
     name: "⚛️  Frontend Tests"
 
