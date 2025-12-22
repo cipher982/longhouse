@@ -242,6 +242,23 @@
     background: rgba(255, 255, 255, 0.02);
   }
 
+  /* Clickable row styling */
+  .ui-table-row--clickable {
+    cursor: pointer;
+  }
+
+  .ui-table-row--clickable:focus {
+    outline: none;
+  }
+
+  .ui-table-row--clickable:focus-visible td {
+    background: rgba(99, 102, 241, 0.08);
+  }
+
+  .ui-table-row--clickable:hover td {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
   /* --- Empty State --- */
   .ui-empty-state {
     display: flex;
@@ -270,6 +287,10 @@
     color: var(--color-text-secondary);
     max-width: 400px;
     margin-bottom: var(--space-6);
+  }
+
+  .ui-empty-state__action {
+    margin-top: var(--space-2);
   }
 
   .ui-empty-state--error .ui-empty-state__title {

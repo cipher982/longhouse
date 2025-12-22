@@ -15,7 +15,7 @@ ZERG_FRONTEND_PORT ?= 47200
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk build-tokens seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)

@@ -19,6 +19,7 @@ from zerg.events import event_bus
 from zerg.services.supervisor_service import SupervisorService
 
 
+@pytest.mark.timeout(60)  # Supervisor tests need more time, especially in CI with parallel workers
 class TestSupervisorE2EFlow:
     """End-to-end tests for supervisor flow via API."""
 
@@ -48,6 +49,7 @@ class TestSupervisorE2EFlow:
         # Stream URL should point to events endpoint
         assert f"/api/jarvis/supervisor/events?run_id={data['run_id']}" in data["stream_url"]
 
+    @pytest.mark.xdist_group(name="supervisor")
     def test_supervisor_creates_one_brain_per_user(self, client, db_session, test_user, temp_artifact_path):
         """Test that multiple dispatches use the same supervisor thread."""
         # First dispatch

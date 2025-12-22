@@ -18,8 +18,13 @@ export const Button: React.FC<ButtonProps> = ({
   as: Component = 'button',
   className,
   children,
+  type,
+  htmlFor,
   ...props
 }) => {
+  // Default type="button" for actual buttons to prevent accidental form submissions
+  const buttonType = Component === 'button' ? (type ?? 'button') : undefined;
+
   return (
     <Component
       className={clsx(
@@ -28,6 +33,8 @@ export const Button: React.FC<ButtonProps> = ({
         `ui-button--${size}`,
         className
       )}
+      type={buttonType}
+      htmlFor={Component === 'label' ? htmlFor : undefined}
       {...props}
     >
       {children}
