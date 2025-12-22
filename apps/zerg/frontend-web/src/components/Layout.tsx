@@ -7,7 +7,7 @@ import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import "../styles/layout.css";
 import { MenuIcon } from "./icons";
 
-const STATUS_ITEMS = [
+const _STATUS_ITEMS = [
   { label: "Runs", value: "0" },
   { label: "Cost", value: "--" },
   { label: "Err", value: "0" },
