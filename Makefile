@@ -15,7 +15,7 @@ ZERG_FRONTEND_PORT ?= 47200
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod
+.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -325,3 +325,36 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 # ---------------------------------------------------------------------------
 smoke-prod: ## Run production smoke tests (validates deployed instance)
 	@./scripts/smoke-prod.sh
+
+# ---------------------------------------------------------------------------
+# Performance Profiling
+# ---------------------------------------------------------------------------
+perf-landing: ## Profile landing page rendering events (Chrome trace analysis)
+	@echo "🔬 Profiling landing page rendering..."
+	@echo "   Ensure 'make dev' is running first!"
+	@echo ""
+	cd apps/zerg/e2e && bun run scripts/profile-landing.ts \
+		--url=http://localhost:30080 \
+		--duration=10 \
+		--output=./perf-results \
+		$(ARGS)
+	@echo ""
+	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "   - report.md: Human-readable summary"
+	@echo "   - trace-*.json: Open in Chrome DevTools or https://ui.perfetto.dev"
+
+perf-gpu: ## Measure actual GPU utilization % for landing page effects (macOS)
+	@echo "🔬 Measuring GPU utilization..."
+	@echo "   Ensure 'make dev' is running first!"
+	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
+	@echo ""
+	cd apps/zerg/e2e && bun run scripts/gpu-profiler.ts \
+		--url=http://localhost:30080 \
+		--duration=10 \
+		--output=./perf-results \
+		$(ARGS)
+	@echo ""
+	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "   - gpu-report.md: Human-readable summary"
+	@echo "   - gpu-summary.json: Stats per variant"
+	@echo "   - gpu-samples.json: Raw sample data"
