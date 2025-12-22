@@ -1,12 +1,17 @@
 /* Settings Page Additional Styles */
 
 @layer pages {
-  .settings-description {
-    color: var(--text-secondary, #e0e0e0);
-    font-size: 14px;
-    margin-bottom: 24px;
-    line-height: 1.5;
-  }
+  .settings-page-container {
+    padding: var(--space-6);
+    max-width: 1000px;
+    margin: 0 auto;
+
+    .settings-description {
+      color: var(--text-secondary, #e0e0e0);
+      font-size: 14px;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
 
   .section-header {
     display: flex;
@@ -34,23 +39,13 @@
     transition: all 0.2s ease;
   }
 
-  .btn-add:hover {
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgb(59 130 246 / 30%);
-  }
+    .btn-add:hover {
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgb(59 130 246 / 30%);
+    }
 
-  .empty-state {
-    color: var(--text-secondary, #e0e0e0);
-    font-style: italic;
-    text-align: center;
-    padding: 16px;
-    background: var(--dark-lighter, #33334a);
-    border-radius: var(--radius-sm, 4px);
-    border: 1px dashed var(--border-color, #3d3d5c);
-  }
-
-  /* Servers */
+    /* Servers */
   .servers-list {
     display: flex;
     flex-direction: column;
@@ -260,4 +255,5 @@
       grid-template-columns: 1fr;
     }
   }
+}
 }

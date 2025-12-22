@@ -35,7 +35,7 @@
    Reactor Rings
    ============================ */
 
-.jarvis-container .reactor-ring {
+#react-root[data-ui-effects="on"] .jarvis-container .reactor-ring {
   position: absolute;
   border-radius: 50%;
   border: 2px solid transparent;
@@ -46,7 +46,7 @@
 }
 
 /* Outer Ring - Largest, slowest */
-.jarvis-container .reactor-ring-outer {
+#react-root[data-ui-effects="on"] .jarvis-container .reactor-ring-outer {
   width: 112px;
   height: 112px;
   border: 2px dashed rgb(99 102 241 / 30%);
@@ -54,7 +54,7 @@
 }
 
 /* Middle Ring - Counter-rotation */
-.jarvis-container .reactor-ring-middle {
+#react-root[data-ui-effects="on"] .jarvis-container .reactor-ring-middle {
   width: 96px;
   height: 96px;
   border: 1.5px solid rgb(99 102 241 / 20%);
@@ -66,7 +66,7 @@
 }
 
 /* Inner Ring - Closest to button, fastest */
-.jarvis-container .reactor-ring-inner {
+#react-root[data-ui-effects="on"] .jarvis-container .reactor-ring-inner {
   width: 82px;
   height: 82px;
   border: 1px dotted rgb(99 102 241 / 25%);

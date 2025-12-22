@@ -3,17 +3,18 @@
    Modern redesign: refined spacing, better hierarchy, subtle depth
    ------------------------------------------------------------------ */
 
-.dashboard-container {
-  flex: 1;
-  padding: var(--space-6);
-  width: 100%;
-  max-width: 1280px;
-  margin: 0 auto;
-  background: transparent;
-  overflow-y: auto;
-  min-height: 0;
+@layer pages {
+  .dashboard-page {
+    flex: 1;
+    padding: var(--space-6);
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto;
+    background: transparent;
+    overflow-y: auto;
+    min-height: 0;
 
-  .run-history-table {
+    .run-history-table {
     width: 100%;
     border-collapse: collapse;
     margin-top: var(--space-3);
@@ -74,56 +75,15 @@
   }
 
   /* -------------------------------------------------------------
-   Agents table (main dashboard list)
+   Agents table (main dashboard list) overrides
    ------------------------------------------------------------- */
-
-  .agents-table {
-    width: 100%;
-    border-collapse: collapse;
-    border-spacing: 0;
-    color: var(--color-text-primary);
-    margin-top: var(--space-4);
-    font-size: 13px;
-  }
-
-  .agents-table th,
-  .agents-table td {
-    padding: 8px 12px;
-    text-align: left;
-    line-height: 1.4;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .agents-table th {
-    font-weight: 600;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-text-muted);
-    background: var(--color-surface-secondary);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    height: 32px;
-  }
-
-  .agents-table td {
-    color: var(--color-text-primary);
-    vertical-align: middle;
-  }
 
   .agents-table tr.agent-row {
     cursor: pointer;
-    transition: background-color 0.1s ease;
-    height: 48px;
   }
 
-  .agents-table tr.agent-row:hover {
-    background: var(--color-surface-overlay);
-  }
-
-  .agents-table tr.agent-row:last-child td {
-    border-bottom: none;
+  .agents-table tr.agent-row.error-row td {
+    border-left: 4px solid var(--color-intent-error);
   }
 
   .owner-cell {
@@ -141,48 +101,6 @@
     height: 22px;
     border-radius: 50%;
     margin-right: 6px;
-  }
-
-  /* Action buttons in dashboard header */
-  #create-agent-button,
-  .create-agent-button,
-  .create-agent-btn {
-    background: var(--color-brand-primary);
-    color: white;
-    border: none;
-    border-radius: var(--radius-lg);
-    padding: var(--space-2) var(--space-5);
-    min-height: var(--component-button-height);
-    font-family: var(--font-family-base);
-    font-weight: 500;
-    font-size: var(--font-size-sm);
-    cursor: pointer;
-    transition:
-      background-color var(--motion-duration-fast) var(--motion-easing-standard),
-      transform var(--motion-duration-fast) var(--motion-easing-standard),
-      box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-  }
-
-  #create-agent-button:hover,
-  .create-agent-btn:hover {
-    background: var(--color-brand-primary-hover);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-md);
-  }
-
-  #create-agent-button:active,
-  .create-agent-btn:active {
-    transform: translateY(0);
-  }
-
-  .create-agent-button.loading {
-    opacity: 0.7;
-    cursor: progress;
-    pointer-events: none;
   }
 
   /* Danger (reset db) button */
@@ -711,32 +629,6 @@
     box-shadow: 0 0 0 2px rgb(59 130 246 / 30%);
   }
 
-  /* Empty-state */
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: var(--spacing-xl);
-    color: var(--text-secondary);
-    min-height: 400px;
-    width: 100%;
-  }
-
-  .empty-state-illustration {
-    width: 160px;
-    height: 160px;
-    margin-bottom: var(--spacing-md);
-    color: var(--color-text-muted);
-    opacity: 0.8;
-  }
-
-  .empty-state-text {
-    margin: 0 0 var(--spacing-md) 0;
-    font-size: var(--font-size-lg);
-    text-align: center;
-  }
-
   /* -------------------------------------------------------------
    Usage Widget - LLM cost/token tracking for users
    ------------------------------------------------------------- */
@@ -930,4 +822,5 @@
     background: rgba(245, 158, 11, 0.15);
     border-color: rgba(180, 83, 9, 0.6);
   }
+}
 }

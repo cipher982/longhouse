@@ -2,6 +2,13 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
+import { 
+  Button, 
+  Card, 
+  SectionHeader, 
+  EmptyState,
+  Input
+} from "../components/ui";
 
 interface UserUpdatePayload {
   display_name?: string | null;
@@ -132,141 +139,161 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <div className="profile-container">
-        <div>Loading user profile...</div>
+      <div className="profile-page-container">
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading profile..."
+          description="Fetching your account details."
+        />
       </div>
     );
   }
 
   return (
-    <div className="profile-container">
-      <div className="profile-content">
-        <h2>User Profile</h2>
+    <div className="profile-page-container">
+      <SectionHeader
+        title="User Profile"
+        description="Manage your account settings and preferences."
+      />
 
-        <form onSubmit={handleSubmit} className="profile-form">
+      <form onSubmit={handleSubmit} className="profile-form">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
           {/* Avatar Section */}
-          <div className="form-section">
-            <h3>Avatar</h3>
-            <div className="avatar-section">
-              <div className="current-avatar">
-                {user.avatar_url ? (
-                  <img
-                    src={user.avatar_url}
-                    alt="Current avatar"
-                    className="avatar-preview"
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Avatar</h3>
+            </Card.Header>
+            <Card.Body>
+              <div className="avatar-section">
+                <div className="current-avatar">
+                  {user.avatar_url ? (
+                    <img
+                      src={user.avatar_url}
+                      alt="Current avatar"
+                      className="avatar-preview"
+                    />
+                  ) : (
+                    <div className="avatar-placeholder">
+                      {user.display_name?.[0]?.toUpperCase() || user.email[0].toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div className="avatar-upload">
+                  <input
+                    type="file"
+                    id="avatar-file"
+                    accept="image/*"
+                    onChange={handleAvatarFileChange}
+                    disabled={uploadAvatarMutation.isPending}
                   />
-                ) : (
-                  <div className="avatar-placeholder">
-                    {user.display_name?.[0]?.toUpperCase() || user.email[0].toUpperCase()}
-                  </div>
-                )}
+                  <Button
+                    variant="secondary"
+                    as="label"
+                    htmlFor="avatar-file"
+                    disabled={uploadAvatarMutation.isPending}
+                  >
+                    {uploadAvatarMutation.isPending ? "Uploading..." : "Choose Avatar"}
+                  </Button>
+                  <small>PNG, JPEG, or WebP. Max 2MB.</small>
+                </div>
               </div>
-              <div className="avatar-upload">
-                <input
-                  type="file"
-                  id="avatar-file"
-                  accept="image/*"
-                  onChange={handleAvatarFileChange}
-                  disabled={uploadAvatarMutation.isPending}
-                />
-                <label htmlFor="avatar-file" className="upload-button">
-                  {uploadAvatarMutation.isPending ? "Uploading..." : "Choose Avatar"}
-                </label>
-                <small>PNG, JPEG, or WebP. Max 2MB.</small>
-              </div>
-            </div>
-          </div>
+            </Card.Body>
+          </Card>
 
           {/* Profile Information */}
-          <div className="form-section">
-            <h3>Profile Information</h3>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Profile Information</h3>
+            </Card.Header>
+            <Card.Body>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                <div className="form-group">
+                  <label htmlFor="email" className="form-label">Email Address</label>
+                  <Input
+                    id="email"
+                    value={user.email}
+                    disabled
+                    style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                  />
+                  <small>Email cannot be changed</small>
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="email" className="form-label">Email Address</label>
-              <input
-                type="email"
-                id="email"
-                value={user.email}
-                disabled
-                className="form-input disabled"
-              />
-              <small>Email cannot be changed</small>
-            </div>
+                <div className="form-group">
+                  <label htmlFor="display-name" className="form-label">Display Name</label>
+                  <Input
+                    id="display-name"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Enter your display name"
+                    maxLength={100}
+                  />
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="display-name" className="form-label">Display Name</label>
-              <input
-                type="text"
-                id="display-name"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Enter your display name"
-                className="form-input"
-                maxLength={100}
-              />
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="avatar-url" className="form-label">Avatar URL</label>
-              <input
-                type="url"
-                id="avatar-url"
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
-                placeholder="https://example.com/avatar.jpg"
-                className="form-input"
-              />
-              <small>Optional: Direct URL to your avatar image</small>
-            </div>
-          </div>
+                <div className="form-group">
+                  <label htmlFor="avatar-url" className="form-label">Avatar URL</label>
+                  <Input
+                    id="avatar-url"
+                    value={avatarUrl}
+                    onChange={(e) => setAvatarUrl(e.target.value)}
+                    placeholder="https://example.com/avatar.jpg"
+                  />
+                  <small>Optional: Direct URL to your avatar image</small>
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
 
           {/* Account Information */}
-          <div className="form-section">
-            <h3>Account Information</h3>
-
-            <div className="info-grid">
-              <div className="info-item">
-                <span className="info-label">User ID:</span>
-                <span className="info-value">{user.id}</span>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Account Information</h3>
+            </Card.Header>
+            <Card.Body>
+              <div className="info-grid">
+                <div className="info-item">
+                  <span className="info-label">User ID:</span>
+                  <span className="info-value">{user.id}</span>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">Member Since:</span>
+                  <span className="info-value">
+                    {new Date(user.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <div className="info-item">
+                  <span className="info-label">Last Login:</span>
+                  <span className="info-value">
+                    {user.last_login
+                      ? new Date(user.last_login).toLocaleString()
+                      : "Never"
+                    }
+                  </span>
+                </div>
               </div>
-              <div className="info-item">
-                <span className="info-label">Member Since:</span>
-                <span className="info-value">
-                  {new Date(user.created_at).toLocaleDateString()}
-                </span>
-              </div>
-              <div className="info-item">
-                <span className="info-label">Last Login:</span>
-                <span className="info-value">
-                  {user.last_login
-                    ? new Date(user.last_login).toLocaleString()
-                    : "Never"
-                  }
-                </span>
-              </div>
-            </div>
-          </div>
+            </Card.Body>
+          </Card>
 
           {/* Form Actions */}
-          <div className="form-actions">
-            <button
+          <div className="form-actions" style={{ display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end', padding: 'var(--space-6) 0' }}>
+            <Button
               type="button"
+              variant="ghost"
               onClick={handleReset}
-              className="btn-secondary"
               disabled={updateProfileMutation.isPending}
             >
               Reset Changes
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn-primary"
+              variant="primary"
+              size="lg"
               disabled={updateProfileMutation.isPending}
             >
               {updateProfileMutation.isPending ? "Saving..." : "Save Changes"}
-            </button>
+            </Button>
           </div>
-        </form>
-      </div>
+        </div>
+      </form>
     </div>
   );
 }
