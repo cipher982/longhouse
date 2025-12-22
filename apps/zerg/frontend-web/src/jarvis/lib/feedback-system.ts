@@ -5,9 +5,17 @@
 
 import { CONFIG } from './config';
 
-class AudioFeedback {
+interface IAudioFeedback {
+  audioContext: AudioContext | null;
+  resumeContext(): Promise<void>;
+  playConnectChime(): void;
+  playVoiceTick(): void;
+  playErrorTone(): void;
+}
+
+class AudioFeedback implements IAudioFeedback {
   private enabled: boolean;
-  private audioContext: AudioContext | null = null;
+  public audioContext: AudioContext | null = null;
   private supported: boolean = false;
 
   constructor(enabled: boolean = true) {
@@ -19,7 +27,7 @@ class AudioFeedback {
     if (!this.enabled) return;
 
     try {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.audioContext = new (window.AudioContext || (window as any as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       this.supported = true;
     } catch (error) {
       console.warn('Audio not supported:', error);
@@ -163,7 +171,6 @@ class HapticFeedback {
   vibrate(pattern: number | number[]): void {
     if (!this.enabled) return;
 
-    const navigator = window.navigator as any;
     if (navigator.vibrate) {
       navigator.vibrate(pattern);
     }
@@ -195,8 +202,8 @@ export class FeedbackSystem {
   async initialize(): Promise<void> {
     // Initialize audio context on user interaction
     const initAudio = () => {
-      if (this.audio && (this.audio as any).audioContext?.state === 'suspended') {
-        (this.audio as any).audioContext.resume();
+      if (this.audio && this.audio.audioContext?.state === 'suspended') {
+        this.audio.audioContext.resume();
       }
       document.removeEventListener('click', initAudio);
       document.removeEventListener('touchstart', initAudio);
@@ -254,24 +261,24 @@ export class FeedbackSystem {
 
   // Compatibility methods for legacy AudioFeedback API
   async resumeContext(): Promise<void> {
-    if (this.audio && (this.audio as any).resumeContext) {
-      await (this.audio as any).resumeContext();
+    if (this.audio && this.audio.resumeContext) {
+      await this.audio.resumeContext();
     }
   }
 
   playConnectChime(): void {
     // Call the internal AudioFeedback's playConnectChime
-    (this.audio as any).playConnectChime();
+    this.audio.playConnectChime();
   }
 
   playVoiceTick(): void {
     // Call the internal AudioFeedback's playVoiceTick
-    (this.audio as any).playVoiceTick();
+    this.audio.playVoiceTick();
   }
 
   playErrorTone(): void {
     // Call the internal AudioFeedback's playErrorTone
-    (this.audio as any).playErrorTone();
+    this.audio.playErrorTone();
   }
 
   cleanup(): void {

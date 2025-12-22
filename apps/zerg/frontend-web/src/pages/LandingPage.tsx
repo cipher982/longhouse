@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { SwarmLogo } from "../components/SwarmLogo";
@@ -14,9 +14,114 @@ import { IntegrationsSection } from "../components/landing/IntegrationsSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { FooterCTA } from "../components/landing/FooterCTA";
 
+type LandingFxName = "particles" | "hero";
+
+function parseFxParam(value: string | null): Set<LandingFxName> | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "all") return new Set<LandingFxName>(["particles", "hero"]);
+  if (normalized === "none" || normalized === "off") return new Set<LandingFxName>();
+
+  const parts = normalized
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const enabled = new Set<LandingFxName>();
+  for (const part of parts) {
+    if (part === "particles") enabled.add("particles");
+    if (part === "hero" || part === "hero-anim" || part === "heroanim") enabled.add("hero");
+  }
+  return enabled;
+}
+
+function getLandingFxFromUrl(): { fxEnabled: Set<LandingFxName>; showPerfHud: boolean } {
+  if (typeof window === "undefined") {
+    return { fxEnabled: new Set<LandingFxName>(["particles", "hero"]), showPerfHud: false };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const fxEnabled = parseFxParam(params.get("fx")) ?? new Set<LandingFxName>(["particles", "hero"]);
+  const perfRaw = (params.get("perf") ?? "").trim().toLowerCase();
+  const showPerfHud = perfRaw === "1" || perfRaw === "true" || perfRaw === "yes";
+  return { fxEnabled, showPerfHud };
+}
+
+function LandingPerfHud({
+  fxEnabled,
+}: {
+  fxEnabled: Set<LandingFxName>;
+}) {
+  const [stats, setStats] = useState<{ fps: number; avgMs: number; p95Ms: number } | null>(null);
+
+  useEffect(() => {
+    const frameTimes: number[] = [];
+    let last = performance.now();
+    let rafId = 0;
+    let intervalId = 0;
+
+    const onFrame = (now: number) => {
+      const dt = now - last;
+      last = now;
+      frameTimes.push(dt);
+      if (frameTimes.length > 240) frameTimes.shift();
+      rafId = requestAnimationFrame(onFrame);
+    };
+
+    rafId = requestAnimationFrame(onFrame);
+
+    intervalId = window.setInterval(() => {
+      if (frameTimes.length < 5) return;
+      const times = [...frameTimes].sort((a, b) => a - b);
+      const avgMs = times.reduce((sum, t) => sum + t, 0) / times.length;
+      const p95Ms = times[Math.floor(times.length * 0.95)] ?? avgMs;
+      const fps = avgMs > 0 ? 1000 / avgMs : 0;
+      setStats({ fps, avgMs, p95Ms });
+    }, 500);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  if (!stats) return null;
+
+  const fxText = Array.from(fxEnabled).sort().join(", ") || "none";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        right: 12,
+        bottom: 12,
+        zIndex: 9999,
+        padding: "10px 12px",
+        borderRadius: 10,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        fontSize: 12,
+        lineHeight: 1.3,
+        color: "rgba(255,255,255,0.9)",
+        background: "rgba(0,0,0,0.8)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        pointerEvents: "none",
+      }}
+    >
+      <div>{`fps ~ ${stats.fps.toFixed(0)}`}</div>
+      <div>{`avg ${stats.avgMs.toFixed(1)}ms`}</div>
+      <div>{`p95 ${stats.p95Ms.toFixed(1)}ms`}</div>
+      <div style={{ marginTop: 6, opacity: 0.8 }}>{`fx: ${fxText}`}</div>
+    </div>
+  );
+}
+
 export default function LandingPage() {
   const { isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
+
+  const { fxEnabled, showPerfHud } = useMemo(() => getLandingFxFromUrl(), []);
+  const particlesEnabled = fxEnabled.has("particles");
+  const heroAnimationsEnabled = fxEnabled.has("hero");
 
   // If already logged in, redirect to dashboard
   useEffect(() => {
@@ -39,15 +144,15 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="landing-page">
+    <div className="landing-page" data-fx-hero={heroAnimationsEnabled ? "1" : "0"} data-fx-particles={particlesEnabled ? "1" : "0"}>
       {/* Particle background */}
-      <div className="particle-bg" />
+      {particlesEnabled && <div className="particle-bg" />}
 
       {/* Gradient orb behind hero */}
       <div className="landing-glow-orb" />
 
       <main className="landing-main">
-        <HeroSection onScrollToScenarios={scrollToScenarios} />
+        <HeroSection onScrollToScenarios={scrollToScenarios} heroAnimationsEnabled={heroAnimationsEnabled} />
         <PASSection />
         <ScenariosSection />
         <DifferentiationSection />
@@ -56,6 +161,8 @@ export default function LandingPage() {
         <TrustSection />
         <FooterCTA />
       </main>
+
+      {showPerfHud && <LandingPerfHud fxEnabled={fxEnabled} />}
     </div>
   );
 }

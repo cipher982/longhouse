@@ -1,11 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 
-interface PerformanceMetrics {
-  renderTime: number;
-  componentName: string;
-  timestamp: number;
-}
-
 // Performance monitoring hook
 export function usePerformanceMonitoring(componentName: string) {
   const renderStartTime = useRef<number>(performance.now());
@@ -92,7 +86,13 @@ export function useMemoryMonitoring(componentName: string) {
     if (import.meta.env.MODE !== 'development') return;
 
     // Check if performance.memory is available
-    const perfMemory = (performance as any).memory;
+    const perfMemory = (performance as unknown as {
+      memory?: {
+        usedJSHeapSize: number;
+        totalJSHeapSize: number;
+        jsHeapSizeLimit: number;
+      }
+    }).memory;
     if (!perfMemory) return;
 
     const logMemoryUsage = () => {

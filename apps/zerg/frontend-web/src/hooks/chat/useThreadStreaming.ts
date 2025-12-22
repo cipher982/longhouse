@@ -133,7 +133,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
     }
   }, [agentId, queryClient, forceUpdate]);
 
-  const { sendMessage: wsSendMessage } = useWebSocket(agentId != null, {
+  useWebSocket(agentId != null, {
     includeAuth: true,
     invalidateQueries: wsQueries,
     onStreamingMessage: handleStreamingMessage,

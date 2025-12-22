@@ -12,7 +12,7 @@ import { ChatComposer } from "../components/chat/ChatComposer";
 import { useChatData } from "../hooks/chat/useChatData";
 import { useChatActions } from "../hooks/chat/useChatActions";
 import { useThreadStreaming } from "../hooks/chat/useThreadStreaming";
-import { createThread } from "../services/api";
+import { createThread, type Thread, type ThreadMessage } from "../services/api";
 
 function useRequiredNumber(param?: string): number | null {
   if (!param) return null;
@@ -132,12 +132,12 @@ export default function ChatPage() {
   });
 
   // Event handlers
-  const handleSelectThread = (thread: any) => {
+  const handleSelectThread = (thread: Thread) => {
     setSelectedThreadId(thread.id);
     navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
   };
 
-  const handleEditThreadTitle = (thread: any, e: React.MouseEvent) => {
+  const handleEditThreadTitle = (thread: Thread, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingThreadId(thread.id);
     setEditingTitle(thread.title);
@@ -194,7 +194,7 @@ export default function ChatPage() {
   };
 
   // Message action handlers
-  const handleCopyMessage = (message: any) => {
+  const handleCopyMessage = (message: ThreadMessage) => {
     navigator.clipboard.writeText(message.content).then(() => {
       toast.success("Message copied to clipboard");
     }).catch(() => {

@@ -4,7 +4,7 @@
  */
 
 import type { RealtimeSession } from '@openai/agents/realtime';
-import type { SessionManager } from '../core';
+import type { SessionManager, JarvisAPIClient } from '../core';
 import type { VoiceAgentConfig } from '../contexts/types';
 import { uuid } from './uuid';
 
@@ -51,19 +51,19 @@ export interface BootstrapData {
  */
 export interface AppState {
   // Core OpenAI SDK objects
-  agent: any | null;
+  agent: unknown | null;
   session: RealtimeSession | null;
   sessionManager: SessionManager | null;
 
   // Conversation state
   currentStreamingText: string;
   currentConversationId: string | null;
-  currentContext: any | null;
+  currentContext: VoiceAgentConfig | null;
   conversations: Array<{ id: string; name: string; meta: string; active?: boolean }>;
 
   // Jarvis-Zerg integration
-  jarvisClient: any; // Type from @jarvis/core
-  cachedAgents: any[];
+  jarvisClient: JarvisAPIClient | null; // Type from @jarvis/core
+  cachedAgents: unknown[];
   bootstrap: BootstrapData | null;
 
   // UI state
@@ -79,8 +79,8 @@ export interface AppState {
  */
 export type StateChangeEvent =
   | { type: 'SESSION_CHANGED'; session: RealtimeSession | null }
-  | { type: 'AGENT_CHANGED'; agent: any }
-  | { type: 'CONTEXT_CHANGED'; context: any }
+  | { type: 'AGENT_CHANGED'; agent: unknown }
+  | { type: 'CONTEXT_CHANGED'; context: VoiceAgentConfig | null }
   | { type: 'STATUS_CHANGED'; active: boolean }
   | { type: 'STREAMING_TEXT_CHANGED'; text: string }
   | { type: 'CONVERSATION_ID_CHANGED'; id: string | null }
@@ -92,7 +92,7 @@ export type StateChangeEvent =
   | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
-  | { type: 'HISTORY_LOADED'; history: any[] }
+  | { type: 'HISTORY_LOADED'; history: unknown[] }
   | { type: 'PREFERENCES_CHANGED'; preferences: ChatPreferences }
   | { type: 'MODELS_LOADED'; models: ModelInfo[] };
 
@@ -157,7 +157,7 @@ export class StateManager {
   /**
    * Update agent
    */
-  setAgent(agent: any | null): void {
+  setAgent(agent: unknown | null): void {
     this.state.agent = agent;
     this.notifyListeners({ type: 'AGENT_CHANGED', agent });
   }
@@ -165,7 +165,7 @@ export class StateManager {
   /**
    * Update context
    */
-  setContext(context: any | null): void {
+  setContext(context: VoiceAgentConfig | null): void {
     this.state.currentContext = context;
     this.notifyListeners({ type: 'CONTEXT_CHANGED', context });
   }
@@ -243,7 +243,7 @@ export class StateManager {
   /**
    * Notify that conversation history was loaded (for UI hydration)
    */
-  historyLoaded(history: any[]): void {
+  historyLoaded(history: unknown[]): void {
     this.notifyListeners({ type: 'HISTORY_LOADED', history });
   }
 
@@ -281,14 +281,14 @@ export class StateManager {
   /**
    * Update Jarvis client
    */
-  setJarvisClient(client: any): void {
+  setJarvisClient(client: JarvisAPIClient | null): void {
     this.state.jarvisClient = client;
   }
 
   /**
    * Update cached agents
    */
-  setCachedAgents(agents: any[]): void {
+  setCachedAgents(agents: unknown[]): void {
     this.state.cachedAgents = agents;
   }
 
@@ -326,12 +326,12 @@ export class StateManager {
    */
   updatePreferences(updates: Partial<ChatPreferences>): void {
     if (this.state.bootstrap) {
-      const existing = (this.state.bootstrap as any).preferences ?? this.getPreferences();
-      (this.state.bootstrap as any).preferences = {
+      const existing = this.state.bootstrap.preferences ?? this.getPreferences();
+      this.state.bootstrap.preferences = {
         ...existing,
         ...updates,
       };
-      this.emit({ type: 'PREFERENCES_CHANGED', preferences: (this.state.bootstrap as any).preferences });
+      this.emit({ type: 'PREFERENCES_CHANGED', preferences: this.state.bootstrap.preferences });
     }
   }
 
@@ -345,7 +345,7 @@ export class StateManager {
   /**
    * Get Jarvis client
    */
-  getJarvisClient(): any {
+  getJarvisClient(): JarvisAPIClient | null {
     return this.state.jarvisClient;
   }
 

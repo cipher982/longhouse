@@ -16,7 +16,7 @@
 
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { useAppDispatch, type ChatMessage } from '../context'
-import { logger, getJarvisClient } from '../../core'
+import { logger, getJarvisClient, type JarvisAPIClient } from '../../core'
 import type { ConversationTurn } from '../../data'
 
 // Import controllers (keep these - they're pure business logic)
@@ -27,6 +27,7 @@ import { feedbackSystem } from '../../lib/feedback-system'
 import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
 import { bootstrapSession, type BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
+import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
 // Keep stateManager for streaming events from supervisor-chat-controller
@@ -72,8 +73,8 @@ interface JarvisAppState {
   connected: boolean
   voiceStatus: 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
   bootstrap: BootstrapData | null
-  currentContext: any | null
-  jarvisClient: any | null
+  currentContext: VoiceAgentConfig | null
+  jarvisClient: JarvisAPIClient | null
 }
 
 /**
@@ -417,7 +418,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         realtimeHistoryTurns: state.currentContext.settings?.realtimeHistoryTurns ?? 8,
       })
 
-      const { session, agent, conversationId, hydratedItemCount } = bootstrapResult
+      const { session, conversationId, hydratedItemCount } = bootstrapResult
       lastBootstrapResultRef.current = bootstrapResult
 
       logger.info(`[useJarvisApp] Session bootstrapped, ${hydratedItemCount} items hydrated`)
@@ -446,7 +447,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       optionsRef.current.onConnected?.()
 
       logger.info('[useJarvisApp] Connected successfully')
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('[useJarvisApp] Connection failed:', error)
 
       audioController.releaseMicrophone()
@@ -455,7 +456,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       dispatch({ type: 'SET_CONNECTED', connected: false })
 
       feedbackSystem.playErrorTone()
-      optionsRef.current.onError?.(error)
+      optionsRef.current.onError?.(error as Error)
     }
   }, [state.connecting, state.connected, state.currentContext, dispatch, updateState, setVoiceStatus, loadSupervisorHistory])
 
@@ -491,7 +492,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   }, [connect, disconnect])
 
   // Set up OpenAI session events
-  const setupSessionEvents = useCallback((session: any) => {
+  const setupSessionEvents = useCallback((session: { on: (event: string, callback: (event: any) => void) => void }) => {
     session.on('transport_event', async (event: any) => {
       const t = event.type || ''
 

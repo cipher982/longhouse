@@ -40,7 +40,6 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const clientRef = useRef<ReturnType<typeof getJarvisClient> | null>(null)
-  const sessionManagerRef = useRef<SessionManager | null>(null)
 
   const { jarvisClient, isConnected, cachedAgents } = state
 

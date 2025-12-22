@@ -13,7 +13,7 @@
    behind all content without affecting layout.
 */
 
-.particle-bg {
+.landing-page .particle-bg {
   position: fixed;
   inset: 0;
   z-index: -1; /* Behind every real element */
@@ -22,34 +22,64 @@
   /* Dark fallback when CSS variables aren’t loaded yet */
   background-color: var(--dark, #000);
 
-  /* Two radial-gradient dot patterns offset by half a tile */
-  background-image:
-    radial-gradient(circle, rgb(255 255 255 / 12%) 0%, transparent 40%),
-    radial-gradient(circle, rgb(255 255 255 / 7%) 0%, transparent 40%);
-
-  /* Size of a single dot (first layer) */
-  background-size:
-    3px 3px,
-    3px 3px;
-
-  /* Offset second layer so dots don’t overlap exactly */
-  background-position:
-    0 0,
-    1.5px 1.5px;
-  animation: particle-drift 60s linear infinite;
+  /*
+    IMPORTANT PERF NOTE (Carmack-style):
+    - Animating `background-position` forces a repaint every frame over the full viewport.
+    - Instead, we paint once and animate a compositor-only `transform` on oversized layers.
+  */
+  --particle-drift-x: 1000px;
+  --particle-drift-y: 500px;
+  --particle-overscan: 96px;
 }
 
-@keyframes particle-drift {
+.landing-page .particle-bg::before,
+.landing-page .particle-bg::after {
+  content: "";
+  position: absolute;
+
+  /* Oversize so translating never exposes edges. */
+  top: calc(-1 * var(--particle-drift-y) - var(--particle-overscan));
+  bottom: calc(-1 * var(--particle-drift-y) - var(--particle-overscan));
+  left: calc(-1 * var(--particle-drift-x) - var(--particle-overscan));
+  right: calc(-1 * var(--particle-drift-x) - var(--particle-overscan));
+
+  background-repeat: repeat;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  animation: particle-drift-transform 60s linear infinite;
+}
+
+.landing-page .particle-bg::before {
+  background-image: radial-gradient(circle, rgb(255 255 255 / 12%) 0%, transparent 40%);
+  background-size: 3px 3px;
+  background-position: 0 0;
+  opacity: 0.9;
+}
+
+.landing-page .particle-bg::after {
+  background-image: radial-gradient(circle, rgb(255 255 255 / 7%) 0%, transparent 40%);
+  background-size: 3px 3px;
+  background-position: 1.5px 1.5px;
+  opacity: 0.9;
+
+  /* Slight parallax variation for "life" without extra paints. */
+  animation-duration: 90s;
+  animation-direction: reverse;
+}
+
+@keyframes particle-drift-transform {
   from {
-    background-position:
-      0 0,
-      1.5px 1.5px;
+    transform: translate3d(0, 0, 0);
   }
 
   to {
-    /* Move several screen widths to achieve a slow drift effect */
-    background-position:
-      1000px 500px,
-      1001.5px 501.5px;
+    transform: translate3d(var(--particle-drift-x), var(--particle-drift-y), 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-page .particle-bg::before,
+  .landing-page .particle-bg::after {
+    animation: none !important;
   }
 }
