@@ -69,18 +69,20 @@ function WelcomeHeader() {
   return (
     <header className="main-header" data-testid="welcome-header">
       <div className="header-left">
-        {shouldShowShelfToggle && (
-          <button
-            id="shelf-toggle-btn"
-            className="header-button shelf-toggle"
-            aria-label="Open agent panel"
-            aria-controls="agent-shelf"
-            aria-expanded={isShelfOpen}
-            onClick={toggleShelf}
-          >
-            <MenuIcon />
-          </button>
-        )}
+        <div className="shelf-toggle-container">
+          {shouldShowShelfToggle && (
+            <button
+              id="shelf-toggle-btn"
+              className="header-button shelf-toggle"
+              aria-label="Open agent panel"
+              aria-controls="agent-shelf"
+              aria-expanded={isShelfOpen}
+              onClick={toggleShelf}
+            >
+              <MenuIcon />
+            </button>
+          )}
+        </div>
         <div className="header-brand">
           <a href="/dashboard" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/dashboard'); }}>
             <div className="brand-logo-wrapper">
