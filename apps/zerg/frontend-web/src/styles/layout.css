@@ -79,6 +79,7 @@
     background-color: var(--color-void, #030305);
     position: relative;
     overflow: hidden;
+    z-index: 0;
 
     /* Living Void Layer 1: Deep Nebula */
     background-image:
@@ -94,36 +95,36 @@
   #react-root[data-ui-effects="on"]::before {
     content: "";
     position: absolute;
-    inset: -50%;
-    width: 200%;
-    height: 200%;
+    inset: -100%;
+    width: 300%;
+    height: 300%;
     background-image:
-      linear-gradient(rgba(99, 102, 241, 0.08) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(99, 102, 241, 0.08) 1px, transparent 1px);
-    background-size: 60px 60px;
-    transform: perspective(500px) rotateX(60deg);
-    animation: grid-move 20s linear infinite;
+      linear-gradient(rgba(99, 102, 241, 0.2) 1.5px, transparent 1.5px),
+      linear-gradient(90deg, rgba(99, 102, 241, 0.2) 1.5px, transparent 1.5px);
+    background-size: 80px 80px;
+    transform: perspective(1000px) rotateX(60deg);
+    animation: grid-move 40s linear infinite;
     pointer-events: none;
-    z-index: 0;
-    mask-image: radial-gradient(circle, black 30%, transparent 70%);
+    z-index: -1;
+    opacity: 0.5;
   }
 
   /* Living Void Layer 3: Global Nebula Drift (Only when effects are on) */
   #react-root[data-ui-effects="on"]::after {
     content: "";
     position: absolute;
-    top: -10%;
-    left: -10%;
-    width: 120%;
-    height: 120%;
+    top: -20%;
+    left: -20%;
+    width: 140%;
+    height: 140%;
     background:
-      radial-gradient(circle at 15% 85%, rgb(99 102 241 / 25%), transparent 35%),
-      radial-gradient(circle at 85% 15%, rgb(6 182 212 / 20%), transparent 30%),
-      radial-gradient(circle at 50% 50%, rgb(236 72 153 / 15%), transparent 40%);
-    animation: nebula-drift 60s ease-in-out infinite;
+      radial-gradient(circle at 20% 80%, rgb(99 102 241 / 35%), transparent 40%),
+      radial-gradient(circle at 80% 20%, rgb(6 182 212 / 30%), transparent 35%),
+      radial-gradient(circle at 50% 50%, rgb(236 72 153 / 25%), transparent 45%);
+    animation: nebula-drift 80s ease-in-out infinite;
     pointer-events: none;
-    z-index: 0;
-    filter: blur(60px);
+    z-index: -2;
+    filter: blur(80px);
     will-change: transform, opacity;
     mix-blend-mode: screen;
   }
@@ -142,10 +143,10 @@
   }
 
   @keyframes nebula-drift {
-    0% { transform: translate(0, 0) scale(1); opacity: 0.6; }
-    33% { transform: translate(2%, -4%) scale(1.05); opacity: 0.8; }
-    66% { transform: translate(-1%, 2%) scale(0.98); opacity: 0.5; }
-    100% { transform: translate(0, 0) scale(1); opacity: 0.6; }
+    0% { transform: translate(0, 0) scale(1); opacity: 0.4; }
+    33% { transform: translate(40px, -60px) scale(1.1); opacity: 0.6; }
+    66% { transform: translate(-20px, 30px) scale(0.95); opacity: 0.3; }
+    100% { transform: translate(0, 0) scale(1); opacity: 0.4; }
   }
 
   /* Place elements explicitly so order in DOM does not matter */
