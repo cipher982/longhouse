@@ -2,10 +2,10 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
-import { 
-  Button, 
-  Card, 
-  SectionHeader, 
+import {
+  Button,
+  Card,
+  SectionHeader,
   EmptyState,
   Input
 } from "../components/ui";

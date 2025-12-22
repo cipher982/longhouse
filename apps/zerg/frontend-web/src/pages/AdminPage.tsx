@@ -3,10 +3,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
-import { 
-  Button, 
-  Card, 
-  SectionHeader, 
+import {
+  Button,
+  Card,
+  SectionHeader,
   EmptyState,
   Table,
   Badge

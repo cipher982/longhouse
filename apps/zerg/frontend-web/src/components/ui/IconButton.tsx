@@ -16,4 +16,3 @@ export const IconButton: React.FC<IconButtonProps> = ({
     </button>
   );
 };
-
