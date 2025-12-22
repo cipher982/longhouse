@@ -389,3 +389,58 @@ export function SignalIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function SquareIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+    </svg>
+  );
+}
+
+export function GridIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+    </svg>
+  );
+}
+
+export function HashIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <line x1="4" y1="9" x2="20" y2="9" />
+      <line x1="4" y1="15" x2="20" y2="15" />
+      <line x1="10" y1="3" x2="8" y2="21" />
+      <line x1="16" y1="3" x2="14" y2="21" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+export function XIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
