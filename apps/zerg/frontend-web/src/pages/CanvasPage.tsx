@@ -47,9 +47,11 @@ import {
 } from "./canvas/dragDropUtils";
 import { SNAP_GRID_SIZE, debounce } from "./canvas/utils";
 
+import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon } from "../components/icons";
+
 const TOOL_ITEMS = [
-  { type: "http-request", name: "HTTP Request", icon: "🌐" },
-  { type: "url-fetch", name: "URL Fetch", icon: "📡" },
+  { type: "http-request", name: "HTTP Request" },
+  { type: "url-fetch", name: "URL Fetch" },
 ];
 
 function CanvasPageContent() {
@@ -157,10 +159,6 @@ function CanvasPageContent() {
     [dragPreviewData, reactFlowInstance, resetDragPreview, setNodes, zoom]
   );
 
-  const resolveToolIcon = useCallback((toolType: string) => {
-    return TOOL_ITEMS.find((tool) => tool.type === toolType)?.icon ?? "🔧";
-  }, []);
-
   const beginAgentDrag = useCallback(
     (event: React.DragEvent, agent: { id: number; name: string }) => {
       event.stopPropagation();
@@ -179,25 +177,25 @@ function CanvasPageContent() {
         const pointerOffsetY = clientY - rect.top;
         const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
         const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
-        const preview: DragPreviewData = {
-          kind: "agent",
-          label: agent.name,
-          icon: "🤖",
-          baseSize: { width: rect.width || 160, height: rect.height || 48 },
-          pointerRatio: { x: pointerRatioX, y: pointerRatioY },
-          agentId: agent.id,
-        };
-        setDragPreviewData(preview);
-        updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
-      } else {
-        const preview: DragPreviewData = {
-          kind: "agent",
-          label: agent.name,
-          icon: "🤖",
-          baseSize: { width: 160, height: 48 },
-          pointerRatio: { x: 0, y: 0 },
-          agentId: agent.id,
-        };
+      const preview: DragPreviewData = {
+        kind: "agent",
+        label: agent.name,
+        icon: "",
+        baseSize: { width: rect.width || 160, height: rect.height || 48 },
+        pointerRatio: { x: pointerRatioX, y: pointerRatioY },
+        agentId: agent.id,
+      };
+      setDragPreviewData(preview);
+      updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
+    } else {
+      const preview: DragPreviewData = {
+        kind: "agent",
+        label: agent.name,
+        icon: "",
+        baseSize: { width: 160, height: 48 },
+        pointerRatio: { x: 0, y: 0 },
+        agentId: agent.id,
+      };
         setDragPreviewData(preview);
         updatePreviewPositionFromClientPoint({ x: event.clientX ?? 0, y: event.clientY ?? 0 }, preview);
       }
@@ -224,25 +222,25 @@ function CanvasPageContent() {
         const pointerOffsetY = clientY - rect.top;
         const pointerRatioX = rect.width ? clamp(pointerOffsetX / rect.width, 0, 1) : 0;
         const pointerRatioY = rect.height ? clamp(pointerOffsetY / rect.height, 0, 1) : 0;
-        const preview: DragPreviewData = {
-          kind: "tool",
-          label: tool.name,
-          icon: resolveToolIcon(tool.type),
-          baseSize: { width: rect.width || 160, height: rect.height || 48 },
-          pointerRatio: { x: pointerRatioX, y: pointerRatioY },
-          toolType: tool.type,
-        };
-        setDragPreviewData(preview);
-        updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
-      } else {
-        const preview: DragPreviewData = {
-          kind: "tool",
-          label: tool.name,
-          icon: resolveToolIcon(tool.type),
-          baseSize: { width: 160, height: 48 },
-          pointerRatio: { x: 0, y: 0 },
-          toolType: tool.type,
-        };
+      const preview: DragPreviewData = {
+        kind: "tool",
+        label: tool.name,
+        icon: "",
+        baseSize: { width: rect.width || 160, height: rect.height || 48 },
+        pointerRatio: { x: pointerRatioX, y: pointerRatioY },
+        toolType: tool.type,
+      };
+      setDragPreviewData(preview);
+      updatePreviewPositionFromClientPoint({ x: clientX, y: clientY }, preview);
+    } else {
+      const preview: DragPreviewData = {
+        kind: "tool",
+        label: tool.name,
+        icon: "",
+        baseSize: { width: 160, height: 48 },
+        pointerRatio: { x: 0, y: 0 },
+        toolType: tool.type,
+      };
         setDragPreviewData(preview);
         updatePreviewPositionFromClientPoint({ x: event.clientX ?? 0, y: event.clientY ?? 0 }, preview);
       }
@@ -264,62 +262,62 @@ function CanvasPageContent() {
         const rect = event.currentTarget.getBoundingClientRect();
         const pointerOffsetX = event.clientX - rect.left;
         const pointerOffsetY = event.clientY - rect.top;
-        const preview: DragPreviewData = {
-          kind: 'agent',
-          label: agent.name,
-          icon: '🤖',
-          baseSize: { width: rect.width || 160, height: rect.height || 48 },
-          pointerRatio: {
-            x: rect.width ? pointerOffsetX / rect.width : 0,
-            y: rect.height ? pointerOffsetY / rect.height : 0
-          },
-          agentId: agent.id,
-        };
-        setDragPreviewData(preview);
-        updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
-        setIsDragActive(true);
+      const preview: DragPreviewData = {
+        kind: 'agent',
+        label: agent.name,
+        icon: '',
+        baseSize: { width: rect.width || 160, height: rect.height || 48 },
+        pointerRatio: {
+          x: rect.width ? pointerOffsetX / rect.width : 0,
+          y: rect.height ? pointerOffsetY / rect.height : 0
+        },
+        agentId: agent.id,
+      };
+      setDragPreviewData(preview);
+      updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
+      setIsDragActive(true);
 
-        event.currentTarget.setAttribute('aria-grabbed', 'true');
-      }
-    },
-    [startDrag, setDragPreviewData, updatePreviewPositionFromClientPoint, setIsDragActive]
-  );
+      event.currentTarget.setAttribute('aria-grabbed', 'true');
+    }
+  },
+  [startDrag, setDragPreviewData, updatePreviewPositionFromClientPoint, setIsDragActive]
+);
 
-  const handleToolPointerDown = useCallback(
-    (event: React.PointerEvent, tool: { type: string; name: string }) => {
-      // Only use Pointer API for touch/pen; let HTML5 drag handle mouse
-      if (event.isPrimary && event.pointerType !== 'mouse') {
-        startDrag(event, {
-          type: 'tool',
-          name: tool.name,
-          tool_type: tool.type
-        });
+const handleToolPointerDown = useCallback(
+  (event: React.PointerEvent, tool: { type: string; name: string }) => {
+    // Only use Pointer API for touch/pen; let HTML5 drag handle mouse
+    if (event.isPrimary && event.pointerType !== 'mouse') {
+      startDrag(event, {
+        type: 'tool',
+        name: tool.name,
+        tool_type: tool.type
+      });
 
-        const rect = event.currentTarget.getBoundingClientRect();
-        const pointerOffsetX = event.clientX - rect.left;
-        const pointerOffsetY = event.clientY - rect.top;
-        const preview: DragPreviewData = {
-          kind: 'tool',
-          label: tool.name,
-          icon: resolveToolIcon(tool.type),
-          baseSize: { width: rect.width || 160, height: rect.height || 48 },
-          pointerRatio: {
-            x: rect.width ? pointerOffsetX / rect.width : 0,
-            y: rect.height ? pointerOffsetY / rect.height : 0
-          },
-          toolType: tool.type,
-        };
-        setDragPreviewData(preview);
-        updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
-        setIsDragActive(true);
+      const rect = event.currentTarget.getBoundingClientRect();
+      const pointerOffsetX = event.clientX - rect.left;
+      const pointerOffsetY = event.clientY - rect.top;
+      const preview: DragPreviewData = {
+        kind: 'tool',
+        label: tool.name,
+        icon: '',
+        baseSize: { width: rect.width || 160, height: rect.height || 48 },
+        pointerRatio: {
+          x: rect.width ? pointerOffsetX / rect.width : 0,
+          y: rect.height ? pointerOffsetY / rect.height : 0
+        },
+        toolType: tool.type,
+      };
+      setDragPreviewData(preview);
+      updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, preview);
+      setIsDragActive(true);
 
-        event.currentTarget.setAttribute('aria-grabbed', 'true');
-      }
-    },
-    [startDrag, resolveToolIcon, setDragPreviewData, updatePreviewPositionFromClientPoint, setIsDragActive]
-  );
+      event.currentTarget.setAttribute('aria-grabbed', 'true');
+    }
+  },
+  [startDrag, setDragPreviewData, updatePreviewPositionFromClientPoint, setIsDragActive]
+);
 
-  // Effect 1: HTML5 drag preview (desktop drag, depends on dragPreviewData)
+// Effect 1: HTML5 drag preview (desktop drag, depends on dragPreviewData)
   useEffect(() => {
     if (!dragPreviewData) {
       return;
@@ -964,12 +962,22 @@ function CanvasPageContent() {
                     >
                       {dragPreviewData.kind === "agent" ? (
                         <div className="agent-node drag-preview-node">
-                          <div className="agent-icon">{dragPreviewData.icon}</div>
+                          <div className="agent-icon">
+                            <AgentIcon width={20} height={20} />
+                          </div>
                           <div className="agent-name">{dragPreviewData.label}</div>
                         </div>
                       ) : (
                         <div className="tool-node drag-preview-node">
-                          <div className="tool-icon">{dragPreviewData.icon}</div>
+                          <div className="tool-icon">
+                            {dragPreviewData.toolType === 'http-request' ? (
+                              <GlobeIcon width={20} height={20} />
+                            ) : dragPreviewData.toolType === 'url-fetch' ? (
+                              <SignalIcon width={20} height={20} />
+                            ) : (
+                              <WrenchIcon width={20} height={20} />
+                            )}
+                          </div>
                           <div className="tool-name">{dragPreviewData.label}</div>
                         </div>
                       )}
