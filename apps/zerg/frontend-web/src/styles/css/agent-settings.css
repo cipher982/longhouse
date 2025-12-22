@@ -503,27 +503,6 @@
     flex-shrink: 0;
   }
 
-  .btn-sm {
-    padding: var(--space-1) var(--space-3);
-    font-size: var(--font-size-xs);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-family: var(--font-family-base);
-    font-weight: 600;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .btn-primary-outline {
-    border: 1px solid var(--color-brand-primary);
-    color: var(--color-brand-primary);
-    background: transparent;
-  }
-
-  .btn-primary-outline:hover {
-    background: var(--color-brand-primary);
-    color: white;
-  }
-
   /* Toggle Switch */
   .switch {
     position: relative;
