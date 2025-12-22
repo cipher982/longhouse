@@ -213,13 +213,13 @@ async def test_worker_message_persistence(worker_runner, temp_store, db_session,
     with open(thread_path, "r") as f:
         messages = [json.loads(line) for line in f]
 
-    # Should have at least: system, user, assistant
-    assert len(messages) >= 3
+    # Should have at least: user + assistant (system/context messages may be injected)
+    assert len(messages) >= 2
 
-    # Verify message structure
-    assert messages[0]["role"] == "system"
-    assert messages[1]["role"] == "user"
-    assert messages[1]["content"] == "Say hello"
+    assert any(m.get("role") == "system" for m in messages)
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    assert len(user_messages) >= 1
+    assert user_messages[0]["content"] == "Say hello"
 
     # Last message should be assistant (may have tool messages in between)
     assistant_messages = [m for m in messages if m["role"] == "assistant"]
