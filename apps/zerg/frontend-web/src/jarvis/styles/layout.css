@@ -6,15 +6,7 @@
   height: 100%;
   position: relative;
   overflow: hidden;
-  background-color: var(--color-void);
-  /* Living Void Layer 1: Deep Nebula */
-  background-image:
-    radial-gradient(
-      circle at 15% 50%,
-      rgb(99 102 241 / 8%) 0%,
-      transparent 25%
-    ),
-    radial-gradient(circle at 85% 30%, rgb(236 72 153 / 8%) 0%, transparent 25%);
+  background-color: transparent;
 }
 
 /* Living Void Layer 2: Perspective grid floor (Tron-style)
@@ -44,26 +36,10 @@
 }
 
 /* Living Void Layer 3: Ambient Glows (Optimized)
-   - Only shown when heavy effects are ON
-   - Colored nebula blobs that drift slowly
-   - Creates atmospheric depth */
+   - REDUNDANT: Moved to global #react-root::after
+   - Keeping this selector empty to avoid breaking legacy code if any */
 #react-root[data-ui-effects="on"] .jarvis-container .app-container::after {
-  content: "";
-  position: absolute;
-  top: -10%;
-  left: -10%;
-  width: 120%;
-  height: 120%;
-  background:
-    radial-gradient(circle at 15% 85%, rgb(99 102 241 / 50%), transparent 35%),
-    radial-gradient(circle at 85% 15%, rgb(6 182 212 / 45%), transparent 30%),
-    radial-gradient(circle at 50% 50%, rgb(236 72 153 / 30%), transparent 40%);
-  animation: nebula-drift 60s ease-in-out infinite;
-  pointer-events: none;
-  z-index: 2;
-  filter: blur(60px);
-  will-change: transform, opacity;
-  mix-blend-mode: screen;
+  display: none;
 }
 
 .jarvis-container .main-content {
@@ -73,9 +49,8 @@
   overflow: hidden;
   position: relative;
   z-index: 1;
-  /* Semi-transparent to let background effects show through */
-  background: rgb(3 3 5 / 40%);
-  box-shadow: inset 0 0 100px rgb(0 0 0 / 30%);
+  /* Transparent to use global background */
+  background: transparent;
 }
 
 /* Header - HUD Style */
