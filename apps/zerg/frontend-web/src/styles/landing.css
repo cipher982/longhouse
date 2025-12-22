@@ -212,8 +212,11 @@
 
   .hero-hex-core {
     fill: url(#hero-core-grad);
-    animation: hero-breathe 4s ease-in-out infinite;
     filter: drop-shadow(0 0 20px rgb(99 102 241 / 50%));
+  }
+
+  [data-fx-hero="1"] .hero-hex-core {
+    animation: hero-breathe 4s ease-in-out infinite;
   }
 
   .hero-orbit-track {
@@ -237,27 +240,36 @@
     stroke-dasharray: 2 4;
   }
 
-  .hero-bg-pulse {
+  [data-fx-hero="1"] .hero-bg-pulse {
     animation: hero-bg-breathe 8s ease-in-out infinite;
   }
 
   .hero-starfield {
     transform-origin: 250px 250px;
+  }
+
+  [data-fx-hero="1"] .hero-starfield {
     animation: hero-spin 120s linear infinite;
   }
 
   .hero-scanner {
     transform-origin: 250px 250px;
+  }
+
+  [data-fx-hero="1"] .hero-scanner {
     animation: hero-spin 15s linear infinite;
   }
 
   .hero-hex-inner {
-    animation: hero-spin 20s linear infinite reverse;
     transform-origin: center;
     transform-box: fill-box;
   }
 
-  .hero-core-pulse {
+  [data-fx-hero="1"] .hero-hex-inner {
+    animation: hero-spin 20s linear infinite reverse;
+  }
+
+  [data-fx-hero="1"] .hero-core-pulse {
     animation: hero-core-pulse-anim 3s ease-in-out infinite;
   }
 
@@ -277,15 +289,21 @@
   }
 
   .hero-orbit-group {
-    animation: hero-spin 60s linear infinite;
     transform-origin: 250px 250px;
     transform-box: view-box;
   }
 
+  [data-fx-hero="1"] .hero-orbit-group {
+    animation: hero-spin 60s linear infinite;
+  }
+
   .hero-orbit-icon {
-    animation: hero-spin 60s linear infinite reverse;
     transform-origin: center;
     transform-box: fill-box;
+  }
+
+  [data-fx-hero="1"] .hero-orbit-icon {
+    animation: hero-spin 60s linear infinite reverse;
   }
 
   .hero-icon-scale {

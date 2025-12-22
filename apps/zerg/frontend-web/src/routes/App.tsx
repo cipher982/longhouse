@@ -212,7 +212,8 @@ export default function App() {
         },
       ]
     },
-    // Fallback - redirect to landing for unknown routes
+    // Fallback for unknown SPA routes - show landing page
+    // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
     {
       path: "*",
       element: (

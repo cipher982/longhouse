@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import "../styles/landing.css";
 
@@ -123,9 +124,30 @@ export default function LandingPage() {
   const particlesEnabled = fxEnabled.has("particles");
   const heroAnimationsEnabled = fxEnabled.has("hero");
 
-  // If already logged in, redirect to dashboard
+  // Control global UI effects based on landing page effects
   useEffect(() => {
-    if (isAuthenticated && !isLoading) {
+    const hasAnyEffect = particlesEnabled || heroAnimationsEnabled;
+    const container = document.getElementById("react-root");
+    if (container) {
+      container.setAttribute("data-ui-effects", hasAnyEffect ? "on" : "off");
+    }
+    return () => {
+      // Restore default on unmount
+      if (container) {
+        container.setAttribute("data-ui-effects", "on");
+      }
+    };
+  }, [particlesEnabled, heroAnimationsEnabled]);
+
+  // If already logged in, redirect to dashboard
+  // SKIP redirect when:
+  // - authEnabled=false (dev mode - fake auth, don't redirect)
+  // - noredirect=1 query param (manual override for testing)
+  useEffect(() => {
+    if (!config.authEnabled) return; // Dev mode: never redirect
+    const params = new URLSearchParams(window.location.search);
+    const skipRedirect = params.get("noredirect") === "1";
+    if (isAuthenticated && !isLoading && !skipRedirect) {
       navigate("/dashboard");
     }
   }, [isAuthenticated, isLoading, navigate]);
