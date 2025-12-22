@@ -12,6 +12,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Self-hosted runners can have global pip config pointing at private indexes.
+  # Force public PyPI for CI so setup-python's pip step doesn't fail.
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
+
 jobs:
   validate:
     runs-on: [self-hosted, Linux, X64, cube]
