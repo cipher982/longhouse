@@ -128,14 +128,14 @@ export default function LandingPage() {
   useEffect(() => {
     const hasAnyEffect = particlesEnabled || heroAnimationsEnabled;
     const container = document.getElementById("react-root");
+    const previous = container?.getAttribute("data-ui-effects");
     if (container) {
       container.setAttribute("data-ui-effects", hasAnyEffect ? "on" : "off");
     }
     return () => {
-      // Restore default on unmount
-      if (container) {
-        container.setAttribute("data-ui-effects", "on");
-      }
+      if (!container) return;
+      if (previous) container.setAttribute("data-ui-effects", previous);
+      else container.removeAttribute("data-ui-effects");
     };
   }, [particlesEnabled, heroAnimationsEnabled]);
 

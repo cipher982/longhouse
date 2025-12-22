@@ -72,8 +72,22 @@ if (!container) {
   throw new Error("React root container not found");
 }
 
-// UI Effects toggle - defaults to "on" unless explicitly "off"
-const uiEffects = import.meta.env.VITE_UI_EFFECTS === "off" ? "off" : "on";
+function parseUiEffects(value: string | null): "on" | "off" | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "on" || normalized === "1" || normalized === "true" || normalized === "yes") return "on";
+  if (normalized === "off" || normalized === "0" || normalized === "false" || normalized === "no") return "off";
+  return null;
+}
+
+// UI Effects toggle - defaults to "on". Disable via:
+// - VITE_UI_EFFECTS=off
+// - ?uieffects=off or ?effects=off
+const envUiEffects = parseUiEffects(import.meta.env.VITE_UI_EFFECTS);
+const params = new URLSearchParams(window.location.search);
+const queryUiEffects = parseUiEffects(params.get("uieffects") ?? params.get("effects"));
+// Default: "on" (full visual mode). Use env/query to force "off".
+const uiEffects: "on" | "off" = queryUiEffects ?? envUiEffects ?? "on";
 container.setAttribute("data-ui-effects", uiEffects);
 
 const queryClient = new QueryClient();
