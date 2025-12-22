@@ -213,7 +213,7 @@
   background: rgb(255 255 255 / 10%);
   border-color: var(--color-brand-primary);
   color: var(--color-text-primary);
-  box-shadow: 0 0 15px rgb(99 102 241 / 20%);
+  box-shadow: var(--shadow-glow);
   transform: translateY(-1px);
 }
 

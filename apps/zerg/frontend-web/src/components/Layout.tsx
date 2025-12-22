@@ -7,13 +7,6 @@ import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import "../styles/layout.css";
 import { MenuIcon } from "./icons";
 
-const _STATUS_ITEMS = [
-  { label: "Runs", value: "0" },
-  { label: "Cost", value: "--" },
-  { label: "Err", value: "0" },
-  { label: "Budget", value: "0%" },
-];
-
 function WelcomeHeader() {
   const { user, logout } = useAuth();
   const { isShelfOpen, toggleShelf } = useShelf();
@@ -21,9 +14,10 @@ function WelcomeHeader() {
   const navigate = useNavigate();
 
   // Only show shelf toggle on routes that have drawer UI
-  const shouldShowShelfToggle =
-    location.pathname.startsWith("/canvas") ||
-    location.pathname.startsWith("/agent");
+  const SHELF_ENABLED_ROUTES = ["/canvas", "/agent"];
+  const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route => 
+    location.pathname.startsWith(route)
+  );
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {

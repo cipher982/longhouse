@@ -111,8 +111,10 @@
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.6);
   --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 24px rgba(99, 102, 241, 0.25);
-  --shadow-glow-cyan: 0 0 20px rgba(6, 182, 212, 0.3);
+  --shadow-glow: 0 0 15px rgb(99 102 241 / 30%);
+  --shadow-glow-strong: 0 0 25px rgb(99 102 241 / 50%);
+  --shadow-glow-cyan: 0 0 15px rgb(6 182 212 / 30%);
+  --shadow-glow-error: 0 0 15px rgb(239 68 68 / 30%);
 
   /* Blur */
   --blur-sm: 8px;
