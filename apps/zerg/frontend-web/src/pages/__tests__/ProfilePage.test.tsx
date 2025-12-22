@@ -111,9 +111,10 @@ describe("ProfilePage", () => {
   it("shows account information", () => {
     renderProfilePage();
 
-    const accountSection = screen.getAllByText("Account Information")[0].closest(".form-section");
-    expect(accountSection).not.toBeNull();
-    const info = within(accountSection as Element);
+    // Account Information is now rendered inside a Card (ui primitives)
+    const accountCard = screen.getAllByText("Account Information")[0].closest(".ui-card");
+    expect(accountCard).not.toBeNull();
+    const info = within(accountCard as Element);
     expect(info.getByText("User ID:")).toBeInTheDocument();
     expect(info.getByText(String(mockUser.id))).toBeInTheDocument();
     const expectedMemberSince = new Date(mockUser.created_at).toLocaleDateString();

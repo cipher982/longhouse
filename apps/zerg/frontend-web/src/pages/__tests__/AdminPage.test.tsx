@@ -196,20 +196,46 @@ describe("AdminPage", () => {
   });
 
   it("handles API errors gracefully", async () => {
-    // Mock API failure
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 403,
-      text: () => Promise.resolve("Admin access required"),
+    // Mock API failure (stable even if the query refires)
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.includes(`${config.apiBaseUrl}/ops/summary`)) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          text: () => Promise.resolve("Admin access required"),
+        } as unknown as Response);
+      }
+
+      // Keep other calls successful so the page can render the error state cleanly
+      if (url.includes(`${config.apiBaseUrl}/admin/super-admin-status`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ is_super_admin: true, requires_password: false }),
+        } as unknown as Response);
+      }
+      if (url.includes(`${config.apiBaseUrl}/admin/users`)) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ users: [], total: 0, limit: 100, offset: 0 }),
+        } as unknown as Response);
+      }
+
+      return Promise.resolve({
+        ok: false,
+        text: () => Promise.resolve("Not found"),
+      } as unknown as Response);
     });
 
     renderAdminPage();
 
     await waitFor(() => {
-      expect(screen.getByText("Failed to load operations data")).toBeInTheDocument();
+      // Admin now uses shared EmptyState copy
+      expect(screen.getByText("Error loading operations")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Retry")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("shows loading states", async () => {
