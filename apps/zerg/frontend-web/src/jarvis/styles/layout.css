@@ -29,7 +29,7 @@
   transform-origin: center bottom;
   animation: grid-drift 30s linear infinite;
   pointer-events: none;
-  z-index: 1;
+  z-index: 0; /* Lowered from 1 */
   mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, transparent 60%);
   filter: drop-shadow(0 0 10px rgba(99, 102, 241, 0.6));
   will-change: transform;
