@@ -90,11 +90,6 @@ interface OpsSummary {
   top_agents_today: OpsTopAgent[];
 }
 
-interface OpsSeriesPoint {
-  hour_iso: string; // Matches backend service field name
-  value: number;
-}
-
 interface OpsTopAgent {
   agent_id: number;
   name: string;
@@ -143,7 +138,7 @@ async function fetchSuperAdminStatus(): Promise<SuperAdminStatusResponse> {
   return response.json();
 }
 
-async function resetDatabase(request: DatabaseResetRequest): Promise<any> {
+async function resetDatabase(request: DatabaseResetRequest): Promise<{ message: string }> {
   const response = await fetch(`${config.apiBaseUrl}/admin/reset-database`, {
     method: "POST",
     headers: {
@@ -250,7 +245,7 @@ function ConfirmationModal({
 
   return (
     <div className="modal-overlay" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <Card style={{ maxWidth: '500px', width: '90%' }} onClick={(e: any) => e.stopPropagation()}>
+      <Card style={{ maxWidth: '500px', width: '90%' }} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
         <Card.Header>
           <h3 style={{ margin: 0 }}>{title}</h3>
         </Card.Header>

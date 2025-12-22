@@ -41,7 +41,7 @@ function uuidFromBytes(bytes: Uint8Array): string {
  * - Final fallback uses `Math.random()` (non-crypto; only for client-side IDs).
  */
 export function uuid(): string {
-  const cryptoObj = (globalThis as any).crypto as Crypto | undefined;
+  const cryptoObj = globalThis.crypto;
 
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
     try {

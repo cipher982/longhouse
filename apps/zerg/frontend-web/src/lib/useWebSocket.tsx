@@ -15,7 +15,7 @@ export enum ConnectionStatus {
   RECONNECTING = 'reconnecting',
 }
 
-interface WebSocketMessage {
+export interface WebSocketMessage {
   type: string;
   data?: unknown;
   [key: string]: unknown;
@@ -75,7 +75,6 @@ export function useWebSocket(
   const wsConfig = getWebSocketConfig();
 
   const {
-    includeAuth = wsConfig.includeAuth,
     reconnectInterval = wsConfig.reconnectInterval,
     maxReconnectAttempts = wsConfig.maxReconnectAttempts,
     invalidateQueries = [],

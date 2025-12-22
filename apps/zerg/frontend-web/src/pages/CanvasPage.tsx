@@ -33,6 +33,7 @@ import {
   type ExecutionStatus,
 } from "../services/api";
 import { useWebSocket } from "../lib/useWebSocket";
+import type { WebSocketMessage } from "../lib/useWebSocket";
 import { AgentShelf } from "./canvas/AgentShelf";
 import { ExecutionControls } from "./canvas/ExecutionControls";
 import { ExecutionLogsPanel } from "./canvas/ExecutionLogsPanel";
@@ -395,7 +396,6 @@ const handleToolPointerDown = useCallback(
     resetDragPreview,
     setIsDragActive,
     updateDragPosition,
-    toDropPayload,
     endDrag,
     updatePreviewPositionFromClientPoint,
   ]);
@@ -546,9 +546,9 @@ const handleToolPointerDown = useCallback(
   const isSaving = saveWorkflowMutation.isPending;
 
   // WebSocket for real-time execution updates
-  const handleStreamingMessage = useCallback((envelope: any) => {
-    const message_type = envelope.type || envelope.message_type;
-    const data = envelope.data;
+  const handleStreamingMessage = useCallback((envelope: WebSocketMessage) => {
+    const message_type = envelope.type || (envelope as any).message_type;
+    const data = envelope.data as any;
 
     if (message_type !== 'stream_chunk') {
       console.log('[CanvasPage] 📨', message_type, 'for execution', data?.execution_id);
@@ -708,7 +708,7 @@ const handleToolPointerDown = useCallback(
       updatePreviewPositionFromClientPoint({ x: event.clientX, y: event.clientY }, dragPreviewData);
       finalizeDrop({ x: event.clientX, y: event.clientY }, payload);
     },
-    [dragPreviewData, finalizeDrop, resetDragPreview, setIsDragActive, toDropPayload, updatePreviewPositionFromClientPoint]
+    [dragPreviewData, finalizeDrop, resetDragPreview, setIsDragActive, updatePreviewPositionFromClientPoint]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {

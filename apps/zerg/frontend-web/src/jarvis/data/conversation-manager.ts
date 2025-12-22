@@ -9,7 +9,7 @@ import type { ConversationTurn, CompanyDocument, OutboxOp, TurnRole } from './ty
 interface SyncResponse {
   ok: boolean
   status: number
-  json(): Promise<any>
+  json(): Promise<unknown>
 }
 
 interface SyncRequestInit {
@@ -55,7 +55,7 @@ interface ConversationDB extends DBSchema {
   }
   kv: {
     key: string
-    value: { key: string; value: any }
+    value: { key: string; value: unknown }
   }
   outbox: {
     key: string // opId
@@ -76,7 +76,7 @@ export class ConversationManager {
   constructor(maxHistoryTurns = 50, options: ConversationManagerOptions = {}) {
     this.maxHistoryTurns = maxHistoryTurns
     const defaultTransport: SyncTransport | undefined = typeof fetch !== 'undefined'
-      ? (input, init) => fetch(input, init as any)
+      ? (input, init) => fetch(input, init as RequestInit)
       : undefined
     const defaultBase = typeof location !== 'undefined'
       ? `${location.origin}/api`
@@ -305,7 +305,7 @@ export class ConversationManager {
       body: JSON.stringify(payload)
     })
     if (!resp.ok) throw new Error(`push failed: ${resp.status}`)
-    const json = await resp.json()
+    const json = await resp.json() as { acked?: string[]; nextCursor?: number }
     const acked: string[] = json.acked || []
     const nextCursor: number = json.nextCursor || cursor
     await this.deleteOutbox(acked)
@@ -323,7 +323,7 @@ export class ConversationManager {
       `${this.resolveSyncUrl('sync/pull')}?cursor=${cursor}`
     )
     if (!resp.ok) throw new Error(`pull failed: ${resp.status}`)
-    const json = await resp.json()
+    const json = await resp.json() as { ops?: any[]; nextCursor?: number }
     const ops: OutboxOp[] = (json.ops || []).map((o: any) => ({ ...o, ts: new Date(o.ts) }))
     const nextCursor: number = json.nextCursor ?? cursor
 
@@ -331,12 +331,13 @@ export class ConversationManager {
       // Apply ops in order (append_turn only for now)
       for (const op of ops) {
         if (op.type === 'append_turn') {
-          const t = op.body?.turn
-          if (!t?.id || !op.body?.conversationId) continue
+          const body = op.body as { turn?: any; conversationId?: string }
+          const t = body?.turn
+          if (!t?.id || !body?.conversationId) continue
           const turn: ConversationTurn = {
             id: t.id,
             timestamp: new Date(t.timestamp || op.ts),
-            conversationId: op.body.conversationId,
+            conversationId: body.conversationId,
             userTranscript: t.userTranscript,
             assistantResponse: t.assistantResponse
           }
@@ -468,12 +469,12 @@ export class ConversationManager {
   }
 
   // KV helpers ------------------------------------------------------------
-  async setKV(key: string, value: any): Promise<void> {
+  async setKV(key: string, value: unknown): Promise<void> {
     if (!this.db) throw new Error('ConversationManager not initialized')
     await this.db.put('kv', { key, value })
   }
 
-  async getKV<T = any>(key: string): Promise<T | undefined> {
+  async getKV<T = unknown>(key: string): Promise<T | undefined> {
     if (!this.db) return undefined
     const res = await this.db.get('kv', key)
     return res?.value as T | undefined

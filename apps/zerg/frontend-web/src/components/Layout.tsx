@@ -15,7 +15,7 @@ function WelcomeHeader() {
 
   // Only show shelf toggle on routes that have drawer UI
   const SHELF_ENABLED_ROUTES = ["/canvas", "/agent"];
-  const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route => 
+  const shouldShowShelfToggle = SHELF_ENABLED_ROUTES.some(route =>
     location.pathname.startsWith(route)
   );
 
