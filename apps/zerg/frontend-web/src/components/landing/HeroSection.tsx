@@ -18,6 +18,13 @@ export function HeroSection({ onScrollToScenarios, heroAnimationsEnabled }: Hero
     if (window.SwarmletFunnel) {
       window.SwarmletFunnel.track('cta_clicked', { location: 'hero' });
     }
+
+    // If auth is disabled (dev mode), go directly to dashboard
+    if (!config.authEnabled) {
+      window.location.href = '/dashboard';
+      return;
+    }
+
     setShowLogin(true);
     // Track modal opened
     if (window.SwarmletFunnel) {

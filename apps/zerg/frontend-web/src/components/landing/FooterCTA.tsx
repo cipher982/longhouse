@@ -1,8 +1,14 @@
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
+import config from "../../lib/config";
 
 export function FooterCTA() {
   const handleStartFree = () => {
+    // If auth is disabled (dev mode), go directly to dashboard
+    if (!config.authEnabled) {
+      window.location.href = '/dashboard';
+      return;
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     setTimeout(() => {
       document.querySelector<HTMLButtonElement>('.landing-cta-main')?.click();

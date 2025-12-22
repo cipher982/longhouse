@@ -1,3 +1,5 @@
+import config from "../../lib/config";
+
 interface Scenario {
   image: string;
   title: string;
@@ -40,6 +42,11 @@ const scenarios: Scenario[] = [
 
 export function ScenariosSection() {
   const handleStartFree = () => {
+    // If auth is disabled (dev mode), go directly to dashboard
+    if (!config.authEnabled) {
+      window.location.href = '/dashboard';
+      return;
+    }
     // Scroll to top and trigger login
     window.scrollTo({ top: 0, behavior: 'smooth' });
     setTimeout(() => {
