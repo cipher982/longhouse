@@ -4,7 +4,6 @@ import re
 
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
 from tests.conftest import TEST_WORKER_MODEL
@@ -43,9 +42,8 @@ def test_create_thread_with_system_message(db_session):
     # Assert – thread exists and first message is system prompt
     assert thread.id is not None
     messages = ThreadService.get_thread_messages_as_langchain(db_session, thread.id)
-    assert len(messages) == 1
-    assert isinstance(messages[0], SystemMessage)
-    assert messages[0].content == "You are helpful."
+    # System prompts are injected at runtime (not stored in DB)
+    assert len(messages) == 0
 
 
 def test_save_and_retrieve_messages(db_session):
@@ -68,25 +66,25 @@ def test_save_and_retrieve_messages(db_session):
 
     history = ThreadService.get_thread_messages_as_langchain(db_session, thread.id)
 
-    # There should be 1 (system) + 3 = 4 messages
-    assert len(history) == 4
+    # System prompts are injected at runtime (not stored in DB)
+    assert len(history) == 3
 
     # Verify user message has timestamp prefix
-    assert isinstance(history[1], HumanMessage)
-    assert re.match(TIMESTAMP_PATTERN, history[1].content), "User message should have timestamp prefix"
-    assert history[1].content.endswith("] Hi"), f"Expected content to end with '] Hi', got: {history[1].content}"
+    assert isinstance(history[0], HumanMessage)
+    assert re.match(TIMESTAMP_PATTERN, history[0].content), "User message should have timestamp prefix"
+    assert history[0].content.endswith("] Hi"), f"Expected content to end with '] Hi', got: {history[0].content}"
 
     # Verify assistant message has timestamp prefix
-    assert isinstance(history[2], AIMessage)
-    assert re.match(TIMESTAMP_PATTERN, history[2].content), "Assistant message should have timestamp prefix"
-    assert history[2].content.endswith(
+    assert isinstance(history[1], AIMessage)
+    assert re.match(TIMESTAMP_PATTERN, history[1].content), "Assistant message should have timestamp prefix"
+    assert history[1].content.endswith(
         "] Hello!"
-    ), f"Expected content to end with '] Hello!', got: {history[2].content}"
+    ), f"Expected content to end with '] Hello!', got: {history[1].content}"
 
     # Verify tool message does NOT have timestamp prefix
-    assert isinstance(history[3], ToolMessage)
-    assert history[3].name == "clock"
-    assert history[3].content == "The time is 12:00"
+    assert isinstance(history[2], ToolMessage)
+    assert history[2].name == "clock"
+    assert history[2].content == "The time is 12:00"
 
 
 def test_timestamp_format_in_messages(db_session):
@@ -109,7 +107,7 @@ def test_timestamp_format_in_messages(db_session):
     history = ThreadService.get_thread_messages_as_langchain(db_session, thread.id)
 
     # Extract timestamp from user message
-    user_msg = history[1]
+    user_msg = history[0]
     assert isinstance(user_msg, HumanMessage)
 
     # Verify timestamp format matches ISO 8601: [YYYY-MM-DDTHH:MM:SSZ]
@@ -120,7 +118,7 @@ def test_timestamp_format_in_messages(db_session):
     assert content == "Test message"
 
     # Verify assistant message also has timestamp
-    assistant_msg = history[2]
+    assistant_msg = history[1]
     assert isinstance(assistant_msg, AIMessage)
     match = re.match(r"^\[(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z\] (.+)$", assistant_msg.content)
     assert match is not None, f"Assistant message should have ISO 8601 timestamp prefix, got: {assistant_msg.content}"

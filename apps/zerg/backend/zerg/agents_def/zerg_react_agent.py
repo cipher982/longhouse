@@ -30,6 +30,70 @@ from zerg.tools.unified_access import get_tool_resolver
 logger = logging.getLogger(__name__)
 
 
+def is_critical_tool_error(
+    result_content: str,
+    error_msg: str | None,
+    *,
+    tool_name: str | None = None,
+) -> bool:
+    """Return True if a tool error is a "fail-fast" configuration/setup problem.
+
+    This intentionally errs on the side of *not* failing fast so the agent can:
+    - correct bad arguments (validation errors)
+    - try alternate tools (e.g. runner_exec -> ssh_exec)
+    """
+
+    # runner_exec has a natural fallback (ssh_exec) for single-user/dev setups.
+    # Treat runner failures as non-critical so the model can attempt alternatives.
+    if tool_name == "runner_exec":
+        return False
+
+    content_lower = (result_content or "").lower()
+    msg_lower = (error_msg or "").lower()
+    combined = f"{content_lower} {msg_lower}"
+
+    # Connector/configuration errors (typically non-recoverable in-task)
+    config_indicators = [
+        "connector_not_configured",
+        "not configured",
+        "not connected",
+        "invalid_credentials",
+        "credentials have expired",
+        "ssh client not found",
+        "ssh key not found",
+        "no ssh key",
+        "not found in path",
+    ]
+    if any(indicator in combined for indicator in config_indicators):
+        return True
+
+    # Permission errors usually indicate missing key/rights.
+    # (This can be "wrong user", but failing fast tends to be preferable here.)
+    if "permission_denied" in combined or "permission denied" in combined:
+        return True
+
+    # Execution errors that strongly indicate infra/setup issues (SSH/host/network)
+    if "execution_error" in combined and any(term in combined for term in ["ssh", "connection", "host", "unreachable"]):
+        return True
+
+    # Validation errors are usually recoverable (bad args/format); don't fail fast.
+    if "validation_error" in combined:
+        return False
+
+    # Transient failures (timeouts, rate limits) are non-critical.
+    transient_indicators = [
+        "timeout",
+        "timed out",
+        "rate_limited",
+        "rate limit",
+        "temporarily unavailable",
+    ]
+    if any(indicator in combined for indicator in transient_indicators):
+        return False
+
+    return False
+
+
 # ---------------------------------------------------------------------------
 # LLM Factory (remains similar, adjusted docstring/comment)
 # ---------------------------------------------------------------------------
@@ -305,79 +369,6 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     from zerg.tools.result_utils import redact_sensitive_args
     from zerg.tools.result_utils import safe_preview
 
-    # ---------------------------------------------------------------
-    # Phase 6: Critical error detection for fail-fast behavior
-    # ---------------------------------------------------------------
-    def _is_critical_error(result_content: str, error_msg: str | None) -> bool:
-        """Determine if a tool error is critical and should stop execution.
-
-        Critical errors are configuration/infrastructure issues that won't
-        resolve by continuing (SSH keys missing, API not configured, etc).
-        Non-critical errors are transient issues (timeout, rate limit, etc).
-
-        Args:
-            result_content: Full tool result content
-            error_msg: Extracted error message (if any)
-
-        Returns:
-            True if error is critical and worker should fail fast
-        """
-        # Check result content and error message
-        content_lower = result_content.lower()
-        msg_lower = (error_msg or "").lower()
-        combined = f"{content_lower} {msg_lower}"
-
-        # Configuration errors (always critical)
-        config_indicators = [
-            "not configured",
-            "no ssh key",
-            "ssh key not found",
-            "not connected",
-            "not found in path",
-            "ssh client not found",
-            "connector_not_configured",
-            "invalid_credentials",
-            "credentials have expired",
-        ]
-
-        for indicator in config_indicators:
-            if indicator in combined:
-                return True
-
-        # Permission errors (critical)
-        if "permission_denied" in combined or "permission denied" in combined:
-            return True
-
-        # Execution errors that indicate setup problems (critical)
-        if "execution_error" in combined:
-            # SSH/connection setup issues
-            if any(term in combined for term in ["ssh", "connection", "host", "unreachable"]):
-                return True
-
-        # Validation errors are typically critical (bad arguments, missing params)
-        if "validation_error" in combined:
-            return True
-
-        # Non-critical: transient failures (timeout, rate limit)
-        # These are not critical - the LLM should be able to reason about them
-        # and potentially retry or take alternative action
-        transient_indicators = [
-            "timeout",
-            "timed out",
-            "rate_limited",
-            "rate limit",
-            "temporarily unavailable",
-        ]
-
-        for indicator in transient_indicators:
-            if indicator in combined:
-                return False
-
-        # Default: treat as non-critical
-        # This is conservative - better to let the agent reason about the error
-        # than to fail fast unnecessarily
-        return False
-
     def _format_critical_error(tool_name: str, error_content: str) -> str:
         """Format a critical error message for the worker result.
 
@@ -521,7 +512,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
                 # Phase 6: Mark critical errors for fail-fast behavior
                 # Determine if this is a critical error that should stop execution
-                if _is_critical_error(result_content, error_msg):
+                if is_critical_tool_error(result_content, error_msg, tool_name=tool_name):
                     critical_msg = _format_critical_error(tool_name, error_msg or result_content)
                     ctx.mark_critical_error(critical_msg)
                     logger.error(f"Critical tool error in worker {ctx.worker_id}: {critical_msg}")
