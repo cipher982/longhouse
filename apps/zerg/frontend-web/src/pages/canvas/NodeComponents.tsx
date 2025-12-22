@@ -1,4 +1,4 @@
-import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon, ZapIcon } from "../../components/icons";
+import { getNodeIcon } from "../../lib/iconUtils";
 import { useStore } from "@xyflow/react";
 import type { NodeTypes } from "@xyflow/react";
 
@@ -6,7 +6,7 @@ import type { NodeTypes } from "@xyflow/react";
 export function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
   return (
     <div className="agent-node">
-      <div className="agent-icon"><AgentIcon width={20} height={20} /></div>
+      <div className="agent-icon">{getNodeIcon("agent")}</div>
       <div className="agent-name">{data.label}</div>
     </div>
   );
@@ -14,11 +14,9 @@ export function AgentNode({ data }: { data: { label: string; agentId?: number } 
 
 // Custom node component for tools
 export function ToolNode({ data }: { data: { label: string; toolType?: string } }) {
-  const IconComponent = data.toolType === 'http-request' ? GlobeIcon : data.toolType === 'url-fetch' ? SignalIcon : WrenchIcon;
-
   return (
     <div className="tool-node">
-      <div className="tool-icon"><IconComponent width={20} height={20} /></div>
+      <div className="tool-icon">{getNodeIcon("tool", data.toolType)}</div>
       <div className="tool-name">{data.label}</div>
     </div>
   );
@@ -28,7 +26,7 @@ export function ToolNode({ data }: { data: { label: string; toolType?: string } 
 export function TriggerNode({ data }: { data: { label: string } }) {
   return (
     <div className="trigger-node">
-      <div className="trigger-icon"><ZapIcon width={20} height={20} /></div>
+      <div className="trigger-icon">{getNodeIcon("trigger")}</div>
       <div className="trigger-name">{data.label}</div>
     </div>
   );

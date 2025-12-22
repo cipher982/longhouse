@@ -47,7 +47,7 @@ import {
 } from "./canvas/dragDropUtils";
 import { SNAP_GRID_SIZE, debounce } from "./canvas/utils";
 
-import { AgentIcon, GlobeIcon, SignalIcon, WrenchIcon } from "../components/icons";
+import { getNodeIcon } from "../lib/iconUtils";
 
 const TOOL_ITEMS = [
   { type: "http-request", name: "HTTP Request" },
@@ -963,20 +963,14 @@ const handleToolPointerDown = useCallback(
                       {dragPreviewData.kind === "agent" ? (
                         <div className="agent-node drag-preview-node">
                           <div className="agent-icon">
-                            <AgentIcon width={20} height={20} />
+                            {getNodeIcon("agent")}
                           </div>
                           <div className="agent-name">{dragPreviewData.label}</div>
                         </div>
                       ) : (
                         <div className="tool-node drag-preview-node">
                           <div className="tool-icon">
-                            {dragPreviewData.toolType === 'http-request' ? (
-                              <GlobeIcon width={20} height={20} />
-                            ) : dragPreviewData.toolType === 'url-fetch' ? (
-                              <SignalIcon width={20} height={20} />
-                            ) : (
-                              <WrenchIcon width={20} height={20} />
-                            )}
+                            {getNodeIcon("tool", dragPreviewData.toolType)}
                           </div>
                           <div className="tool-name">{dragPreviewData.label}</div>
                         </div>
