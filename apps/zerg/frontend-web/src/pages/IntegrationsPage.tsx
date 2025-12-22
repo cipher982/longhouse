@@ -17,6 +17,7 @@ import type { AccountConnectorStatus } from "../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "../components/agent-settings/ConnectorConfigModal";
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
+import { SectionHeader, EmptyState } from "../components/ui";
 
 export default function IntegrationsPage() {
   const { data: connectors, isLoading, error, refetch } = useAccountConnectors();
@@ -107,28 +108,30 @@ export default function IntegrationsPage() {
 
   if (error) {
     return (
-      <div className="integrations-container">
-        <div className="integrations-content">
-          <h2>Integrations</h2>
-          <p className="error-message">Failed to load integrations: {String(error)}</p>
-        </div>
+      <div className="integrations-page-container">
+        <EmptyState
+          variant="error"
+          title="Error loading integrations"
+          description={String(error)}
+        />
       </div>
     );
   }
 
   return (
-    <div className="integrations-container">
-      <div className="integrations-content">
-        <div className="integrations-header">
-          <h2>Integrations</h2>
-          <p className="integrations-description">
-            Configure credentials for external services. These integrations are shared across all your agents.
-            Individual agents can override these settings if needed.
-          </p>
-        </div>
+    <div className="integrations-page-container">
+      <SectionHeader
+        title="Integrations"
+        description="Configure credentials for external services. These integrations are shared across all your agents."
+      />
 
+      <div className="integrations-content">
         {isLoading ? (
-          <p className="muted">Loading integrations…</p>
+          <EmptyState
+            icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+            title="Loading integrations..."
+            description="Fetching your connected services."
+          />
         ) : (
           <div className="connector-groups">
             <div className="connector-group">

@@ -694,38 +694,14 @@
    Integrations Page (Account-Level Credentials)
    ------------------------------------------------------------------ */
 
-  .integrations-container {
+  .integrations-page-container {
     padding: var(--space-8);
-    max-width: 900px;
+    max-width: 1000px;
     margin: 0 auto;
   }
 
   .integrations-content {
-    background: var(--color-surface-section);
-    border-radius: var(--radius-lg);
-    padding: var(--space-6);
-    box-shadow: var(--shadow-md);
-  }
-
-  .integrations-header {
-    margin-bottom: var(--space-6);
-    padding-bottom: var(--space-4);
-    border-bottom: 1px solid var(--color-border-muted);
-  }
-
-  .integrations-header h2 {
-    margin: 0 0 var(--space-2);
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-2xl);
-    font-weight: 600;
-    color: var(--color-text-primary);
-  }
-
-  .integrations-description {
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-    line-height: 1.5;
+    background: transparent;
   }
 
   /* Reuse connector-groups and connector-cards from agent-settings */
