@@ -293,8 +293,11 @@ def jarvis_clear_history(
 ) -> None:
     """Clear conversation history by deleting all messages from Supervisor thread.
 
-    This clears all messages from the user's Supervisor thread, effectively
-    resetting the conversation history. The thread itself is preserved.
+    This clears all conversation messages from the user's Supervisor thread.
+    The thread itself and the agent's system instructions are preserved.
+
+    System prompts are injected fresh on every run from agent.system_instructions,
+    so clearing history doesn't affect the agent's behavior.
 
     Args:
         db: Database session

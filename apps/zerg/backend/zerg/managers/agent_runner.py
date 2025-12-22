@@ -166,32 +166,37 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         logger.info(f"[AgentRunner] Starting run_thread for thread {thread.id}, agent {self.agent.id}")
 
-        original_msgs = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
-        original_msg_count = len(original_msgs)  # Track count BEFORE injection
-        logger.info(f"[AgentRunner] Retrieved {original_msg_count} original messages from thread")
+        # Load conversation history from DB (excludes system messages - those are injected fresh)
+        db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
+
+        # Filter out any system messages from DB (they're stale - we inject fresh below)
+        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
+        logger.info(
+            f"[AgentRunner] Retrieved {len(conversation_msgs)} conversation messages from thread (filtered out stale system messages)"
+        )
 
         # ------------------------------------------------------------------
-        # Prepend connector protocols to system message
-        # Per PRD: Static protocols are part of system prompt (cacheable)
-        # They define HOW to interpret the dynamic connector_status injected per-turn
+        # ALWAYS inject fresh system prompt from agent configuration
+        # This ensures the agent always runs with current instructions,
+        # even after history clears or prompt updates
         # ------------------------------------------------------------------
-        if original_msgs and hasattr(original_msgs[0], "type") and original_msgs[0].type == "system":
-            from langchain_core.messages import SystemMessage
+        from langchain_core.messages import SystemMessage
 
-            protocols = get_connector_protocols()
-            original_system_content = original_msgs[0].content
-            # Prepend protocols to system message
-            enhanced_system_message = SystemMessage(content=f"{protocols}\n\n{original_system_content}")
-            original_msgs = [enhanced_system_message] + original_msgs[1:]
-            logger.debug(
-                "[AgentRunner] Prepended connector protocols to system message for agent %s",
-                self.agent.id,
-            )
-        else:
-            logger.warning(
-                "[AgentRunner] No system message found in thread %s, skipping protocol injection",
-                thread.id,
-            )
+        # Load agent from DB to get current system_instructions
+        agent_row = crud.get_agent(db, self.agent.id)
+        if not agent_row or not agent_row.system_instructions:
+            raise RuntimeError(f"Agent {self.agent.id} has no system_instructions")
+
+        # Build system message with connector protocols prepended
+        protocols = get_connector_protocols()
+        system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+        system_msg = SystemMessage(content=system_content)
+
+        # Start with system message
+        original_msgs = [system_msg] + conversation_msgs
+        logger.info(
+            f"[AgentRunner] Injected fresh system prompt ({len(agent_row.system_instructions)} chars) + {len(conversation_msgs)} conversation messages"
+        )
 
         # ------------------------------------------------------------------
         # Inject connector status context into messages
@@ -282,6 +287,28 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # Track count of messages sent to LLM (including injected context)
             messages_with_context = len(original_msgs)
             logger.info(f"[AgentRunner] Calling runnable.ainvoke with {messages_with_context} messages")
+
+            # Optional debug: dump full LLM input to file (set DEBUG_LLM_INPUT=1)
+            import os
+
+            if os.getenv("DEBUG_LLM_INPUT") == "1":
+                import tempfile
+                from pathlib import Path as PathLib
+
+                debug_file = PathLib(tempfile.gettempdir()) / f"llm_input_agent{self.agent.id}_thread{thread.id}.txt"
+                with open(debug_file, "w") as f:
+                    f.write("=" * 80 + "\n")
+                    f.write(f"LLM INPUT FOR AGENT {self.agent.id} (THREAD {thread.id})\n")
+                    f.write("=" * 80 + "\n\n")
+                    for i, msg in enumerate(original_msgs):
+                        msg_type = type(msg).__name__
+                        role = getattr(msg, "role", "unknown")
+                        content = getattr(msg, "content", "")
+                        f.write(f"Message {i} [{msg_type} role={role}]:\n")
+                        f.write(f"{content}\n")
+                        f.write("-" * 80 + "\n\n")
+                logger.info(f"[DEBUG] Full LLM input written to: {debug_file}")
+
             # Use **async** invoke with the entrypoint
             # Pass the messages list directly to the function
             # For Functional API, we use .ainvoke method with the config
