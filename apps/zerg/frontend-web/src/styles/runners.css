@@ -5,12 +5,12 @@
     width: 100%;
     max-width: 1400px;
     margin: 0 auto;
-    padding: 2rem;
+    padding: var(--space-8);
 
     .runners-page {
       display: flex;
       flex-direction: column;
-      gap: 2rem;
+      gap: var(--space-8);
     }
 
   .runners-header {

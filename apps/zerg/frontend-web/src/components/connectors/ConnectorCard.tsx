@@ -4,6 +4,7 @@
  */
 
 import type { ConnectorStatus, AccountConnectorStatus } from "../../types/connectors";
+import { Button, Card, Badge } from "../ui";
 
 // Connectors that support OAuth flow
 const OAUTH_CONNECTORS = ["github"] as const;
@@ -51,70 +52,80 @@ export function ConnectorCard({
   const connectedViaOAuth = connector.metadata?.connected_via === "oauth";
   const supportsOAuth = isOAuthConnector(connector.type);
 
+  const getStatusVariant = (): 'success' | 'error' | 'warning' | 'neutral' => {
+    if (!connector.configured) return 'neutral';
+    if (connector.test_status === 'success') return 'success';
+    if (connector.test_status === 'failed') return 'error';
+    return 'warning';
+  };
+
   return (
-    <div className={`connector-card ${statusClass}`}>
-      <div className="connector-card-header">
-        <span className="connector-name">{connector.name}</span>
-        <span className={`connector-status ${statusClass}`}>{statusText}</span>
-      </div>
+    <Card className={`connector-card ${statusClass}`}>
+      <Card.Header>
+        <span className="connector-name" style={{ fontWeight: 600 }}>{connector.name}</span>
+        <Badge variant={getStatusVariant()}>{statusText}</Badge>
+      </Card.Header>
 
-      {connector.configured && connector.display_name && (
-        <div className="connector-display-name">{connector.display_name}</div>
-      )}
-
-      {connector.configured && connector.metadata && (
-        <div className="connector-metadata">
-          {Object.entries(connector.metadata)
-            .filter(([k]) => !["enabled", "from_email", "from_number", "connected_via"].includes(k))
-            .slice(0, 2)
-            .map(([key, value]) => (
-              <span key={key} className="metadata-item">
-                {String(value)}
-              </span>
-            ))}
-        </div>
-      )}
-
-      <div className="connector-card-actions">
-        {connector.configured ? (
-          <>
-            {connectedViaOAuth && onOAuthConnect ? (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={onOAuthConnect}
-                disabled={isOAuthPending}
-              >
-                {isOAuthPending ? "Connecting..." : "Reconnect"}
-              </button>
-            ) : (
-              <button type="button" className="btn-secondary" onClick={onConfigure}>
-                Edit
-              </button>
-            )}
-            <button type="button" className="btn-tertiary" onClick={onTest} disabled={isTesting}>
-              Test
-            </button>
-            <button type="button" className="btn-danger" onClick={onDelete}>
-              Remove
-            </button>
-          </>
-        ) : supportsOAuth && onOAuthConnect ? (
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={onOAuthConnect}
-            disabled={isOAuthPending}
-          >
-            {isOAuthPending ? "Connecting..." : `Connect ${connector.name}`}
-          </button>
-        ) : (
-          <button type="button" className="btn-primary" onClick={onConfigure}>
-            Configure
-          </button>
+      <Card.Body>
+        {connector.configured && connector.display_name && (
+          <div className="connector-display-name" style={{ marginBottom: 'var(--space-2)', fontSize: '0.9rem' }}>{connector.display_name}</div>
         )}
-      </div>
-    </div>
+
+        {connector.configured && connector.metadata && (
+          <div className="connector-metadata" style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+            {Object.entries(connector.metadata)
+              .filter(([k]) => !["enabled", "from_email", "from_number", "connected_via"].includes(k))
+              .slice(0, 2)
+              .map(([key, value]) => (
+                <Badge key={key} variant="neutral" style={{ textTransform: 'none', fontSize: '10px' }}>
+                  {String(value)}
+                </Badge>
+              ))}
+          </div>
+        )}
+
+        <div className="connector-card-actions" style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+          {connector.configured ? (
+            <>
+              {connectedViaOAuth && onOAuthConnect ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onOAuthConnect}
+                  disabled={isOAuthPending}
+                >
+                  {isOAuthPending ? "Connecting..." : "Reconnect"}
+                </Button>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={onConfigure}>
+                  Edit
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={onTest} disabled={isTesting}>
+                Test
+              </Button>
+              <Button variant="danger" size="sm" onClick={onDelete}>
+                Remove
+              </Button>
+            </>
+          ) : supportsOAuth && onOAuthConnect ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onOAuthConnect}
+              disabled={isOAuthPending}
+              style={{ width: '100%' }}
+            >
+              {isOAuthPending ? "Connecting..." : `Connect ${connector.name}`}
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={onConfigure} style={{ width: '100%' }}>
+              Configure
+            </Button>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
   );
 }
 
