@@ -56,9 +56,36 @@ def main():
     else:
         print("❌ spawn_worker NOT in allowed_tools!")
 
-    # Check prompt content
+    # Check ACTUAL thread messages (runtime state, not just config)
     print("\n" + "=" * 60)
-    print("PROMPT ANALYSIS")
+    print("THREAD MESSAGES (RUNTIME STATE)")
+    print("=" * 60)
+
+    from sqlalchemy import text
+    thread_id = 1  # Supervisor thread
+    messages = db.execute(text(
+        f"SELECT id, role, LEFT(content, 80), sent_at FROM thread_messages WHERE thread_id = {thread_id} ORDER BY sent_at"
+    )).fetchall()
+
+    print(f"Thread {thread_id} has {len(messages)} messages")
+    system_msgs = [m for m in messages if m[1] == 'system']
+    print(f"System messages: {len(system_msgs)}")
+
+    if len(system_msgs) == 0:
+        print("❌ CRITICAL: Thread has NO system message - LLM is running blind!")
+    elif messages[0][1] != 'system':
+        print(f"❌ CRITICAL: First message is {messages[0][1]}, not system!")
+        print(f"   System message is at position {[i for i, m in enumerate(messages) if m[1] == 'system'][0]}")
+    else:
+        print("✅ System message is first in thread")
+
+    print("\nFirst 5 messages:")
+    for i, (msg_id, role, content, sent_at) in enumerate(messages[:5]):
+        print(f"  {i}. [{role}] {content[:60]}...")
+
+    # Check prompt content (what's CONFIGURED, may differ from what's IN the thread)
+    print("\n" + "=" * 60)
+    print("PROMPT ANALYSIS (CONFIGURED)")
     print("=" * 60)
 
     prompt = agent.system_instructions or ""
