@@ -11,6 +11,9 @@ import "./styles/layers.css";
 // Core styles (tokens defined in legacy.css via generated/tokens.css)
 import "./styles/legacy.css";
 
+// Shared UI primitives (@layer components)
+import "./styles/ui.css";
+
 // Component styles (@layer components)
 import "./styles/modal.css";
 import "./styles/chat.css";
@@ -68,6 +71,10 @@ const container = document.getElementById("react-root");
 if (!container) {
   throw new Error("React root container not found");
 }
+
+// UI Effects toggle - defaults to "on" unless explicitly "off"
+const uiEffects = import.meta.env.VITE_UI_EFFECTS === "off" ? "off" : "on";
+container.setAttribute("data-ui-effects", uiEffects);
 
 const queryClient = new QueryClient();
 

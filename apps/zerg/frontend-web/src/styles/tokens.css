@@ -119,6 +119,11 @@
   --blur-md: 16px;
   --blur-lg: 24px;
 
+  /* Glass Presets (Shared UI System) */
+  --surface-glass-1: rgba(255, 255, 255, 0.03);
+  --surface-glass-2: rgba(255, 255, 255, 0.07);
+  --border-glass-1: rgba(255, 255, 255, 0.08);
+
   /* Motion */
   --motion-duration-instant: 50ms;
   --motion-duration-fast: 150ms;
@@ -270,4 +275,13 @@
   /* Dashboard shortcuts */
   --table-cell-padding: var(--component-dashboard-table-cell-padding);
   --actions-column-width: var(--component-dashboard-actions-column-width);
+
+  /* Spacing Aliases (Legacy) */
+  --spacing-xs: var(--space-1);
+  --spacing-sm: var(--space-2);
+  --spacing-md: var(--space-4);
+  --spacing-lg: var(--space-6);
+  --spacing-xl: var(--space-8);
+  --spacing-2xl: var(--space-12);
+  --spacing-3xl: var(--space-16);
 }

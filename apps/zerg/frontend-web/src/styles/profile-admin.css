@@ -1,47 +1,26 @@
 /* Profile and Admin Pages Styling */
 
 @layer pages {
-  /* Profile Page */
-  .profile-container {
-    max-width: 800px;
+  .profile-page-container,
+  .admin-page-container {
+    padding: var(--space-6);
+    max-width: 1400px;
     margin: 0 auto;
-    padding: 32px;
-    background: var(--dark-lighter, #33334a);
-    min-height: calc(100vh - 120px);
-  }
+    width: 100%;
 
-  .profile-content h2 {
-    color: var(--text, #fff);
-    font-size: 24px;
-    font-weight: 600;
-    margin-bottom: 32px;
-    border-bottom: 2px solid var(--border-color, #3d3d5c);
-    padding-bottom: 12px;
-  }
+    /* Profile Page */
+    .profile-container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
 
-  .profile-form {
-    display: flex;
-    flex-direction: column;
-    gap: 32px;
-  }
+    .profile-form {
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
 
-  .form-section {
-    background: var(--dark-card, #2a2a3a);
-    border: 1px solid var(--border-color, #3d3d5c);
-    border-radius: var(--radius-lg, 8px);
-    padding: 24px;
-  }
-
-  .form-section h3 {
-    color: var(--text, #fff);
-    font-size: 18px;
-    font-weight: 600;
-    margin: 0 0 16px;
-    border-bottom: 1px solid var(--border-color, #3d3d5c);
-    padding-bottom: 8px;
-  }
-
-  /* Avatar Section */
+    /* Avatar Section */
   .avatar-section {
     display: flex;
     align-items: center;
@@ -347,14 +326,8 @@
     margin-top: 4px;
   }
 
-  /* Admin Sections */
-  .admin-section {
-    background: var(--dark-card, #2a2a3a);
-    border: 1px solid var(--border-color, #3d3d5c);
-    border-radius: var(--radius-lg, 8px);
-    padding: 24px;
-    margin-bottom: 24px;
-  }
+    /* Admin Sections */
+    .admin-section {
 
   .admin-section h3 {
     color: var(--text, #fff);
@@ -461,27 +434,17 @@
     margin-bottom: 16px;
   }
 
-  .error-state button {
-    background: var(--primary, #64ffda);
-    color: var(--dark-card, #2a2a3a);
-    border: none;
-    padding: 8px 16px;
-    border-radius: var(--radius-sm, 4px);
-    font-weight: 500;
-    cursor: pointer;
-  }
+    .error-state button {
+      background: var(--primary, #64ffda);
+      color: var(--dark-card, #2a2a3a);
+      border: none;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm, 4px);
+      font-weight: 500;
+      cursor: pointer;
+    }
 
-  /* Override global empty-state for admin tables */
-  .admin-section .empty-state {
-    text-align: center;
-    padding: 24px;
-    color: var(--text-secondary, #e0e0e0);
-    font-style: italic;
-    min-height: 0;
-    font-size: 14px;
-  }
-
-  /* System Info */
+    /* System Info */
   .system-info {
     padding: 16px 0;
   }
@@ -922,4 +885,5 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+}
 }
