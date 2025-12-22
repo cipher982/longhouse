@@ -48,11 +48,7 @@ import {
 import { SNAP_GRID_SIZE, debounce } from "./canvas/utils";
 
 import { getNodeIcon } from "../lib/iconUtils";
-
-const TOOL_ITEMS = [
-  { type: "http-request", name: "HTTP Request" },
-  { type: "url-fetch", name: "URL Fetch" },
-];
+import { XIcon } from "../components/icons";
 
 function CanvasPageContent() {
   const queryClient = useQueryClient();
@@ -1014,7 +1010,7 @@ const handleToolPointerDown = useCallback(
                 onClick={() => setShowShortcutHelp(false)}
                 title="Close shortcuts"
               >
-                ✕
+                <XIcon width={14} height={14} />
               </button>
             </div>
             <ul className="shortcut-help-list">

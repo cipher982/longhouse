@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect, useState } from "react";
 import { ExecutionLogStream, type LogEntry } from "../../components/ExecutionLogStream";
 import type { ExecutionStatus } from "../../services/api";
+import { XIcon } from "../../components/icons";
 
 interface ExecutionLogsPanelProps {
   showLogs: boolean;
@@ -53,7 +54,6 @@ export function ExecutionLogsPanel({
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const panelWidth = panelRect.width;
-    const panelHeight = panelRect.height;
 
     // Constrain to viewport bounds (leave at least 50px visible)
     const minVisible = 50;
@@ -126,7 +126,7 @@ export function ExecutionLogsPanel({
           onClick={onClose}
           title="Close Logs"
         >
-          ✕
+          <XIcon width={14} height={14} />
         </button>
       </div>
       <div className="logs-content">

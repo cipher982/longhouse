@@ -55,6 +55,18 @@
     border-color: var(--color-brand-primary);
   }
 
+  .ui-button--success {
+    background: var(--color-intent-success-muted);
+    border-color: rgba(34, 197, 94, 0.2);
+    color: var(--color-intent-success);
+  }
+
+  .ui-button--success:hover:not(:disabled) {
+    background: var(--color-intent-success);
+    color: #fff;
+    box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+  }
+
   .ui-button--ghost {
     background: transparent;
     color: var(--color-text-secondary);
