@@ -7,10 +7,10 @@ import {
 import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
 import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
-import { 
-  Button, 
-  SectionHeader, 
-  EmptyState 
+import {
+  Button,
+  SectionHeader,
+  EmptyState
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import "../styles/knowledge-sources.css";
