@@ -91,12 +91,16 @@
   border-radius: 50%;
   filter: blur(8px);
   opacity: 0.6;
+}
+
+#react-root[data-ui-effects="on"] .brand-logo-glow {
   animation: logo-pulse 3s ease-in-out infinite;
 }
 
 @keyframes logo-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 0.7; transform: scale(1.1); }
+  /* Only animate opacity - scale invalidates blur cache, forcing re-blur every frame */
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
 }
 
 .brand-link {
@@ -177,6 +181,9 @@
   box-shadow:
     0 0 8px var(--color-brand-primary),
     0 0 16px rgb(99 102 241 / 40%);
+}
+
+#react-root[data-ui-effects="on"] .nav-tab-indicator {
   animation: indicator-glow 2s ease-in-out infinite;
 }
 
