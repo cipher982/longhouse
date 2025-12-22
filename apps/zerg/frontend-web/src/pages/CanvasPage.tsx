@@ -246,7 +246,7 @@ function CanvasPageContent() {
       }
       setIsDragActive(true);
     },
-    [resolveToolIcon, setIsDragActive, transparentDragImage, updatePreviewPositionFromClientPoint]
+    [setIsDragActive, transparentDragImage, updatePreviewPositionFromClientPoint]
   );
 
   const handleAgentPointerDown = useCallback(
