@@ -29,17 +29,30 @@ Table.Body = ({ children, className, id }) => (
   <tbody className={className} id={id}>{children}</tbody>
 );
 
-Table.Row = ({ children, className, onClick, onKeyDown, style, ...props }) => (
-  <tr
-    className={clsx(className, onClick && 'ui-table-row--clickable')}
-    onClick={onClick}
-    onKeyDown={onKeyDown}
-    style={style}
-    {...props}
-  >
-    {children}
-  </tr>
-);
+Table.Row = ({ children, className, onClick, onKeyDown, style, ...props }) => {
+  // Keyboard handler for clickable rows (Enter/Space triggers click)
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (onClick && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      onClick();
+    }
+    onKeyDown?.(e);
+  };
+
+  return (
+    <tr
+      className={clsx(className, onClick && 'ui-table-row--clickable')}
+      onClick={onClick}
+      onKeyDown={onClick ? handleKeyDown : onKeyDown}
+      style={style}
+      tabIndex={onClick ? 0 : undefined}
+      role={onClick ? 'button' : undefined}
+      {...props}
+    >
+      {children}
+    </tr>
+  );
+};
 
 Table.Cell = ({ children, className, isHeader = false, colSpan, onClick, style, ...props }) => {
   if (isHeader) {
