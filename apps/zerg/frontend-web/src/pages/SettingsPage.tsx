@@ -2,6 +2,14 @@ import React, { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { getUserContext, updateUserContext, type UserContext } from "../services/api";
+import { 
+  Button, 
+  Card, 
+  SectionHeader, 
+  EmptyState,
+  Input
+} from "../components/ui";
+import { PlusIcon } from "../components/icons";
 
 interface Server {
   name: string;
@@ -153,356 +161,325 @@ export default function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="profile-container">
-        <div>Loading settings...</div>
+      <div className="settings-page-container">
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading settings..."
+          description="Fetching your personal context."
+        />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="profile-container">
-        <div className="profile-content">
-          <h2>Settings</h2>
-          <p className="error-message">Failed to load settings: {String(error)}</p>
-        </div>
+      <div className="settings-page-container">
+        <EmptyState
+          variant="error"
+          title="Error loading settings"
+          description={String(error)}
+        />
       </div>
     );
   }
 
   return (
-    <div className="profile-container">
-      <div className="profile-content">
-        <h2>User Context Settings</h2>
-        <p className="settings-description">
-          Configure your personal context that AI agents will use to better understand and assist you.
-        </p>
+    <div className="settings-page-container">
+      <SectionHeader
+        title="User Context Settings"
+        description="Configure your personal context that AI agents will use to better understand and assist you."
+      />
 
-        <form onSubmit={handleSubmit} className="profile-form">
+      <form onSubmit={handleSubmit} className="profile-form">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
           {/* Basic Information */}
-          <div className="form-section">
-            <h3>Basic Information</h3>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Basic Information</h3>
+            </Card.Header>
+            <Card.Body>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                <div className="form-group">
+                  <label htmlFor="display-name" className="form-label">Display Name</label>
+                  <Input
+                    id="display-name"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Your name"
+                  />
+                  <small>How you'd like to be addressed</small>
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="display-name" className="form-label">Display Name</label>
-              <input
-                type="text"
-                id="display-name"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Your name"
-                className="form-input"
-              />
-              <small>How you'd like to be addressed</small>
-            </div>
+                <div className="form-group">
+                  <label htmlFor="role" className="form-label">Role</label>
+                  <Input
+                    id="role"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    placeholder="e.g., software engineer, founder, student"
+                  />
+                  <small>Your professional role or position</small>
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="role" className="form-label">Role</label>
-              <input
-                type="text"
-                id="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                placeholder="e.g., software engineer, founder, student"
-                className="form-input"
-              />
-              <small>Your professional role or position</small>
-            </div>
+                <div className="form-group">
+                  <label htmlFor="location" className="form-label">Location</label>
+                  <Input
+                    id="location"
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    placeholder="e.g., San Francisco, CA"
+                  />
+                  <small>Your location for timezone and regional context</small>
+                </div>
 
-            <div className="form-group">
-              <label htmlFor="location" className="form-label">Location</label>
-              <input
-                type="text"
-                id="location"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g., San Francisco, CA"
-                className="form-input"
-              />
-              <small>Your location for timezone and regional context</small>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="description" className="form-label">Description</label>
-              <textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief description of what you do and what you want AI to help with"
-                className="form-input"
-                rows={3}
-              />
-              <small>What you do and how AI agents can help you</small>
-            </div>
-          </div>
+                <div className="form-group">
+                  <label htmlFor="description" className="form-label">Description</label>
+                  <textarea
+                    id="description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Brief description of what you do and what you want AI to help with"
+                    className="ui-input"
+                    style={{ height: 'auto', minHeight: '80px', padding: 'var(--space-2) var(--space-3)' }}
+                    rows={3}
+                  />
+                  <small>What you do and how AI agents can help you</small>
+                </div>
+              </div>
+            </Card.Body>
+          </Card>
 
           {/* Servers */}
-          <div className="form-section">
-            <div className="section-header">
-              <h3>Servers</h3>
-              <button
-                type="button"
-                onClick={addServer}
-                className="btn-add"
-              >
-                + Add Server
-              </button>
-            </div>
-            <p className="section-description">
-              Configure servers that AI agents can reference or SSH into
-            </p>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Servers</h3>
+              <Button type="button" onClick={addServer}>
+                <PlusIcon /> Add Server
+              </Button>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description" style={{ marginTop: 0 }}>
+                Configure servers that AI agents can reference or SSH into
+              </p>
 
-            {servers.length === 0 ? (
-              <p className="empty-state">No servers configured</p>
-            ) : (
-              <div className="servers-list">
-                {servers.map((server, index) => (
-                  <div key={index} className="server-card">
-                    <div className="server-card-header">
-                      <span className="server-index">Server {index + 1}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeServer(index)}
-                        className="btn-remove"
-                      >
-                        Remove
-                      </button>
-                    </div>
+              {servers.length === 0 ? (
+                <div style={{ padding: 'var(--space-8)', textAlign: 'center', border: '1px dashed var(--border-glass-1)', borderRadius: 'var(--radius-md)' }}>
+                  <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>No servers configured</p>
+                </div>
+              ) : (
+                <div className="servers-list">
+                  {servers.map((server, index) => (
+                    <Card key={index} variant="default" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                      <Card.Header>
+                        <span className="server-index">Server {index + 1}</span>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => removeServer(index)}
+                        >
+                          Remove
+                        </Button>
+                      </Card.Header>
+                      <Card.Body>
+                        <div className="server-fields">
+                          <div className="form-group">
+                            <label className="form-label">Name *</label>
+                            <Input
+                              value={server.name}
+                              onChange={(e) => updateServer(index, "name", e.target.value)}
+                              placeholder="e.g., production-server"
+                              required
+                            />
+                          </div>
 
-                    <div className="server-fields">
-                      <div className="form-group">
-                        <label className="form-label">Name *</label>
-                        <input
-                          type="text"
-                          value={server.name}
-                          onChange={(e) => updateServer(index, "name", e.target.value)}
-                          placeholder="e.g., production-server"
-                          className="form-input"
-                          required
-                        />
-                      </div>
+                          <div className="form-group">
+                            <label className="form-label">IP Address *</label>
+                            <Input
+                              value={server.ip}
+                              onChange={(e) => updateServer(index, "ip", e.target.value)}
+                              placeholder="e.g., 192.168.1.100"
+                              required
+                            />
+                          </div>
 
-                      <div className="form-group">
-                        <label className="form-label">IP Address *</label>
-                        <input
-                          type="text"
-                          value={server.ip}
-                          onChange={(e) => updateServer(index, "ip", e.target.value)}
-                          placeholder="e.g., 192.168.1.100"
-                          className="form-input"
-                          required
-                        />
-                      </div>
+                          <div className="form-group">
+                            <label className="form-label">Purpose *</label>
+                            <Input
+                              value={server.purpose}
+                              onChange={(e) => updateServer(index, "purpose", e.target.value)}
+                              placeholder="e.g., production web server"
+                              required
+                            />
+                          </div>
 
-                      <div className="form-group">
-                        <label className="form-label">Purpose *</label>
-                        <input
-                          type="text"
-                          value={server.purpose}
-                          onChange={(e) => updateServer(index, "purpose", e.target.value)}
-                          placeholder="e.g., production web server"
-                          className="form-input"
-                          required
-                        />
-                      </div>
+                          <div className="form-group">
+                            <label className="form-label">Platform</label>
+                            <Input
+                              value={server.platform || ""}
+                              onChange={(e) => updateServer(index, "platform", e.target.value)}
+                              placeholder="e.g., Ubuntu 22.04"
+                            />
+                          </div>
 
-                      <div className="form-group">
-                        <label className="form-label">Platform</label>
-                        <input
-                          type="text"
-                          value={server.platform || ""}
-                          onChange={(e) => updateServer(index, "platform", e.target.value)}
-                          placeholder="e.g., Ubuntu 22.04"
-                          className="form-input"
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">Notes</label>
-                        <textarea
-                          value={server.notes || ""}
-                          onChange={(e) => updateServer(index, "notes", e.target.value)}
-                          placeholder="Additional notes about this server"
-                          className="form-input"
-                          rows={2}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                          <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                            <label className="form-label">Notes</label>
+                            <textarea
+                              value={server.notes || ""}
+                              onChange={(e) => updateServer(index, "notes", e.target.value)}
+                              placeholder="Additional notes about this server"
+                              className="ui-input"
+                              style={{ height: 'auto', minHeight: '60px', padding: 'var(--space-2) var(--space-3)' }}
+                              rows={2}
+                            />
+                          </div>
+                        </div>
+                      </Card.Body>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </Card.Body>
+          </Card>
 
           {/* Integrations */}
-          <div className="form-section">
-            <h3>Integrations</h3>
-            <p className="section-description">
-              Tools and services you use (e.g., health_tracker: WHOOP, notes: Obsidian)
-            </p>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Integrations</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description" style={{ marginTop: 0 }}>
+                Tools and services you use (e.g., health_tracker: WHOOP, notes: Obsidian)
+              </p>
 
-            {Object.keys(integrations).length === 0 ? (
-              <p className="empty-state">No integrations configured</p>
-            ) : (
-              <div className="integrations-list">
-                {Object.entries(integrations).map(([key, value]) => (
-                  <div key={key} className="integration-item">
-                    <div className="integration-info">
-                      <span className="integration-key">{key}:</span>
-                      <span className="integration-value">{value}</span>
+              {Object.keys(integrations).length === 0 ? (
+                <div style={{ padding: 'var(--space-8)', textAlign: 'center', border: '1px dashed var(--border-glass-1)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-4)' }}>
+                  <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>No integrations configured</p>
+                </div>
+              ) : (
+                <div className="integrations-list">
+                  {Object.entries(integrations).map(([key, value]) => (
+                    <div key={key} className="integration-item">
+                      <div className="integration-info">
+                        <span className="integration-key">{key}:</span>
+                        <span className="integration-value">{value}</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeIntegration(key)}
+                      >
+                        Remove
+                      </Button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeIntegration(key)}
-                      className="btn-remove-small"
-                    >
-                      Remove
-                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="add-integration" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass-1)' }}>
+                <div className="form-group">
+                  <label className="form-label">Key</label>
+                  <Input
+                    value={newIntegrationKey}
+                    onChange={(e) => setNewIntegrationKey(e.target.value)}
+                    placeholder="e.g., health_tracker"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Value</label>
+                  <Input
+                    value={newIntegrationValue}
+                    onChange={(e) => setNewIntegrationValue(e.target.value)}
+                    placeholder="e.g., WHOOP"
+                  />
+                </div>
+                <Button type="button" onClick={addIntegration}>
+                  Add Integration
+                </Button>
+              </div>
+            </Card.Body>
+          </Card>
+
+          {/* Jarvis Tools */}
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Jarvis Tools</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description" style={{ marginTop: 0 }}>
+                Enable or disable tools that Jarvis can use to help you
+              </p>
+
+              <div className="tools-list">
+                {[
+                  { id: 'location', name: 'Location', desc: 'Get current GPS location via Traccar' },
+                  { id: 'whoop', name: 'WHOOP Health Data', desc: 'Get WHOOP health metrics and recovery data' },
+                  { id: 'obsidian', name: 'Obsidian Notes', desc: 'Search and read notes from your Obsidian vault' },
+                  { id: 'supervisor', name: 'Supervisor Agent', desc: 'Delegate complex multi-step tasks to supervisor' }
+                ].map(tool => (
+                  <div key={tool.id} className="tool-toggle" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass-1)' }}>
+                    <label className="tool-label">
+                      <input
+                        type="checkbox"
+                        checked={tools[tool.id]}
+                        onChange={(e) => setTools({ ...tools, [tool.id]: e.target.checked })}
+                        className="tool-checkbox"
+                      />
+                      <div className="tool-info">
+                        <span className="tool-name">{tool.name}</span>
+                        <span className="tool-description">{tool.desc}</span>
+                      </div>
+                    </label>
                   </div>
                 ))}
               </div>
-            )}
-
-            <div className="add-integration">
-              <div className="form-group">
-                <label className="form-label">Key</label>
-                <input
-                  type="text"
-                  value={newIntegrationKey}
-                  onChange={(e) => setNewIntegrationKey(e.target.value)}
-                  placeholder="e.g., health_tracker"
-                  className="form-input"
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Value</label>
-                <input
-                  type="text"
-                  value={newIntegrationValue}
-                  onChange={(e) => setNewIntegrationValue(e.target.value)}
-                  placeholder="e.g., WHOOP"
-                  className="form-input"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={addIntegration}
-                className="btn-add"
-              >
-                Add Integration
-              </button>
-            </div>
-          </div>
-
-          {/* Jarvis Tools */}
-          <div className="form-section">
-            <h3>Jarvis Tools</h3>
-            <p className="section-description">
-              Enable or disable tools that Jarvis can use to help you
-            </p>
-
-            <div className="tools-list">
-              <div className="tool-toggle">
-                <label className="tool-label">
-                  <input
-                    type="checkbox"
-                    checked={tools.location}
-                    onChange={(e) => setTools({ ...tools, location: e.target.checked })}
-                    className="tool-checkbox"
-                  />
-                  <div className="tool-info">
-                    <span className="tool-name">Location</span>
-                    <span className="tool-description">Get current GPS location via Traccar</span>
-                  </div>
-                </label>
-              </div>
-
-              <div className="tool-toggle">
-                <label className="tool-label">
-                  <input
-                    type="checkbox"
-                    checked={tools.whoop}
-                    onChange={(e) => setTools({ ...tools, whoop: e.target.checked })}
-                    className="tool-checkbox"
-                  />
-                  <div className="tool-info">
-                    <span className="tool-name">WHOOP Health Data</span>
-                    <span className="tool-description">Get WHOOP health metrics and recovery data</span>
-                  </div>
-                </label>
-              </div>
-
-              <div className="tool-toggle">
-                <label className="tool-label">
-                  <input
-                    type="checkbox"
-                    checked={tools.obsidian}
-                    onChange={(e) => setTools({ ...tools, obsidian: e.target.checked })}
-                    className="tool-checkbox"
-                  />
-                  <div className="tool-info">
-                    <span className="tool-name">Obsidian Notes</span>
-                    <span className="tool-description">Search and read notes from your Obsidian vault</span>
-                  </div>
-                </label>
-              </div>
-
-              <div className="tool-toggle">
-                <label className="tool-label">
-                  <input
-                    type="checkbox"
-                    checked={tools.supervisor}
-                    onChange={(e) => setTools({ ...tools, supervisor: e.target.checked })}
-                    className="tool-checkbox"
-                  />
-                  <div className="tool-info">
-                    <span className="tool-name">Supervisor Agent</span>
-                    <span className="tool-description">Delegate complex multi-step tasks to supervisor</span>
-                  </div>
-                </label>
-              </div>
-            </div>
-          </div>
+            </Card.Body>
+          </Card>
 
           {/* Custom Instructions */}
-          <div className="form-section">
-            <h3>Custom Instructions</h3>
-            <p className="section-description">
-              Specific preferences for how AI agents should respond to you
-            </p>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Custom Instructions</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description" style={{ marginTop: 0 }}>
+                Specific preferences for how AI agents should respond to you
+              </p>
 
-            <div className="form-group">
-              <textarea
-                id="custom-instructions"
-                value={customInstructions}
-                onChange={(e) => setCustomInstructions(e.target.value)}
-                placeholder="e.g., Always explain technical concepts in detail, prefer Python over JavaScript, etc."
-                className="form-input"
-                rows={4}
-              />
-            </div>
-          </div>
+              <div className="form-group">
+                <textarea
+                  id="custom-instructions"
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  placeholder="e.g., Always explain technical concepts in detail, prefer Python over JavaScript, etc."
+                  className="ui-input"
+                  style={{ height: 'auto', minHeight: '120px', padding: 'var(--space-2) var(--space-3)' }}
+                  rows={4}
+                />
+              </div>
+            </Card.Body>
+          </Card>
 
           {/* Form Actions */}
-          <div className="form-actions">
-            <button
+          <div className="form-actions" style={{ display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end', padding: 'var(--space-6) 0' }}>
+            <Button
               type="button"
+              variant="ghost"
               onClick={handleReset}
-              className="btn-secondary"
               disabled={updateMutation.isPending}
             >
               Reset Changes
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              className="btn-primary"
+              variant="primary"
+              size="lg"
               disabled={updateMutation.isPending}
             >
               {updateMutation.isPending ? "Saving..." : "Save Settings"}
-            </button>
+            </Button>
           </div>
-        </form>
-      </div>
+        </div>
+      </form>
     </div>
   );
 }

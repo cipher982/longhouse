@@ -3,6 +3,14 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
+import { 
+  Button, 
+  Card, 
+  SectionHeader, 
+  EmptyState,
+  Table,
+  Badge
+} from "../components/ui";
 
 // Types for admin user usage data
 interface UserPeriodUsage {
@@ -199,13 +207,15 @@ function MetricCard({
   color?: string;
 }) {
   return (
-    <div className="metric-card">
-      <div className="metric-header">
-        <h4 style={{ color }}>{title}</h4>
-      </div>
-      <div className="metric-value">{value}</div>
-      {subtitle && <div className="metric-subtitle">{subtitle}</div>}
-    </div>
+    <Card className="metric-card">
+      <Card.Header>
+        <h4 style={{ color, margin: 0, fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</h4>
+      </Card.Header>
+      <Card.Body>
+        <div className="metric-value" style={{ fontSize: '1.8rem', fontWeight: 700 }}>{value}</div>
+        {subtitle && <div className="metric-subtitle" style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>{subtitle}</div>}
+      </Card.Body>
+    </Card>
   );
 }
 
@@ -239,34 +249,38 @@ function ConfirmationModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <h3>{title}</h3>
-        <p>{message}</p>
-        {requirePassword && (
-          <div className="form-group" style={{ marginTop: "16px" }}>
-            <input
-              type="password"
-              className="form-input"
-              placeholder="Confirmation password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+    <div className="modal-overlay" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+      <Card style={{ maxWidth: '500px', width: '90%' }} onClick={(e: any) => e.stopPropagation()}>
+        <Card.Header>
+          <h3 style={{ margin: 0 }}>{title}</h3>
+        </Card.Header>
+        <Card.Body>
+          <p>{message}</p>
+          {requirePassword && (
+            <div className="form-group" style={{ marginTop: "16px" }}>
+              <input
+                type="password"
+                className="ui-input"
+                placeholder="Confirmation password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="modal-actions" style={{ display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end', marginTop: 'var(--space-6)' }}>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              variant={isDangerous ? "danger" : "primary"}
+              onClick={handleConfirm}
+              disabled={requirePassword && !password}
+            >
+              {confirmText}
+            </Button>
           </div>
-        )}
-        <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className={isDangerous ? "btn-danger" : "btn-primary"}
-            onClick={handleConfirm}
-            disabled={requirePassword && !password}
-          >
-            {confirmText}
-          </button>
-        </div>
-      </div>
+        </Card.Body>
+      </Card>
     </div>
   );
 }
@@ -275,41 +289,38 @@ function ConfirmationModal({
 function TopAgentsTable({ agents }: { agents: OpsTopAgent[] }) {
   if (agents.length === 0) {
     return (
-      <div className="empty-state">
-        <p>No agent data available</p>
-      </div>
+      <EmptyState
+        title="No agent data available"
+        description="Data will appear once agents start running."
+      />
     );
   }
 
   return (
-    <div className="top-agents-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Agent Name</th>
-            <th>Owner</th>
-            <th>Runs</th>
-            <th>Cost (USD)</th>
-            <th>P95 Latency</th>
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map((agent) => (
-            <tr key={agent.agent_id}>
-              <td className="agent-name">{agent.name}</td>
-              <td className="owner-email">{agent.owner_email}</td>
-              <td className="runs-count">{agent.runs}</td>
-              <td className="cost">
-                {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
-              </td>
-              <td className="latency">
-                {agent.p95_ms}ms
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <Table.Header>
+        <Table.Cell isHeader>Agent Name</Table.Cell>
+        <Table.Cell isHeader>Owner</Table.Cell>
+        <Table.Cell isHeader>Runs</Table.Cell>
+        <Table.Cell isHeader>Cost (USD)</Table.Cell>
+        <Table.Cell isHeader>P95 Latency</Table.Cell>
+      </Table.Header>
+      <Table.Body>
+        {agents.map((agent) => (
+          <Table.Row key={agent.agent_id}>
+            <Table.Cell className="agent-name">{agent.name}</Table.Cell>
+            <Table.Cell className="owner-email">{agent.owner_email}</Table.Cell>
+            <Table.Cell className="runs-count">{agent.runs}</Table.Cell>
+            <Table.Cell className="cost">
+              {agent.cost_usd !== null ? `$${agent.cost_usd.toFixed(4)}` : 'N/A'}
+            </Table.Cell>
+            <Table.Cell className="latency">
+              {agent.p95_ms}ms
+            </Table.Cell>
+          </Table.Row>
+        ))}
+      </Table.Body>
+    </Table>
   );
 }
 
@@ -341,68 +352,65 @@ function UsersTable({
 
   if (users.length === 0) {
     return (
-      <div className="empty-state">
-        <p>No users found</p>
-      </div>
+      <EmptyState
+        title="No users found"
+        description="Try a different sort or check back later."
+      />
     );
   }
 
   return (
-    <div className="users-table-container">
-      <table className="users-table">
-        <thead>
-          <tr>
-            <th onClick={() => onSort("email")} className="sortable">
-              User {renderSortArrow("email")}
-            </th>
-            <th>Role</th>
-            <th onClick={() => onSort("cost_today")} className="sortable numeric">
-              Today {renderSortArrow("cost_today")}
-            </th>
-            <th onClick={() => onSort("cost_7d")} className="sortable numeric">
-              7 Days {renderSortArrow("cost_7d")}
-            </th>
-            <th onClick={() => onSort("cost_30d")} className="sortable numeric">
-              30 Days {renderSortArrow("cost_30d")}
-            </th>
-            <th onClick={() => onSort("created_at")} className="sortable">
-              Joined {renderSortArrow("created_at")}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((user) => (
-            <tr
-              key={user.id}
-              onClick={() => onUserClick(user.id)}
-              className="clickable-row"
-            >
-              <td className="user-cell">
-                <div className="user-info">
-                  <span className="user-email">{user.email}</span>
-                  {user.display_name && (
-                    <span className="user-display-name">{user.display_name}</span>
-                  )}
-                </div>
-              </td>
-              <td>
-                <span className={`role-badge role-${user.role.toLowerCase()}`}>
-                  {user.role}
-                </span>
-              </td>
-              <td className="numeric">{formatCost(user.usage.today.cost_usd)}</td>
-              <td className="numeric">{formatCost(user.usage.seven_days.cost_usd)}</td>
-              <td className="numeric">{formatCost(user.usage.thirty_days.cost_usd)}</td>
-              <td>
-                {user.created_at
-                  ? new Date(user.created_at).toLocaleDateString()
-                  : "-"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <Table.Header>
+        <Table.Cell isHeader onClick={() => onSort("email")} style={{ cursor: 'pointer' }}>
+          User {renderSortArrow("email")}
+        </Table.Cell>
+        <Table.Cell isHeader>Role</Table.Cell>
+        <Table.Cell isHeader onClick={() => onSort("cost_today")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+          Today {renderSortArrow("cost_today")}
+        </Table.Cell>
+        <Table.Cell isHeader onClick={() => onSort("cost_7d")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+          7 Days {renderSortArrow("cost_7d")}
+        </Table.Cell>
+        <Table.Cell isHeader onClick={() => onSort("cost_30d")} style={{ cursor: 'pointer', textAlign: 'right' }}>
+          30 Days {renderSortArrow("cost_30d")}
+        </Table.Cell>
+        <Table.Cell isHeader onClick={() => onSort("created_at")} style={{ cursor: 'pointer' }}>
+          Joined {renderSortArrow("created_at")}
+        </Table.Cell>
+      </Table.Header>
+      <Table.Body>
+        {users.map((user) => (
+          <Table.Row
+            key={user.id}
+            onClick={() => onUserClick(user.id)}
+            style={{ cursor: 'pointer' }}
+          >
+            <Table.Cell className="user-cell">
+              <div className="user-info">
+                <span className="user-email">{user.email}</span>
+                {user.display_name && (
+                  <span className="user-display-name" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{user.display_name}</span>
+                )}
+              </div>
+            </Table.Cell>
+            <Table.Cell>
+              <Badge variant={user.role === 'admin' ? 'success' : 'neutral'}>
+                {user.role}
+              </Badge>
+            </Table.Cell>
+            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.today.cost_usd)}</Table.Cell>
+            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.seven_days.cost_usd)}</Table.Cell>
+            <Table.Cell style={{ textAlign: 'right' }}>{formatCost(user.usage.thirty_days.cost_usd)}</Table.Cell>
+            <Table.Cell>
+              {user.created_at
+                ? new Date(user.created_at).toLocaleDateString()
+                : "-"}
+            </Table.Cell>
+          </Table.Row>
+        ))}
+      </Table.Body>
+    </Table>
   );
 }
 
@@ -651,31 +659,42 @@ function AdminPage() {
   };
 
   return (
-    <div className="admin-page">
-      <div className="admin-header">
-        <h1>Operations Dashboard</h1>
-        <div className="window-selector">
-          <label>Time Window:</label>
-          <select
-            value={selectedWindow}
-            onChange={(e) => setSelectedWindow(e.target.value as "today" | "7d" | "30d")}
-          >
-            <option value="today">Today</option>
-            <option value="7d">Last 7 Days</option>
-            <option value="30d">Last 30 Days</option>
-          </select>
-        </div>
-      </div>
+    <div className="admin-page-container">
+      <SectionHeader
+        title="Operations Dashboard"
+        description="Monitor system-wide activity, budgets, and user usage."
+        actions={
+          <div className="window-selector">
+            <label style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginRight: 'var(--space-2)' }}>Time Window:</label>
+            <select
+              className="ui-input"
+              style={{ width: 'auto', height: '32px' }}
+              value={selectedWindow}
+              onChange={(e) => setSelectedWindow(e.target.value as "today" | "7d" | "30d")}
+            >
+              <option value="today">Today</option>
+              <option value="7d">Last 7 Days</option>
+              <option value="30d">Last 30 Days</option>
+            </select>
+          </div>
+        }
+      />
 
       {summaryLoading ? (
-        <div className="loading-state">Loading operations data...</div>
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading operations data..."
+          description="Fetching real-time metrics."
+        />
       ) : summaryError ? (
-        <div className="error-state">
-          <p>Failed to load operations data</p>
-          <button onClick={() => window.location.reload()}>Retry</button>
-        </div>
+        <EmptyState
+          variant="error"
+          title="Error loading operations"
+          description={String(summaryError)}
+          action={<Button onClick={() => window.location.reload()}>Retry</Button>}
+        />
       ) : summary ? (
-        <>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
           {/* Key Metrics - using real backend data */}
           <div className="metrics-grid">
             <MetricCard
@@ -741,106 +760,122 @@ function AdminPage() {
           </div>
 
           {/* Top Agents Section - using data from summary */}
-          <div className="admin-section">
-            <h3>Top Performing Agents (Today)</h3>
-            <TopAgentsTable agents={summary.top_agents_today} />
-          </div>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Top Performing Agents (Today)</h3>
+            </Card.Header>
+            <Card.Body>
+              <TopAgentsTable agents={summary.top_agents_today} />
+            </Card.Body>
+          </Card>
 
           {/* Users Usage Section */}
-          <div className="admin-section">
-            <h3>User LLM Usage</h3>
-            <p className="section-description">
-              Click on a user to see detailed usage breakdown
-            </p>
-            {usersLoading ? (
-              <div className="loading-state">Loading users...</div>
-            ) : usersData?.users ? (
-              <UsersTable
-                users={usersData.users}
-                sortField={usersSortField}
-                sortOrder={usersSortOrder}
-                onSort={handleUsersSort}
-                onUserClick={handleUserClick}
-              />
-            ) : (
-              <div className="empty-state">No users found</div>
-            )}
-          </div>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>User LLM Usage</h3>
+            </Card.Header>
+            <Card.Body>
+              <p className="section-description" style={{ marginTop: 0 }}>
+                Click on a user to see detailed usage breakdown
+              </p>
+              {usersLoading ? (
+                <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>Loading users...</div>
+              ) : usersData?.users ? (
+                <UsersTable
+                  users={usersData.users}
+                  sortField={usersSortField}
+                  sortOrder={usersSortOrder}
+                  onSort={handleUsersSort}
+                  onUserClick={handleUserClick}
+                />
+              ) : (
+                <div style={{ padding: 'var(--space-8)', textAlign: 'center' }}>No users found</div>
+              )}
+            </Card.Body>
+          </Card>
 
           {/* System Information - using real backend data */}
-          <div className="admin-section">
-            <h3>System Information</h3>
-            <div className="system-info">
-              <div className="info-grid">
-                <div className="info-item">
-                  <span className="info-label">Total Agents:</span>
-                  <span className="info-value">{summary.agents_total}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Scheduled Agents:</span>
-                  <span className="info-value">{summary.agents_scheduled}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Active Users (24h):</span>
-                  <span className="info-value">{summary.active_users_24h}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">User Budget Used:</span>
-                  <span className="info-value">
-                    ${summary.budget_user.used_usd.toFixed(4)}
-                    {summary.budget_user.limit_cents > 0 && (
-                      <span> / ${(summary.budget_user.limit_cents / 100).toFixed(2)}</span>
-                    )}
-                  </span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Global Budget Used:</span>
-                  <span className="info-value">
-                    ${summary.budget_global.used_usd.toFixed(4)}
-                    {summary.budget_global.limit_cents > 0 && (
-                      <span> / ${(summary.budget_global.limit_cents / 100).toFixed(2)}</span>
-                    )}
-                  </span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Median Latency:</span>
-                  <span className="info-value">{summary.latency_ms.p50}ms</span>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>System Information</h3>
+            </Card.Header>
+            <Card.Body>
+              <div className="system-info">
+                <div className="info-grid">
+                  <div className="info-item">
+                    <span className="info-label">Total Agents:</span>
+                    <span className="info-value">{summary.agents_total}</span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Scheduled Agents:</span>
+                    <span className="info-value">{summary.agents_scheduled}</span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Active Users (24h):</span>
+                    <span className="info-value">{summary.active_users_24h}</span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">User Budget Used:</span>
+                    <span className="info-value">
+                      ${summary.budget_user.used_usd.toFixed(4)}
+                      {summary.budget_user.limit_cents > 0 && (
+                        <span> / ${(summary.budget_user.limit_cents / 100).toFixed(2)}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Global Budget Used:</span>
+                    <span className="info-value">
+                      ${summary.budget_global.used_usd.toFixed(4)}
+                      {summary.budget_global.limit_cents > 0 && (
+                        <span> / ${(summary.budget_global.limit_cents / 100).toFixed(2)}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="info-item">
+                    <span className="info-label">Median Latency:</span>
+                    <span className="info-value">{summary.latency_ms.p50}ms</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            </Card.Body>
+          </Card>
 
           {/* Admin Actions */}
-          <div className="admin-section">
-            <h3>Database Management</h3>
-            <div className="admin-actions">
-              <div className="action-group">
-                <button
-                  className="btn-warning"
-                  onClick={handleClearData}
-                  disabled={resetMutation.isPending}
-                >
-                  Clear User Data
-                </button>
-                <p className="action-description">
-                  Remove all user-generated data (agents, runs, workflows) while preserving user accounts
-                </p>
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Database Management</h3>
+            </Card.Header>
+            <Card.Body>
+              <div className="admin-actions">
+                <div className="action-group">
+                  <Button
+                    variant="danger"
+                    onClick={handleClearData}
+                    disabled={resetMutation.isPending}
+                  >
+                    Clear User Data
+                  </Button>
+                  <p className="action-description">
+                    Remove all user-generated data (agents, runs, workflows) while preserving user accounts
+                  </p>
+                </div>
+                <div className="action-group">
+                  <Button
+                    variant="danger"
+                    onClick={handleFullReset}
+                    disabled={resetMutation.isPending}
+                  >
+                    Full Database Reset
+                  </Button>
+                  <p className="action-description">
+                    Drop and recreate all tables (destructive operation)
+                  </p>
+                </div>
               </div>
-              <div className="action-group">
-                <button
-                  className="btn-danger"
-                  onClick={handleFullReset}
-                  disabled={resetMutation.isPending}
-                >
-                  Full Database Reset
-                </button>
-                <p className="action-description">
-                  Drop and recreate all tables (destructive operation)
-                </p>
-              </div>
-            </div>
-          </div>
-        </>
+            </Card.Body>
+          </Card>
+        </div>
       ) : null}
 
       {/* Confirmation Modal */}

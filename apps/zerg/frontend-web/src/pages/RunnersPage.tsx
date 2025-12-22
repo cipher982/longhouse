@@ -3,6 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { useRunners, useRevokeRunner } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
 import AddRunnerModal from "../components/AddRunnerModal";
+import { 
+  Button, 
+  Badge, 
+  Card, 
+  SectionHeader, 
+  EmptyState 
+} from "../components/ui";
+import { PlusIcon } from "../components/icons";
 import "../styles/runners.css";
 
 export default function RunnersPage() {
@@ -24,14 +32,14 @@ export default function RunnersPage() {
     }
   };
 
-  const getStatusBadgeClass = (status: string) => {
+  const getStatusVariant = (status: string): 'success' | 'error' | 'neutral' => {
     switch (status) {
       case "online":
-        return "status-badge status-online";
+        return "success";
       case "revoked":
-        return "status-badge status-revoked";
+        return "error";
       default:
-        return "status-badge status-offline";
+        return "neutral";
     }
   };
 
@@ -55,111 +63,113 @@ export default function RunnersPage() {
 
   if (isLoading) {
     return (
-      <div className="runners-container">
-        <div className="runners-page">
-          <div>Loading runners...</div>
-        </div>
+      <div className="runners-page-container">
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading runners..."
+          description="Fetching your connected infrastructure."
+        />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="runners-container">
-        <div className="runners-page">
-          <div>Error loading runners: {error instanceof Error ? error.message : "Unknown error"}</div>
-        </div>
+      <div className="runners-page-container">
+        <EmptyState
+          variant="error"
+          title="Error loading runners"
+          description={error instanceof Error ? error.message : "Unknown error"}
+        />
       </div>
     );
   }
 
   return (
-    <div className="runners-container">
+    <div className="runners-page-container">
       <div className="runners-page">
-        <div className="runners-header">
-          <h1>Runners</h1>
-          <button
-            type="button"
-            className="add-runner-button"
-            onClick={() => setShowAddModal(true)}
-          >
-            Add Runner
-          </button>
-        </div>
+        <SectionHeader
+          title="Runners"
+          description="Infrastructure nodes that execute commands for your agents."
+          actions={
+            <Button variant="primary" onClick={() => setShowAddModal(true)}>
+              <PlusIcon />
+              Add Runner
+            </Button>
+          }
+        />
 
         {runners && runners.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-content">
-              <h2>No runners yet</h2>
-              <p>Runners let you execute commands on your own infrastructure securely.</p>
-              <button
-                type="button"
-                className="add-runner-button-large"
-                onClick={() => setShowAddModal(true)}
-              >
+          <EmptyState
+            title="No runners yet"
+            description="Runners let you execute commands on your own infrastructure securely."
+            action={
+              <Button variant="primary" size="lg" onClick={() => setShowAddModal(true)}>
                 Add your first runner
-              </button>
-            </div>
-          </div>
+              </Button>
+            }
+          />
         ) : (
           <div className="runners-grid">
             {runners?.map((runner) => (
-              <div
+              <Card
                 key={runner.id}
                 className="runner-card"
                 onClick={() => navigate(`/runners/${runner.id}`)}
               >
-                <div className="runner-card-header">
-                  <h3>{runner.name}</h3>
-                  <span className={getStatusBadgeClass(runner.status)}>
+                <Card.Header>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{runner.name}</h3>
+                  <Badge variant={getStatusVariant(runner.status)}>
                     {runner.status}
-                  </span>
-                </div>
+                  </Badge>
+                </Card.Header>
 
-                <div className="runner-card-details">
-                  <div className="runner-detail-row">
-                    <span className="runner-detail-label">Platform:</span>
-                    <span className="runner-detail-value">
-                      {runner.runner_metadata?.platform || "Unknown"} / {runner.runner_metadata?.arch || "Unknown"}
-                    </span>
-                  </div>
-
-                  <div className="runner-detail-row">
-                    <span className="runner-detail-label">Last seen:</span>
-                    <span className="runner-detail-value">
-                      {formatTimestamp(runner.last_seen_at)}
-                    </span>
-                  </div>
-
-                  {runner.capabilities && runner.capabilities.length > 0 && (
+                <Card.Body>
+                  <div className="runner-card-details">
                     <div className="runner-detail-row">
-                      <span className="runner-detail-label">Capabilities:</span>
-                      <div className="capabilities-list">
-                        {runner.capabilities.map((cap) => (
-                          <span key={cap} className="capability-chip">
-                            {cap}
-                          </span>
-                        ))}
+                      <span className="runner-detail-label">Platform:</span>
+                      <span className="runner-detail-value">
+                        {runner.runner_metadata?.platform || "Unknown"} / {runner.runner_metadata?.arch || "Unknown"}
+                      </span>
+                    </div>
+
+                    <div className="runner-detail-row">
+                      <span className="runner-detail-label">Last seen:</span>
+                      <span className="runner-detail-value">
+                        {formatTimestamp(runner.last_seen_at)}
+                      </span>
+                    </div>
+
+                    {runner.capabilities && runner.capabilities.length > 0 && (
+                      <div className="runner-detail-row">
+                        <span className="runner-detail-label">Capabilities:</span>
+                        <div className="capabilities-list">
+                          {runner.capabilities.map((cap) => (
+                            <span key={cap} className="capability-chip">
+                              {cap}
+                            </span>
+                          ))}
+                        </div>
                       </div>
+                    )}
+                  </div>
+
+                  {runner.status !== "revoked" && (
+                    <div className="runner-card-actions" style={{ marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--border-glass-1)' }}>
+                      <Button
+                        variant="danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRevoke(runner);
+                        }}
+                        style={{ width: '100%' }}
+                      >
+                        Revoke
+                      </Button>
                     </div>
                   )}
-                </div>
-
-                {runner.status !== "revoked" && (
-                  <div className="runner-card-actions">
-                    <button
-                      type="button"
-                      className="runner-action-button revoke-button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRevoke(runner);
-                      }}
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                )}
-              </div>
+                </Card.Body>
+              </Card>
             ))}
           </div>
         )}

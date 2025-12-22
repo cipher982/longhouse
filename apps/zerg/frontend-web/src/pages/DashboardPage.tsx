@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import clsx from "clsx";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -14,10 +15,18 @@ import {
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
-import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon } from "../components/icons";
+import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
+import {
+  Button,
+  IconButton,
+  Badge,
+  Table,
+  SectionHeader,
+  EmptyState
+} from "../components/ui";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -674,10 +683,12 @@ export default function DashboardPage() {
 
   if (isLoading) {
     return (
-      <div id="dashboard-container" className="dashboard-container">
-        <div id="dashboard" className="dashboard">
-          <div>Loading agents…</div>
-        </div>
+      <div id="dashboard-container" className="dashboard-page">
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading agents..."
+          description="Fetching your autonomous workforce."
+        />
       </div>
     );
   }
@@ -685,10 +696,17 @@ export default function DashboardPage() {
   if (error) {
     const message = error instanceof Error ? error.message : "Failed to load agents";
     return (
-      <div id="dashboard-container" className="dashboard-container">
-        <div id="dashboard" className="dashboard">
-          <div>{message}</div>
-        </div>
+      <div id="dashboard-container" className="dashboard-page">
+        <EmptyState
+          variant="error"
+          title="Error loading dashboard"
+          description={message}
+          action={
+            <Button onClick={() => queryClient.invalidateQueries({ queryKey: dashboardQueryKey })}>
+              Retry
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -697,67 +715,63 @@ export default function DashboardPage() {
   const emptyColspan = includeOwner ? 8 : 7;
 
   return (
-    <div id="dashboard-container" className="dashboard-container">
-      <div id="dashboard" className="dashboard">
-        <div className="dashboard-header">
-          <div className="scope-wrapper">
-            <span className="scope-text-label" id="scope-text">
-              {scope === "all" ? "All agents" : "My agents"}
-            </span>
-            <label className="scope-toggle">
-              <input
-                type="checkbox"
-                id="dashboard-scope-toggle"
-                data-testid="dashboard-scope-toggle"
-                checked={scope === "all"}
-                onChange={(e) => {
-                  const newScope = e.target.checked ? "all" : "my";
-                  setScope(newScope);
-                }}
-              />
-              <span className="slider"></span>
-            </label>
-          </div>
+    <div id="dashboard-container" className="dashboard-page">
+      <SectionHeader
+        title={scope === "all" ? "All agents" : "My agents"}
+        description="Monitor and manage your autonomous workers."
+        actions={
           <div className="button-container">
-            <button
-              id="create-agent-button"
-              type="button"
-              className={`create-agent-button${createAgentMutation.isPending ? " loading" : ""}`}
-              data-testid="create-agent-btn"
+            <div className="scope-wrapper">
+              <label className="scope-toggle">
+                <input
+                  type="checkbox"
+                  id="dashboard-scope-toggle"
+                  data-testid="dashboard-scope-toggle"
+                  checked={scope === "all"}
+                  onChange={(e) => {
+                    const newScope = e.target.checked ? "all" : "my";
+                    setScope(newScope);
+                  }}
+                />
+                <span className="slider"></span>
+              </label>
+            </div>
+            <Button
+              variant="primary"
               onClick={() => createAgentMutation.mutate()}
               disabled={createAgentMutation.isPending}
             >
-              {createAgentMutation.isPending ? <span className="spinner" /> : "Create Agent"}
-            </button>
+              {createAgentMutation.isPending ? (
+                <span className="spinner" />
+              ) : (
+                <>
+                  <PlusIcon />
+                  Create Agent
+                </>
+              )}
+            </Button>
           </div>
-        </div>
+        }
+      />
 
+      <div className="dashboard-content">
         {/* LLM Usage Widget */}
         <UsageWidget />
 
-        <table id="agents-table" className="agents-table">
-          <thead>
-            <tr>
-              {renderHeaderCell("Name", "name", sortConfig, handleSort)}
-              {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
-              {renderHeaderCell("Status", "status", sortConfig, handleSort)}
-              {renderHeaderCell("Created", "created_at", sortConfig, handleSort)}
-              {renderHeaderCell("Last Run", "last_run", sortConfig, handleSort)}
-              {renderHeaderCell("Next Run", "next_run", sortConfig, handleSort)}
-              {renderHeaderCell("Success Rate", "success", sortConfig, handleSort)}
-              <th
-                scope="col"
-                className="actions-header"
-                data-column="actions"
-                onClick={() => handleSort("name")}
-                role="button"
-                tabIndex={0}
-              >
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody id="agents-table-body">
+        <Table>
+          <Table.Header>
+            {renderHeaderCell("Name", "name", sortConfig, handleSort)}
+            {includeOwner && renderHeaderCell("Owner", "owner", sortConfig, handleSort, false)}
+            {renderHeaderCell("Status", "status", sortConfig, handleSort)}
+            {renderHeaderCell("Created", "created_at", sortConfig, handleSort)}
+            {renderHeaderCell("Last Run", "last_run", sortConfig, handleSort)}
+            {renderHeaderCell("Next Run", "next_run", sortConfig, handleSort)}
+            {renderHeaderCell("Success Rate", "success", sortConfig, handleSort)}
+            <Table.Cell isHeader className="actions-header">
+              Actions
+            </Table.Cell>
+          </Table.Header>
+          <Table.Body id="agents-table-body">
             {sortedRows.map(({ agent, createdDisplay, lastRunDisplay, nextRunDisplay }) => {
               const runs = runsByAgent[agent.id];
               const isExpanded = expandedAgentId === agent.id;
@@ -770,15 +784,14 @@ export default function DashboardPage() {
 
               return (
                 <Fragment key={agent.id}>
-                  <tr
+                  <Table.Row
                     data-agent-id={agent.id}
-                    aria-expanded={isExpanded ? "true" : "false"}
-                    className={`agent-row ${agent.status === "error" ? "error-row" : ""}`}
-                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    className={clsx('agent-row', agent.status === "error" && "error-row")}
                     onClick={() => toggleAgentRow(agent.id)}
-                    onKeyDown={(event) => handleRowKeyDown(event, agent.id)}
+                    onKeyDown={(event: ReactKeyboardEvent<HTMLTableRowElement>) => handleRowKeyDown(event, agent.id)}
                   >
-                    <td data-label="Name" className="name-cell">
+                    <Table.Cell data-label="Name" className="name-cell">
                       {editingAgentId === agent.id ? (
                         <input
                           className="inline-edit-input"
@@ -808,16 +821,16 @@ export default function DashboardPage() {
                           {agent.name}
                         </span>
                       )}
-                    </td>
+                    </Table.Cell>
                     {includeOwner && (
-                      <td className="owner-cell" data-label="Owner">
+                      <Table.Cell className="owner-cell" data-label="Owner">
                         {renderOwnerCell(agent)}
-                      </td>
+                      </Table.Cell>
                     )}
-                    <td data-label="Status">
-                      <span className={`status-indicator status-${agent.status.toLowerCase()}`}>
+                    <Table.Cell data-label="Status">
+                      <Badge variant={agent.status === 'error' ? 'error' : agent.status === 'running' || agent.status === 'processing' ? 'warning' : 'success'}>
                         {formatStatus(agent.status)}
-                      </span>
+                      </Badge>
                       {agent.last_error && agent.last_error.trim() && (
                         <span className="info-icon" title={agent.last_error}>
                           ℹ
@@ -830,57 +843,49 @@ export default function DashboardPage() {
                           {lastRunIndicator ? " (Last: ✓)" : " (Last: ✗)"}
                         </span>
                       )}
-                    </td>
-                    <td data-label="Created">{createdDisplay}</td>
-                    <td data-label="Last Run">{lastRunDisplay}</td>
-                    <td data-label="Next Run">{nextRunDisplay}</td>
-                    <td data-label="Success Rate">{successStats.display}</td>
-                    <td className="actions-cell" data-label="Actions">
+                    </Table.Cell>
+                    <Table.Cell data-label="Created">{createdDisplay}</Table.Cell>
+                    <Table.Cell data-label="Last Run">{lastRunDisplay}</Table.Cell>
+                    <Table.Cell data-label="Next Run">{nextRunDisplay}</Table.Cell>
+                    <Table.Cell data-label="Success Rate">{successStats.display}</Table.Cell>
+                    <Table.Cell className="actions-cell" data-label="Actions">
                       <div className="actions-cell-inner">
-                        <button
-                          type="button"
-                          className={`action-btn run-btn${isRunning || isPendingRun ? " disabled" : ""}`}
+                        <IconButton
+                          className={clsx("run-btn", (isRunning || isPendingRun) && "disabled")}
                           data-testid={`run-agent-${agent.id}`}
                           disabled={isRunning || isPendingRun}
                           title={isRunning ? "Agent is already running" : "Run Agent"}
-                          aria-label={isRunning ? "Agent is already running" : "Run Agent"}
                           onClick={(event) => handleRunAgent(event, agent.id, agent.status)}
                         >
                           <PlayIcon />
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn chat-btn"
+                        </IconButton>
+                        <IconButton
+                          className="chat-btn"
                           data-testid={`chat-agent-${agent.id}`}
                           title="Chat with Agent"
-                          aria-label="Chat with Agent"
                           onClick={(event) => handleChatAgent(event, agent.id, agent.name)}
                         >
                           <MessageCircleIcon />
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn debug-btn"
+                        </IconButton>
+                        <IconButton
+                          className="debug-btn"
                           data-testid={`debug-agent-${agent.id}`}
                           title="Debug / Info"
-                          aria-label="Debug / Info"
                           onClick={(event) => handleDebugAgent(event, agent.id)}
                         >
                           <SettingsIcon />
-                        </button>
-                        <button
-                          type="button"
-                          className="action-btn delete-btn"
+                        </IconButton>
+                        <IconButton
+                          className="delete-btn"
                           data-testid={`delete-agent-${agent.id}`}
                           title="Delete Agent"
-                          aria-label="Delete Agent"
                           onClick={(event) => handleDeleteAgent(event, agent.id, agent.name)}
                         >
                           <TrashIcon />
-                        </button>
+                        </IconButton>
                       </div>
-                    </td>
-                  </tr>
+                    </Table.Cell>
+                  </Table.Row>
                   {isExpanded && (
                     <tr className="agent-detail-row" key={`detail-${agent.id}`}>
                       <td colSpan={emptyColspan}>
@@ -962,23 +967,18 @@ export default function DashboardPage() {
               );
             })}
             {sortedRows.length === 0 && (
-              <tr>
-                <td colSpan={emptyColspan}>
-                  <div className="empty-state">
-                    <img
-                      src={appLogo}
-                      alt="Swarmlet Logo"
-                      className="empty-state-illustration"
-                    />
-                    <p className="empty-state-text">
-                      No agents found. Click 'Create Agent' to get started.
-                    </p>
-                  </div>
-                </td>
-              </tr>
+              <Table.Row>
+                <Table.Cell isHeader colSpan={emptyColspan}>
+                  <EmptyState
+                    icon={<img src={appLogo} alt="Swarmlet Logo" style={{ width: 160, height: 160, opacity: 0.8 }} />}
+                    title="No agents found"
+                    description="Click 'Create Agent' to get started."
+                  />
+                </Table.Cell>
+              </Table.Row>
             )}
-          </tbody>
-        </table>
+          </Table.Body>
+        </Table>
       </div>
       {settingsAgentId != null && (
         <AgentSettingsDrawer

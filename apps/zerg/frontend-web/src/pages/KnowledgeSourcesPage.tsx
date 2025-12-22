@@ -7,6 +7,12 @@ import {
 import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
 import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
+import { 
+  Button, 
+  SectionHeader, 
+  EmptyState 
+} from "../components/ui";
+import { PlusIcon } from "../components/icons";
 import "../styles/knowledge-sources.css";
 
 export default function KnowledgeSourcesPage() {
@@ -38,48 +44,51 @@ export default function KnowledgeSourcesPage() {
 
   if (isLoading) {
     return (
-      <div className="profile-container">
-        <div className="profile-content">
-          <h2>Knowledge Sources</h2>
-          <p>Loading...</p>
-        </div>
+      <div className="knowledge-sources-page-container">
+        <EmptyState
+          icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
+          title="Loading knowledge sources..."
+          description="Fetching your connected documentation and codebases."
+        />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="profile-container">
-        <div className="profile-content">
-          <h2>Knowledge Sources</h2>
-          <p className="error-message">Failed to load: {String(error)}</p>
-        </div>
+      <div className="knowledge-sources-page-container">
+        <EmptyState
+          variant="error"
+          title="Error loading knowledge sources"
+          description={String(error)}
+        />
       </div>
     );
   }
 
   return (
-    <div className="profile-container knowledge-sources-page">
-      <div className="profile-content">
-        <div className="section-header">
-          <div>
-            <h2>Knowledge Sources</h2>
-            <p className="settings-description">
-              Connect knowledge sources to give your agents context about your codebase, documentation, and more.
-            </p>
-          </div>
-          <button className="btn-add" onClick={() => setIsModalOpen(true)} data-testid="add-knowledge-source-btn">
-            + Add Source
-          </button>
-        </div>
+    <div className="knowledge-sources-page-container">
+      <SectionHeader
+        title="Knowledge Sources"
+        description="Connect knowledge sources to give your agents context about your codebase, documentation, and more."
+        actions={
+          <Button variant="primary" onClick={() => setIsModalOpen(true)} data-testid="add-knowledge-source-btn">
+            <PlusIcon /> Add Source
+          </Button>
+        }
+      />
 
+      <div className="knowledge-sources-content">
         {sources && sources.length === 0 ? (
-          <div className="empty-state" data-testid="empty-state">
-            <p>No knowledge sources configured yet.</p>
-            <p className="empty-state-hint">
-              Add a GitHub repository or URL to get started.
-            </p>
-          </div>
+          <EmptyState
+            title="No knowledge sources configured yet"
+            description="Add a GitHub repository or URL to get started."
+            action={
+              <Button variant="primary" onClick={() => setIsModalOpen(true)}>
+                Add your first source
+              </Button>
+            }
+          />
         ) : (
           <>
             <div className="runners-grid">

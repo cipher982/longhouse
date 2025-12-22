@@ -90,8 +90,8 @@
       radial-gradient(circle at 85% 30%, rgb(236 72 153 / 8%) 0%, transparent 25%);
   }
 
-  /* Living Void Layer 2: Moving Grid */
-  #react-root::before {
+  /* Living Void Layer 2: Moving Grid (Only when effects are on) */
+  #react-root[data-ui-effects="on"]::before {
     content: "";
     position: absolute;
     inset: -50%;
@@ -106,6 +106,13 @@
     pointer-events: none;
     z-index: 0;
     mask-image: radial-gradient(circle, black 30%, transparent 70%);
+  }
+
+  /* Disable animations for reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    #react-root::before {
+      animation: none !important;
+    }
   }
 
   @keyframes grid-move {

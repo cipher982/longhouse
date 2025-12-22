@@ -1,12 +1,17 @@
 /* Knowledge Sources Page Styles */
 
 @layer pages {
-  /* Card Styles */
-  .knowledge-sources-page .knowledge-source-card .source-header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
+  .knowledge-sources-page-container {
+    padding: var(--space-6);
+    max-width: 1200px;
+    margin: 0 auto;
+
+    /* Card Styles */
+    .knowledge-source-card .source-header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
 
   .knowledge-sources-page .knowledge-source-card .source-icon {
     display: flex;
@@ -23,107 +28,12 @@
     word-break: break-all;
   }
 
-  .knowledge-sources-page .knowledge-source-card .source-error {
-    color: #ef4444;
-    font-size: 0.85rem;
-  }
+  .knowledge-sources-page     .knowledge-source-card .source-error {
+      color: #ef4444;
+      font-size: 0.85rem;
+    }
 
-  .knowledge-sources-page .status-badge.status-syncing {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  }
-
-  .knowledge-sources-page .status-badge.status-pending {
-    background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
-  }
-
-  .knowledge-sources-page .runner-action-button-danger {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  }
-
-  .knowledge-sources-page .runner-action-button-danger:hover {
-    background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
-  }
-
-  /* Section Header */
-  .knowledge-sources-page .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1.5rem;
-  }
-
-  .knowledge-sources-page .section-header h2 {
-    margin: 0 0 0.5rem 0;
-  }
-
-  /* Empty State */
-  .knowledge-sources-page .empty-state {
-    text-align: center;
-    padding: 3rem 1rem;
-    color: var(--text-secondary, #a0a0a0);
-  }
-
-  .knowledge-sources-page .empty-state p {
-    margin: 0.5rem 0;
-  }
-
-  .knowledge-sources-page .empty-state-hint {
-    font-size: 0.9rem;
-  }
-
-  /* ============================================
-   Add Knowledge Source Modal - Content Styles
-   ============================================ */
-
-  /* Source Type Selection */
-  .knowledge-sources-page .source-type-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1rem;
-    padding: 0.5rem 0;
-  }
-
-  .knowledge-sources-page .source-type-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid #3f3f46;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-  }
-
-  .knowledge-sources-page .source-type-card:hover {
-    border-color: #10b981;
-    background: rgba(16, 185, 129, 0.08);
-  }
-
-  .knowledge-sources-page .source-type-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 48px;
-    height: 48px;
-    color: #fafafa;
-  }
-
-  .knowledge-sources-page .source-type-card h3 {
-    margin: 0;
-    font-size: 1rem;
-    color: #fafafa;
-  }
-
-  .knowledge-sources-page .source-type-card p {
-    margin: 0;
-    font-size: 0.85rem;
-    color: #a1a1aa;
-  }
-
-  /* Repo Picker */
+    /* Repo Picker */
   .knowledge-sources-page .repo-picker {
     display: flex;
     flex-direction: column;
@@ -354,4 +264,5 @@
   .knowledge-search-panel .search-result-link:hover {
     text-decoration: underline;
   }
+}
 }
