@@ -6,7 +6,7 @@ cd /app
 
 # Master runtime validation - fail fast if environment is broken
 echo "🔍 Running master runtime validation..."
-python validate-runtime.py || {
+python scripts/validate-runtime.py || {
     echo "❌ CRITICAL: Runtime validation failed!"
     echo "❌ Container startup blocked - check environment configuration"
     exit 1
