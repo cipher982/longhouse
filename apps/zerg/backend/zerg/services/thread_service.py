@@ -187,7 +187,14 @@ class ThreadService:
         thread_type: str = "chat",
         active: Optional[bool] = None,
     ) -> ThreadModel:
-        """Create a thread and insert the agent's system message atomically."""
+        """Create a thread for an agent.
+
+        NOTE: System messages are NO LONGER stored in thread_messages.
+        They are injected fresh at runtime from agent.system_instructions.
+        This prevents drift when prompts are updated.
+
+        The function name is kept for backward compatibility.
+        """
 
         if active is None:
             # Chat threads should be active by default; others not.
@@ -203,14 +210,8 @@ class ThreadService:
             thread_type=thread_type,
         )
 
-        # First message is always the agent's system prompt.
-        crud.create_thread_message(
-            db=db,
-            thread_id=thread.id,
-            role="system",
-            content=agent.system_instructions,
-            processed=True,  # System messages are implicitly processed
-        )
+        # System prompt is now injected at runtime, not stored in DB
+        # See: agent_runner.py run_thread() for runtime injection
 
         return thread
 
