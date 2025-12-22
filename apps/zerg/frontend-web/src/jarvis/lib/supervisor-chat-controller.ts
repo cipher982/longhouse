@@ -48,6 +48,8 @@ interface SSESupervisorEvent {
     result?: string;
     error?: string;
     status?: string;
+    // Token streaming
+    token?: string;
     // Worker lifecycle fields
     job_id?: number;
     task?: string;
@@ -307,7 +309,10 @@ export class SupervisorChatController {
           }
         }
 
-        logger.info(`[SupervisorChat] Processing SSE event: ${eventType}`);
+        // Skip logging high-frequency token events to reduce console spam
+        if (eventType && eventType !== 'supervisor_token') {
+          logger.info(`[SupervisorChat] Processing SSE event: ${eventType}`);
+        }
 
         // Handle the event
         if (data) {
