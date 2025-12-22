@@ -206,11 +206,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # ephemeral context that gets regenerated fresh on every turn
         # ------------------------------------------------------------------
         try:
-            context_text = build_agent_context(
-                db=db,
-                owner_id=self.agent.owner_id,
-                agent_id=self.agent.id,
-            )
+            context_text = build_agent_context(db=db, owner_id=self.agent.owner_id, agent_id=self.agent.id)
             # Inject as SystemMessage - this is background context, NOT user input
             # The agent should be aware of connector status but not discuss it
             # unless the user explicitly asks about integrations

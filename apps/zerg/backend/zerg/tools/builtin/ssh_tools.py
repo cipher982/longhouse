@@ -36,6 +36,104 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_SIZE = 10 * 1024
 
 
+def _parse_ssh_config(config_path: Path) -> dict[str, dict[str, str]]:
+    """Parse a subset of OpenSSH config into a mapping.
+
+    We intentionally parse only the small subset we need (Host, HostName, User,
+    Port, IdentityFile) because the mounted config can contain macOS-only
+    directives (e.g., UseKeychain) that would break Linux OpenSSH.
+    """
+    try:
+        raw = config_path.read_text()
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        logger.warning("Failed to read SSH config at %s", config_path, exc_info=True)
+        return {}
+
+    cfg: dict[str, dict[str, str]] = {}
+    active_hosts: list[str] = []
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split()
+        if not parts:
+            continue
+
+        key = parts[0].lower()
+        value = " ".join(parts[1:]).strip().strip('"').strip("'")
+
+        if key == "host":
+            active_hosts = [h.strip() for h in parts[1:] if h.strip()]
+            continue
+
+        if not active_hosts:
+            continue
+
+        if key not in {"hostname", "user", "port", "identityfile"}:
+            continue
+
+        for host_pattern in active_hosts:
+            cfg.setdefault(host_pattern, {})[key] = value
+
+    return cfg
+
+
+def _expand_identity_file(identity_file: str, *, home_dir: Path) -> Path:
+    val = identity_file.strip().strip('"').strip("'")
+    if val.startswith("~"):
+        return Path(str(home_dir) + val[1:])
+    return Path(val)
+
+
+def _resolve_ssh_target(host: str, *, home_dir: Path) -> tuple[str, str, str, Path | None] | None:
+    """Resolve 'host' into (user, hostname, port, identity_file).
+
+    Supports:
+    - Explicit: user@hostname or user@hostname:port
+    - Alias: <host> (resolved via ~/.ssh/config without invoking ssh -F)
+    """
+    ssh_dir = home_dir / ".ssh"
+    cfg = _parse_ssh_config(ssh_dir / "config")
+    defaults = cfg.get("*", {})
+
+    # Explicit format: user@host(:port)
+    parsed = _parse_host(host)
+    if parsed:
+        user, hostname, port = parsed
+        identity_file = defaults.get("identityfile")
+        identity_path = None
+        if identity_file:
+            candidate = _expand_identity_file(identity_file, home_dir=home_dir)
+            if candidate.exists():
+                identity_path = candidate
+        return (user, hostname, port, identity_path)
+
+    # Alias: look up an exact Host entry (no globs)
+    entry = cfg.get(host)
+    if not entry:
+        return None
+
+    hostname = entry.get("hostname")
+    user = entry.get("user") or defaults.get("user")
+    port = entry.get("port") or defaults.get("port") or "22"
+
+    if not hostname or not user:
+        return None
+
+    identity_file = entry.get("identityfile") or defaults.get("identityfile")
+    identity_path = None
+    if identity_file:
+        candidate = _expand_identity_file(identity_file, home_dir=home_dir)
+        if candidate.exists():
+            identity_path = candidate
+
+    return (user, hostname, port, identity_path)
+
+
 def _parse_host(host: str) -> tuple[str, str, str] | None:
     """Parse host string into (user, hostname, port).
 
@@ -89,7 +187,7 @@ def ssh_exec(
     - Output is truncated if > 10KB to prevent token explosion
 
     Args:
-        host: Server in "user@hostname" or "user@hostname:port" format
+        host: Server in "user@hostname" or "user@hostname:port" format, OR an SSH alias from ~/.ssh/config (e.g. "cube")
         command: Shell command to execute remotely
         timeout_secs: Maximum seconds to wait before killing the command (default: 30)
 
@@ -149,25 +247,20 @@ def ssh_exec(
                 "command parameter is required",
             )
 
-        # Parse and validate host
-        parsed = _parse_host(host)
-        if not parsed:
+        home_dir = Path.home()
+
+        # Resolve host + pick identity file (without invoking ssh config)
+        resolved = _resolve_ssh_target(host, home_dir=home_dir)
+        if not resolved:
             return tool_error(
                 ErrorType.VALIDATION_ERROR,
-                f"Invalid host format: {host}. Use 'user@hostname' or 'user@hostname:port' format.",
+                (
+                    f"Invalid host format: {host}. Use 'user@hostname' or 'user@hostname:port', "
+                    "or pass an SSH alias present in ~/.ssh/config."
+                ),
             )
 
-        user, hostname, port = parsed
-
-        # Pick an SSH key: prefer id_ed25519, fall back to id_rsa
-        home_dir = Path(subprocess.os.path.expanduser("~"))
-        id_key = home_dir / ".ssh" / "id_ed25519"
-        rsa_key = home_dir / ".ssh" / "id_rsa"
-        key_path = None
-        if id_key.exists():
-            key_path = id_key
-        elif rsa_key.exists():
-            key_path = rsa_key
+        user, hostname, port, key_path = resolved
 
         # Construct SSH command
         # -o StrictHostKeyChecking=no: Don't prompt for host key verification
@@ -177,6 +270,8 @@ def ssh_exec(
             "ssh",
             "-F",
             "/dev/null",  # ignore host config files (avoids macOS-only directives)
+            "-o",
+            "BatchMode=yes",
             "-o",
             "StrictHostKeyChecking=no",
             "-o",
@@ -192,6 +287,7 @@ def ssh_exec(
         ]
 
         if key_path:
+            ssh_cmd.extend(["-o", "IdentitiesOnly=yes"])
             ssh_cmd.extend(["-i", str(key_path)])
         else:
             logger.warning("SSH key not found; relying on default SSH agent/keys")
@@ -280,7 +376,7 @@ TOOLS: List[StructuredTool] = [
         name="ssh_exec",
         description=(
             "Execute a shell command on a remote server via SSH. "
-            "Host must be in 'user@hostname' or 'user@hostname:port' format. "
+            "Host can be 'user@hostname', 'user@hostname:port', or an SSH alias from ~/.ssh/config (e.g. 'cube'). "
             "Returns exit code, stdout, stderr, and duration. Non-zero exit codes are not errors - "
             "they indicate the command ran but returned a failure code. "
             "NOTE: Prefer runner_exec for multi-tenant deployments."

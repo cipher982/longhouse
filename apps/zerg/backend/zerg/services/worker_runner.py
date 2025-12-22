@@ -217,8 +217,8 @@ class WorkerRunner:
             # Convert database models to LangChain messages for processing
             langchain_messages = [_db_to_langchain(msg) for msg in created_messages]
 
-            # Persist messages to thread.jsonl
-            await self._persist_messages(worker_id, thread.id, db)
+            # Persist messages to thread.jsonl (include injected system/context)
+            await self._persist_messages(worker_id, thread.id, db, agent_id=agent.id)
 
             # Persist tool calls to separate files
             await self._persist_tool_calls(worker_id, langchain_messages)
@@ -480,7 +480,7 @@ class WorkerRunner:
         logger.debug(f"Created temporary agent {agent.id} for worker")
         return agent
 
-    async def _persist_messages(self, worker_id: str, thread_id: int, db: Session) -> None:
+    async def _persist_messages(self, worker_id: str, thread_id: int, db: Session, *, agent_id: int) -> None:
         """Persist all thread messages to thread.jsonl.
 
         Parameters
@@ -491,7 +491,43 @@ class WorkerRunner:
             Thread ID to read messages from
         db
             SQLAlchemy session
+        agent_id
+            Agent ID used for runtime system prompt injection
         """
+        # Include runtime-injected system/context messages for debugging.
+        # These are NOT stored in the DB (see AgentRunner.run_thread), but they
+        # are critical for understanding worker behavior post-hoc.
+        try:
+            from zerg.connectors.status_builder import build_agent_context
+            from zerg.crud import crud as _crud
+            from zerg.prompts.connector_protocols import get_connector_protocols
+
+            agent_row = _crud.get_agent(db, agent_id)
+            if agent_row and agent_row.system_instructions:
+                protocols = get_connector_protocols()
+                system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+                self.artifact_store.save_message(
+                    worker_id,
+                    {
+                        "role": "system",
+                        "content": system_content,
+                        "timestamp": None,
+                    },
+                )
+
+                # Connector status context (ephemeral at runtime) – include for debugging.
+                context_text = build_agent_context(db=db, owner_id=agent_row.owner_id, agent_id=agent_row.id)
+                self.artifact_store.save_message(
+                    worker_id,
+                    {
+                        "role": "system",
+                        "content": f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}",
+                        "timestamp": None,
+                    },
+                )
+        except Exception:
+            logger.debug("Failed to persist injected system/context messages for worker %s", worker_id, exc_info=True)
+
         messages = crud.get_thread_messages(db, thread_id=thread_id)
 
         for msg in messages:

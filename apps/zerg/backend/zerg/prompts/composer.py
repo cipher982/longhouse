@@ -54,6 +54,10 @@ def format_servers(servers: list[dict]) -> str:
         purpose = s.get("purpose", "")
         platform = s.get("platform", "")
         notes = s.get("notes", "")
+        ssh_alias = s.get("ssh_alias", "")
+        ssh_user = s.get("ssh_user", "")
+        ssh_port = s.get("ssh_port", "")
+        ssh_host = s.get("ssh_host", "") or ip
 
         line = f"**{name}**"
         if ip:
@@ -62,6 +66,11 @@ def format_servers(servers: list[dict]) -> str:
             line += f" - {purpose}"
         if platform:
             line += f" [{platform}]"
+        if ssh_alias:
+            line += f"\n  SSH alias: {ssh_alias}"
+        elif ssh_user and ssh_host:
+            port_suffix = f":{ssh_port}" if ssh_port else ""
+            line += f"\n  SSH: {ssh_user}@{ssh_host}{port_suffix}"
         if notes:
             line += f"\n  Notes: {notes}"
 

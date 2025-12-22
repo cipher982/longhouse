@@ -171,7 +171,10 @@ def runner_exec(
     if not resolved:
         return tool_error(
             ErrorType.VALIDATION_ERROR,
-            f"Runner '{target}' not found",
+            (
+                f"Runner '{target}' not found (no Runner daemon is connected with that name). "
+                "This refers to the Runner connector, not the server itself."
+            ),
         )
 
     runner_id, runner_name = resolved
@@ -183,7 +186,10 @@ def runner_exec(
         if not runner:
             return tool_error(
                 ErrorType.VALIDATION_ERROR,
-                f"Runner '{target}' not found",
+                (
+                    f"Runner '{target}' not found (no Runner daemon is connected with that name). "
+                    "This refers to the Runner connector, not the server itself."
+                ),
             )
 
         if runner.status == "revoked":

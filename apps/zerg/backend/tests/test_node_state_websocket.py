@@ -34,7 +34,7 @@ async def test_node_state_changed_broadcast(monkeypatch):
     # handshake because we only test broadcast logic).
     client_id = "client-test"
 
-    async with global_topic_manager._lock:  # pylint: disable=protected-access
+    async with global_topic_manager._get_lock():  # pylint: disable=protected-access
         global_topic_manager.active_connections[client_id] = dummy_ws  # type: ignore[arg-type]
         global_topic_manager.topic_subscriptions.setdefault(topic, set()).add(client_id)
         global_topic_manager.client_topics.setdefault(client_id, set()).add(topic)
@@ -63,7 +63,7 @@ async def test_node_state_changed_broadcast(monkeypatch):
     assert frame["data"]["node_id"] == "node_1"
 
     # Cleanup – remove dummy connection from manager maps so other tests not affected
-    async with global_topic_manager._lock:  # pylint: disable=protected-access
+    async with global_topic_manager._get_lock():  # pylint: disable=protected-access
         global_topic_manager.active_connections.pop(client_id, None)
         global_topic_manager.client_topics.pop(client_id, None)
         global_topic_manager.topic_subscriptions.get(topic, set()).discard(client_id)
