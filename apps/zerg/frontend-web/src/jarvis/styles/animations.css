@@ -42,24 +42,7 @@
   }
 }
 
-@keyframes nebula-drift {
-  0% {
-    transform: translate(0, 0) scale(1);
-    opacity: 0.4;
-  }
-  33% {
-    transform: translate(30px, -50px) scale(1.1);
-    opacity: 0.5;
-  }
-  66% {
-    transform: translate(-20px, 20px) scale(0.95);
-    opacity: 0.3;
-  }
-  100% {
-    transform: translate(0, 0) scale(1);
-    opacity: 0.4;
-  }
-}
+/* nebula-drift is defined globally in styles/layout.css */
 
 /* Old grid-move used background-position (causes repaint)
    New grid-drift uses transform (GPU composited) */
