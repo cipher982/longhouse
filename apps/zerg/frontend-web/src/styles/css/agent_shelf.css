@@ -276,6 +276,16 @@
 }
 
 /* Agent pill icon is now rendered as SVG in the component */
+.agent-pill-icon {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-brand-primary);
+}
 
 .agent-pill:hover {
   background: var(--color-surface-elevated);
