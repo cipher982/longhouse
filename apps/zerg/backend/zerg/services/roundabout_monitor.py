@@ -1026,6 +1026,11 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
         lines.append("")
         lines.append("Check worker artifacts for details:")
         lines.append(f"  read_worker_file('{result.job_id}', 'thread.jsonl')")
+        lines.append("")
+
+        # Evidence marker for LLM wrapper expansion (even for failures - useful tool output may exist)
+        if result.run_id is not None and result.worker_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
 
     elif result.status == "monitor_timeout":
         lines.append(f"Monitor timeout: stopped watching job {result.job_id} after {result.duration_seconds:.1f}s.")
@@ -1036,6 +1041,11 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
             lines.append("The worker appears to have stopped.")
         lines.append(f"  get_worker_metadata('{result.job_id}')")
         lines.append(f"  read_worker_result('{result.job_id}')  # when complete")
+        lines.append("")
+
+        # Evidence marker for LLM wrapper expansion (even for timeouts - partial output may be useful)
+        if result.run_id is not None and result.worker_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
 
     elif result.status == "early_exit":
         lines.append(f"Exited monitoring of worker job {result.job_id} early.")
