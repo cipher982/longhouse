@@ -57,6 +57,13 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
                       <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
                     )}
                   </div>
+                  {/* Debug mode: show token usage when reasoning tokens present */}
+                  {isAssistant && message.usage && message.usage.reasoning_tokens && message.usage.reasoning_tokens > 0 && (
+                    <div className="message-debug-info">
+                      <span className="debug-badge">🧠 {message.usage.reasoning_tokens} reasoning tokens</span>
+                      <span className="debug-detail">({message.usage.total_tokens} total)</span>
+                    </div>
+                  )}
                 </div>
               );
             })}

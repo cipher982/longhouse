@@ -254,6 +254,13 @@ The Jarvis code lives in `src/jarvis/` with this structure:
 - `data/` — IndexedDB storage
 - `styles/` — Jarvis-specific CSS
 
+**Reasoning Effort Feature:**
+- Chat UI includes reasoning effort selector (none/low/medium/high)
+- Controls OpenAI reasoning intensity for gpt-5.1, o1, o3 models
+- Displays reasoning tokens badge in UI when >0
+- Implementation uses raw AsyncOpenAI (not LangChain streaming)
+- See: `docs/features/REASONING_EFFORT.md`
+
 ## Generated Code — Do Not Edit
 
 - `apps/zerg/frontend-web/src/generated/` — OpenAPI types

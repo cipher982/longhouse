@@ -355,6 +355,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
             updates: {
               status: event.status as any,
               ...(event.content !== undefined ? { content: event.content } : {}),
+              ...(event.usage !== undefined ? { usage: event.usage } : {}),
             },
           })
           break

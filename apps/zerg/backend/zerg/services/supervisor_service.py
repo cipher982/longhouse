@@ -558,6 +558,13 @@ class SupervisorService:
                     "duration_ms": duration_ms,
                     "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
+                    # Token usage for debug/power mode
+                    "usage": {
+                        "prompt_tokens": runner.usage_prompt_tokens,
+                        "completion_tokens": runner.usage_completion_tokens,
+                        "total_tokens": runner.usage_total_tokens,
+                        "reasoning_tokens": runner.usage_reasoning_tokens,
+                    },
                 },
             )
             reset_seq(run.id)

@@ -89,7 +89,7 @@ export type StateChangeEvent =
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
   | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date; skipAnimation?: boolean; correlationId?: string } }
-  | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string }
+  | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string; usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null } }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
   | { type: 'HISTORY_LOADED'; history: unknown[] }
@@ -222,8 +222,13 @@ export class StateManager {
   /**
    * Update assistant message status via correlationId
    */
-  updateAssistantStatus(correlationId: string, status: string, content?: string): void {
-    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED', correlationId, status, content });
+  updateAssistantStatus(
+    correlationId: string,
+    status: string,
+    content?: string,
+    usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null }
+  ): void {
+    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED', correlationId, status, content, usage });
   }
 
   /**

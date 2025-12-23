@@ -27,7 +27,6 @@ from typing import Dict
 from typing import Sequence
 from typing import Tuple
 
-from langchain_core.messages import AIMessage
 from sqlalchemy.orm import Session
 
 from zerg.agents_def import zerg_react_agent
@@ -118,6 +117,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         self.usage_prompt_tokens: int | None = None
         self.usage_completion_tokens: int | None = None
         self.usage_total_tokens: int | None = None
+        self.usage_reasoning_tokens: int | None = None  # For reasoning models (gpt-5, o1, o3)
 
         # Whether this runner/LLM emits per-token chunks – treat env value
         # case-insensitively; anything truthy like "1", "true", "yes" enables
@@ -305,6 +305,11 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                         f.write("-" * 80 + "\n\n")
                 logger.info(f"[DEBUG] Full LLM input written to: {debug_file}")
 
+            # Reset LLM usage tracking before invoking (so we capture usage from this run only)
+            from zerg.agents_def.zerg_react_agent import reset_llm_usage
+
+            reset_llm_usage()
+
             # Use **async** invoke with the entrypoint
             # Pass the messages list directly to the function
             # For Functional API, we use .ainvoke method with the config
@@ -335,34 +340,29 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         new_messages = updated_messages[messages_with_context:]
         logger.info(f"[AgentRunner] Extracted {len(new_messages)} new messages")
 
-        # Aggregate usage strictly from provider metadata
-        p_sum = 0
-        c_sum = 0
-        t_sum = 0
-        for msg in new_messages:
-            if isinstance(msg, AIMessage):
-                meta = getattr(msg, "response_metadata", None) or {}
-                addl = getattr(msg, "additional_kwargs", None) or {}
-                usage = meta.get("token_usage") or meta.get("usage") or addl.get("token_usage") or addl.get("usage") or {}
-                try:
-                    p = int(usage.get("prompt_tokens", 0))
-                    c = int(usage.get("completion_tokens", 0))
-                    # Some providers include total_tokens; otherwise derive strictly if both components present
-                    if "total_tokens" in usage:
-                        t = int(usage.get("total_tokens", 0))
-                    else:
-                        t = p + c if ("prompt_tokens" in usage and "completion_tokens" in usage) else 0
-                except Exception:
-                    p = c = t = 0
-                p_sum += p
-                c_sum += c
-                t_sum += t
+        # Get accumulated usage from context variable (set during LLM calls)
+        # This is more reliable than extracting from messages since LangGraph streaming
+        # doesn't preserve response_metadata on AIMessage objects
+        from zerg.agents_def.zerg_react_agent import get_llm_usage
 
-        if p_sum or c_sum or t_sum:
-            self.usage_prompt_tokens = p_sum if p_sum else None
-            self.usage_completion_tokens = c_sum if c_sum else None
-            # Prefer explicit totals if any contributed them; otherwise keep None when 0
-            self.usage_total_tokens = t_sum if t_sum else None
+        ctx_usage = get_llm_usage()
+        logger.info(f"[AgentRunner] Context variable usage: {ctx_usage}")
+
+        if ctx_usage:
+            p_sum = ctx_usage.get("prompt_tokens", 0) or 0
+            c_sum = ctx_usage.get("completion_tokens", 0) or 0
+            t_sum = ctx_usage.get("total_tokens", 0) or 0
+            r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
+
+            if p_sum or c_sum or t_sum or r_sum:
+                self.usage_prompt_tokens = p_sum if p_sum else None
+                self.usage_completion_tokens = c_sum if c_sum else None
+                self.usage_total_tokens = t_sum if t_sum else None
+                self.usage_reasoning_tokens = r_sum if r_sum else None
+                logger.info(
+                    f"[AgentRunner] Usage set: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
+                    f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}"
+                )
 
         # Log each new message for debugging
         for i, msg in enumerate(new_messages):

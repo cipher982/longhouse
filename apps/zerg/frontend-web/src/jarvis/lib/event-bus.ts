@@ -52,7 +52,19 @@ export interface EventMap {
   'supervisor:worker_started': { jobId: number; workerId?: string; timestamp: number };
   'supervisor:worker_complete': { jobId: number; workerId?: string; status: string; durationMs?: number; timestamp: number };
   'supervisor:worker_summary': { jobId: number; workerId?: string; summary: string; timestamp: number };
-  'supervisor:complete': { runId: number; result: string; status: string; durationMs?: number; timestamp: number };
+  'supervisor:complete': {
+    runId: number;
+    result: string;
+    status: string;
+    durationMs?: number;
+    timestamp: number;
+    usage?: {
+      prompt_tokens?: number | null;
+      completion_tokens?: number | null;
+      total_tokens?: number | null;
+      reasoning_tokens?: number | null;
+    };
+  };
   'supervisor:error': { message: string; details?: string; timestamp: number };
   'supervisor:cleared': { timestamp: number };
 
