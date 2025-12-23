@@ -100,6 +100,10 @@ make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidia
 
 # Validation (CI checks these)
 make validate      # All validation
+
+# Performance profiling (GPU, macOS only)
+make perf-gpu           # Landing page GPU measurement
+make perf-gpu-dashboard # Dashboard GPU measurement
 ```
 
 ## Deploying + Coolify Debugging
@@ -354,6 +358,8 @@ If you edit these, your changes will be overwritten by `make regen-ws` or `make 
    - Parallel execution enabled (pytest uses `-n auto`, Playwright uses 4 workers)
    - Proper test isolation (separate DB per worker)
    - ~40s for unit tests (vs 3+ minutes without parallelism)
+
+18. **UI effects toggle**: Dashboard/app pages use static backgrounds + glass panels by default. Use `?effects=off` URL param or `VITE_UI_EFFECTS=off` to disable ambient visuals entirely. Landing page has its own animated effects (hero, particles) controlled separately via `?fx=none`.
 
 ## Environment Setup
 
