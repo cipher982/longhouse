@@ -1,13 +1,15 @@
-/* Design Tokens */
-@import "./tokens.css";
+/* Design Tokens (loaded into tokens layer) */
+@import url("./tokens.css") layer(tokens);
 
-/* All legacy CSS using spec-compliant layer() syntax */
+/* Navigation Components (actively maintained) */
+@import url("./css/nav.css") layer(navigation);
+
+/* Legacy CSS (lower specificity than navigation/components) */
 @import url("./styles.css") layer(legacy);
 @import url("./run_button.css") layer(legacy);
 @import url("./css/util.css") layer(legacy);
 @import url("./css/buttons.css") layer(legacy);
 @import url("./css/forms.css") layer(legacy);
-@import url("./css/nav.css") layer(legacy);
 @import url("./css/agent_shelf.css") layer(legacy);
 @import url("./css/canvas.css") layer(legacy);
 @import url("./css/dashboard.css") layer(legacy);
@@ -18,6 +20,5 @@
 @import url("./css/tool_config_modal.css") layer(legacy);
 @import url("./css/mcp.css") layer(legacy);
 @import url("./css/particle.css") layer(legacy);
-@import url("./css/components/buttons.css") layer(legacy);
 @import url("./css/components/disclosure.css") layer(legacy);
 @import url("./css/components/execution-results.css") layer(legacy);
