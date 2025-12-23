@@ -1,95 +1,202 @@
 /* ------------------------------------------------------------------
-   Button Component Styles – extracted from monolithic styles.css
+   Legacy Button Compatibility Layer
+
+   NOTE: This file provides backwards compatibility for old button classes.
+   For new code, use the Button component from components/ui/Button.tsx
+   which uses the .ui-button system defined in ui.css.
+
+   Legacy classes map to ui-button variants:
+   - .btn-primary    → .ui-button.ui-button--primary
+   - .btn-secondary  → .ui-button.ui-button--secondary
+   - .btn-ghost      → .ui-button.ui-button--ghost
+   - .btn-sm         → .ui-button (with custom size)
+   - .btn-lg         → .ui-button (with custom size)
    ------------------------------------------------------------------ */
 
+/* Primary button - brand colored */
 .btn-primary {
-  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background-color: var(--color-brand-primary);
   border: none;
   padding: var(--component-button-padding-y) var(--component-button-padding-x);
   font-size: var(--component-button-font-size);
   font-weight: var(--component-button-font-weight);
   border-radius: var(--radius-md);
-  color: var(--color-surface-page);
+  color: #fff;
   cursor: pointer;
   transition:
     background-color var(--motion-duration-fast) var(--motion-easing-standard),
-    transform var(--motion-duration-fast) var(--motion-easing-standard);
+    transform var(--motion-duration-fast) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  white-space: nowrap;
+  user-select: none;
 }
 
-.btn-primary:hover {
-  background-color: var(--color-brand-secondary);
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-brand-primary-hover);
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.3);
   transform: translateY(-1px);
 }
 
-/* Secondary (neutral surface) */
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Secondary button - neutral surface */
 .btn,
 .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background-color: var(--color-surface-card);
   color: var(--color-text-primary);
   border: 1px solid var(--color-border-subtle);
   padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  font-size: var(--component-button-font-size);
+  font-weight: var(--component-button-font-weight);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition:
     background-color var(--motion-duration-fast) var(--motion-easing-standard),
     transform var(--motion-duration-fast) var(--motion-easing-standard);
+  white-space: nowrap;
+  user-select: none;
 }
 
-.btn:hover,
-.btn-secondary:hover {
+.btn:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled) {
   background-color: var(--color-surface-section);
   transform: translateY(-1px);
 }
 
-/* Ghost button – transparent, coloured outline */
+.btn:disabled,
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Ghost button - transparent with border */
 .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   color: var(--color-brand-primary);
   border: 1px solid var(--color-brand-primary);
   padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  font-size: var(--component-button-font-size);
+  font-weight: var(--component-button-font-weight);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition:
     background-color var(--motion-duration-fast) var(--motion-easing-standard),
     color var(--motion-duration-fast) var(--motion-easing-standard),
     transform var(--motion-duration-fast) var(--motion-easing-standard);
+  white-space: nowrap;
+  user-select: none;
 }
 
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-brand-primary) 12%, transparent);
   transform: translateY(-1px);
 }
 
-/* --------------------------------------------------------- */
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-/* Micro-interaction additions (Phase-4)                     */
-
-/* --------------------------------------------------------- */
-
-/* Slightly scale down on active press for tactile feedback */
-.btn:active,
-.btn-primary:active,
-.btn-secondary:active,
-.btn-ghost:active {
+/* Active state - micro-interaction for tactile feedback */
+.btn:active:not(:disabled),
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled),
+.btn-ghost:active:not(:disabled) {
   transform: scale(0.97);
 }
 
-/* Ensure buttons don’t jump when both translateY and scale are applied */
-.btn:hover:active,
-.btn-primary:hover:active,
-.btn-secondary:hover:active,
-.btn-ghost:hover:active {
+.btn:hover:active:not(:disabled),
+.btn-primary:hover:active:not(:disabled),
+.btn-secondary:hover:active:not(:disabled),
+.btn-ghost:hover:active:not(:disabled) {
   transform: scale(0.97) translateY(-1px);
+}
+
+/* Tertiary button - muted surface */
+.btn-tertiary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-overlay);
+  color: var(--color-text-secondary);
+  border: 1px solid transparent;
+  padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  font-size: var(--component-button-font-size);
+  font-weight: var(--component-button-font-weight);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-fast) var(--motion-easing-standard);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-tertiary:hover:not(:disabled) {
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+
+.btn-tertiary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Danger button - destructive actions */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-intent-error-muted);
+  color: var(--color-intent-error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: var(--component-button-padding-y) var(--component-button-padding-x);
+  font-size: var(--component-button-font-size);
+  font-weight: var(--component-button-font-weight);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-fast) var(--motion-easing-standard);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-intent-error);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Size modifiers */
 .btn-sm {
   padding: var(--space-xs) var(--space-md);
   font-size: var(--font-size-xs);
+  height: 32px;
 }
 
 .btn-lg {
   padding: var(--space-md) var(--space-xl);
   font-size: var(--font-size-lg);
+  height: 44px;
 }

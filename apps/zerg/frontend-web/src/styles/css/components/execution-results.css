@@ -19,8 +19,8 @@
 
   /* Modern CSS transitions */
   transition:
-    width 0.3s ease,
-    view-transition-name 0.3s ease;
+    width var(--motion-duration-normal) ease,
+    view-transition-name var(--motion-duration-normal) ease;
   container-type: inline-size;
   container-name: results-panel;
 }
@@ -64,7 +64,7 @@
   font-weight: 500;
   background: var(--surface-tertiary);
   color: var(--text-secondary);
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .results-panel-status.running {
@@ -136,7 +136,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   padding: 16px;
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 
   /* Modern hover with :has() */
   &:has(.result-output) {
