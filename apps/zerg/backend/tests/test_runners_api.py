@@ -24,12 +24,18 @@ def test_create_enroll_token(client: TestClient, db_session: Session, test_user:
     assert "expires_at" in data
     assert "swarmlet_url" in data
     assert "docker_command" in data
+    assert "one_liner_install_command" in data
 
     # Token should be a long string
     assert len(data["enroll_token"]) > 30
 
     # Docker command should contain the token
     assert data["enroll_token"] in data["docker_command"]
+
+    # One-liner should contain the token and install.sh endpoint
+    assert data["enroll_token"] in data["one_liner_install_command"]
+    assert "/api/runners/install.sh" in data["one_liner_install_command"]
+    assert "curl -fsSL" in data["one_liner_install_command"]
 
 
 def test_register_runner_with_valid_token(client: TestClient, db_session: Session, test_user: User):

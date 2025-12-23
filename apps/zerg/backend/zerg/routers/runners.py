@@ -57,6 +57,152 @@ _REGISTER_LOCK = threading.Lock()
 # ---------------------------------------------------------------------------
 
 
+@router.get("/install.sh")
+def get_install_script(
+    enroll_token: str,
+    runner_name: str | None = None,
+    swarmlet_url: str | None = None,
+    runner_image: str | None = None,
+) -> Response:
+    """Return shell script for one-liner runner installation.
+
+    This endpoint is designed to be used with curl:
+        curl -fsSL https://api.swarmlet.com/api/runners/install.sh?enroll_token=xxx | bash
+
+    Or with environment variables:
+        curl -fsSL https://api.swarmlet.com/api/runners/install.sh | \
+            ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
+
+    The script:
+    1. Registers the runner using the enroll token
+    2. Saves credentials to ~/.config/swarmlet/runner.env
+    3. Starts the runner container with docker run
+
+    No authentication required - this is for bootstrapping new runners.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+
+    # Default values from query params or settings
+    if not swarmlet_url:
+        if not settings.app_public_url:
+            if settings.testing:
+                swarmlet_url = "http://localhost:30080"
+            else:
+                return Response(
+                    content="Error: APP_PUBLIC_URL not configured on server",
+                    media_type="text/plain",
+                    status_code=500,
+                )
+        else:
+            swarmlet_url = settings.app_public_url
+
+    if not runner_image:
+        runner_image = settings.runner_docker_image
+
+    # Generate the shell script
+    default_runner_name = runner_name or "$(hostname)"
+    script = f"""#!/bin/bash
+set -e
+
+# Swarmlet Runner Installer
+# This script registers a runner and starts it with Docker
+
+# Configuration (can be overridden via env vars)
+ENROLL_TOKEN="${{ENROLL_TOKEN:-{enroll_token}}}"
+RUNNER_NAME="${{RUNNER_NAME:-{default_runner_name}}}"
+SWARMLET_URL="${{SWARMLET_URL:-{swarmlet_url}}}"
+RUNNER_IMAGE="${{RUNNER_IMAGE:-{runner_image}}}"
+
+# Validate required vars
+if [ -z "$ENROLL_TOKEN" ]; then
+  echo "Error: ENROLL_TOKEN is required" >&2
+  exit 1
+fi
+
+if [ -z "$SWARMLET_URL" ]; then
+  echo "Error: SWARMLET_URL is required" >&2
+  exit 1
+fi
+
+echo "Registering runner '$RUNNER_NAME' with Swarmlet..."
+
+# Register runner and get credentials
+REGISTER_URL="${{SWARMLET_URL}}/api/runners/register"
+RESPONSE=$(curl -sf -X POST "$REGISTER_URL" \\
+  -H "Content-Type: application/json" \\
+  -d "{{\\\"enroll_token\\\": \\\"$ENROLL_TOKEN\\\", \\\"name\\\": \\\"$RUNNER_NAME\\\"}}")
+
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to register runner. Check your enrollment token." >&2
+  exit 1
+fi
+
+# Parse JSON response
+# Try python3 first, fallback to node, otherwise error
+if command -v python3 >/dev/null 2>&1; then
+  RUNNER_SECRET=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['runner_secret'])")
+  RUNNER_NAME=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['name'])")
+elif command -v node >/dev/null 2>&1; then
+  RUNNER_SECRET=$(echo "$RESPONSE" | node -e "console.log(JSON.parse(require('fs').readFileSync(0, 'utf-8')).runner_secret)")
+  RUNNER_NAME=$(echo "$RESPONSE" | node -e "console.log(JSON.parse(require('fs').readFileSync(0, 'utf-8')).name)")
+else
+  echo "Error: Please install python3 or node to parse JSON response" >&2
+  exit 1
+fi
+
+if [ -z "$RUNNER_SECRET" ]; then
+  echo "Error: Failed to parse runner credentials from response" >&2
+  exit 1
+fi
+
+echo "Runner registered successfully: $RUNNER_NAME"
+
+# Save credentials to config file
+CONFIG_DIR="$HOME/.config/swarmlet"
+CONFIG_FILE="$CONFIG_DIR/runner.env"
+
+mkdir -p "$CONFIG_DIR"
+cat > "$CONFIG_FILE" <<EOF
+SWARMLET_URL=$SWARMLET_URL
+RUNNER_NAME=$RUNNER_NAME
+RUNNER_SECRET=$RUNNER_SECRET
+EOF
+
+chmod 600 "$CONFIG_FILE"
+
+echo "Credentials saved to $CONFIG_FILE"
+
+# Start runner container
+echo "Starting runner container..."
+
+docker run -d --name swarmlet-runner \\
+  --env-file "$CONFIG_FILE" \\
+  --restart unless-stopped \\
+  "$RUNNER_IMAGE"
+
+if [ $? -eq 0 ]; then
+  echo "Runner container started successfully!"
+  echo "Container name: swarmlet-runner"
+  echo ""
+  echo "Check status with: docker logs swarmlet-runner"
+else
+  echo "Error: Failed to start runner container" >&2
+  exit 1
+fi
+"""
+
+    return Response(
+        content=script,
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": "inline; filename=install.sh",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @router.post("/enroll-token", response_model=EnrollTokenResponse)
 def create_enroll_token(
     response: Response,
@@ -82,15 +228,21 @@ def create_enroll_token(
     from zerg.config import get_settings
 
     settings = get_settings()
+    # In test mode, use a placeholder URL
     if not settings.app_public_url:
-        raise HTTPException(
-            status_code=500,
-            detail="APP_PUBLIC_URL not configured. Set this in your environment.",
-        )
-    swarmlet_url = settings.app_public_url
+        if settings.testing:
+            swarmlet_url = "http://localhost:30080"
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="APP_PUBLIC_URL not configured. Set this in your environment.",
+            )
+    else:
+        swarmlet_url = settings.app_public_url
+
     runner_image = settings.runner_docker_image
 
-    # Generate two-step setup instructions
+    # Generate two-step setup instructions (legacy, for manual setup)
     docker_command = (
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
@@ -104,11 +256,15 @@ def create_enroll_token(
         f"  {runner_image}"
     )
 
+    # Generate one-liner install command (recommended method)
+    one_liner_install_command = f"curl -fsSL {swarmlet_url}/api/runners/install.sh?enroll_token={plaintext_token} | bash"
+
     return EnrollTokenResponse(
         enroll_token=plaintext_token,
         expires_at=token_record.expires_at,
         swarmlet_url=swarmlet_url,
         docker_command=docker_command,
+        one_liner_install_command=one_liner_install_command,
     )
 
 
