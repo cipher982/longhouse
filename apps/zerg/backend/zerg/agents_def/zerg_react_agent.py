@@ -33,7 +33,18 @@ logger = logging.getLogger(__name__)
 
 # Track run_ids that have already been warned about evidence mounting issues
 # Prevents log spam since _call_model_async is called multiple times per ReAct loop
+# NOTE: Call clear_evidence_mount_warning(run_id) when run completes to prevent unbounded growth
 _evidence_mount_warned_runs: set[int] = set()
+
+
+def clear_evidence_mount_warning(run_id: int) -> None:
+    """Clear the warning-once state for a completed supervisor run.
+
+    Call this when a supervisor run completes to prevent unbounded memory growth
+    in long-running servers.
+    """
+    _evidence_mount_warned_runs.discard(run_id)
+
 
 # Context variable to store accumulated LLM usage data (set during LLM calls, read by AgentRunner)
 # This is needed because LangGraph streaming doesn't preserve usage metadata on AIMessage objects
