@@ -93,7 +93,7 @@
   background: var(--color-surface-overlay);
   color: var(--text);
   font-size: 13px;
-  transition: all 0.2s ease;
+  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 #user-input:focus {
@@ -173,7 +173,7 @@
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
-  transition: all 0.1s ease;
+  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
   white-space: nowrap;
   min-height: 32px;
   display: flex;
@@ -225,7 +225,7 @@ body.space-pan #node-canvas {
   padding: 6px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.1s ease;
+  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -384,7 +384,7 @@ body.space-pan #node-canvas {
   height: 20px;
   background-color: #ccc;
   border-radius: 20px;
-  transition: 0.1s;
+  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
 }
 
 .toggle-slider::before {
@@ -396,7 +396,7 @@ body.space-pan #node-canvas {
   bottom: 2px;
   background-color: white;
   border-radius: 50%;
-  transition: 0.1s;
+  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
 }
 
 .toggle-checkbox:checked + .toggle-slider {

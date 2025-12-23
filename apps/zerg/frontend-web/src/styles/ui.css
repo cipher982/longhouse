@@ -88,6 +88,36 @@
     color: #fff;
   }
 
+  .ui-button--tertiary {
+    background: var(--color-surface-overlay);
+    color: var(--color-text-secondary);
+    border-color: transparent;
+  }
+
+  .ui-button--tertiary:hover:not(:disabled) {
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+  }
+
+  /* Size variants */
+  .ui-button--sm {
+    height: 32px;
+    padding: 0 var(--space-3);
+    font-size: var(--font-size-xs);
+  }
+
+  .ui-button--md {
+    height: 36px;
+    padding: 0 var(--space-4);
+    font-size: var(--font-size-sm);
+  }
+
+  .ui-button--lg {
+    height: 44px;
+    padding: 0 var(--space-5);
+    font-size: var(--font-size-lg);
+  }
+
   /* --- Icon Button --- */
   .ui-icon-button {
     display: inline-flex;

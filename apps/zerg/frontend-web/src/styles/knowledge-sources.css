@@ -58,7 +58,7 @@
     border: 1px solid #3f3f46;
     border-radius: 6px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     text-align: left;
     width: 100%;
   }
@@ -104,7 +104,7 @@
     border-radius: 6px;
     color: #fafafa;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .knowledge-sources-page .load-more-button:hover {
@@ -183,7 +183,7 @@
     border-radius: 6px;
     color: #fafafa;
     font-size: 0.95rem;
-    transition: border-color 0.2s ease;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .knowledge-search-panel .search-input:focus {
@@ -213,7 +213,7 @@
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid #3f3f46;
     border-radius: 6px;
-    transition: border-color 0.2s ease;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .knowledge-search-panel .search-result-item:hover {
