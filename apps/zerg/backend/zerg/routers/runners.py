@@ -12,7 +12,6 @@ Runners enable secure command execution without backend access to user SSH keys.
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 import threading
 
@@ -79,8 +78,16 @@ def create_enroll_token(
         ttl_minutes=10,
     )
 
-    # Get Swarmlet API URL from environment (default to localhost for dev)
-    swarmlet_url = os.getenv("SWARMLET_API_URL", "http://localhost:47300")
+    # Get Swarmlet API URL from settings (required in all environments)
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    if not settings.app_public_url:
+        raise HTTPException(
+            status_code=500,
+            detail="APP_PUBLIC_URL not configured. Set this in your environment.",
+        )
+    swarmlet_url = settings.app_public_url
 
     # Generate two-step setup instructions
     docker_command = (
@@ -88,12 +95,12 @@ def create_enroll_token(
         f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
         f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
-        f"# Step 2: Run with credentials from step 1\n"
+        f"# Step 2: Save the runner_secret from the response, then run:\n"
         f"docker run -d --name swarmlet-runner \\\n"
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"
-        f"  -e RUNNER_ID=<id_from_step_1> \\\n"
+        f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
-        f"  swarmlet/runner:latest"
+        f"  ghcr.io/swarmlet/runner:latest"
     )
 
     return EnrollTokenResponse(
@@ -412,20 +419,57 @@ async def runner_websocket(
             return
 
         runner_id = hello_data.get("runner_id")
+        runner_name = hello_data.get("runner_name")
         secret = hello_data.get("secret")
         metadata = hello_data.get("metadata", {})
 
-        if not runner_id or not secret:
-            logger.warning("Hello message missing runner_id or secret")
-            await websocket.close(code=1008, reason="Missing runner_id or secret")
+        if not secret:
+            logger.warning("Hello message missing secret")
+            await websocket.close(code=1008, reason="Missing secret")
             return
 
-        # Validate credentials
-        runner = runner_crud.get_runner(db, runner_id)
+        if not runner_id and not runner_name:
+            logger.warning("Hello message missing runner_id or runner_name")
+            await websocket.close(code=1008, reason="Missing runner_id or runner_name")
+            return
+
+        # Look up runner by ID or name
+        # Name-based auth requires iterating users, but since the secret is unique
+        # per runner, we can validate after finding by name across all users
+        runner = None
+        if runner_id:
+            runner = runner_crud.get_runner(db, runner_id)
+        elif runner_name:
+            # For name-based auth, we need to find the runner and verify secret
+            # Since names are unique per owner, we search all runners with that name
+            # and verify the secret matches (there should only be one match)
+            from sqlalchemy import select
+
+            from zerg.models.models import Runner as RunnerModel
+
+            stmt = select(RunnerModel).where(RunnerModel.name == runner_name)
+            result = db.execute(stmt)
+            candidates = result.scalars().all()
+
+            # Find the runner whose secret matches
+            for candidate in candidates:
+                computed_hash = runner_crud.hash_token(secret)
+                if secrets.compare_digest(computed_hash, candidate.auth_secret_hash):
+                    runner = candidate
+                    runner_id = runner.id
+                    break
+
+            if not runner:
+                logger.warning(f"Runner not found by name: {runner_name}")
+                await websocket.close(code=1008, reason="Invalid runner_name or secret")
+                return
+
         if not runner:
             logger.warning(f"Runner not found: {runner_id}")
             await websocket.close(code=1008, reason="Invalid runner_id")
             return
+
+        runner_id = runner.id  # Ensure runner_id is set for name-based auth
 
         # Check secret using constant-time comparison
         computed_hash = runner_crud.hash_token(secret)

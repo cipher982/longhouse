@@ -23,7 +23,12 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Runner ID: ${config.runnerId}`);
+  if (config.runnerName) {
+    console.log(`Runner Name: ${config.runnerName}`);
+  }
+  if (config.runnerId) {
+    console.log(`Runner ID: ${config.runnerId}`);
+  }
   console.log(`Swarmlet URL: ${config.swarmletUrl}`);
   console.log(`Heartbeat interval: ${config.heartbeatIntervalMs}ms`);
   console.log('====================================\n');

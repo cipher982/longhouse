@@ -200,6 +200,7 @@ comet_latest.dmg
 .playwright-mcp/
 apps/zerg/backend/scripts/user_context.local.json
 apps/zerg/backend/scripts/personal_credentials.local.json
+apps/zerg/backend/scripts/runners.local.json
 
 # Environment backups
 .env-backups-*/

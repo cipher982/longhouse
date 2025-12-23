@@ -43,11 +43,15 @@ All configuration is via environment variables:
 | Variable                 | Required | Default                | Description                                   |
 | ------------------------ | -------- | ---------------------- | --------------------------------------------- |
 | `SWARMLET_URL`           | No       | `ws://localhost:47300` | Swarmlet API URL (ws:// or wss://)            |
-| `RUNNER_ID`              | Yes      | -                      | Runner ID from registration                   |
+| `RUNNER_NAME`            | *        | -                      | Runner name (alternative to RUNNER_ID)        |
+| `RUNNER_ID`              | *        | -                      | Runner ID from registration                   |
 | `RUNNER_SECRET`          | Yes      | -                      | Runner secret from registration               |
+| `RUNNER_CAPABILITIES`    | No       | `exec.readonly`        | Comma-separated capabilities (e.g., exec.full)|
 | `HEARTBEAT_INTERVAL_MS`  | No       | `30000`                | Heartbeat interval in milliseconds            |
 | `RECONNECT_DELAY_MS`     | No       | `5000`                 | Initial reconnect delay in milliseconds       |
 | `MAX_RECONNECT_DELAY_MS` | No       | `60000`                | Maximum reconnect delay (exponential backoff) |
+
+\* Either `RUNNER_NAME` or `RUNNER_ID` is required. Name-based auth is simpler for dev.
 
 ## Registration
 

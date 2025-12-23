@@ -10,7 +10,6 @@ Runners are the multi-tenant-safe replacement for ssh_exec key-mounting.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from typing import Any
 from typing import Dict
@@ -24,7 +23,16 @@ from zerg.schemas.runner_schemas import RunnerResponse
 
 
 def _swarmlet_api_url() -> str:
-    return os.getenv("SWARMLET_API_URL", "http://localhost:47300")
+    """Get the public API URL for runner setup commands.
+
+    Requires APP_PUBLIC_URL to be set in all environments.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    if not settings.app_public_url:
+        raise RuntimeError("APP_PUBLIC_URL not configured. Set this in your environment.")
+    return settings.app_public_url
 
 
 def runner_list() -> Dict[str, Any]:
@@ -69,12 +77,12 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
         f"curl -X POST {swarmlet_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
         f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner"}}\'\n\n'
-        f"# Step 2: Run with credentials from step 1\n"
+        f"# Step 2: Save the runner_secret from the response, then run:\n"
         f"docker run -d --name swarmlet-runner \\\n"
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"
-        f"  -e RUNNER_ID=<id_from_step_1> \\\n"
+        f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
-        f"  swarmlet/runner:latest"
+        f"  ghcr.io/swarmlet/runner:latest"
     )
 
     expires_at: datetime = token_record.expires_at
