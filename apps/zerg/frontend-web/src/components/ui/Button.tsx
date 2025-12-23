@@ -1,7 +1,7 @@
 import React from 'react';
 import clsx from 'clsx';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'ghost' | 'danger' | 'success';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {

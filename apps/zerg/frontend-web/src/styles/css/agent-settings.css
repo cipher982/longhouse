@@ -225,70 +225,14 @@
     flex-wrap: wrap;
   }
 
-  .btn-primary,
-  .btn-secondary,
-  .btn-tertiary {
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md);
-    border: none;
-    cursor: pointer;
+  /* Button styles now inherit from buttons.css (legacy) and ui.css (new system) */
+  /* Scoped overrides for agent-settings context */
+  .agent-settings-drawer .btn-primary,
+  .agent-settings-drawer .btn-secondary,
+  .agent-settings-drawer .btn-tertiary,
+  .agent-settings-drawer .btn-danger {
     font-family: var(--font-family-base);
     font-weight: 600;
-    font-size: var(--font-size-sm);
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .btn-primary {
-    background: var(--color-brand-primary);
-    color: white;
-  }
-
-  .btn-primary:hover {
-    background: var(--color-brand-primary-hover);
-  }
-
-  .btn-secondary {
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-  }
-
-  .btn-secondary:hover {
-    background: var(--color-border-primary);
-  }
-
-  .btn-tertiary {
-    background: var(--color-surface-overlay);
-    color: var(--color-text-secondary);
-  }
-
-  .btn-tertiary:hover {
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-  }
-
-  .btn-primary:disabled,
-  .btn-secondary:disabled,
-  .btn-tertiary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .btn-danger {
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md);
-    border: none;
-    cursor: pointer;
-    font-family: var(--font-family-base);
-    font-weight: 600;
-    font-size: var(--font-size-sm);
-    background: var(--color-intent-error-muted);
-    color: var(--color-intent-error);
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .btn-danger:hover {
-    background: var(--color-intent-error);
-    color: white;
   }
 
   .mcp-server-list {
@@ -523,7 +467,7 @@
     cursor: pointer;
     inset: 0;
     background-color: var(--color-surface-elevated);
-    transition: 0.4s;
+    transition: all var(--motion-duration-slow) var(--motion-easing-standard);
     border-radius: 34px;
   }
 
@@ -535,7 +479,7 @@
     left: 4px;
     bottom: 4px;
     background-color: white;
-    transition: 0.4s;
+    transition: all var(--motion-duration-slow) var(--motion-easing-standard);
     border-radius: 50%;
   }
 

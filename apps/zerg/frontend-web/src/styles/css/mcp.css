@@ -61,7 +61,7 @@
   padding: 12px;
   background: var(--color-surface-section);
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .mcp-preset-card:hover {

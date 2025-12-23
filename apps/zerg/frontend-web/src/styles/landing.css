@@ -307,7 +307,7 @@
   }
 
   .hero-icon-scale {
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform var(--motion-duration-normal) var(--motion-easing-bounce);
     transform-origin: center;
     transform-box: fill-box;
   }
@@ -402,7 +402,7 @@
     width: 90%;
     text-align: center;
     position: relative;
-    animation: slideUp 0.3s ease-out;
+    animation: slideUp var(--motion-duration-normal) ease-out;
     box-shadow: var(--shadow-xl);
   }
 

@@ -30,7 +30,7 @@
       color: #a1a1aa;
       font-size: 0.875rem;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
       width: fit-content;
     }
 
@@ -94,7 +94,7 @@
       font-size: 0.875rem;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
     .edit-button:hover {
@@ -156,7 +156,7 @@
       border: 1px solid #3f3f46;
       border-radius: 8px;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
     .capability-checkbox:hover {
@@ -203,7 +203,7 @@
       border-radius: 6px;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
     .save-button:hover:not(:disabled) {
@@ -224,7 +224,7 @@
       color: #fafafa;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
     .cancel-button:hover {
@@ -255,7 +255,7 @@
       color: #ef4444;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
       width: fit-content;
     }
 
@@ -318,7 +318,7 @@
       color: #facc15;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
       white-space: nowrap;
     }
 
@@ -377,7 +377,7 @@
       color: white;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
       white-space: nowrap;
     }
 
@@ -394,7 +394,7 @@
       font-size: 0.875rem;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     }
 
     .dismiss-secret-button:hover {
