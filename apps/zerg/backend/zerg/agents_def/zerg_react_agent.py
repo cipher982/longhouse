@@ -295,6 +295,35 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # Create LLM dynamically with current enable_token_stream flag
         llm_with_tools = _make_llm(agent_row, tools)
 
+        # Phase 2: Evidence Mounting for Supervisor Runs
+        # If we're in a supervisor context, wrap the LLM with evidence mounting
+        from zerg.services.supervisor_context import get_supervisor_run_id
+
+        supervisor_run_id = get_supervisor_run_id()
+        if supervisor_run_id is not None:
+            # We're in a supervisor run - wrap LLM for evidence mounting
+            from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
+
+            # Get database session from credential resolver context
+            try:
+                from zerg.connectors.context import get_credential_resolver
+
+                resolver = get_credential_resolver()
+                if resolver is not None:
+                    db = resolver.db  # CredentialResolver has db attribute
+                    owner_id = getattr(agent_row, "owner_id", None)
+                    if owner_id is not None and db is not None:
+                        llm_with_tools = EvidenceMountingLLM(
+                            base_llm=llm_with_tools,
+                            run_id=supervisor_run_id,
+                            owner_id=owner_id,
+                            db=db,
+                        )
+                        logger.debug(f"Evidence mounting enabled for supervisor run_id={supervisor_run_id}")
+            except Exception as e:
+                # Evidence mounting is best-effort - don't fail if context is unavailable
+                logger.debug(f"Could not enable evidence mounting: {e}")
+
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
 
