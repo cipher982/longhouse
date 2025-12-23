@@ -1,0 +1,25 @@
+name: Test ARC Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: arc-runner-set
+    steps:
+      - name: System info
+        run: |
+          echo "=== Runner Info ==="
+          echo "Hostname: $(hostname)"
+          echo "User: $(whoami)"
+          echo "OS: $(uname -a)"
+          echo ""
+          echo "=== Resources ==="
+          nproc
+          free -h || cat /proc/meminfo | head -5
+          echo ""
+          echo "=== Network ==="
+          curl -s ifconfig.me || echo "no external access"
+          echo ""
+          echo "=== Success ==="
+          echo "ARC runner is working!"
