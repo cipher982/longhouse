@@ -43,14 +43,16 @@ Workers are not “collaborators passing notes.” They are isolated contexts fo
 - page the right evidence into the supervisor’s working context under strict budgets
 - keep persistent conversation small
 
-### 5) “More context” is transactional (Mount → Reason → Prune)
+### 5) "More context" is transactional (Mount → Reason → Prune)
 
 When the supervisor needs worker evidence:
-- **Mount:** temporarily inject worker trace evidence into the supervisor’s working context (ephemeral).
+- **Mount:** expand evidence pointers into full trace content at the LLM-call boundary (ephemeral, per-call).
 - **Reason:** produce the user-facing answer using that evidence.
 - **Prune:** commit only the final answer (and small provenance pointers); never persist raw mounted evidence into long-lived conversation state.
 
-This is branch/rewind semantics: attach evidence to decide; don’t commit evidence into memory.
+This is branch/rewind semantics: attach evidence to decide; don't commit evidence into memory.
+
+Key insight: evidence mounting happens **before every LLM call within a run**, not just once at run start. The ReAct loop may involve multiple LLM calls (tool decisions → tool results → more decisions), and each call needs access to current evidence.
 
 ### 6) Require system invariants, not model behavior
 
@@ -89,28 +91,37 @@ We do *not* attempt to make prose deterministic via schemas/parsers.
 
 ## Non-goals (explicit)
 
-- No enforced schemas for worker outputs (no “must return JSON with fields X/Y/Z”).
+- No enforced schemas for worker outputs (no "must return JSON with fields X/Y/Z").
 - No domain-specific parsing pipelines for command outputs (no regex-based disk/docker parsers).
-- No permanent injection of raw logs/tool outputs into supervisor’s long-lived thread.
-- No “agent management bureaucracy” (workers exist to isolate context, not to build an organization chart).
+- No permanent injection of raw logs/tool outputs into supervisor's long-lived thread.
+- No "agent management bureaucracy" (workers exist to isolate context, not to build an organization chart).
+
+**Clarification: execution metadata is allowed.** We distinguish between:
+- ❌ Domain parsing: "parse df -h output into {filesystem, used_pct, ...}"
+- ✅ Execution metadata: "tool ssh_exec ran, exit_code=0, duration=234ms, output_bytes=1847"
+
+Execution metadata (tool index) helps prioritize evidence (failures first) without interpreting what the tool output *means*.
 
 ---
 
-## Success criteria (what “good” looks like)
+## Success criteria (what "good" looks like)
 
 - The supervisor can reliably answer infrastructure questions even when worker prose is empty/garbage, because the supervisor can see the raw evidence at decision time.
-- The supervisor’s long-lived thread stays compact and useful; it does not accumulate tool dumps.
-- Debugging is deterministic: “what happened” is a trace query, not a guess.
-- Paging is progressive: fast answers by default, deeper evidence only when needed.
+- The supervisor's long-lived thread stays compact and useful; it does not accumulate tool dumps.
+- Debugging is deterministic: "what happened" is a trace query, not a guess.
+- Evidence is immediate: supervisor sees all available evidence at decision time without extra tool calls. No "dig in if curious" round-trips.
 
 ---
 
 ## Vocabulary
 
 - **Trace:** append-only record of actions + outputs.
-- **Mount:** transiently attach trace evidence into an inference context.
+- **Mount:** transiently expand evidence pointers into full content at the LLM-call boundary.
 - **Prune:** ensure mounted evidence does not become persistent conversation state.
 - **Budget:** strict cap (tokens/bytes/lines/time) on mounted evidence.
+- **Evidence compiler:** deterministic module that assembles evidence within budget, applying prioritization and truncation.
+- **Tool index:** execution metadata (which tools ran, exit codes, durations) without domain-specific parsing.
+- **Evidence marker:** pointer embedded in persisted messages that the evidence compiler expands at mount time.
 
 ---
 
