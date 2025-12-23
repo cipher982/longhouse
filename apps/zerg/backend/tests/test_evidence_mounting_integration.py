@@ -233,3 +233,314 @@ class TestEvidencePersistence:
 
             # But original message (what would be persisted) is unchanged
             assert len(compact_message.content) < 500  # Still compact
+
+
+class TestCriticalScenario:
+    """Test the critical scenario: empty worker prose but useful tool outputs.
+
+    This is the PRIMARY PROBLEM the evidence mounting system solves:
+    - Worker executes tools successfully (e.g., ssh_exec)
+    - Worker's final AI message is empty or garbage ("(No result generated)")
+    - Supervisor should still answer correctly using raw tool outputs
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_result_txt_with_tool_outputs(self, db_session, sample_agent, temp_artifact_path):
+        """Test supervisor can answer even when worker result.txt is empty.
+
+        This simulates the bug scenario:
+        1. Worker runs ssh_exec successfully
+        2. Worker's result.txt is empty or "(No result generated)"
+        3. EvidenceCompiler should still provide ssh_exec output
+        4. Supervisor should receive expanded evidence with tool outputs
+        """
+        from unittest.mock import AsyncMock
+        import json
+        from sqlalchemy.orm import Session
+        from zerg.models.models import AgentRun, WorkerJob
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.crud import create_thread
+        from zerg.services.evidence_compiler import EvidenceCompiler
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+        # Create supervisor run
+        thread = create_thread(db_session, agent_id=sample_agent.id, title="Test Run")
+        supervisor_run = AgentRun(
+            agent_id=sample_agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
+        )
+        db_session.add(supervisor_run)
+        db_session.commit()
+        db_session.refresh(supervisor_run)
+
+        # Create artifact store
+        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
+
+        # Create worker with tool output but empty result
+        worker_id = artifact_store.create_worker(
+            task="Check disk space on server",
+            config={"model": "gpt-4"},
+            owner_id=sample_agent.owner_id,
+        )
+
+        # Add successful ssh_exec output
+        ssh_output = json.dumps({
+            "ok": True,
+            "data": {
+                "host": "clifford",
+                "command": "df -h",
+                "exit_code": 0,
+                "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\n/dev/sdb1       500G  200G  300G  40% /data",
+                "stderr": "",
+                "duration_ms": 234,
+            }
+        })
+        artifact_store.save_tool_output(worker_id, "ssh_exec", ssh_output, sequence=1)
+
+        # Save empty result.txt (the problem case!)
+        artifact_store.save_result(worker_id, "(No result generated)")
+
+        # Create worker job
+        job = WorkerJob(
+            owner_id=sample_agent.owner_id,
+            supervisor_run_id=supervisor_run.id,
+            task="Check disk space on server",
+            status="success",
+            worker_id=worker_id,
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        # Format roundabout result (what supervisor sees)
+        result = RoundaboutResult(
+            status="complete",
+            job_id=job.id,
+            worker_id=worker_id,
+            duration_seconds=5.2,
+            summary="(No result generated)",  # Empty/garbage summary
+            tool_index=[
+                ToolIndexEntry(
+                    sequence=1,
+                    tool_name="ssh_exec",
+                    exit_code=0,
+                    duration_ms=234,
+                    output_bytes=len(ssh_output),
+                    failed=False
+                ),
+            ],
+            run_id=supervisor_run.id,
+        )
+        compact_payload = format_roundabout_result(result)
+
+        # Verify compact payload has marker
+        assert "[EVIDENCE:" in compact_payload
+        assert "ssh_exec [exit=0" in compact_payload
+
+        # Create LLM wrapper with real compiler
+        mock_base_llm = AsyncMock()
+        mock_base_llm.ainvoke = AsyncMock(return_value="Test response")
+
+        compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
+        wrapper = EvidenceMountingLLM(
+            base_llm=mock_base_llm,
+            run_id=supervisor_run.id,
+            owner_id=sample_agent.owner_id,
+            db=db_session,
+        )
+        wrapper.compiler = compiler  # Use real compiler
+
+        # Create message as supervisor would receive it
+        messages = [
+            ToolMessage(
+                content=compact_payload,
+                tool_call_id="tc1",
+                name="spawn_worker",
+            ),
+        ]
+
+        # Call LLM (should expand evidence)
+        await wrapper.ainvoke(messages)
+
+        # Verify LLM received expanded evidence with tool output
+        call_args = mock_base_llm.ainvoke.call_args[0][0]
+        expanded_msg = call_args[0]
+
+        # Should contain evidence expansion
+        assert "--- Evidence for Worker" in expanded_msg.content
+        assert "001_ssh_exec.txt" in expanded_msg.content
+        assert "df -h" in expanded_msg.content
+        assert "/dev/sda1" in expanded_msg.content
+        assert "45G" in expanded_msg.content
+
+        # Should show exit code
+        assert "exit=0" in expanded_msg.content
+
+    def test_multiple_tools_failed_tool_prioritized(self, db_session, sample_agent, temp_artifact_path):
+        """Test that failed tools are prioritized even with empty result.txt."""
+        import json
+        from zerg.services.evidence_compiler import EvidenceCompiler
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.models.models import AgentRun, WorkerJob
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.crud import create_thread
+
+        # Create supervisor run
+        thread = create_thread(db_session, agent_id=sample_agent.id, title="Test Run")
+        supervisor_run = AgentRun(
+            agent_id=sample_agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
+        )
+        db_session.add(supervisor_run)
+        db_session.commit()
+        db_session.refresh(supervisor_run)
+
+        # Create artifact store and worker
+        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
+        worker_id = artifact_store.create_worker(
+            task="Check server status",
+            config={"model": "gpt-4"},
+            owner_id=sample_agent.owner_id,
+        )
+
+        # Add successful tool
+        success_output = json.dumps({
+            "ok": True,
+            "data": {
+                "host": "clifford",
+                "command": "uptime",
+                "exit_code": 0,
+                "stdout": "up 45 days",
+                "stderr": "",
+                "duration_ms": 100,
+            }
+        })
+        artifact_store.save_tool_output(worker_id, "ssh_exec", success_output, sequence=1)
+
+        # Add failed tool (should be prioritized)
+        failed_output = json.dumps({
+            "ok": True,
+            "data": {
+                "host": "clifford",
+                "command": "bad-command",
+                "exit_code": 127,
+                "stdout": "",
+                "stderr": "bash: bad-command: command not found",
+                "duration_ms": 50,
+            }
+        })
+        artifact_store.save_tool_output(worker_id, "ssh_exec", failed_output, sequence=2)
+
+        # Empty result.txt
+        artifact_store.save_result(worker_id, "")
+
+        # Create worker job
+        job = WorkerJob(
+            owner_id=sample_agent.owner_id,
+            supervisor_run_id=supervisor_run.id,
+            task="Check server status",
+            status="success",
+            worker_id=worker_id,
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        # Compile evidence
+        compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
+        evidence_map = compiler.compile(
+            run_id=supervisor_run.id,
+            owner_id=sample_agent.owner_id,
+            budget_bytes=10000,
+        )
+
+        # Verify failed tool appears first
+        evidence = evidence_map[job.id]
+        assert "[FAILED]" in evidence
+
+        # Failed tool should appear before success tool
+        failed_pos = evidence.find("[FAILED]")
+        success_file_pos = evidence.find("001_ssh_exec.txt")
+        assert failed_pos < success_file_pos
+
+        # Should contain error message
+        assert "command not found" in evidence
+
+    def test_large_tool_output_truncation(self, db_session, sample_agent, temp_artifact_path):
+        """Test that large tool outputs are truncated with head+tail."""
+        import json
+        from zerg.services.evidence_compiler import EvidenceCompiler
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.models.models import AgentRun, WorkerJob
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.crud import create_thread
+
+        # Create supervisor run
+        thread = create_thread(db_session, agent_id=sample_agent.id, title="Test Run")
+        supervisor_run = AgentRun(
+            agent_id=sample_agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.MANUAL,
+        )
+        db_session.add(supervisor_run)
+        db_session.commit()
+        db_session.refresh(supervisor_run)
+
+        # Create artifact store and worker
+        artifact_store = WorkerArtifactStore(base_path=temp_artifact_path)
+        worker_id = artifact_store.create_worker(
+            task="Get large log file",
+            config={"model": "gpt-4"},
+            owner_id=sample_agent.owner_id,
+        )
+
+        # Add very large output (50KB+)
+        large_log = "LOG LINE " * 10000  # ~100KB
+        large_output = json.dumps({
+            "ok": True,
+            "data": {
+                "host": "clifford",
+                "command": "cat /var/log/syslog",
+                "exit_code": 0,
+                "stdout": large_log,
+                "stderr": "",
+                "duration_ms": 500,
+            }
+        })
+        artifact_store.save_tool_output(worker_id, "ssh_exec", large_output, sequence=1)
+
+        # Empty result.txt
+        artifact_store.save_result(worker_id, "")
+
+        # Create worker job
+        job = WorkerJob(
+            owner_id=sample_agent.owner_id,
+            supervisor_run_id=supervisor_run.id,
+            task="Get large log file",
+            status="success",
+            worker_id=worker_id,
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        # Compile evidence with small budget
+        compiler = EvidenceCompiler(artifact_store=artifact_store, db=db_session)
+        evidence_map = compiler.compile(
+            run_id=supervisor_run.id,
+            owner_id=sample_agent.owner_id,
+            budget_bytes=5000,  # Small budget to force truncation
+        )
+
+        evidence = evidence_map[job.id]
+
+        # Should contain truncation marker
+        assert "truncated" in evidence.lower()
+
+        # Should be within budget
+        assert len(evidence.encode("utf-8")) <= 6000  # Allow small margin
+
+        # Should contain both head and tail
+        assert "LOG LINE" in evidence
