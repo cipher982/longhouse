@@ -96,6 +96,7 @@ services:
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-1}
       SWARMLET_DATA_PATH: /app/data/workers
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       RELOAD: "true"
       DEBUG: "true"
       LOG_LEVEL: DEBUG
@@ -147,6 +148,7 @@ services:
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-1}
       SWARMLET_DATA_PATH: /app/data/workers
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       RELOAD: "true"
       DEBUG: "true"
       LOG_LEVEL: DEBUG
@@ -285,6 +287,7 @@ services:
       ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: "0"
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL}
     volumes:
       - ${BACKEND_STATIC_PATH:-backend_static}:/app/static
       - ../config:/app/config:ro
@@ -371,6 +374,49 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - swarm-network
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Dev Runner (full profile) - Simulates user infrastructure
+  # ---------------------------------------------------------------------------
+  # Starts a runner daemon that connects back to the backend via WebSocket.
+  # Tests the runner execution flow locally without external infra.
+  # Uses known dev secret from runners.local.json seeding config.
+  dev-runner:
+    profiles: [full]
+    build:
+      context: ../apps/runner
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      zerg-backend:
+        condition: service_healthy
+    environment:
+      SWARMLET_URL: ws://zerg-backend:8000
+      RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
+      RUNNER_SECRET: ${DEV_RUNNER_SECRET:-dev-runner-secret-clifford-12345}
+      RUNNER_CAPABILITIES: ${DEV_RUNNER_CAPABILITIES:-exec.full}
+    networks:
+      - swarm-network
+    logging: *default-logging
+
+  # Dev Runner for zerg profile (direct port exposure mode)
+  dev-runner-zerg:
+    profiles: [zerg]
+    build:
+      context: ../apps/runner
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      zerg-backend-exposed:
+        condition: service_healthy
+    environment:
+      SWARMLET_URL: ws://zerg-backend-exposed:8000
+      RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
+      RUNNER_SECRET: ${DEV_RUNNER_SECRET:-dev-runner-secret-clifford-12345}
+      RUNNER_CAPABILITIES: ${DEV_RUNNER_CAPABILITIES:-exec.full}
     networks:
       - swarm-network
     logging: *default-logging

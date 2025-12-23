@@ -92,7 +92,7 @@ export DEV_ADMIN="${DEV_ADMIN:-1}"
 
 # Validate required env vars (fail fast, don't start half-configured stacks)
 missing=0
-for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do
+for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB APP_PUBLIC_URL; do
     if [ -z "${!var:-}" ]; then
         echo -e "${RED}❌ Missing required env var: ${var}${NC}"
         missing=1

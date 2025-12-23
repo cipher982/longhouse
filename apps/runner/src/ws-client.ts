@@ -112,11 +112,12 @@ export class RunnerWebSocketClient {
     this.isConnecting = false;
     this.currentReconnectDelay = this.config.reconnectDelayMs; // Reset backoff
 
-    // Send hello message
+    // Send hello message (use name or ID for auth)
     const metadata = this.getMetadata();
     const helloMsg: HelloMessage = {
       type: 'hello',
       runner_id: this.config.runnerId,
+      runner_name: this.config.runnerName,
       secret: this.config.runnerSecret,
       metadata: {
         ...metadata,
