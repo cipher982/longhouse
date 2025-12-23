@@ -17,28 +17,26 @@ class _UsageStub:
     def invoke(self, messages):
         from langchain_core.messages import AIMessage
 
-        # Simulate OpenAI usage metadata via LangChain AIMessage.response_metadata
-        meta = {
-            "token_usage": {
-                "prompt_tokens": 8,
-                "completion_tokens": 9,
-                "total_tokens": 17,
-            }
+        # Simulate OpenAI usage metadata via LangChain AIMessage.usage_metadata
+        # In langchain-core 1.x, usage is in usage_metadata, not response_metadata
+        usage = {
+            "input_tokens": 8,
+            "output_tokens": 9,
+            "total_tokens": 17,
         }
-        return AIMessage(content="ok", response_metadata=meta)
+        return AIMessage(content="ok", usage_metadata=usage)
 
     async def ainvoke(self, messages, **kwargs):
         from langchain_core.messages import AIMessage
 
-        # Simulate OpenAI usage metadata via LangChain AIMessage.response_metadata
-        meta = {
-            "token_usage": {
-                "prompt_tokens": 8,
-                "completion_tokens": 9,
-                "total_tokens": 17,
-            }
+        # Simulate OpenAI usage metadata via LangChain AIMessage.usage_metadata
+        # In langchain-core 1.x, usage is in usage_metadata, not response_metadata
+        usage = {
+            "input_tokens": 8,
+            "output_tokens": 9,
+            "total_tokens": 17,
         }
-        return AIMessage(content="ok", response_metadata=meta)
+        return AIMessage(content="ok", usage_metadata=usage)
 
 
 @pytest.mark.asyncio

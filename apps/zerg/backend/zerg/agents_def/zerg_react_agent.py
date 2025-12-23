@@ -5,7 +5,9 @@ defining *how the agent thinks*.  Persistence and streaming will be handled by
 AgentRunner.
 """
 
+import contextvars
 import logging
+from typing import Dict
 from typing import List
 from typing import Optional
 
@@ -28,6 +30,37 @@ from zerg.context import get_worker_context
 from zerg.tools.unified_access import get_tool_resolver
 
 logger = logging.getLogger(__name__)
+
+# Context variable to store accumulated LLM usage data (set during LLM calls, read by AgentRunner)
+# This is needed because LangGraph streaming doesn't preserve usage metadata on AIMessage objects
+_llm_usage_var: contextvars.ContextVar[Dict] = contextvars.ContextVar("llm_usage", default={})
+
+
+def reset_llm_usage() -> None:
+    """Reset the accumulated LLM usage data. Call before starting a new agent run."""
+    _llm_usage_var.set({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "reasoning_tokens": 0})
+
+
+def get_llm_usage() -> Dict:
+    """Get the accumulated LLM usage data from the current run."""
+    return _llm_usage_var.get()
+
+
+def _accumulate_llm_usage(usage: Dict) -> None:
+    """Add usage data from an LLM call to the accumulated total."""
+    current = _llm_usage_var.get()
+    if not current:
+        current = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "reasoning_tokens": 0}
+
+    current["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
+    current["completion_tokens"] += usage.get("completion_tokens", 0) or 0
+    current["total_tokens"] += usage.get("total_tokens", 0) or 0
+
+    # Extract reasoning_tokens from completion_tokens_details
+    details = usage.get("completion_tokens_details") or {}
+    current["reasoning_tokens"] += details.get("reasoning_tokens", 0) or 0
+
+    _llm_usage_var.set(current)
 
 
 def is_critical_tool_error(
@@ -133,6 +166,8 @@ def _make_llm(agent_row, tools):
     reasoning_effort = agent_cfg.get("reasoning_effort")
     if reasoning_effort and reasoning_effort.lower() not in ("none", ""):
         kwargs["reasoning_effort"] = reasoning_effort.lower()
+
+    logger.info(f"[_make_llm] Creating LLM with model={agent_row.model}, reasoning_effort={reasoning_effort}")
 
     # Enforce a maximum completion length if configured (>0)
     # Note: O1-series/reasoning models require max_completion_tokens instead of max_tokens
@@ -254,18 +289,18 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         from datetime import datetime
         from datetime import timezone
 
-        # Create LLM dynamically with current enable_token_stream flag
-        llm_with_tools = _make_llm(agent_row, tools)
-
         # Track timing for metrics
         start_time = datetime.now(timezone.utc)
+
+        # Create LLM dynamically with current enable_token_stream flag
+        llm_with_tools = _make_llm(agent_row, tools)
 
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
 
             callback = WsTokenCallback()
             # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
-            # ainvoke() returns the complete message while callbacks stream tokens
+            # With langchain-core 1.2.5+, usage_metadata is populated on the result
             result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
         else:
             # For non-streaming, use sync invoke wrapped in thread
@@ -276,22 +311,40 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         end_time = datetime.now(timezone.utc)
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-        # Record metrics if collector is available
+        # Extract and accumulate token usage (always, for AgentRunner)
+        # With langchain-core 1.2.5+, usage_metadata is the canonical location for usage
+        if isinstance(result, AIMessage):
+            usage_meta = getattr(result, "usage_metadata", None)
+
+            logger.info(f"[_call_model_async] usage_metadata: {usage_meta}")
+
+            # Accumulate usage in context variable (for AgentRunner to retrieve)
+            if usage_meta:
+                # Convert from usage_metadata format to our internal format
+                usage_dict = {
+                    "prompt_tokens": usage_meta.get("input_tokens", 0),
+                    "completion_tokens": usage_meta.get("output_tokens", 0),
+                    "total_tokens": usage_meta.get("total_tokens", 0),
+                    "completion_tokens_details": {"reasoning_tokens": usage_meta.get("output_token_details", {}).get("reasoning", 0)},
+                }
+                _accumulate_llm_usage(usage_dict)
+
+        # Record metrics if collector is available (workers only)
         from zerg.worker_metrics import get_metrics_collector
 
         collector = get_metrics_collector()
         if collector:
-            # Extract token usage from result
+            # Extract token usage from result for metrics (use usage_metadata)
             prompt_tokens = None
             completion_tokens = None
             total_tokens = None
 
             if isinstance(result, AIMessage):
-                meta = getattr(result, "response_metadata", None) or {}
-                usage = meta.get("token_usage") or meta.get("usage") or {}
-                prompt_tokens = usage.get("prompt_tokens")
-                completion_tokens = usage.get("completion_tokens")
-                total_tokens = usage.get("total_tokens")
+                usage_meta = getattr(result, "usage_metadata", None)
+                if usage_meta:
+                    prompt_tokens = usage_meta.get("input_tokens")
+                    completion_tokens = usage_meta.get("output_tokens")
+                    total_tokens = usage_meta.get("total_tokens")
 
             collector.record_llm_call(
                 phase=phase,

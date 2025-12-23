@@ -6,8 +6,12 @@ No backward compatibility. Clean, direct implementation.
 """
 
 import logging
+from typing import TYPE_CHECKING
 from typing import Any
 from typing import Dict
+
+if TYPE_CHECKING:
+    from langgraph.types import RunnableConfig
 
 from zerg.callbacks.token_stream import set_current_user_id
 from zerg.crud import crud
@@ -37,17 +41,18 @@ class BaseNodeExecutor:
         self.publish_event = publish_event_callback
         self.node_type = node_type
 
-    async def execute(self, state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def execute(self, state: Dict[str, Any], config: "RunnableConfig") -> Dict[str, Any]:
         """Execute the node and return updated state.
 
         Args:
             state: Mutable workflow state (node_outputs, completed_nodes, error)
-            config: Immutable execution config containing execution_id
+            config: Immutable execution config containing execution_id (RunnableConfig from LangGraph)
         """
         # Extract execution_id from config (immutable metadata)
+        # In LangGraph 1.0, config is always provided (never None)
         execution_id = config.get("configurable", {}).get("execution_id") if config else None
         if not execution_id:
-            raise ValueError(f"Node {self.node_id}: execution_id not found in config")
+            raise ValueError(f"Node {self.node_id}: execution_id not found in config. Config: {config}")
 
         session_factory = get_session_factory()
 
