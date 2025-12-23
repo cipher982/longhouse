@@ -88,6 +88,7 @@ def create_enroll_token(
             detail="APP_PUBLIC_URL not configured. Set this in your environment.",
         )
     swarmlet_url = settings.app_public_url
+    runner_image = settings.runner_docker_image
 
     # Generate two-step setup instructions
     docker_command = (
@@ -100,7 +101,7 @@ def create_enroll_token(
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"
         f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
-        f"  ghcr.io/swarmlet/runner:latest"
+        f"  {runner_image}"
     )
 
     return EnrollTokenResponse(
@@ -433,6 +434,8 @@ async def runner_websocket(
             await websocket.close(code=1008, reason="Missing runner_id or runner_name")
             return
 
+        computed_hash = runner_crud.hash_token(secret)
+
         # Look up runner by ID or name
         # Name-based auth requires iterating users, but since the secret is unique
         # per runner, we can validate after finding by name across all users
@@ -440,25 +443,13 @@ async def runner_websocket(
         if runner_id:
             runner = runner_crud.get_runner(db, runner_id)
         elif runner_name:
-            # For name-based auth, we need to find the runner and verify secret
-            # Since names are unique per owner, we search all runners with that name
-            # and verify the secret matches (there should only be one match)
+            # Name-based auth: names are only unique per-owner, so we bind name+secret.
             from sqlalchemy import select
 
             from zerg.models.models import Runner as RunnerModel
 
-            stmt = select(RunnerModel).where(RunnerModel.name == runner_name)
-            result = db.execute(stmt)
-            candidates = result.scalars().all()
-
-            # Find the runner whose secret matches
-            for candidate in candidates:
-                computed_hash = runner_crud.hash_token(secret)
-                if secrets.compare_digest(computed_hash, candidate.auth_secret_hash):
-                    runner = candidate
-                    runner_id = runner.id
-                    break
-
+            stmt = select(RunnerModel).where(RunnerModel.name == runner_name, RunnerModel.auth_secret_hash == computed_hash)
+            runner = db.execute(stmt).scalar_one_or_none()
             if not runner:
                 logger.warning(f"Runner not found by name: {runner_name}")
                 await websocket.close(code=1008, reason="Invalid runner_name or secret")
@@ -472,7 +463,6 @@ async def runner_websocket(
         runner_id = runner.id  # Ensure runner_id is set for name-based auth
 
         # Check secret using constant-time comparison
-        computed_hash = runner_crud.hash_token(secret)
         if not secrets.compare_digest(computed_hash, runner.auth_secret_hash):
             logger.warning(f"Invalid secret for runner {runner_id}")
             await websocket.close(code=1008, reason="Invalid secret")

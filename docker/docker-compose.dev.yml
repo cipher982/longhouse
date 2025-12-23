@@ -395,9 +395,9 @@ services:
         condition: service_healthy
     environment:
       SWARMLET_URL: ws://zerg-backend:8000
-      RUNNER_NAME: clifford
-      RUNNER_SECRET: dev-runner-secret-clifford-12345
-      RUNNER_CAPABILITIES: exec.full
+      RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
+      RUNNER_SECRET: ${DEV_RUNNER_SECRET:-dev-runner-secret-clifford-12345}
+      RUNNER_CAPABILITIES: ${DEV_RUNNER_CAPABILITIES:-exec.full}
     networks:
       - swarm-network
     logging: *default-logging
@@ -414,9 +414,9 @@ services:
         condition: service_healthy
     environment:
       SWARMLET_URL: ws://zerg-backend-exposed:8000
-      RUNNER_NAME: clifford
-      RUNNER_SECRET: dev-runner-secret-clifford-12345
-      RUNNER_CAPABILITIES: exec.full
+      RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
+      RUNNER_SECRET: ${DEV_RUNNER_SECRET:-dev-runner-secret-clifford-12345}
+      RUNNER_CAPABILITIES: ${DEV_RUNNER_CAPABILITIES:-exec.full}
     networks:
       - swarm-network
     logging: *default-logging

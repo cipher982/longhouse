@@ -10,6 +10,7 @@ Seeding sources (checked in order):
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from sqlalchemy import select
@@ -168,6 +169,12 @@ def _seed_runners() -> bool:
         True if seeding succeeded or was skipped (idempotent), False on error.
     """
     from zerg.crud import runner_crud
+
+    current_env = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    if current_env == "production":
+        # Runner seeding is meant for dev DX; avoid silently creating runners in production.
+        logger.debug("Skipping runners auto-seed in production environment")
+        return True
 
     config_path = _find_config_file(RUNNERS_PATHS)
     if not config_path:

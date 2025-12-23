@@ -35,6 +35,13 @@ def _swarmlet_api_url() -> str:
     return settings.app_public_url
 
 
+def _runner_docker_image() -> str:
+    """Get the runner docker image to use in setup commands."""
+    from zerg.config import get_settings
+
+    return get_settings().runner_docker_image
+
+
 def runner_list() -> Dict[str, Any]:
     """List the current user's runners (names, ids, status, last seen).
 
@@ -71,6 +78,7 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
     )
 
     swarmlet_url = _swarmlet_api_url()
+    runner_image = _runner_docker_image()
 
     docker_command = (
         f"# Step 1: Register runner (one-time)\n"
@@ -82,7 +90,7 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
         f"  -e SWARMLET_URL={swarmlet_url} \\\n"
         f"  -e RUNNER_NAME=my-runner \\\n"
         f"  -e RUNNER_SECRET=<secret_from_step_1> \\\n"
-        f"  ghcr.io/swarmlet/runner:latest"
+        f"  {runner_image}"
     )
 
     expires_at: datetime = token_record.expires_at

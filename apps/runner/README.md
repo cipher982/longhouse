@@ -12,8 +12,8 @@ cd /path/to/repo/root
 bun install
 
 # Set environment variables
-export SWARMLET_URL=ws://localhost:47300
-export RUNNER_ID=123
+export SWARMLET_URL=http://localhost:30080
+export RUNNER_NAME=my-runner
 export RUNNER_SECRET=your_secret_here
 
 # Run the daemon
@@ -26,12 +26,13 @@ bun run --filter @swarmlet/runner dev
 ### Using Docker
 
 ```bash
+# Build locally (from repo root)
 cd /path/to/repo/root
-docker build -f apps/runner/Dockerfile -t swarmlet/runner:latest .
+docker build -t swarmlet/runner:latest apps/runner
 
 docker run -d --name swarmlet-runner \
-  -e SWARMLET_URL=ws://localhost:47300 \
-  -e RUNNER_ID=123 \
+  -e SWARMLET_URL=http://localhost:30080 \
+  -e RUNNER_NAME=my-runner \
   -e RUNNER_SECRET=your_secret_here \
   swarmlet/runner:latest
 ```
