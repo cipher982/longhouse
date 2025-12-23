@@ -177,6 +177,31 @@
   border-style: dashed;
 }
 
+/* Debug mode: reasoning tokens display */
+.jarvis-container .message-debug-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-mono);
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+.jarvis-container .debug-badge {
+  background: linear-gradient(135deg, rgb(168 85 247 / 20%) 0%, rgb(139 92 246 / 20%) 100%);
+  border: 1px solid rgb(168 85 247 / 30%);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: rgb(192 132 252);
+}
+
+.jarvis-container .debug-detail {
+  color: var(--color-text-muted);
+}
+
 .jarvis-container .message.user.preview .message-content::after {
   content: "...";
   animation: pulse 1s ease-in-out infinite;

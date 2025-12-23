@@ -61,6 +61,13 @@ interface SSESupervisorEvent {
     tool_call_id?: string;
     tool_args_preview?: string;
     result_preview?: string;
+    // Usage metadata (for reasoning effort feature)
+    usage?: {
+      prompt_tokens?: number | null;
+      completion_tokens?: number | null;
+      total_tokens?: number | null;
+      reasoning_tokens?: number | null;
+    };
   };
   client_correlation_id?: string;
 }
@@ -472,7 +479,7 @@ export class SupervisorChatController {
           }
 
           if (correlationId) {
-            stateManager.updateAssistantStatus(correlationId, 'final', result);
+            stateManager.updateAssistantStatus(correlationId, 'final', result, payload.usage);
           }
         }
 
@@ -483,6 +490,8 @@ export class SupervisorChatController {
             result: result || 'Task completed',
             status: 'success',
             timestamp: Date.now(),
+            // Token usage for debug/power mode
+            usage: payload.usage,
           });
         }
         break;
