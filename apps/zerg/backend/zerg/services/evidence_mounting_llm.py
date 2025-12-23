@@ -211,7 +211,7 @@ class EvidenceMountingLLM:
 
         # Validate marker matches our context
         if marker_run_id != self.run_id:
-            logger.warning(f"Evidence marker run_id mismatch: marker={marker_run_id}, context={self.run_id}. " "Skipping expansion.")
+            logger.warning(f"Evidence marker run_id mismatch: marker={marker_run_id}, context={self.run_id}. Skipping expansion.")
             return msg
 
         # Get evidence for this worker
