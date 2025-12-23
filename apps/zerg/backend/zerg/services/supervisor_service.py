@@ -18,6 +18,7 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session
 
+from zerg.agents_def.zerg_react_agent import clear_evidence_mount_warning
 from zerg.crud import crud
 from zerg.events import EventType
 from zerg.events import event_bus
@@ -568,6 +569,7 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
+            clear_evidence_mount_warning(run.id)
 
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms")
 
@@ -605,6 +607,7 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
+            clear_evidence_mount_warning(run.id)
 
             logger.info(f"Supervisor run {run.id} cancelled after {duration_ms}ms")
 
@@ -642,6 +645,7 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
+            clear_evidence_mount_warning(run.id)
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 
