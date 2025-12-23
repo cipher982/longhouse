@@ -1,0 +1,13 @@
+{
+  "runners": [
+    {
+      "name": "clifford",
+      "secret": "dev-runner-secret-clifford-12345",
+      "capabilities": ["exec.full"],
+      "labels": {
+        "role": "server",
+        "env": "prod"
+      }
+    }
+  ]
+}

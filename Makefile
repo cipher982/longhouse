@@ -35,7 +35,7 @@ env-check: ## Validate required environment variables
 	warn=0; \
 	echo "🔍 Checking environment variables..."; \
 	\
-	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
+	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB APP_PUBLIC_URL; do \
 		if [ -z "$$(printenv $$var)" ]; then \
 			echo "❌ Missing required: $$var"; \
 			missing=1; \
