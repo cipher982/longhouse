@@ -109,6 +109,22 @@ class ToolActivity:
 
 
 @dataclass
+class ToolIndexEntry:
+    """Execution metadata for a single tool call in the tool index.
+
+    This is NOT domain parsing - just execution metadata (exit codes, sizes, durations).
+    The tool index provides a compact summary of what tools ran and their outcomes.
+    """
+
+    sequence: int
+    tool_name: str
+    exit_code: int | None = None
+    duration_ms: int | None = None
+    output_bytes: int = 0
+    failed: bool = False
+
+
+@dataclass
 class RoundaboutStatus:
     """Current status of a worker in the roundabout."""
 
@@ -138,6 +154,8 @@ class RoundaboutResult:
     activity_summary: dict[str, Any] = field(default_factory=dict)
     decision: RoundaboutDecision | None = None  # The decision that triggered exit
     drill_down_hint: str | None = None  # For peek: what to read next
+    tool_index: list[ToolIndexEntry] = field(default_factory=list)  # Execution metadata for tool calls
+    run_id: int | None = None  # Supervisor run ID for evidence correlation
 
 
 def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, str]:
@@ -733,18 +751,144 @@ class RoundaboutMonitor:
                 if output_preview:
                     self._last_tool_output = output_preview[:500]  # Cap at 500 chars
 
+    def _build_tool_index(self, worker_id: str) -> list[ToolIndexEntry]:
+        """Build tool index from worker artifacts.
+
+        This reads the tool_calls directory and extracts execution metadata
+        (exit codes, sizes, durations) for each tool call.
+
+        Parameters
+        ----------
+        worker_id
+            Worker ID to read artifacts from
+
+        Returns
+        -------
+        list[ToolIndexEntry]
+            Tool execution metadata entries
+        """
+        try:
+            worker_dir = self._artifact_store._get_worker_dir(worker_id)
+            tool_calls_dir = worker_dir / "tool_calls"
+
+            if not tool_calls_dir.exists():
+                return []
+
+            tool_index = []
+
+            for filepath in sorted(tool_calls_dir.glob("*.txt")):
+                # Parse filename: "001_ssh_exec.txt" -> sequence=1, tool_name="ssh_exec"
+                filename = filepath.name
+                try:
+                    seq_str, tool_name_ext = filename.split("_", 1)
+                    sequence = int(seq_str)
+                    tool_name = tool_name_ext.replace(".txt", "")
+                except ValueError:
+                    logger.warning(f"Skipping malformed tool output filename: {filename}")
+                    continue
+
+                # Get file size
+                output_bytes = filepath.stat().st_size
+
+                # Try to extract exit code and failure status from tool output
+                exit_code, failed = self._extract_tool_metadata(filepath)
+
+                # Try to get duration from activity log (best effort)
+                duration_ms = self._get_tool_duration(tool_name, sequence)
+
+                tool_index.append(
+                    ToolIndexEntry(
+                        sequence=sequence,
+                        tool_name=tool_name,
+                        exit_code=exit_code,
+                        duration_ms=duration_ms,
+                        output_bytes=output_bytes,
+                        failed=failed,
+                    )
+                )
+
+            return tool_index
+
+        except Exception as e:
+            logger.warning(f"Failed to build tool index for worker {worker_id}: {e}")
+            return []
+
+    def _extract_tool_metadata(self, filepath) -> tuple[int | None, bool]:
+        """Extract exit code and failure status from tool output file.
+
+        Tool outputs are JSON envelopes: {"ok": bool, "data": {...}, "error": ...}
+        For ssh_exec, data contains: {"exit_code": N, "stdout": ..., "stderr": ...}
+
+        Parameters
+        ----------
+        filepath
+            Path to tool output file
+
+        Returns
+        -------
+        tuple[int | None, bool]
+            (exit_code, failed) - exit_code is None if not extractable
+        """
+        try:
+            content = filepath.read_text()
+            data = json.loads(content)
+
+            # Check if this is an error envelope
+            if not data.get("ok", True):
+                return (None, True)
+
+            # Try to extract exit_code from data
+            tool_data = data.get("data", {})
+            if isinstance(tool_data, dict):
+                exit_code = tool_data.get("exit_code")
+                if exit_code is not None:
+                    # Non-zero exit code means command failed
+                    return (exit_code, exit_code != 0)
+
+            return (None, False)
+
+        except (json.JSONDecodeError, OSError):
+            # Can't parse - assume not failed
+            return (None, False)
+
+    def _get_tool_duration(self, tool_name: str, sequence: int) -> int | None:
+        """Get tool duration from activity log (best effort).
+
+        Parameters
+        ----------
+        tool_name
+            Name of the tool
+        sequence
+            Sequence number of the tool call
+
+        Returns
+        -------
+        int | None
+            Duration in milliseconds if found
+        """
+        # Try to find matching activity with duration
+        for activity in self._tool_activities:
+            if activity.tool_name == tool_name and activity.duration_ms is not None:
+                return activity.duration_ms
+
+        return None
+
     async def _create_completion_result(self, job) -> RoundaboutResult:
         """Create result when worker completes."""
         elapsed = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
         result_text = None
         summary = None
+        tool_index = []
 
         if job.worker_id and job.status == "success":
             try:
                 result_text = self._artifact_store.get_worker_result(job.worker_id)
                 metadata = self._artifact_store.get_worker_metadata(job.worker_id)
                 summary = metadata.get("summary", result_text[:200] if result_text else None)
+
+                # Build tool index from artifacts
+                tool_index = self._build_tool_index(job.worker_id)
             except Exception as e:
                 logger.warning(f"Failed to get worker result for {job.worker_id}: {e}")
 
@@ -760,6 +904,8 @@ class RoundaboutMonitor:
             summary=summary,
             error=job.error if job.status == "failed" else None,
             activity_summary=activity_summary,
+            tool_index=tool_index,
+            run_id=self.supervisor_run_id,
         )
 
     def _create_result(self, status: str, error: str | None = None) -> RoundaboutResult:
@@ -822,29 +968,55 @@ def format_roundabout_result(result: RoundaboutResult) -> str:
     """Format roundabout result for supervisor thread.
 
     This is what gets persisted to the supervisor's conversation history.
+    Returns a compact payload with:
+    - Tool index (execution metadata)
+    - Summary (worker's prose, may be empty/garbage)
+    - Evidence marker for LLM wrapper expansion
+
+    The evidence marker format is: [EVIDENCE:run_id=48,job_id=123,worker_id=abc-123]
     """
     lines = []
 
     if result.status == "complete":
         lines.append(f"Worker job {result.job_id} completed successfully.")
-        lines.append(f"Duration: {result.duration_seconds:.1f}s")
-        lines.append(f"Worker ID: {result.worker_id}")
+        lines.append(f"Duration: {result.duration_seconds:.1f}s | Worker ID: {result.worker_id}")
         lines.append("")
 
-        if result.summary:
-            lines.append(f"Summary: {result.summary}")
+        # Tool Index (execution metadata, not domain parsing)
+        if result.tool_index:
+            lines.append("Tool Index:")
+            for entry in result.tool_index:
+                # Build status indicator
+                if entry.failed:
+                    status = "FAILED"
+                elif entry.exit_code == 0:
+                    status = f"exit={entry.exit_code}"
+                elif entry.exit_code is not None:
+                    status = f"exit={entry.exit_code}"
+                else:
+                    status = "ok"
+
+                # Build duration indicator
+                duration_str = f"{entry.duration_ms}ms" if entry.duration_ms is not None else "?ms"
+
+                # Format: "  1. ssh_exec [exit=0, 234ms, 1847B]"
+                lines.append(f"  {entry.sequence}. {entry.tool_name} [{status}, {duration_str}, {entry.output_bytes}B]")
             lines.append("")
 
-        if result.result:
-            # Truncate very long results
-            if len(result.result) > 2000:
-                lines.append("Result (truncated):")
-                lines.append(result.result[:2000])
-                lines.append("...")
-                lines.append(f"\nFull result available via read_worker_result({result.job_id})")
-            else:
-                lines.append("Result:")
-                lines.append(result.result)
+        # Summary (worker's prose, truncated to 500 chars)
+        if result.summary:
+            summary_truncated = result.summary[:500] if len(result.summary) > 500 else result.summary
+            lines.append(f"Summary: {summary_truncated}")
+            lines.append("")
+        elif result.result:
+            # Fallback to result if no summary
+            result_truncated = result.result[:500] if len(result.result) > 500 else result.result
+            lines.append(f"Summary: {result_truncated}")
+            lines.append("")
+
+        # Evidence marker for LLM wrapper expansion
+        if result.run_id is not None and result.worker_id is not None:
+            lines.append(f"[EVIDENCE:run_id={result.run_id},job_id={result.job_id},worker_id={result.worker_id}]")
 
     elif result.status == "failed":
         lines.append(f"Worker job {result.job_id} failed.")
