@@ -1,7 +1,9 @@
 # Jarvis Look-and-Feel → Swarmlet UI System (Spec + Roadmap)
 
 **Date:** 2025-12-22
-**Status:** Completed (Implementation rolled out)
+**Status:** Completed
+
+**Update (2025-12-22):** Background animations removed for GPU efficiency. Dashboard/app pages now use static grid + nebula gradients with glass panels (backdrop-filter). Landing page retains animated effects.
 
 ## Why this exists
 Jarvis chat (`/chat`) has a cohesive, “premium” cyber/glass aesthetic (depth, glow, motion, typography). The rest of the Swarmlet SPA (dashboard + settings + runners + admin + canvas) is a mix of:
