@@ -1,15 +1,16 @@
 """Auto-seeding service for development and production environments.
 
-This service automatically seeds user context and credentials on startup.
+This service automatically seeds user context, credentials, and runners on startup.
 All seeding is idempotent - safe to run multiple times.
 
 Seeding sources (checked in order):
-1. scripts/user_context.local.json (dev, git-ignored)
-2. ~/.config/zerg/user_context.json (prod/personal)
+1. scripts/*.local.json (dev, git-ignored)
+2. ~/.config/zerg/*.json (prod/personal)
 """
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from sqlalchemy import select
@@ -30,6 +31,12 @@ CREDENTIALS_PATHS = [
     Path("/app/scripts/personal_credentials.local.json"),  # Docker dev
     Path(__file__).parent.parent.parent / "scripts" / "personal_credentials.local.json",  # Local dev
     Path.home() / ".config" / "zerg" / "personal_credentials.json",  # Prod/personal
+]
+
+RUNNERS_PATHS = [
+    Path("/app/scripts/runners.local.json"),  # Docker dev
+    Path(__file__).parent.parent.parent / "scripts" / "runners.local.json",  # Local dev
+    Path.home() / ".config" / "zerg" / "runners.json",  # Prod/personal
 ]
 
 
@@ -149,6 +156,96 @@ def _seed_personal_credentials() -> bool:
         return False
 
 
+def _seed_runners() -> bool:
+    """Seed runners from local config file.
+
+    This allows dev environments to have pre-configured runners with known
+    secrets, avoiding the need to re-register runners after database resets.
+
+    The config file contains plaintext secrets that get hashed before storage.
+    The runner daemon should use the same plaintext secret to connect.
+
+    Returns:
+        True if seeding succeeded or was skipped (idempotent), False on error.
+    """
+    from zerg.crud import runner_crud
+
+    current_env = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    if current_env == "production":
+        # Runner seeding is meant for dev DX; avoid silently creating runners in production.
+        logger.debug("Skipping runners auto-seed in production environment")
+        return True
+
+    config_path = _find_config_file(RUNNERS_PATHS)
+    if not config_path:
+        logger.debug("No runners config found - skipping seed")
+        return True
+
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to load runners from {config_path}: {e}")
+        return False
+
+    runners_config = config.get("runners", [])
+    if not runners_config:
+        logger.debug("No runners defined in config - skipping")
+        return True
+
+    db = default_session_factory()
+    try:
+        # Find first user
+        result = db.execute(select(User).limit(1))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.debug("No users in database yet - skipping runners seed")
+            return True
+
+        seeded_count = 0
+        skipped_count = 0
+
+        for runner_config in runners_config:
+            name = runner_config.get("name")
+            secret = runner_config.get("secret")
+
+            if not name or not secret:
+                logger.warning(f"Runner config missing name or secret: {runner_config}")
+                continue
+
+            # Check if runner already exists (idempotent)
+            existing = runner_crud.get_runner_by_name(db, user.id, name)
+            if existing:
+                logger.debug(f"Runner '{name}' already exists - skipping")
+                skipped_count += 1
+                continue
+
+            # Create the runner with the known secret
+            runner_crud.create_runner(
+                db=db,
+                owner_id=user.id,
+                name=name,
+                auth_secret=secret,
+                labels=runner_config.get("labels"),
+                capabilities=runner_config.get("capabilities", ["exec.readonly"]),
+            )
+            seeded_count += 1
+            logger.info(f"Seeded runner '{name}' for {user.email}")
+
+        if seeded_count > 0:
+            logger.info(f"Seeded {seeded_count} runners ({skipped_count} already existed)")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to seed runners: {e}")
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
 def run_auto_seed() -> dict:
     """Run all auto-seeding tasks.
 
@@ -160,6 +257,7 @@ def run_auto_seed() -> dict:
     results = {
         "user_context": "skipped",
         "credentials": "skipped",
+        "runners": "skipped",
     }
 
     # Seed user context (servers, integrations, preferences)
@@ -177,5 +275,13 @@ def run_auto_seed() -> dict:
             results["credentials"] = f"ok ({config_path.name})"
     else:
         results["credentials"] = "failed"
+
+    # Seed runners (dev infrastructure connectors)
+    if _seed_runners():
+        config_path = _find_config_file(RUNNERS_PATHS)
+        if config_path:
+            results["runners"] = f"ok ({config_path.name})"
+    else:
+        results["runners"] = "failed"
 
     return results

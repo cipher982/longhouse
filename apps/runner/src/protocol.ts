@@ -6,7 +6,8 @@
 
 export interface HelloMessage {
   type: 'hello';
-  runner_id: number;
+  runner_id?: number | null;
+  runner_name?: string | null;
   secret: string;
   metadata: RunnerMetadata;
 }

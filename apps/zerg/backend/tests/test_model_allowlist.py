@@ -47,6 +47,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         allowed_cors_origins=real_settings.allowed_cors_origins,
         openai_api_key=real_settings.openai_api_key,
         app_public_url=real_settings.app_public_url,
+        runner_docker_image=real_settings.runner_docker_image,
         pubsub_audience=real_settings.pubsub_audience,
         gmail_pubsub_topic=real_settings.gmail_pubsub_topic,
         pubsub_sa_email=real_settings.pubsub_sa_email,
