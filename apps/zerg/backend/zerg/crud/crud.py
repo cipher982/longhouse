@@ -70,6 +70,7 @@ from .crud_users import create_user
 from .crud_users import get_user
 from .crud_users import get_user_by_email
 from .crud_users import update_user
+from .crud_worker_jobs import get_by_supervisor_run as get_worker_jobs_by_supervisor_run
 from .crud_workflows import create_workflow
 from .crud_workflows import create_workflow_execution
 from .crud_workflows import create_workflow_template
@@ -148,4 +149,6 @@ __all__ = [
     "get_workflow_template_by_name",
     "get_workflow_templates",
     "get_workflows",
+    # Worker Jobs
+    "get_worker_jobs_by_supervisor_run",
 ]
