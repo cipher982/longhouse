@@ -8,6 +8,7 @@ interface RunnerSetupData {
   expires_at: string;
   swarmlet_url: string;
   docker_command: string;
+  one_liner_install_command: string;
 }
 
 interface RunnerSetupCardProps {
@@ -25,6 +26,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
   const [timeRemaining, setTimeRemaining] = useState("");
   const [baselineRunnerIds, setBaselineRunnerIds] = useState<Set<number> | null>(null);
   const [showRawOutput, setShowRawOutput] = useState(false);
+  const [showManualSetup, setShowManualSetup] = useState(false);
   const queryClient = useQueryClient();
 
   // Track when the token was generated (card render time).
@@ -138,7 +140,18 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
     return () => clearInterval(interval);
   }, [status, baselineRunnerIds, queryClient]);
 
-  const handleCopy = async () => {
+  const handleCopyOneLiner = async () => {
+    setCopyError(null);
+    const ok = await copyToClipboard(data.one_liner_install_command);
+    if (!ok) {
+      setCopyError("Copy failed. Select the command and copy it manually.");
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyManual = async () => {
     setCopyError(null);
     const ok = await copyToClipboard(data.docker_command);
     if (!ok) {
@@ -194,17 +207,17 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
 
       <div className="runner-setup-body">
         <p className="runner-setup-description">
-          Run this on your machine to connect:
+          <strong>One-liner install (recommended):</strong>
         </p>
 
         <div className="runner-setup-code-container">
           <pre className="runner-setup-code">
-            <code>{data.docker_command}</code>
+            <code>{data.one_liner_install_command}</code>
           </pre>
           <button
             type="button"
             className="runner-setup-copy-button"
-            onClick={handleCopy}
+            onClick={handleCopyOneLiner}
             disabled={status === "expired"}
           >
             {copied ? "✓ Copied" : "📋 Copy"}
@@ -212,6 +225,37 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
         </div>
 
         {copyError && <div className="runner-setup-copy-error">{copyError}</div>}
+
+        <div className="runner-setup-manual-toggle">
+          <button
+            type="button"
+            className="runner-setup-manual-toggle-button"
+            onClick={() => setShowManualSetup(!showManualSetup)}
+          >
+            {showManualSetup ? "▼ Hide manual setup (2 steps)" : "▶ Show manual setup (2 steps)"}
+          </button>
+        </div>
+
+        {showManualSetup && (
+          <div className="runner-setup-manual-section">
+            <p className="runner-setup-description">
+              <strong>Manual setup (2 steps):</strong>
+            </p>
+            <div className="runner-setup-code-container">
+              <pre className="runner-setup-code">
+                <code>{data.docker_command}</code>
+              </pre>
+              <button
+                type="button"
+                className="runner-setup-copy-button"
+                onClick={handleCopyManual}
+                disabled={status === "expired"}
+              >
+                {copied ? "✓ Copied" : "📋 Copy"}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="runner-setup-status">
           {status === "waiting" && (
@@ -278,6 +322,7 @@ export function parseRunnerSetupData(content: string): RunnerSetupData | null {
         expires_at: parsed.data.expires_at,
         swarmlet_url: parsed.data.swarmlet_url,
         docker_command: parsed.data.docker_command,
+        one_liner_install_command: parsed.data.one_liner_install_command || "",
       };
     }
   } catch {

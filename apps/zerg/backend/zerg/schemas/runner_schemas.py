@@ -32,6 +32,7 @@ class EnrollTokenResponse(BaseModel):
     expires_at: datetime = Field(..., description="Token expiration timestamp")
     swarmlet_url: str = Field(..., description="Swarmlet API URL for runner connection")
     docker_command: str = Field(..., description="Complete docker run command for easy setup")
+    one_liner_install_command: str = Field(..., description="One-liner curl command for automated install")
 
 
 class RunnerRegisterRequest(BaseModel):
