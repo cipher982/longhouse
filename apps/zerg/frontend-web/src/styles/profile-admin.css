@@ -19,8 +19,9 @@
       flex-direction: column;
       gap: 32px;
     }
+  }
 
-    /* Avatar Section */
+  /* Avatar Section */
   .avatar-section {
     display: flex;
     align-items: center;
@@ -69,7 +70,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
     text-align: center;
     border: none;
     display: inline-block;
@@ -106,7 +107,7 @@
     padding: 10px 12px;
     color: var(--text, #fff);
     font-size: 14px;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .form-input:focus {
@@ -177,7 +178,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .btn-primary:hover:not(:disabled) {
@@ -201,7 +202,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .btn-secondary:hover:not(:disabled) {
@@ -296,7 +297,7 @@
     border-radius: var(--radius-lg, 8px);
     padding: 20px;
     text-align: center;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .metric-card:hover {
@@ -522,7 +523,7 @@
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .btn-warning:hover:not(:disabled) {
@@ -537,29 +538,7 @@
     opacity: 0.6;
   }
 
-  .btn-danger {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-    border: none;
-    color: white;
-    padding: 12px 24px;
-    border-radius: var(--radius-sm, 4px);
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .btn-danger:hover:not(:disabled) {
-    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgb(239 68 68 / 40%);
-  }
-
-  .btn-danger:disabled {
-    background: #6b7280;
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
+  /* .btn-danger now inherits from buttons.css - no need for duplicate definition */
 
   /* Admin Page Confirmation Modal - scoped to admin page only */
   .admin-page .modal-overlay {
@@ -570,7 +549,7 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
-    animation: fadeIn 0.2s ease;
+    animation: fadeIn var(--motion-duration-fast) ease;
   }
 
   .admin-page .modal-content {
@@ -581,7 +560,7 @@
     max-width: 500px;
     width: 90%;
     box-shadow: 0 20px 60px rgb(0 0 0 / 50%);
-    animation: slideUp 0.3s ease;
+    animation: slideUp var(--motion-duration-normal) ease;
   }
 
   @keyframes slideUp {
@@ -633,7 +612,7 @@
   .metric-card,
   .admin-section,
   .form-section {
-    animation: fadeIn 0.3s ease;
+    animation: fadeIn var(--motion-duration-normal) ease;
   }
 
   /* Section Description */
@@ -695,7 +674,7 @@
 
   .users-table .clickable-row {
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .users-table .clickable-row:hover {
@@ -773,7 +752,7 @@
     padding: 4px 8px;
     line-height: 1;
     border-radius: 4px;
-    transition: all 0.15s ease;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .modal-close:hover {
@@ -886,4 +865,5 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
 }
