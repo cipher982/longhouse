@@ -31,6 +31,10 @@ from zerg.tools.unified_access import get_tool_resolver
 
 logger = logging.getLogger(__name__)
 
+# Track run_ids that have already been warned about evidence mounting issues
+# Prevents log spam since _call_model_async is called multiple times per ReAct loop
+_evidence_mount_warned_runs: set[int] = set()
+
 # Context variable to store accumulated LLM usage data (set during LLM calls, read by AgentRunner)
 # This is needed because LangGraph streaming doesn't preserve usage metadata on AIMessage objects
 _llm_usage_var: contextvars.ContextVar[Dict] = contextvars.ContextVar("llm_usage", default={})
@@ -304,13 +308,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             # We're in a supervisor run - wrap LLM for evidence mounting
             from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
 
+            # Helper to warn once per run_id (prevents log spam in ReAct loop)
+            def _warn_once(msg: str) -> None:
+                if supervisor_run_id not in _evidence_mount_warned_runs:
+                    _evidence_mount_warned_runs.add(supervisor_run_id)
+                    logger.warning(msg)
+
             # Get database session from credential resolver context
             try:
                 from zerg.connectors.context import get_credential_resolver
 
                 resolver = get_credential_resolver()
                 if resolver is None:
-                    logger.warning(
+                    _warn_once(
                         f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: "
                         "CredentialResolver context not available. Evidence from worker tools will not be mounted."
                     )
@@ -318,11 +328,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                     db = resolver.db  # CredentialResolver has db attribute
                     owner_id = getattr(agent_row, "owner_id", None)
                     if owner_id is None:
-                        logger.warning(
+                        _warn_once(
                             f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: " "owner_id not available on agent_row"
                         )
                     elif db is None:
-                        logger.warning(
+                        _warn_once(
                             f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: "
                             "Database session not available in CredentialResolver"
                         )
@@ -333,13 +343,12 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             owner_id=owner_id,
                             db=db,
                         )
-                        logger.info(f"Evidence mounting enabled for supervisor run_id={supervisor_run_id}, owner_id={owner_id}")
+                        # Only log on first LLM call of this run (when we actually wrap)
+                        if supervisor_run_id not in _evidence_mount_warned_runs:
+                            logger.debug(f"Evidence mounting enabled for supervisor run_id={supervisor_run_id}, owner_id={owner_id}")
             except Exception as e:
                 # Evidence mounting is best-effort - don't fail if context is unavailable
-                logger.warning(
-                    f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: {e}",
-                    exc_info=True,
-                )
+                _warn_once(f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: {e}")
 
         if enable_token_stream:
             from zerg.callbacks.token_stream import WsTokenCallback
