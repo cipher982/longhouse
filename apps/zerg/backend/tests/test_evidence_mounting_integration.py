@@ -77,6 +77,47 @@ class TestSpawnWorkerReturnFormat:
         assert match.group(2) == "123"  # job_id
         assert match.group(3) == "test-worker-123"  # worker_id
 
+    def test_format_failed_includes_marker(self):
+        """Test that failed workers include evidence marker (Issue 2 fix)."""
+        result = RoundaboutResult(
+            status="failed",
+            job_id=123,
+            worker_id="test-worker-123",
+            duration_seconds=5.2,
+            error="Worker failed: SSH connection timeout",
+            run_id=48,
+        )
+
+        formatted = format_roundabout_result(result)
+
+        # Should include evidence marker even for failures
+        assert "[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker-123]" in formatted
+
+        # Should also contain error info
+        assert "failed" in formatted.lower()
+        assert "SSH connection timeout" in formatted
+
+    def test_format_timeout_includes_marker(self):
+        """Test that timed-out workers include evidence marker (Issue 2 fix)."""
+        result = RoundaboutResult(
+            status="monitor_timeout",
+            job_id=123,
+            worker_id="test-worker-123",
+            duration_seconds=300.0,
+            worker_still_running=True,
+            error="Monitor timeout after 300s",
+            run_id=48,
+        )
+
+        formatted = format_roundabout_result(result)
+
+        # Should include evidence marker even for timeouts
+        assert "[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker-123]" in formatted
+
+        # Should also contain timeout info
+        assert "timeout" in formatted.lower()
+        assert "STILL RUNNING" in formatted
+
     def test_format_without_run_id_no_marker(self):
         """Test that formatted result omits marker when run_id is None."""
         result = RoundaboutResult(
@@ -233,6 +274,121 @@ class TestEvidencePersistence:
 
             # But original message (what would be persisted) is unchanged
             assert len(compact_message.content) < 500  # Still compact
+
+
+class TestNonStreamingPath:
+    """Test that evidence mounting works when LLM_TOKEN_STREAM is disabled.
+
+    This is a regression test for Issue 1: the non-streaming path was bypassing
+    the EvidenceMountingLLM wrapper by calling _call_model_sync which created
+    a fresh LLM instance.
+    """
+
+    @pytest.mark.asyncio
+    async def test_evidence_mounting_with_streaming_disabled(self, monkeypatch):
+        """Test that evidence mounting works when enable_token_stream=False."""
+        from unittest.mock import AsyncMock, MagicMock
+        from langchain_core.messages import ToolMessage
+        from zerg.services.evidence_mounting_llm import EvidenceMountingLLM
+
+        # Disable streaming
+        monkeypatch.setenv("LLM_TOKEN_STREAM", "false")
+
+        # Create mock base LLM
+        mock_base_llm = AsyncMock()
+        mock_base_llm.ainvoke = AsyncMock(return_value="Test response")
+
+        # Create wrapper with context
+        mock_db = MagicMock()
+        wrapper = EvidenceMountingLLM(
+            base_llm=mock_base_llm,
+            run_id=48,
+            owner_id=100,
+            db=mock_db,
+        )
+
+        # Mock compiler to return evidence
+        from unittest.mock import patch
+        with patch.object(wrapper.compiler, "compile") as mock_compile:
+            mock_compile.return_value = {
+                123: "--- Evidence for Worker 123 ---\nTool output here\n--- End ---"
+            }
+
+            # Create message with evidence marker
+            messages = [
+                ToolMessage(
+                    content="Worker result\n[EVIDENCE:run_id=48,job_id=123,worker_id=test-worker]",
+                    tool_call_id="tc1",
+                    name="spawn_worker",
+                ),
+            ]
+
+            # Call ainvoke (should work even without streaming)
+            await wrapper.ainvoke(messages)
+
+            # Verify evidence was expanded
+            mock_base_llm.ainvoke.assert_called_once()
+            call_args = mock_base_llm.ainvoke.call_args[0][0]
+            expanded_msg = call_args[0]
+
+            # Should contain expanded evidence
+            assert "--- Evidence for Worker 123 ---" in expanded_msg.content
+            assert "Tool output here" in expanded_msg.content
+
+    @pytest.mark.asyncio
+    async def test_agent_uses_wrapped_llm_non_streaming(self, monkeypatch):
+        """Test that agent's non-streaming path uses the wrapped LLM.
+
+        This verifies that _call_model_async always uses llm_with_tools (wrapped)
+        instead of calling _call_model_sync (which would create a fresh LLM).
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from langchain_core.messages import AIMessage, HumanMessage
+        from zerg.agents_def.zerg_react_agent import get_runnable
+
+        # Disable streaming
+        monkeypatch.setenv("LLM_TOKEN_STREAM", "false")
+
+        # Create mock agent
+        mock_agent = MagicMock()
+        mock_agent.id = 1
+        mock_agent.owner_id = 100
+        mock_agent.model = "gpt-4"
+        mock_agent.allowed_tools = []
+
+        # Patch _make_llm to track if it's called multiple times (it shouldn't be)
+        llm_creation_count = 0
+        original_make_llm = None
+
+        def counting_make_llm(agent_row, tools):
+            nonlocal llm_creation_count, original_make_llm
+            llm_creation_count += 1
+            # Create a mock LLM that returns a final response
+            mock_llm = MagicMock()
+            mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Final response"))
+            mock_llm.bind_tools = MagicMock(return_value=mock_llm)
+            return mock_llm
+
+        # Patch _make_llm in the module
+        import zerg.agents_def.zerg_react_agent as react_module
+        original_make_llm = react_module._make_llm
+        react_module._make_llm = counting_make_llm
+
+        try:
+            # Create runnable
+            runnable = get_runnable(mock_agent)
+
+            # Execute with a simple message
+            messages = [HumanMessage(content="Hello")]
+            config = {"configurable": {"thread_id": "test-thread"}}
+            result = await runnable.ainvoke(messages, config=config)
+
+            # Verify _make_llm was called exactly once (not twice - once for wrapper, once for sync call)
+            assert llm_creation_count == 1, f"Expected 1 LLM creation, got {llm_creation_count}"
+
+        finally:
+            # Restore original
+            react_module._make_llm = original_make_llm
 
 
 class TestCriticalScenario:
