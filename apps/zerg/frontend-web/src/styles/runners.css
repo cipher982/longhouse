@@ -6,12 +6,13 @@
     max-width: 1400px;
     margin: 0 auto;
     padding: var(--space-8);
+  }
 
-    .runners-page {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-8);
-    }
+  .runners-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-8);
+  }
 
   .runners-header {
     display: flex;
@@ -41,7 +42,7 @@
     border-radius: 12px;
     padding: 1.5rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .runner-card:hover {
@@ -128,7 +129,7 @@
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .runner-action-button:hover {
