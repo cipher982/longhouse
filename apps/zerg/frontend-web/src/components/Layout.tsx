@@ -1,17 +1,49 @@
 import clsx from "clsx";
-import type { PropsWithChildren } from "react";
+import { useState, useEffect, useCallback, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import "../styles/layout.css";
-import { MenuIcon } from "./icons";
+import { SidebarIcon, XIcon } from "./icons";
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
   const { isShelfOpen, toggleShelf } = useShelf();
   const location = useLocation();
   const navigate = useNavigate();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Close mobile nav on route change
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  // Close mobile nav on escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && mobileNavOpen) {
+        setMobileNavOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [mobileNavOpen]);
+
+  // Prevent body scroll when mobile nav is open
+  useEffect(() => {
+    if (mobileNavOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [mobileNavOpen]);
+
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+  const toggleMobileNav = useCallback(() => setMobileNavOpen(prev => !prev), []);
 
   // Only show shelf toggle on routes that have drawer UI
   const SHELF_ENABLED_ROUTES = ["/canvas", "/agent"];
@@ -61,22 +93,24 @@ function WelcomeHeader() {
   }
 
   return (
+    <>
     <header className="main-header" data-testid="welcome-header">
       <div className="header-left">
-        <div className="shelf-toggle-container">
-          {shouldShowShelfToggle && (
-            <button
-              id="shelf-toggle-btn"
-              className="header-button shelf-toggle"
-              aria-label="Open agent panel"
-              aria-controls="agent-shelf"
-              aria-expanded={isShelfOpen}
-              onClick={toggleShelf}
-            >
-              <MenuIcon />
-            </button>
-          )}
-        </div>
+        {/* Mobile hamburger menu - shown only on mobile via CSS */}
+        <button
+          className="mobile-menu-toggle"
+          aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
+          aria-expanded={mobileNavOpen}
+          aria-controls="mobile-nav-drawer"
+          onClick={toggleMobileNav}
+        >
+          <span className="hamburger-icon">
+            <span />
+            <span />
+            <span />
+          </span>
+        </button>
+
         <div className="header-brand">
           <a href="/dashboard" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/dashboard'); }}>
             <div className="brand-logo-wrapper">
@@ -114,6 +148,18 @@ function WelcomeHeader() {
       </nav>
 
       <div className="header-actions">
+        {shouldShowShelfToggle && (
+          <button
+            id="shelf-toggle-btn"
+            className="header-button shelf-toggle"
+            aria-label="Toggle agent panel"
+            aria-controls="agent-shelf"
+            aria-expanded={isShelfOpen}
+            onClick={toggleShelf}
+          >
+            <SidebarIcon />
+          </button>
+        )}
         <div className="user-menu-container">
           <div
             className="avatar-badge"
@@ -141,6 +187,60 @@ function WelcomeHeader() {
         </div>
       </div>
     </header>
+
+    {/* Mobile navigation drawer */}
+    <nav
+      id="mobile-nav-drawer"
+      className={clsx("mobile-nav-drawer", { open: mobileNavOpen })}
+      aria-label="Mobile navigation"
+    >
+      <div className="mobile-nav-header">
+        <div className="mobile-nav-brand">
+          <img
+            src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
+            alt=""
+          />
+          <span>Swarmlet</span>
+        </div>
+        <button
+          className="mobile-nav-close"
+          aria-label="Close menu"
+          onClick={closeMobileNav}
+        >
+          <XIcon width={20} height={20} />
+        </button>
+      </div>
+      <div className="mobile-nav-links">
+        {navItems.map(({ label, href }) => {
+          const isActive =
+            location.pathname === href ||
+            (href !== '/' && location.pathname.startsWith(href));
+
+          return (
+            <button
+              key={href}
+              type="button"
+              className={clsx("mobile-nav-link", { "mobile-nav-link--active": isActive })}
+              aria-current={isActive ? 'page' : undefined}
+              onClick={() => {
+                navigate(href);
+                closeMobileNav();
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+
+    {/* Scrim overlay */}
+    <div
+      className={clsx("mobile-nav-scrim", { visible: mobileNavOpen })}
+      onClick={closeMobileNav}
+      aria-hidden="true"
+    />
+    </>
   );
 }
 
