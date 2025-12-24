@@ -287,7 +287,7 @@ test.describe('Performance and Load Testing', () => {
 
     // Perform memory-intensive operations
     for (let i = 0; i < 10; i++) {
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(100);
       await page.getByTestId('global-canvas-tab').click();
       await page.waitForTimeout(100);
@@ -388,7 +388,7 @@ test.describe('Performance and Load Testing', () => {
         await page.waitForTimeout(1000);
 
         // Simulate user actions
-        await page.getByTestId('global-dashboard-tab').click();
+        await page.locator('.header-nav').click();
         await page.waitForTimeout(500);
 
         // Create an agent as this user
@@ -411,7 +411,7 @@ test.describe('Performance and Load Testing', () => {
         // Navigate between tabs
         await page.getByTestId('global-canvas-tab').click();
         await page.waitForTimeout(300);
-        await page.getByTestId('global-dashboard-tab').click();
+        await page.locator('.header-nav').click();
         await page.waitForTimeout(300);
 
         await context.close();

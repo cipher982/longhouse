@@ -196,7 +196,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
 
     // Navigate to establish connection
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(3000);
 
     console.log('📊 Messages sent after connection:', sentMessages.length);
@@ -248,7 +248,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
 
     // Navigate and establish initial connection
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     const initialConnectionCount = connectionCount;
@@ -297,7 +297,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
 
     // Navigate and establish connection
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     console.log('📊 Queue flush events:', queueFlushEvents.length);
@@ -384,13 +384,13 @@ test.describe('WebSocket Bounded Message Queue', () => {
 
     // Navigate and interact to generate different message types
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     // Switch views to generate subscribe/unsubscribe
     await page.getByTestId('global-canvas-tab').click();
     await page.waitForTimeout(500);
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     console.log('📊 Message types sent:');
@@ -447,7 +447,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
 
     // Navigate and wait for stable connection
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(3000);
 
     console.log('📊 Messages sent directly:', sentMessages.length);

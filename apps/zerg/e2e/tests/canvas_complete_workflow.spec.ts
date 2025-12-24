@@ -43,8 +43,8 @@ test.describe('Complete Canvas Workflow', () => {
 
     // Step 3: Verify agent appears in dashboard
     console.log('📊 Step 3: Verifying agent in dashboard...');
-    await expect(page.getByTestId('global-dashboard-tab')).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('global-dashboard-tab').click();
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Wait for the specific agent to appear with polling (React updates via polling)

@@ -82,8 +82,8 @@ test.describe('Agent Creation Full Workflow', () => {
     await page.waitForTimeout(1000);
 
     // Navigate to dashboard
-    await expect(page.getByTestId('global-dashboard-tab')).toBeVisible({ timeout: 15000 });
-    await page.getByTestId('global-dashboard-tab').click();
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     // Look for the created agent in the UI

@@ -45,7 +45,7 @@ test.describe('Thread & Chat – basic flows', () => {
     const backBtn = page.locator('.back-button');
     if (await backBtn.count() > 0) {
       await backBtn.click();
-      await expect(page.locator('[data-testid="global-dashboard-tab"]')).toBeVisible();
+      await expect(page.locator('.header-nav')).toBeVisible();
     }
   });
 

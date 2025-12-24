@@ -31,7 +31,7 @@ test('Agent shelf loads and displays agents on canvas', async ({ page }) => {
   expect(shelfText).not.toContain('No agents available');
 
   // 6: Optionally (re)visit dashboard and back to canvas to verify shelf rerenders
-  // const dashboardTab = page.locator('[data-testid="global-dashboard-tab"]');
+  // const dashboardTab = page.locator('.header-nav');
   // await dashboardTab.click();
   // await canvasTab.click();
   // await expect(agentPills).toHaveCountGreaterThan(0, { timeout: 10000 });

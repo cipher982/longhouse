@@ -26,14 +26,14 @@ test.describe('Comprehensive Database Isolation', () => {
     await page.waitForTimeout(2000);
 
     // Check if we can see the app structure
-    const dashboardExists = await page.locator('[data-testid="global-dashboard-tab"]').isVisible();
+    const dashboardExists = await page.locator('.header-nav').isVisible();
     console.log('📊 Dashboard tab visible:', dashboardExists);
 
     if (dashboardExists) {
       console.log('✅ App loaded successfully');
 
       // Try to interact with the dashboard
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(1000);
 
       // Check for any error messages

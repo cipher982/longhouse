@@ -32,7 +32,7 @@ export async function createAgentsViaDashboard(
   page: Page,
   count: number = 1
 ): Promise<void> {
-  await page.getByTestId('global-dashboard-tab').click();
+  await page.locator('.header-nav').click();
   await page.waitForTimeout(1000);
 
   const createAgentBtn = page.locator('button:has-text("Create Agent")');
