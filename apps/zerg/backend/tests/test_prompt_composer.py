@@ -202,6 +202,30 @@ class TestFormatServers:
         assert "unknown" in result
         assert "10.0.0.1" in result
 
+    def test_format_servers_with_both_ssh_alias_and_concrete(self):
+        """Test that both SSH alias and concrete details appear together.
+
+        Workers in Docker containers can't use SSH aliases (no ~/.ssh/config),
+        so they need the concrete user@host:port format even when an alias exists.
+        This was a bug where 'elif' was used instead of 'if', causing the concrete
+        details to be suppressed when an alias was present.
+        """
+        servers = [{
+            "name": "cube",
+            "ip": "100.70.237.79",
+            "purpose": "GPU workloads",
+            "ssh_alias": "cube",
+            "ssh_user": "drose",
+            "ssh_host": "100.104.187.47",
+            "ssh_port": "2222",
+        }]
+
+        result = format_servers(servers)
+
+        # Both should appear - alias for humans, concrete for Docker workers
+        assert "SSH alias: cube" in result
+        assert "SSH: drose@100.104.187.47:2222" in result
+
 
 # ---------------------------------------------------------------------------
 # Test format_server_names
