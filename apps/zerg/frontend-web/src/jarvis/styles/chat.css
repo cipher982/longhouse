@@ -177,29 +177,32 @@
   border-style: dashed;
 }
 
-/* Debug mode: reasoning tokens display */
-.jarvis-container .message-debug-info {
+/* Token usage chip (hover for breakdown) */
+.jarvis-container .message-usage {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  justify-content: flex-end;
   margin-top: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+}
+
+.jarvis-container .usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
   font-size: var(--font-size-xs);
   font-family: var(--font-family-mono);
   color: var(--color-text-muted);
-  opacity: 0.7;
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  opacity: 0.75;
+  user-select: none;
+  cursor: help;
 }
 
-.jarvis-container .debug-badge {
-  background: linear-gradient(135deg, rgb(168 85 247 / 20%) 0%, rgb(139 92 246 / 20%) 100%);
-  border: 1px solid rgb(168 85 247 / 30%);
-  border-radius: 4px;
-  padding: 2px 6px;
-  color: rgb(192 132 252);
-}
-
-.jarvis-container .debug-detail {
-  color: var(--color-text-muted);
+.jarvis-container .usage-chip:hover {
+  opacity: 0.95;
+  border-color: rgb(255 255 255 / 18%);
 }
 
 .jarvis-container .message.user.preview .message-content::after {
