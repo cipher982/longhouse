@@ -45,7 +45,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
     await page.waitForTimeout(2000);
 
     // Navigate to dashboard to trigger subscriptions
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(3000);
 
     // Verify subscribe messages were sent
@@ -113,7 +113,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
 
     // Wait longer than the 5-second timeout
     console.log('⏳ Waiting 6 seconds for timeout to fire...');
@@ -148,7 +148,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate and establish connection
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     const initialReconnectCount = reconnectCount;
@@ -201,7 +201,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard (triggers subscriptions)
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     // Rapidly switch between views to trigger subscribe/unsubscribe
@@ -209,7 +209,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
       console.log(`🔄 Cycle ${i + 1}/3`);
       await page.getByTestId('global-canvas-tab').click();
       await page.waitForTimeout(500);
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(500);
     }
 
@@ -254,7 +254,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(3000);
 
     // NOTE: Currently backend sends 'error' type, not 'subscribe_error'
@@ -309,7 +309,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
 
     // Wait for initial subscribe
     await page.waitForTimeout(1000);
@@ -352,7 +352,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard (mounts component with subscriptions)
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     console.log('✅ Dashboard mounted with subscriptions');
@@ -420,7 +420,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
 
     // Navigate to dashboard
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(3000);
 
     console.log('📊 Subscribe message ID:', subscribeMessageId);
@@ -478,7 +478,7 @@ test.describe('WebSocket Subscription Edge Cases', () => {
 
     // Navigate to dashboard
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     // Check subscribedAgentIdsRef prevents duplicates

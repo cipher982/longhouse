@@ -98,7 +98,7 @@ async function getCapturedSSEEvents(page: Page): Promise<CapturedSSEEvent[]> {
  */
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
-  const chatInterface = page.locator('#pttBtn, .chat-wrapper, .transcript');
+  const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
   await expect(chatInterface.first()).toBeVisible({ timeout: 15000 });
   console.log('[Test] Chat page loaded');
 }

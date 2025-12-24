@@ -96,7 +96,7 @@ export async function createMultipleAgents(
 export async function createAgentViaUI(page: Page): Promise<string> {
   // Navigate to dashboard if not already there
   try {
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
   } catch (error) {
     // Ignore if already on dashboard or button doesn't exist

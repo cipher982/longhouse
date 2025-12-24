@@ -100,7 +100,7 @@ test.describe('Perfect Graph Persistence', () => {
     console.log('🔄 Step 6: Testing tab switch persistence...');
 
     // Switch to dashboard
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await expect(page.locator('#dashboard-container')).toBeVisible();
     console.log('✅ Switched to dashboard');
 
@@ -198,7 +198,7 @@ test.describe('Perfect Graph Persistence', () => {
       console.log(`Rapid switch cycle ${i + 1}/5`);
 
       // To dashboard
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(100);
 
       // Back to canvas

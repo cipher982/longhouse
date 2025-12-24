@@ -85,7 +85,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
     console.log('📝 Step 4: CRITICAL - Testing tab switch...');
 
     // Switch to dashboard
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await expect(page.locator('#dashboard-container')).toBeVisible();
     console.log('✅ Switched to dashboard');
 
@@ -158,7 +158,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
       console.log(`Switch cycle ${i + 1}/3`);
 
       // To dashboard
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await expect(page.locator('[data-testid="dashboard-container"]')).toBeVisible();
       await page.waitForTimeout(200);
 
@@ -204,7 +204,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
     });
 
     // Switch tabs
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
     await page.getByTestId('global-canvas-tab').click();
     await page.waitForTimeout(1000);

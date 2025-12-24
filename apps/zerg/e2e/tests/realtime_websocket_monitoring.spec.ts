@@ -81,7 +81,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
 
     // Step 4: Navigate between tabs to trigger more updates
     console.log('📊 Step 4: Navigating to trigger more WebSocket events...');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
     await page.getByTestId('global-canvas-tab').click();
     await page.waitForTimeout(1000);
@@ -126,7 +126,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
     console.log('📊 Step 6: Testing real-time UI updates...');
 
     // Check if the created agent appears in the dashboard
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const agentInDashboard = await page.locator(`text=${createdAgent.name}`).isVisible();

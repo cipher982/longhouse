@@ -13,7 +13,7 @@ test.describe('Canvas UI Tests', () => {
     await page.waitForFunction(() => (window as any).__APP_READY__ === true, { timeout: 15000 });
 
     // Wait for app header/tabs to render
-    await expect(page.getByTestId('global-dashboard-tab')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
     // User clicks on Canvas tab
     const canvasTab = page.getByTestId('global-canvas-tab');
     await expect(canvasTab).toBeVisible({ timeout: 15000 });
@@ -45,7 +45,7 @@ test.describe('Canvas UI Tests', () => {
     await expect(canvasContainer).toBeVisible({ timeout: 5000 });
 
     // Switch to dashboard and back
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
     await page.getByTestId('global-canvas-tab').click();
 
