@@ -65,13 +65,10 @@ Do not use npm, yarn, pip, or poetry.
 
 ```bash
 # Start everything (Docker + nginx + services)
-make dev           # Full platform with nginx proxy (profile: full)
+make dev           # Full platform with nginx proxy (profile: dev)
                    # ⚠️ Interactive - tails logs until Ctrl+C
                    # ⚠️ Auto-rebuilds images (--build flag included)
 make dev-bg        # Same but background (for CI/automation)
-
-# Start individual services
-make zerg          # Just Zerg with direct ports (profile: zerg)
 
 # Environment validation
 make env-check     # Validate required env vars before starting
@@ -165,14 +162,12 @@ Other compose files:
 
 | Profile | Services | Use Case |
 |---------|----------|----------|
-| `full` | postgres, zerg-backend, zerg-frontend, reverse-proxy | Full platform via nginx at 30080 |
-| `zerg` | postgres, zerg-backend-exposed, zerg-frontend-exposed | Zerg only, direct ports |
+| `dev` | postgres, backend, frontend, reverse-proxy | Full platform via nginx at 30080 |
 | `prod` | postgres, zerg-backend-prod, zerg-frontend-prod | Production hardened |
 
 ```bash
 # Direct compose usage (prefer make targets)
-docker compose -f docker/docker-compose.dev.yml --profile full up
-docker compose -f docker/docker-compose.dev.yml --profile zerg up
+docker compose -f docker/docker-compose.dev.yml --profile dev up
 ```
 
 ## Testing Infrastructure
@@ -383,7 +378,7 @@ Dev auth defaults (`AUTH_DISABLED=1`, `VITE_AUTH_ENABLED=false`) are set in comp
 On startup, the backend automatically seeds user context and credentials from local config files. This is **idempotent** (safe to run repeatedly).
 
 ### Config File Locations (checked in order)
-| File | Dev Path | Prod Path |
+| File | Dev Path (relative to backend) | Prod Path |
 |------|----------|-----------|
 | User context | `scripts/user_context.local.json` | `~/.config/zerg/user_context.json` |
 | Credentials | `scripts/personal_credentials.local.json` | `~/.config/zerg/personal_credentials.json` |
@@ -391,11 +386,12 @@ On startup, the backend automatically seeds user context and credentials from lo
 ### Setup (First Time)
 ```bash
 # Copy examples and edit with your details
-cp apps/zerg/backend/scripts/user_context.example.json \
-   apps/zerg/backend/scripts/user_context.local.json
+cd apps/zerg/backend
+cp scripts/user_context.example.json \
+   scripts/user_context.local.json
 
-cp apps/zerg/backend/scripts/personal_credentials.example.json \
-   apps/zerg/backend/scripts/personal_credentials.local.json
+cp scripts/personal_credentials.example.json \
+   scripts/personal_credentials.local.json
 
 # Edit the files with your servers, integrations, and credentials
 # Then restart the backend (or it will seed on next `make dev`)
