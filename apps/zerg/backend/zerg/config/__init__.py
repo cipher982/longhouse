@@ -270,6 +270,16 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
     once the first LLM call is made.
     """
 
+    # SAFETY GATE: Fail-fast if test infrastructure is enabled in production
+    # Tool stubbing should NEVER be enabled outside of tests
+    tool_stubs_path = os.getenv("ZERG_TOOL_STUBS_PATH")
+    if tool_stubs_path and not settings.testing:
+        raise RuntimeError(
+            f"CRITICAL: ZERG_TOOL_STUBS_PATH is set ('{tool_stubs_path}') but TESTING is not enabled. "
+            f"Tool stubbing is TEST-ONLY infrastructure and must not be used in production. "
+            f"Either unset ZERG_TOOL_STUBS_PATH or set TESTING=1."
+        )
+
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs
         return
 

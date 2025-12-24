@@ -100,6 +100,8 @@ services:
       RELOAD: "true"
       DEBUG: "true"
       LOG_LEVEL: DEBUG
+      # E2E test tool stubbing (optional - only set when running E2E tests)
+      ZERG_TOOL_STUBS_PATH: ${ZERG_TOOL_STUBS_PATH:-}
     # Port exposure controlled by profile - see zerg-backend-exposed below
     ports: []
     volumes:
@@ -109,6 +111,8 @@ services:
       - ../data:/app/data
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
       - ../logs/backend:/app/logs
+      # E2E test fixtures (for tool stubbing)
+      - ../apps/zerg/e2e/fixtures:/app/e2e-fixtures:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       <<: *healthcheck-defaults
