@@ -46,7 +46,7 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     if (!total) return null
 
     const reasoning = usage.reasoning_tokens
-    const reasoningPart = reasoning && reasoning > 0 ? ` · 🧠 ${formatTokens(reasoning)}` : ''
+    const reasoningPart = reasoning && reasoning > 0 ? ` · Reasoning ${formatTokens(reasoning)}` : ''
     return `Run ${total}${reasoningPart}`
   }
 
