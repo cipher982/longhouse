@@ -68,7 +68,7 @@ def format_servers(servers: list[dict]) -> str:
             line += f" [{platform}]"
         if ssh_alias:
             line += f"\n  SSH alias: {ssh_alias}"
-        elif ssh_user and ssh_host:
+        if ssh_user and ssh_host:
             port_suffix = f":{ssh_port}" if ssh_port else ""
             line += f"\n  SSH: {ssh_user}@{ssh_host}{port_suffix}"
         if notes:
