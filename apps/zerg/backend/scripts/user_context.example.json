@@ -9,13 +9,19 @@
       "ip": "192.168.1.100",
       "purpose": "What this server is used for",
       "platform": "Ubuntu 22.04",
-      "notes": "Any additional notes about this server"
+      "notes": "Any additional notes about this server",
+      "ssh_user": "admin",
+      "ssh_port": 22
     },
     {
-      "name": "server2",
-      "ip": "10.0.0.50",
-      "purpose": "Another server's purpose",
-      "platform": "Debian 12"
+      "name": "homeserver",
+      "ip": "100.x.x.x",
+      "purpose": "Home lab server with custom SSH port",
+      "platform": "Ubuntu 22.04",
+      "ssh_alias": "homeserver",
+      "ssh_user": "myuser",
+      "ssh_host": "100.x.x.x",
+      "ssh_port": 2222
     }
   ],
   "integrations": {
