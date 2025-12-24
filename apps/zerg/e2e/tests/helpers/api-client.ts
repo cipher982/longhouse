@@ -77,8 +77,9 @@ export class ApiClient {
     this.headers['Authorization'] = `Bearer ${token}`;
   }
 
-  private async request(method: string, path: string, body?: any): Promise<any> {
+  private async request(method: string, path: string, body?: any, retryCount = 0): Promise<any> {
     const url = `${this.baseUrl}${path}`;
+    const MAX_RETRIES = 2;
     let response;
     let errorText = '';
 
@@ -100,16 +101,18 @@ export class ApiClient {
       }
       return await response.text();
     } catch (error) {
-      testLog.error(`API request error: ${method} ${path}`, {
-        error: error instanceof Error ? error.message : String(error),
-        responseStatus: response?.status,
-        responseText: errorText
-      });
+      // Only log on final attempt to avoid spam
+      if (retryCount >= MAX_RETRIES) {
+        testLog.error(`API request failed after ${retryCount + 1} attempts: ${method} ${path}`, {
+          error: error instanceof Error ? error.message : String(error),
+          responseStatus: response?.status,
+        });
+      }
 
-      // If it's a 500 error, wait a bit and retry once
-      if (response?.status === 500) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        return this.request(method, path, body);
+      // Retry on 500 errors, but with a limit
+      if (response?.status === 500 && retryCount < MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return this.request(method, path, body, retryCount + 1);
       }
 
       throw error;
