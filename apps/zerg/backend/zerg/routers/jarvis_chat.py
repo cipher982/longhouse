@@ -146,7 +146,9 @@ async def _chat_stream_generator(
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
                 event_type = event.get("event_type") or event.get("type") or "event"
-                logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
+                # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled.
+                if event_type != EventType.SUPERVISOR_TOKEN.value:
+                    logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
 
                 # Track worker lifecycle so we don't close the stream until workers finish
                 if event_type == "worker_spawned":
