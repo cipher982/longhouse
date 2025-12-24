@@ -1,21 +1,15 @@
 # Swarm Platform (Jarvis + Zerg Monorepo)
 
 # ---------------------------------------------------------------------------
-# Load environment variables from .env (ports are now configured there)
+# Load environment variables from .env
 # ---------------------------------------------------------------------------
 -include .env
-export $(shell sed 's/=.*//' .env 2>/dev/null || true)
-
-# Fallback defaults if .env is missing values
-ZERG_BACKEND_PORT ?= $(BACKEND_PORT)
-ZERG_FRONTEND_PORT ?= $(FRONTEND_PORT)
-ZERG_BACKEND_PORT ?= 47300
-ZERG_FRONTEND_PORT ?= 47200
+export $(shell sed 's/=.*//' .env 2>/dev/null | grep -v '^#' || true)
 
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg zerg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -36,107 +30,96 @@ env-check: ## Validate required environment variables
 	echo "🔍 Checking environment variables..."; \
 	\
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB APP_PUBLIC_URL; do \
-		if [ -z "$$(printenv $$var)" ]; then \
+		if [ -z "$$$(printenv $$var)" ]; then \
 			echo "❌ Missing required: $$var"; \
 			missing=1; \
 		fi; \
 	done; \
 	\
-	if [ -z "$$OPENAI_API_KEY" ]; then \
-		echo "⚠️  Warning: OPENAI_API_KEY not set (LLM features disabled)"; \
-		warn=1; \
-	fi; \
+		if [ -z "$$OPENAI_API_KEY" ]; then \
+			echo "⚠️  Warning: OPENAI_API_KEY not set (LLM features disabled)"; \
+			warn=1; \
+		fi; \
 	\
-	if [ $$missing -eq 1 ]; then \
-		echo ""; \
-		echo "💡 Copy .env.example to .env and fill in required values"; \
-		exit 1; \
-	fi; \
+		if [ $$missing -eq 1 ]; then \
+			echo ""; \
+			echo "💡 Copy .env.example to .env and fill in required values"; \
+			exit 1; \
+		fi; \
 	\
-	if [ $$warn -eq 0 ]; then \
-		echo "✅ All required environment variables set"; \
-	else \
-		echo "✅ Required variables set (warnings above are optional)"; \
-	fi
+		if [ $$warn -eq 0 ]; then \
+			echo "✅ All required environment variables set"; \
+		else \
+			echo "✅ Required variables set (warnings above are optional)"; \
+		fi
 
 env-check-prod: ## Validate production environment variables
 	@missing=0; \
 	echo "🔍 Checking production environment variables..."; \
 	\
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB \
-	           JWT_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
-	           GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-	           OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
-		if [ -z "$$(printenv $$var)" ]; then \
+		   JWT_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
+		   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
+		   OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
+		if [ -z "$$$(printenv $$var)" ]; then \
 			echo "❌ Missing required for prod: $$var"; \
 			missing=1; \
 		fi; \
 	done; \
 	\
-	if [ "$$AUTH_DISABLED" = "1" ]; then \
-		echo "❌ AUTH_DISABLED must be 0 for production"; \
-		missing=1; \
-	fi; \
+		if [ "$$AUTH_DISABLED" = "1" ]; then \
+			echo "❌ AUTH_DISABLED must be 0 for production"; \
+			missing=1; \
+		fi; \
 	\
-	if [ $$missing -eq 1 ]; then \
-		echo ""; \
-		echo "💡 Set all required production variables before deploying"; \
-		exit 1; \
-	fi; \
+		if [ $$missing -eq 1 ]; then \
+			echo ""; \
+			echo "💡 Set all required production variables before deploying"; \
+			exit 1; \
+		fi; \
 	echo "✅ All production environment variables set"
 
 # ---------------------------------------------------------------------------
 # Core Development Commands
 # ---------------------------------------------------------------------------
-dev: env-check ## ⭐ Start full platform (Docker + Nginx, isolated ports)
-	@echo "🚀 Starting full platform (Docker)..."
+dev: env-check ## ⭐ Start development environment (Docker + Nginx)
+	@echo "🚀 Starting development environment (Docker)..."
 	@./scripts/dev-docker.sh
 
-dev-bg: env-check ## Start full platform in background (for CI/automation)
-	@echo "🚀 Starting full platform (background)..."
-	$(COMPOSE_DEV) --profile full up -d --build
+dev-bg: env-check ## Start development environment in background
+	@echo "🚀 Starting development environment (background)..."
+	$(COMPOSE_DEV) --profile dev up -d --build
 	@echo "⏳ Waiting for services..."
 	@sleep 10
-	$(COMPOSE_DEV) --profile full ps
+	$(COMPOSE_DEV) --profile dev ps
 	@echo "✅ Services started in background. Use 'make logs' to tail."
-
-zerg: env-check ## Start Zerg only (Postgres + Backend + Frontend)
-	@echo "🚀 Starting Zerg platform..."
-	$(COMPOSE_DEV) --profile zerg up -d --build
-	@sleep 3
-	@$(COMPOSE_DEV) --profile zerg ps
-	@echo ""
-	@echo "✅ Backend:  http://localhost:$${BACKEND_PORT:-47300}"
-	@echo "✅ Frontend: http://localhost:$${FRONTEND_PORT:-47200}"
 
 stop: ## Stop all Docker services
 	@./scripts/stop-docker.sh
 
-dev-clean: ## Stop/remove zerg dev containers (keeps DB volume)
-	@echo "🧹 Cleaning zerg dev containers (keeping volumes)..."
-	@$(COMPOSE_DEV) --profile full down --remove-orphans 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile zerg down --remove-orphans 2>/dev/null || true
-	@echo "✅ Cleaned zerg containers (volumes preserved)"
+dev-clean: ## Stop/remove dev containers (keeps DB volume)
+	@echo "🧹 Cleaning dev containers (keeping volumes)..."
+	@$(COMPOSE_DEV) --profile dev down --remove-orphans 2>/dev/null || true
+	@echo "✅ Cleaned dev containers (volumes preserved)"
 
-dev-reset-db: ## Destroy zerg dev DB volume (data loss)
-	@echo "⚠️  Resetting zerg dev database (THIS DELETES LOCAL DB DATA)..."
-	@$(COMPOSE_DEV) --profile full down -v --remove-orphans 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile zerg down -v --remove-orphans 2>/dev/null || true
-	@echo "✅ Zerg DB reset. Start with 'make dev' and then run 'make seed-agents' if needed."
+dev-reset-db: ## Destroy dev DB volume (data loss)
+	@echo "⚠️  Resetting dev database (THIS DELETES LOCAL DB DATA)..."
+	@$(COMPOSE_DEV) --profile dev down -v --remove-orphans 2>/dev/null || true
+	@echo "✅ DB reset. Start with 'make dev' and then run 'make seed-agents' if needed."
 
 logs: ## View logs from running services
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
 		$(COMPOSE_DEV) logs -f; \
 	else \
-		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		echo "❌ No services running. Start with 'make dev'"; \
 		exit 1; \
 	fi
 
 logs-app: ## View logs for app services (excludes Postgres)
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f reverse-proxy zerg-backend zerg-backend-exposed zerg-frontend zerg-frontend-exposed; \
+		$(COMPOSE_DEV) logs -f reverse-proxy backend frontend; \
 	else \
-		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		echo "❌ No services running. Start with 'make dev'"; \
 		exit 1; \
 	fi
 
@@ -144,7 +127,7 @@ logs-db: ## View logs for Postgres only
 	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
 		$(COMPOSE_DEV) logs -f postgres; \
 	else \
-		echo "❌ No services running. Start with 'make dev' or 'make zerg'"; \
+		echo "❌ No services running. Start with 'make dev'"; \
 		exit 1; \
 	fi
 
@@ -157,7 +140,7 @@ doctor: ## Print quick diagnostics for dev stack
 	@test -f .env && echo "  ✅ .env exists" || (echo "  ❌ missing .env" && exit 1)
 	@missing=0; \
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
-		if [ -z "$$(printenv $$var)" ]; then \
+		if [ -z "$$$(printenv $$var)" ]; then \
 			echo "  ❌ $$var is empty"; \
 			missing=1; \
 		else \
@@ -178,7 +161,7 @@ doctor: ## Print quick diagnostics for dev stack
 reset: ## Reset database (destroys all data)
 	@echo "⚠️  Resetting database..."
 	@$(COMPOSE_DEV) down -v 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile zerg up -d
+	@$(COMPOSE_DEV) --profile dev up -d
 	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------
@@ -237,7 +220,7 @@ seed-agents: ## Seed baseline Zerg agents for Jarvis
 	@echo "🌱 Seeding agents..."
 	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
 	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running. Start with 'make dev' or 'make zerg'"; \
+		echo "❌ Backend not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
 	@docker exec $$BACKEND uv run python scripts/seed_jarvis_agents.py
@@ -247,7 +230,7 @@ seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@echo "🔑 Seeding personal credentials..."
 	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
 	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running. Start with 'make dev' or 'make zerg'"; \
+		echo "❌ Backend not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
 	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
@@ -295,11 +278,11 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 	@failed=0; \
 	\
 	for t in $$(grep -E '^\.PHONY:' Makefile \
-	          | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' \
-	          | tr ' ' '\n' \
-	          | sed '/^$$/d'); do \
+		  | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' \
+		  | tr ' ' '\n' \
+		  | sed '/^$$/d'); do \
 	    case $$t in \
-	        help|validate-makefile) continue ;; \
+		help|validate-makefile) continue ;; \
 	    esac; \
 	    if ! grep -Eq "^$$t:.*##" Makefile; then \
 	        echo "❌ Missing help comment (##) for .PHONY target: $$t"; \
@@ -308,10 +291,10 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 	done; \
 	\
 	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile \
-	          | sed -E 's/:.*##.*$$//'); do \
+		  | sed -E 's/:.*##.*$$//'); do \
 	    if ! grep -Eq "^\.PHONY:.*\\b$$t\\b" Makefile; then \
-	        echo "❌ Target has help but is not in .PHONY: $$t"; \
-	        failed=1; \
+		echo "❌ Target has help but is not in .PHONY: $$t"; \
+		failed=1; \
 	    fi; \
 	done; \
 	\

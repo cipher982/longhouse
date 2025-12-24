@@ -11,7 +11,7 @@ NC='\033[0m'
 
 # Central compose file reference - use unified compose with profile
 export COMPOSE_FILE="docker/docker-compose.dev.yml"
-export COMPOSE_PROFILE="full"
+export COMPOSE_PROFILE="dev"
 export COMPOSE_PROJECT_NAME="zerg"
 STARTED=false
 LOGS_PID=""
@@ -138,7 +138,7 @@ echo ""
 # Follow logs in background so Ctrl+C hits our trap first.
 # Default: hide noisy Postgres logs (healthchecks, checkpoints) to keep dev output usable.
 # Set INCLUDE_DB_LOGS=1 to include Postgres.
-LOG_SERVICES=(reverse-proxy zerg-backend zerg-frontend)
+LOG_SERVICES=(reverse-proxy backend frontend)
 if [ "${INCLUDE_DB_LOGS:-0}" = "1" ]; then
     LOG_SERVICES+=(postgres)
 fi
