@@ -25,6 +25,11 @@ class ServerConfig(BaseModel):
     purpose: Optional[str] = Field(None, description="Server purpose or role")
     platform: Optional[str] = Field(None, description="OS/platform (e.g., 'Ubuntu', 'macOS')")
     notes: Optional[str] = Field(None, description="Additional notes or details")
+    # SSH configuration for worker fallback
+    ssh_alias: Optional[str] = Field(None, description="SSH config alias (e.g., 'cube')")
+    ssh_user: Optional[str] = Field(None, description="SSH username (e.g., 'drose')")
+    ssh_host: Optional[str] = Field(None, description="SSH hostname/IP (defaults to ip if not set)")
+    ssh_port: Optional[int] = Field(None, description="SSH port (defaults to 22 if not set)")
 
     class Config:
         extra = "allow"  # Allow additional fields for flexibility
