@@ -84,7 +84,9 @@ class EventBus:
             logger.debug("No subscribers for %s", event_type)
             return
 
-        logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
+        # SUPERVISOR_TOKEN is emitted per-token and can spam logs when DEBUG is enabled.
+        if event_type != EventType.SUPERVISOR_TOKEN:
+            logger.debug("Publishing event %s to %s subscriber(s)", event_type, subscriber_count)
 
         # ------------------------------------------------------------------
         # Fan-out **concurrently** so that a slow subscriber can no longer
