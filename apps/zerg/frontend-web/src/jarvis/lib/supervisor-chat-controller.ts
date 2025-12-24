@@ -23,6 +23,12 @@ export interface SupervisorChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  usage?: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+    reasoning_tokens?: number | null;
+  };
 }
 
 export interface SupervisorChatConfig {
@@ -116,11 +122,12 @@ export class SupervisorChatController {
       const data = await response.json();
 
       // Transform server format to UI format
-      // Server returns: { messages: Array<{ role, content, timestamp }>, total }
+      // Server returns: { messages: Array<{ role, content, timestamp, usage? }>, total }
       const messages: SupervisorChatMessage[] = (data.messages || []).map((msg: any) => ({
         role: msg.role,
         content: msg.content,
         timestamp: new Date(msg.timestamp),
+        usage: msg.usage || undefined,
       }));
 
       logger.info(`[SupervisorChat] Loaded ${messages.length} messages from history`);

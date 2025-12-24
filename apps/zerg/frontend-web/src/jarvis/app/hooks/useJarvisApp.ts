@@ -203,6 +203,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
           timestamp: msg.timestamp,
           userTranscript: msg.role === 'user' ? msg.content : undefined,
           assistantResponse: msg.role === 'assistant' ? msg.content : undefined,
+          assistantUsage: msg.role === 'assistant' ? msg.usage : undefined,
         }))
 
         lastSupervisorTurnsRef.current = history
@@ -224,6 +225,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
               role: 'assistant',
               content: turn.assistantResponse,
               timestamp: turn.timestamp ? new Date(turn.timestamp) : new Date(),
+              usage: turn.assistantUsage,
             })
           }
         }
