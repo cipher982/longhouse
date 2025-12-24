@@ -39,6 +39,17 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     return lines.length ? lines.join('\n') : null
   }
 
+  const buildUsageLine = (usage?: ChatMessage['usage']) => {
+    if (!usage) return null
+
+    const total = formatTokens(usage.total_tokens)
+    if (!total) return null
+
+    const reasoning = usage.reasoning_tokens
+    const reasoningPart = reasoning && reasoning > 0 ? ` · 🧠 ${formatTokens(reasoning)}` : ''
+    return `Run ${total}${reasoningPart}`
+  }
+
   // Auto-scroll to bottom when new messages arrive or during streaming
   useEffect(() => {
     if (containerRef.current) {
@@ -64,33 +75,35 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
               const isTyping = isAssistant && message.status === 'typing';
               const hasContent = message.content && message.content.length > 0;
               const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
-              const usageDisplay = isAssistant ? formatTokens(message.usage?.total_tokens) : null
+              const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 
               return (
                 <div
                   key={message.id}
                   className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${isQueued ? ' queued' : ''}`}
                 >
-                  <div className="message-content">
-                    {isQueued && !hasContent ? (
-                      <div className="placeholder-shimmer" style={{ width: '100px', height: '20px', borderRadius: '4px', background: 'rgba(255,255,255,0.1)' }} />
-                    ) : isTyping && !hasContent ? (
-                      <div className="thinking-dots thinking-dots--in-chat">
-                        <span className="thinking-dot"></span>
-                        <span className="thinking-dot"></span>
-                        <span className="thinking-dot"></span>
+                  <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
+                    <div className="message-content">
+                      {isQueued && !hasContent ? (
+                        <div className="placeholder-shimmer" style={{ width: '100px', height: '20px', borderRadius: '4px', background: 'rgba(255,255,255,0.1)' }} />
+                      ) : isTyping && !hasContent ? (
+                        <div className="thinking-dots thinking-dots--in-chat">
+                          <span className="thinking-dot"></span>
+                          <span className="thinking-dot"></span>
+                          <span className="thinking-dot"></span>
+                        </div>
+                      ) : (
+                        <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+                      )}
+                    </div>
+                    {isAssistant && usageTitle && usageLine && (
+                      <div className="message-usage" aria-hidden="true">
+                        <span className="message-usage-text" title={usageTitle}>
+                          {usageLine}
+                        </span>
                       </div>
-                    ) : (
-                      <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
                     )}
                   </div>
-                  {isAssistant && usageTitle && usageDisplay && (
-                    <div className="message-usage">
-                      <span className="usage-chip" title={usageTitle} aria-label={usageTitle}>
-                        Tokens {usageDisplay}
-                      </span>
-                    </div>
-                  )}
                 </div>
               );
             })}
