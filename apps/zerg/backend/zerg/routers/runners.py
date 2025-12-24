@@ -657,10 +657,9 @@ async def runner_websocket(
                 message_type = message.get("type")
 
                 if message_type == "heartbeat":
-                    # Update last_seen_at
+                    # Update last_seen_at (no log - too noisy at 30s intervals)
                     runner.last_seen_at = utc_now_naive()
                     db.commit()
-                    logger.debug(f"Heartbeat from runner {runner_id}")
 
                 elif message_type == "exec_chunk":
                     # Handle output streaming
