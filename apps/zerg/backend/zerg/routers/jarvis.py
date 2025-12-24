@@ -211,6 +211,7 @@ class JarvisChatMessage(BaseModel):
     role: str = Field(..., description="Message role: user or assistant")
     content: str = Field(..., description="Message content")
     timestamp: datetime = Field(..., description="Message timestamp")
+    usage: Optional[dict] = Field(None, description="Optional LLM usage metadata for this assistant response")
 
 
 class JarvisHistoryResponse(BaseModel):
@@ -271,6 +272,7 @@ def jarvis_history(
             role=msg.role,
             content=msg.content,
             timestamp=msg.sent_at,
+            usage=(msg.message_metadata or {}).get("usage") if msg.role == "assistant" else None,
         )
         for msg in messages
     ]

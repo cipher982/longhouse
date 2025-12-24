@@ -9,6 +9,12 @@ export interface ConversationTurn {
   userTranscript?: string;
   assistantText?: string;
   assistantAudio?: ArrayBuffer;
+  assistantUsage?: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+    reasoning_tokens?: number | null;
+  };
   latencyMs?: number;
   conversationId?: string;
   assistantResponse?: string;

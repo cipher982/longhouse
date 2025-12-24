@@ -243,8 +243,14 @@ class TestRunAutoSeed:
         ), patch(
             "zerg.services.auto_seed._seed_personal_credentials", return_value=True
         ), patch(
+            "zerg.services.auto_seed._seed_runners", return_value=True
+        ), patch(
             "zerg.services.auto_seed._find_config_file",
-            side_effect=[config_file, None],  # First call for context, second for creds
+            side_effect=[
+                config_file,  # user context
+                None,  # credentials
+                None,  # runners
+            ],
         ):
             result = run_auto_seed()
 

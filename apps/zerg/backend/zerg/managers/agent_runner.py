@@ -381,6 +381,23 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         )
         logger.info(f"[AgentRunner] Saved {len(created_rows)} message rows to database")
 
+        # Persist per-response token usage onto the *final* assistant message row so it survives refresh/history loads.
+        # Note: usage_* values are accumulated across all LLM calls for this run (not just the visible assistant text).
+        usage_payload = {
+            "prompt_tokens": self.usage_prompt_tokens,
+            "completion_tokens": self.usage_completion_tokens,
+            "total_tokens": self.usage_total_tokens,
+            "reasoning_tokens": self.usage_reasoning_tokens,
+        }
+        if any(v is not None for v in usage_payload.values()):
+            last_assistant_row = next((row for row in reversed(created_rows) if row.role == "assistant"), None)
+            if last_assistant_row is not None:
+                existing_meta = dict(last_assistant_row.message_metadata or {})
+                existing_meta["usage"] = usage_payload
+                last_assistant_row.message_metadata = existing_meta
+                db.commit()
+                logger.info("[AgentRunner] Stored usage metadata on assistant message row id=%s", last_assistant_row.id)
+
         # Mark user messages processed
         logger.info(f"[AgentRunner] Marking {len(unprocessed_rows)} user messages as processed")
         self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
