@@ -4,7 +4,7 @@
 # Load environment variables from .env
 # ---------------------------------------------------------------------------
 -include .env
-export $(shell sed 's/=.*//' .env 2>/dev/null | grep -v '^#' || true)
+export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
@@ -44,7 +44,7 @@ env-check: ## Validate required environment variables
 		if [ $$missing -eq 1 ]; then \
 			echo ""; \
 			echo "💡 Copy .env.example to .env and fill in required values"; \
-			exit 1; \
+		exit 1; \
 		fi; \
 	\
 		if [ $$warn -eq 0 ]; then \
@@ -75,7 +75,7 @@ env-check-prod: ## Validate production environment variables
 		if [ $$missing -eq 1 ]; then \
 			echo ""; \
 			echo "💡 Set all required production variables before deploying"; \
-			exit 1; \
+		exit 1; \
 		fi; \
 	echo "✅ All production environment variables set"
 
