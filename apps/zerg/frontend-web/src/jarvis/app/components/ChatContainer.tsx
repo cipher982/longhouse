@@ -14,6 +14,31 @@ interface ChatContainerProps {
 export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const formatTokens = (n?: number | null) => {
+    if (n === null || n === undefined) return null
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 10_000) return `${Math.round(n / 1000)}k`
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+    return `${n}`
+  }
+
+  const buildUsageTitle = (usage?: ChatMessage['usage']) => {
+    if (!usage) return null
+
+    const total = usage.total_tokens
+    const prompt = usage.prompt_tokens
+    const completion = usage.completion_tokens
+    const reasoning = usage.reasoning_tokens
+
+    const lines: string[] = []
+    if (total !== null && total !== undefined) lines.push(`Run tokens (input+output): ${total.toLocaleString()}`)
+    if (prompt !== null && prompt !== undefined) lines.push(`Input tokens: ${prompt.toLocaleString()}`)
+    if (completion !== null && completion !== undefined) lines.push(`Output tokens: ${completion.toLocaleString()}`)
+    if (reasoning !== null && reasoning !== undefined && reasoning > 0) lines.push(`Reasoning tokens: ${reasoning.toLocaleString()} (subset of output)`)
+
+    return lines.length ? lines.join('\n') : null
+  }
+
   // Auto-scroll to bottom when new messages arrive or during streaming
   useEffect(() => {
     if (containerRef.current) {
@@ -38,6 +63,8 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
               const isQueued = isAssistant && message.status === 'queued';
               const isTyping = isAssistant && message.status === 'typing';
               const hasContent = message.content && message.content.length > 0;
+              const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
+              const usageDisplay = isAssistant ? formatTokens(message.usage?.total_tokens) : null
 
               return (
                 <div
@@ -57,11 +84,11 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
                       <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
                     )}
                   </div>
-                  {/* Debug mode: show token usage when reasoning tokens present */}
-                  {isAssistant && message.usage && message.usage.reasoning_tokens && message.usage.reasoning_tokens > 0 && (
-                    <div className="message-debug-info">
-                      <span className="debug-badge">🧠 {message.usage.reasoning_tokens} reasoning tokens</span>
-                      <span className="debug-detail">({message.usage.total_tokens} total)</span>
+                  {isAssistant && usageTitle && usageDisplay && (
+                    <div className="message-usage">
+                      <span className="usage-chip" title={usageTitle} aria-label={usageTitle}>
+                        Tokens {usageDisplay}
+                      </span>
                     </div>
                   )}
                 </div>
