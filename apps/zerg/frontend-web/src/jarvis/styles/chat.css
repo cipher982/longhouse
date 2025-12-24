@@ -84,6 +84,15 @@
   flex-direction: row-reverse;
 }
 
+/* Bubble wrapper (enables meta overlays without layout shift) */
+.jarvis-container .message-bubble {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  max-width: 80%;
+  outline: none;
+}
+
 /* Avatars */
 .jarvis-container .message-avatar {
   width: 28px;
@@ -119,7 +128,6 @@
 
 /* Bubbles */
 .jarvis-container .message-content {
-  max-width: 80%;
   padding: var(--space-2) var(--space-4);
   border-radius: 16px;
   font-size: var(--font-size-sm);
@@ -177,32 +185,36 @@
   border-style: dashed;
 }
 
-/* Token usage chip (hover for breakdown) */
+/* Token usage (subtle, hover-reveal) */
 .jarvis-container .message-usage {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-2);
+  position: absolute;
+  right: 0;
+  bottom: calc(-1 * var(--space-3));
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+  pointer-events: none;
 }
 
-.jarvis-container .usage-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
+.jarvis-container .message-usage-text {
   font-size: var(--font-size-xs);
   font-family: var(--font-family-mono);
   color: var(--color-text-muted);
-  background: rgb(255 255 255 / 6%);
-  border: 1px solid rgb(255 255 255 / 10%);
   opacity: 0.75;
+  white-space: nowrap;
   user-select: none;
-  cursor: help;
+  cursor: default;
+  letter-spacing: 0.2px;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 25%);
 }
 
-.jarvis-container .usage-chip:hover {
-  opacity: 0.95;
-  border-color: rgb(255 255 255 / 18%);
+.jarvis-container .message.assistant:hover .message-usage,
+.jarvis-container .message.assistant:focus-within .message-usage {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .jarvis-container .message.user.preview .message-content::after {
