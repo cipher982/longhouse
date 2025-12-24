@@ -15,7 +15,7 @@ That's it. One command to start, Ctrl+C to stop. Everything shuts down cleanly.
 
 ## What `make dev` Does
 
-1. **Starts Docker Compose (profile: `full`)** behind a single nginx entrypoint
+1. **Starts Docker Compose (profile: `dev`)** behind a single nginx entrypoint
 2. **Routes everything same-origin** at `http://localhost:30080` (dashboard, chat, API)
 3. **Traps Ctrl+C** to shut down everything cleanly
 4. **Shows status** of all services
@@ -34,16 +34,7 @@ Internal service ports exist, but are not exposed to the host in `make dev`.
 
 ---
 
-## Alternative Commands
-
-### Start Individual Services
-
-```bash
-# Zerg only (Docker, direct ports)
-make zerg
-```
-
-### Monitoring
+## Monitoring
 
 ```bash
 # Tail all service logs
@@ -89,7 +80,7 @@ make dev
 
 ### "Cannot connect to backend"
 
-The zerg-backend isn't running or the proxy isn't working:
+The backend isn't running or the proxy isn't working:
 
 1. Check if it started: `lsof -i :47300` or `docker ps | grep backend`
 2. Check Vite config has proxy: `cat apps/zerg/frontend-web/vite.config.ts`
@@ -177,7 +168,6 @@ Internal service ports (dev):
 ```
 zerg/
 ├── apps/
-│   ├── jarvis/              # Legacy Jarvis artifacts (no standalone web app)
 │   └── zerg/                # Agent platform
 │       ├── backend/         # FastAPI (includes /api/jarvis/*)
 │       ├── frontend-web/    # Unified React SPA (dashboard + /chat)

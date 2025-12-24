@@ -50,23 +50,22 @@ The simplest deployment uses the unified Docker Compose with the `prod` profile:
 
 ```bash
 # Development (full platform with nginx at port 30080)
-docker compose -f docker/docker-compose.yml --profile full up
+docker compose -f docker/docker-compose.dev.yml --profile dev up
 
 # Production (hardened, no debug tools)
-docker compose -f docker/docker-compose.yml --profile prod up -d
+docker compose -f docker/docker-compose.prod.yml up -d
 ```
 
 | Profile | Services                                              | Use Case                         |
 | ------- | ----------------------------------------------------- | -------------------------------- |
-| `full`  | postgres, zerg-_, jarvis-_, reverse-proxy             | Full platform via nginx at 30080 |
-| `zerg`  | postgres, zerg-backend-exposed, zerg-frontend-exposed | Zerg only, direct ports          |
+| `dev`   | postgres, backend, frontend, reverse-proxy            | Full platform via nginx at 30080 |
 | `prod`  | postgres, zerg-backend-prod, zerg-frontend-prod       | Production hardened              |
 
 Deploy to Coolify:
 
 1. Push code to git repository
 2. Create new application in Coolify
-3. Point to `docker/docker-compose.yml` with profile `prod`
+3. Point to `docker/docker-compose.prod.yml`
 4. Set environment variables in Coolify UI
 5. Deploy
 
