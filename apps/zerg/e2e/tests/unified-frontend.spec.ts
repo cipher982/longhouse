@@ -50,54 +50,55 @@ test.describe('Unified Frontend Navigation', () => {
   test('chat page loads at /chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
-    // Wait for PTT button - indicates Jarvis loaded
-    await expect(page.locator('#pttBtn')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('#appTitle')).toContainText('Jarvis');
+    // Wait for Jarvis chat UI to load (text input container)
+    await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 10000 });
+    // Verify we're in the Jarvis container
+    await expect(page.locator('.jarvis-container')).toBeVisible();
   });
 
   test('dashboard page loads at /dashboard', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
 
-    // Wait for dashboard tab - indicates Zerg loaded
+    // Wait for header nav to load - indicates Zerg loaded
     // Note: If auth redirect happens, this may fail - ensure AUTH_DISABLED=1 in .env
-    await expect(page.locator('[data-testid="global-dashboard-tab"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
+    // Dashboard tab should be active
+    await expect(page.locator('.nav-tab--active:has-text("Dashboard")')).toBeVisible();
   });
 
   test('chat tab visible in Zerg dashboard', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
 
     // Wait for dashboard to load
-    await expect(page.locator('[data-testid="global-dashboard-tab"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
     // Chat tab should be visible in the nav
-    const chatTab = page.locator('[data-testid="global-chat-tab"]');
+    const chatTab = page.locator('.nav-tab:has-text("Chat")');
     await expect(chatTab).toBeVisible();
-    await expect(chatTab).toHaveAttribute('href', '/chat');
   });
 
   test('dashboard link visible in Jarvis chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
     // Wait for chat to load
-    await expect(page.locator('#pttBtn')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 10000 });
 
-    // Dashboard link should be visible in header
-    const dashboardLink = page.locator('a[href="/dashboard"]');
-    await expect(dashboardLink).toBeVisible();
-    await expect(dashboardLink).toContainText('Dashboard');
+    // Dashboard tab should be visible in header nav
+    const dashboardTab = page.locator('.nav-tab:has-text("Dashboard")');
+    await expect(dashboardTab).toBeVisible();
   });
 
   test('chat tab navigates from dashboard to chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/dashboard`, { waitUntil: 'domcontentloaded' });
 
     // Wait for dashboard to load
-    await expect(page.locator('[data-testid="global-dashboard-tab"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
     // Click the chat tab
-    await page.click('[data-testid="global-chat-tab"]');
+    await page.click('.nav-tab:has-text("Chat")');
 
-    // Wait for chat page to load (PTT button visible)
-    await expect(page.locator('#pttBtn')).toBeVisible({ timeout: 15000 });
+    // Wait for chat page to load
+    await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15000 });
     await expect(page).toHaveURL(/\/chat/);
   });
 
@@ -105,13 +106,13 @@ test.describe('Unified Frontend Navigation', () => {
     await page.goto(`${UNIFIED_URL}/chat`);
 
     // Wait for chat to load
-    await expect(page.locator('#pttBtn')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15000 });
 
-    // Click the dashboard link
-    await page.click('a[href="/dashboard"]');
+    // Click the dashboard tab
+    await page.click('.nav-tab:has-text("Dashboard")');
 
     // Wait for dashboard to load
-    await expect(page.locator('[data-testid="global-dashboard-tab"]')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.nav-tab--active:has-text("Dashboard")')).toBeVisible({ timeout: 15000 });
     await expect(page).toHaveURL(/\/dashboard/);
   });
 
