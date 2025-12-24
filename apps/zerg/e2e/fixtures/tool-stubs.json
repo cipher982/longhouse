@@ -1,0 +1,93 @@
+{
+  "$comment": "Tool stubs for deterministic E2E tests. See apps/zerg/backend/zerg/testing/tool_stubs.py",
+
+  "ssh_exec": [
+    {
+      "$comment": "Disk space check on cube server - returns deterministic output",
+      "match": {
+        "host": "cube",
+        "command_contains": "df"
+      },
+      "result": {
+        "ok": true,
+        "data": {
+          "host": "cube",
+          "command": "df -h",
+          "exit_code": 0,
+          "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\ntmpfs           7.8G     0  7.8G   0% /dev/shm\n/dev/sdb1       500G  200G  300G  40% /data",
+          "stderr": ""
+        }
+      }
+    },
+    {
+      "$comment": "Connection failure scenario for unreachable server",
+      "match": {
+        "host_contains": "unreachable"
+      },
+      "result": {
+        "ok": false,
+        "error_type": "execution_error",
+        "user_message": "SSH connection to unreachable-server timed out after 30 seconds (exit code 255)"
+      }
+    },
+    {
+      "$comment": "Generic SSH success for any other cube command",
+      "match": {
+        "host": "cube"
+      },
+      "result": {
+        "ok": true,
+        "data": {
+          "host": "cube",
+          "command": "stubbed_command",
+          "exit_code": 0,
+          "stdout": "Command executed successfully (stubbed)",
+          "stderr": ""
+        }
+      }
+    }
+  ],
+
+  "runner_exec": [
+    {
+      "$comment": "Notes search - returns deterministic results",
+      "match": {
+        "tool_name_contains": "search_notes"
+      },
+      "result": {
+        "ok": true,
+        "data": {
+          "results": [
+            {
+              "path": "notes/test-note.md",
+              "content": "This is a test note for E2E testing.",
+              "score": 0.95
+            }
+          ],
+          "count": 1
+        }
+      }
+    }
+  ],
+
+  "web_search": [
+    {
+      "$comment": "Weather search - deterministic results",
+      "match": {
+        "query_contains": "weather"
+      },
+      "result": {
+        "ok": true,
+        "data": {
+          "results": [
+            {
+              "title": "Current Weather",
+              "snippet": "The current temperature is 72F with clear skies.",
+              "url": "https://example.com/weather"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

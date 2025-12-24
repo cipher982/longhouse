@@ -159,13 +159,24 @@ def _make_llm(agent_row, tools):
     # that tweak ``LLM_TOKEN_STREAM`` via ``monkeypatch.setenv`` after the
     # module import still take effect.
 
-    enable_token_stream = get_settings().llm_token_stream
+    settings = get_settings()
+    enable_token_stream = settings.llm_token_stream
 
-    # Handle mock model for testing
-    if agent_row.model == "gpt-mock":
-        from zerg.testing.mock_llm import MockChatLLM
+    # Handle mock/scripted models for testing (guarded by settings.testing)
+    if agent_row.model in ("gpt-mock", "gpt-scripted"):
+        if not settings.testing:
+            raise RuntimeError(f"Test model '{agent_row.model}' cannot be used in production. " f"Set TESTING=1 to enable test models.")
 
-        llm = MockChatLLM()
+        if agent_row.model == "gpt-mock":
+            from zerg.testing.mock_llm import MockChatLLM
+
+            llm = MockChatLLM()
+            return llm.bind_tools(tools)
+
+        # gpt-scripted
+        from zerg.testing.scripted_llm import ScriptedChatLLM
+
+        llm = ScriptedChatLLM()
         return llm.bind_tools(tools)
 
     # Create LLM with basic parameters
@@ -464,8 +475,12 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
     def _call_tool_sync(tool_call: dict):  # noqa: D401 – internal helper
         """Execute a single tool call (blocking)."""
+        import json
 
         tool_name = tool_call["name"]
+        tool_args = tool_call.get("args", {})
+        tool_call_id = tool_call["id"]
+
         tool_to_call = tools_by_name.get(tool_name)
 
         if not tool_to_call:
@@ -473,12 +488,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             logger.error(observation)
         else:
             try:
-                observation = tool_to_call.invoke(tool_call.get("args", {}))
+                observation = tool_to_call.invoke(tool_args)
             except Exception as exc:  # noqa: BLE001
                 observation = f"<tool-error> {exc}"
                 logger.exception("Error executing tool %s", tool_name)
 
-        return ToolMessage(content=str(observation), tool_call_id=tool_call["id"], name=tool_name)
+        # Serialize observation to JSON if it's a dict (tool_success/tool_error envelope)
+        # This ensures consistent JSON format for evidence parsing and artifact storage
+        if isinstance(observation, dict):
+            content = json.dumps(observation)
+        else:
+            content = str(observation)
+
+        return ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name)
 
     # ---------------------------------------------------------------
     # Import helper functions for tool result processing

@@ -34,6 +34,12 @@
         "provider": "openai",
         "tier": null,
         "description": "Mock model for unit tests"
+      },
+      "gpt-scripted": {
+        "displayName": "Scripted (E2E testing)",
+        "provider": "openai",
+        "tier": null,
+        "description": "Scripted model for deterministic E2E tests"
       }
     }
   },

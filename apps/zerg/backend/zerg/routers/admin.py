@@ -602,6 +602,74 @@ async def fix_database_schema():
 
 
 # ---------------------------------------------------------------------------
+# Test Configuration Endpoints (E2E testing only)
+# ---------------------------------------------------------------------------
+
+
+class ConfigureTestModelRequest(BaseModel):
+    """Request model for configuring test model."""
+
+    model: str = "gpt-scripted"
+
+
+@router.post("/configure-test-model")
+async def configure_test_model(
+    request: ConfigureTestModelRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """Configure the supervisor agent to use a test model.
+
+    This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
+    Only available when TESTING=1 is set.
+
+    Args:
+        request: Contains the model to use (default: gpt-scripted)
+
+    Returns:
+        Success message with agent ID
+    """
+    settings = get_settings()
+
+    # CRITICAL: Only allow when testing mode is enabled
+    # This ensures test models can never be configured in production
+    if not settings.testing:
+        raise HTTPException(
+            status_code=403,
+            detail="Test model configuration requires TESTING=1. This endpoint is not available in production.",
+        )
+
+    # Valid test models
+    valid_test_models = {"gpt-mock", "gpt-scripted"}
+    if request.model not in valid_test_models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid test model: {request.model}. Valid options: {valid_test_models}",
+        )
+
+    try:
+        from zerg.services.supervisor_service import SupervisorService
+
+        supervisor_service = SupervisorService(db)
+        agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+
+        # Update agent model
+        agent.model = request.model
+        db.commit()
+
+        logger.info(f"Configured supervisor agent {agent.id} to use model: {request.model}")
+
+        return {
+            "message": f"Supervisor agent configured to use {request.model}",
+            "agent_id": agent.id,
+            "model": request.model,
+        }
+    except Exception as e:
+        logger.error(f"Error configuring test model: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to configure test model: {str(e)}") from e
+
+
+# ---------------------------------------------------------------------------
 # Admin User Usage Endpoints (Phase 2)
 # ---------------------------------------------------------------------------
 
