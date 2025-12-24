@@ -43,7 +43,6 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ## Commands
 
 - `make dev` – brings up unified stack with nginx front.
-- `make zerg` – direct ports stack (backend + frontend).
 - Tests: `make test` (unit), `make test-e2e`, `make test-all`, `make test-chat-e2e`.
 - Codegen: `make generate-sdk`, `make regen-ws`.
 
@@ -53,11 +52,10 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 
 ```
 apps/
-├── zerg/
-│   ├── backend/        # FastAPI + LangGraph supervisor/worker
-│   ├── frontend-web/   # React dashboard
-│   └── e2e/            # Playwright unified tests
-└── jarvis/             # Legacy artifacts + shared packages
+└── zerg/
+    ├── backend/        # FastAPI + LangGraph supervisor/worker
+    ├── frontend-web/   # React dashboard
+    └── e2e/            # Playwright unified tests
 
 docker/                 # Compose files + nginx reverse-proxy configs
 docs/                   # Specs/PRDs (see below)
@@ -72,7 +70,7 @@ scripts/                # Dev tools + generators
 - `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
 - `docs/specs/super-siri-architecture.md` – overall vision.
 - `docs/specs/supervisor-ui-spec.md` – pending (future UI work).
-- `docs/DEPLOYMENT.md` / `docker/docker-compose.dev.yml` – dev/prod entrypoints (profiles: `full|zerg|prod`).
+- `docs/DEPLOYMENT.md` / `docker/docker-compose.dev.yml` – dev/prod entrypoints (profiles: `dev|prod`).
 
 ---
 

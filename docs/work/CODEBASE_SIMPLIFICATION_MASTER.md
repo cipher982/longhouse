@@ -33,7 +33,7 @@ Rules for this effort:
 - [x] Fix `scripts/fast-contract-check.sh` (currently assumes `frontend/` Rust).
 - [x] Fix or remove `scripts/run_all_tests.sh` (assumes `backend/`, `frontend/`, `e2e/`).
 - [x] Fix OpenAPI scripts to use `apps/zerg/openapi.json` (not root `openapi.json`).
-- [ ] Audit and fix any remaining scripts that reference:
+- [x] Audit and fix any remaining scripts that reference:
   - `backend/` (should be `apps/zerg/backend/`)
   - `frontend/` (should be `apps/zerg/frontend-web/` or `apps/zerg/e2e/`)
   - `asyncapi/` or `asyncapi/chat.yml` (schema is under `schemas/`)
@@ -97,18 +97,18 @@ Rules for this effort:
 
 ### 4.1 Remove tracked Yarn artifacts (Bun-first repo)
 
-- [ ] Delete tracked `apps/jarvis/.yarn/install-state.gz` and stop tracking `.yarn/`.
+- [x] Delete tracked `apps/jarvis/.yarn/install-state.gz` and stop tracking `.yarn/`. (N/A - apps/jarvis deleted)
 
 ### 4.2 Remove committed symlink hacks (if feasible)
 
-- [ ] Remove `apps/jarvis/swarm-packages/config` symlink and switch Jarvis to use the root Bun workspace cleanly.
+- [x] Remove `apps/jarvis/swarm-packages/config` symlink and switch Jarvis to use the root Bun workspace cleanly. (N/A - apps/jarvis deleted)
 
 ---
 
 ## Phase 5 — Repo Hygiene + Deletions
 
-- [ ] Stop tracking/move root-level stale Python project config (`pyproject.toml`) if unused.
-- [ ] Remove unused root `tests/` (if not executed by `make test` / CI).
+- [x] Stop tracking/move root-level stale Python project config (`pyproject.toml`) if unused. (N/A - not present at root)
+- [x] Remove unused root `tests/` (if not executed by `make test` / CI). (N/A - not present at root)
 - [ ] Gitignore `scratch/` and move any needed docs into `docs/`.
 
 ---
@@ -116,6 +116,12 @@ Rules for this effort:
 ## Phase 6 — CI / Automation Alignment
 
 - [x] Update `.github/workflows/*` to match current repo structure + Bun/uv.
+
+### 6.2 Docker Profile Consolidation
+
+- [x] Rename `full` profile to `dev` and remove `zerg` profile.
+- [x] Consolidate backend/frontend services in `docker-compose.dev.yml`.
+- [x] Standardize on `make dev` as primary entry point.
 
 ### 6.1 Pre-commit Overhaul (AI Agent Safety)
 
