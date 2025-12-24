@@ -56,7 +56,7 @@ test.describe('Data Persistence and Recovery', () => {
     // Navigate to UI and verify agent appears
     await page.goto('/');
     await page.waitForTimeout(1000);
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Wait for dashboard to load and force a refresh of data
@@ -67,7 +67,7 @@ test.describe('Data Persistence and Recovery', () => {
     await page.waitForTimeout(3000);
 
     // Navigate back to dashboard after reload
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(2000);
 
     // Wait for the agents table to load
@@ -101,7 +101,7 @@ test.describe('Data Persistence and Recovery', () => {
     // Navigate to application again
     await newPage.goto('/');
     await newPage.waitForTimeout(2000);
-    await newPage.getByTestId('global-dashboard-tab').click();
+    await newPage.locator('.header-nav').click();
     await newPage.waitForTimeout(1000);
 
     // Verify data persisted after "restart"

@@ -34,7 +34,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
     await page.waitForLoadState('networkidle');
 
     // Click dashboard tab if not already there
-    const dashboardTab = page.locator('[data-testid="global-dashboard-tab"]');
+    const dashboardTab = page.locator('.header-nav');
     if (await dashboardTab.isVisible()) {
       await dashboardTab.click();
     }

@@ -479,7 +479,7 @@ test.describe('Accessibility and UI/UX', () => {
 
     // Step 1: Navigate to dashboard
     const step1Start = Date.now();
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
     const step1Time = Date.now() - step1Start;
     workflowSteps.push({ step: 'Navigate to dashboard', time: step1Time });
@@ -517,7 +517,7 @@ test.describe('Accessibility and UI/UX', () => {
       // Step 3: Verify agent appears in dashboard
       await page.reload();
       await page.waitForTimeout(1000);
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(500);
 
       const agentVisible = await page.locator(`text=${agent.name}`).isVisible();

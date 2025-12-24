@@ -21,7 +21,7 @@ test.describe('Agent + Tool Complete E2E Workflow', () => {
     await page.waitForTimeout(2000);
 
     // Verify clean state - should have no agents in fresh in-memory DB
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
     const existingAgents = await page.locator('table tbody tr').count();
     console.log(`🧹 Clean in-memory DB state: ${existingAgents} existing agents`);
@@ -39,7 +39,7 @@ test.describe('Agent + Tool Complete E2E Workflow', () => {
     console.log('🔥 Step 1: Creating test agent...');
 
     // Navigate to dashboard
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Create just ONE agent to avoid confusion
@@ -383,7 +383,7 @@ test.describe('Agent + Tool Complete E2E Workflow', () => {
     console.log('🧪 Testing agent shelf functionality...');
 
     // First create an agent
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const createAgentBtn = page.locator('button:has-text("Create Agent")');

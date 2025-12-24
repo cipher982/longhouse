@@ -16,7 +16,7 @@ test.describe('Agent ID Fix Verification', () => {
     console.log('🔧 Testing agent_id fix for workflow execution...');
 
     // Step 1: Create a test agent
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const createAgentBtn = page.locator('button:has-text("Create Agent")');
@@ -115,7 +115,7 @@ test.describe('Agent ID Fix Verification', () => {
     console.log('🔍 Testing canvas data structure...');
 
     // Create agent and drag to canvas (simplified version)
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const createAgentBtn = page.locator('button:has-text("Create Agent")');

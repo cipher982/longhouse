@@ -275,7 +275,7 @@ test.describe('Error Handling and Edge Cases', () => {
       await page.waitForTimeout(500);
 
       // Try to interact with UI while offline
-      await page.getByTestId('global-dashboard-tab').click();
+      await page.locator('.header-nav').click();
       await page.waitForTimeout(1000);
 
       // Check for offline indicators or error messages
@@ -330,7 +330,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Try various UI interactions that might cause errors
     await page.getByTestId('global-canvas-tab').click();
     await page.waitForTimeout(500);
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
 
     console.log('📊 JavaScript errors detected:', jsErrors.length);

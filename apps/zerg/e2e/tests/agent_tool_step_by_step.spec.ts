@@ -30,7 +30,7 @@ test.describe('Agent-Tool E2E - Step by Step', () => {
     console.log('🧪 Step 1: Verifying clean database...');
 
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const agentRows = await page.locator('table tbody tr').all();
@@ -46,7 +46,7 @@ test.describe('Agent-Tool E2E - Step by Step', () => {
     console.log('🧪 Step 2: Creating one agent...');
 
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Verify clean start
@@ -74,7 +74,7 @@ test.describe('Agent-Tool E2E - Step by Step', () => {
     console.log('🧪 Step 3: Creating agent and navigating to canvas...');
 
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     // Create agent first
@@ -107,7 +107,7 @@ test.describe('Agent-Tool E2E - Step by Step', () => {
 
     // Setup: Create agent and go to canvas
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const createBtn = page.locator('button:has-text("Create Agent")');
@@ -156,7 +156,7 @@ test.describe('Agent-Tool E2E - Step by Step', () => {
 
     // Setup: Create agent and go to canvas
     await page.goto('/');
-    await page.getByTestId('global-dashboard-tab').click();
+    await page.locator('.header-nav').click();
     await page.waitForTimeout(1000);
 
     const createBtn = page.locator('button:has-text("Create Agent")');
