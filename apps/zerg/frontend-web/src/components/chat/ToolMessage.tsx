@@ -3,7 +3,7 @@ import clsx from "clsx";
 import { SyntaxHighlighter, oneDark } from '../../lib/syntaxHighlighter';
 import { ThreadMessage } from "../../services/api";
 import { RunnerSetupCard, parseRunnerSetupData } from "./RunnerSetupCard";
-import { WrenchIcon } from "../icons";
+import { WrenchIcon, ChevronRightIcon } from "../icons";
 
 interface ToolMessageProps {
   message: ThreadMessage;
@@ -47,7 +47,7 @@ export function ToolMessage({ message }: ToolMessageProps) {
         <span className="tool-status-indicator">
            {isProcessing ? "Running..." : "Completed"}
         </span>
-        <div className={clsx("chevron", { "open": isOpen })}>▶</div>
+        <div className={clsx("chevron", { "open": isOpen })}><ChevronRightIcon width={14} height={14} /></div>
       </div>
 
       {isOpen && (
