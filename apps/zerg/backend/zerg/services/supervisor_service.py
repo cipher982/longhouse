@@ -55,7 +55,7 @@ class SupervisorRunResult:
 
     run_id: int
     thread_id: int
-    status: str  # 'success' | 'failed' | 'cancelled' | 'error'
+    status: str  # 'success' | 'failed' | 'cancelled' | 'deferred' | 'error'
     result: str | None = None
     error: str | None = None
     duration_ms: int = 0
@@ -510,17 +510,53 @@ class SupervisorService:
 
             _user_ctx_token = set_current_user_id(owner_id)
 
-            # Run the agent with timeout
+            # Run the agent with timeout (shielded so timeout doesn't cancel work)
             runner = AgentRunner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
+            run_task = asyncio.create_task(runner.run_thread(self.db, thread))
             try:
+                # asyncio.shield() prevents timeout from cancelling the task -
+                # the timeout stops WAITING, not the WORK itself
                 created_messages = await asyncio.wait_for(
-                    runner.run_thread(self.db, thread),
+                    asyncio.shield(run_task),
                     timeout=timeout,
                 )
             except asyncio.TimeoutError:
-                raise RuntimeError(f"Supervisor execution timed out after {timeout}s")
+                # Timeout migration: run continues in background, we return deferred status
+                # Calculate duration for the deferred event
+                end_time = datetime.now(timezone.utc)
+                duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+                # Update run status to DEFERRED (not FAILED)
+                run.status = RunStatus.DEFERRED
+                self.db.commit()
+
+                # Emit deferred event (not error)
+                await event_bus.publish(
+                    EventType.SUPERVISOR_DEFERRED,
+                    {
+                        "event_type": EventType.SUPERVISOR_DEFERRED,
+                        "run_id": run.id,
+                        "thread_id": thread.id,
+                        "message": "Still working on this in the background. I'll continue when ready.",
+                        "timeout_seconds": timeout,
+                        "attach_url": f"/api/jarvis/runs/{run.id}/stream",
+                        "owner_id": owner_id,
+                    },
+                )
+
+                logger.info(f"Supervisor run {run.id} deferred after {timeout}s timeout (task continues in background)")
+
+                # Return deferred result - NOT an error
+                return SupervisorRunResult(
+                    run_id=run.id,
+                    thread_id=thread.id,
+                    status="deferred",
+                    result="Still working on this in the background. I'll let you know when it's done.",
+                    duration_ms=duration_ms,
+                    debug_url=f"/supervisor/{run.id}",
+                )
             finally:
-                # Always reset context even on timeout
+                # Always reset context even on timeout/deferred
                 reset_supervisor_run_id(_supervisor_ctx_token)
                 # Reset user context
                 from zerg.callbacks.token_stream import current_user_id_var

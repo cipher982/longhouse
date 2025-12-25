@@ -88,7 +88,7 @@ async def _chat_stream_generator(
                     owner_id=owner_id,
                     task=message,
                     run_id=run_id,
-                    timeout=120,
+                    timeout=600,  # 10 min safety net; deferred state kicks in before this
                     model_override=model,
                     reasoning_effort=reasoning_effort,
                 )
@@ -112,6 +112,7 @@ async def _chat_stream_generator(
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)  # Real-time LLM tokens
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)  # Timeout migration
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
@@ -194,15 +195,18 @@ async def _chat_stream_generator(
                 }
 
     except asyncio.CancelledError:
-        logger.info(f"Chat SSE stream disconnected for run {run_id}")
-        if task_handle and not task_handle.done():
-            task_handle.cancel()
+        # v2.2: SSE disconnect doesn't cancel the run - work continues in background
+        logger.info(f"Chat SSE stream disconnected for run {run_id} - run continues in background")
+        # DON'T cancel the task - let it continue
+        # if task_handle and not task_handle.done():
+        #     task_handle.cancel()
     finally:
         # Unsubscribe from all events
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
