@@ -10,8 +10,7 @@ import { useCallback, useEffect } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
-import { workerProgress } from '../lib/worker-progress'
+import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, WorkerProgress } from './components'
 
 console.info('[Jarvis] Starting React application')
 
@@ -22,11 +21,6 @@ interface AppProps {
 export default function App({ embedded = false }: AppProps) {
   const state = useAppState()
   const dispatch = useAppDispatch()
-
-  // Initialize worker progress UI (shows when supervisor delegates to workers)
-  useEffect(() => {
-    workerProgress.initialize('worker-progress', 'sticky')
-  }, [])
 
   // Pause expensive CSS animations when window loses focus (saves CPU/GPU)
   useEffect(() => {
@@ -136,6 +130,8 @@ export default function App({ embedded = false }: AppProps) {
           <ModelSelector />
         </div>
 
+        <WorkerProgress mode="sticky" />
+
         <ChatContainer
           messages={state.messages}
           userTranscriptPreview={state.userTranscriptPreview}
@@ -152,9 +148,6 @@ export default function App({ embedded = false }: AppProps) {
           />
         </div>
       </div>
-
-      {/* Worker progress container (WorkerProgressUI will normalize/relocate as needed) */}
-      <div id="worker-progress"></div>
 
       {/* Hidden audio element for remote playback */}
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>
