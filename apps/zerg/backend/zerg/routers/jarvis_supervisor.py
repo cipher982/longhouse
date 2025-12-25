@@ -173,6 +173,19 @@ async def jarvis_supervisor(
 
     logger.info(f"Jarvis supervisor: created run {run.id} for user {current_user.id}, task: {request.task[:50]}...")
 
+    # Unit tests use a per-test ephemeral database that is torn down immediately after the request.
+    # Spawning background tasks here can outlive the test and crash xdist workers during teardown.
+    from zerg.config import get_settings
+
+    if get_settings().testing:
+        logger.debug("TESTING=1: skipping background supervisor execution for run %s", run.id)
+        return JarvisSupervisorResponse(
+            run_id=run.id,
+            thread_id=thread.id,
+            status="running",
+            stream_url=f"/api/jarvis/supervisor/events?run_id={run.id}",
+        )
+
     # Start supervisor execution in background
     async def run_supervisor_background(owner_id: int, task: str, run_id: int):
         """Execute supervisor in background."""
@@ -188,6 +201,7 @@ async def jarvis_supervisor(
                     task=task,
                     run_id=run_id,  # Use the run created in the endpoint
                     timeout=120,
+                    return_on_deferred=False,
                 )
         except Exception as e:
             logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
@@ -243,6 +257,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)  # Timeout migration
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
@@ -285,6 +300,9 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     pending_workers -= 1
                 elif event_type == "supervisor_complete":
                     supervisor_done = True
+                elif event_type == "supervisor_deferred":
+                    # v2.2: Timeout migration - supervisor deferred, close stream
+                    complete = True
                 elif event_type == "error":
                     complete = True
 
@@ -332,6 +350,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
