@@ -37,8 +37,9 @@ def test_summary_basic(db_session):
     )
     thread = crud.create_thread(db=db_session, agent_id=agent.id, title="t1", active=True, agent_state={})
 
-    now = datetime.utcnow()
-    today = now
+    # Use a stable "today" timestamp that won't cross a UTC day boundary during the test run.
+    # These tests query by UTC date, so running near 00:00Z can otherwise flake.
+    today = datetime.combine(datetime.utcnow().date(), datetime.min.time()) + timedelta(hours=12)
 
     # 1 success with cost and duration
     _mk_run(
@@ -123,7 +124,8 @@ def test_top_agents_ordering_and_limit(db_session):
     )
     t1 = crud.create_thread(db=db_session, agent_id=a1.id, title="t1", active=True, agent_state={})
     t2 = crud.create_thread(db=db_session, agent_id=a2.id, title="t2", active=True, agent_state={})
-    now = datetime.utcnow()
+    # Avoid UTC day-boundary flakes: ops queries group/filter by UTC date.
+    now = datetime.combine(datetime.utcnow().date(), datetime.min.time()) + timedelta(hours=12)
     # A1: 3 runs
     for _ in range(3):
         _mk_run(

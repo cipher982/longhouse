@@ -42,9 +42,18 @@ from zerg.models.models import ThreadMessage
 from zerg.services.scheduler_service import scheduler_service
 from zerg.websocket.manager import topic_manager
 
-# Disable LangSmith tracing for all tests
-os.environ["LANGCHAIN_TRACING_V2"] = "false"
-os.environ["LANGCHAIN_ENDPOINT"] = ""
+# Disable LangSmith/LangChain tracing for all tests.
+# LangChain can treat the *presence* of these env vars as "enabled" (even if set to "false"),
+# so we explicitly unset them to avoid tracer initialization during tests.
+for _k in (
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_ENDPOINT",
+    "LANGCHAIN_API_KEY",
+    "LANGSMITH_TRACING",
+    "LANGSMITH_ENDPOINT",
+    "LANGSMITH_API_KEY",
+):
+    os.environ.pop(_k, None)
 
 # ---------------------------------------------------------------------------
 # Stub *cryptography* so zerg.utils.crypto can import Fernet without the real
@@ -73,8 +82,6 @@ if "cryptography" not in sys.modules:  # guard in case real package installed
     _fernet_mod.Fernet = _FakeFernet  # type: ignore[attr-defined]
     sys.modules["cryptography"] = _crypto_mod
     sys.modules["cryptography.fernet"] = _fernet_mod
-
-os.environ["LANGCHAIN_API_KEY"] = ""
 
 # ---------------------------------------------------------------------------
 # Crypto – note: FERNET_SECRET is set above, before any project imports.
