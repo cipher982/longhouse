@@ -55,7 +55,7 @@ Be extremely specific about missing interactive elements and their impact on use
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5.1",
+      model: "gpt-5.2",
       messages: [
         {
           role: "user",

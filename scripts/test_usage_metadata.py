@@ -30,7 +30,7 @@ def test_usage_metadata():
     print("="*60)
 
     llm = ChatOpenAI(
-        model="gpt-5.1",
+        model="gpt-5.2",
         api_key=api_key,
         streaming=True,
         reasoning_effort="high",

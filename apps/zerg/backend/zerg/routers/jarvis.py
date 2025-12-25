@@ -335,7 +335,7 @@ def jarvis_clear_history(
 class JarvisModelInfo(BaseModel):
     """Model information for frontend display."""
 
-    id: str = Field(..., description="Model ID (e.g., gpt-5.1)")
+    id: str = Field(..., description="Model ID (e.g., gpt-5.2)")
     display_name: str = Field(..., description="Human-readable name")
     description: str = Field(..., description="Brief description")
 

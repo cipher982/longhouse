@@ -253,7 +253,7 @@ The Jarvis code lives in `src/jarvis/` with this structure:
 
 **Reasoning Effort Feature:**
 - Chat UI includes reasoning effort selector (none/low/medium/high)
-- Controls OpenAI reasoning intensity for gpt-5.1, o1, o3 models
+- Controls OpenAI reasoning intensity for gpt-5.2, o1, o3 models
 - Displays reasoning tokens badge in UI when >0
 - Implementation uses raw AsyncOpenAI (now upgraded to LangChain `usage_metadata` v1.2.5+)
 

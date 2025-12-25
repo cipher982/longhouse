@@ -323,7 +323,7 @@ export class StateManager {
    * Get current preferences
    */
   getPreferences(): ChatPreferences {
-    return this.state.bootstrap?.preferences || { chat_model: 'gpt-5.1', reasoning_effort: 'none' };
+    return this.state.bootstrap?.preferences || { chat_model: 'gpt-5.2', reasoning_effort: 'none' };
   }
 
   /**

@@ -166,7 +166,7 @@ class _LazyMock:
 
 # Model tiers by capability (change these in config/models.json to update everywhere)
 # These are lazy - config is loaded on first string conversion/comparison
-TIER_1 = _LazyTier("TIER_1")  # Best reasoning (gpt-5.1)
+TIER_1 = _LazyTier("TIER_1")  # Best reasoning (gpt-5.2)
 TIER_2 = _LazyTier("TIER_2")  # Good, cheaper (gpt-5-mini)
 TIER_3 = _LazyTier("TIER_3")  # Basic, cheapest (gpt-5-nano)
 MOCK_MODEL = _LazyMock()  # For unit tests

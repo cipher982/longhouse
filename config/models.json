@@ -5,17 +5,17 @@
   "text": {
     "$comment": "Text/chat completion models (Zerg agent orchestration)",
     "tiers": {
-      "TIER_1": "gpt-5.1",
+      "TIER_1": "gpt-5.2",
       "TIER_2": "gpt-5-mini",
       "TIER_3": "gpt-5-nano"
     },
     "mock": "gpt-mock",
     "models": {
-      "gpt-5.1": {
-        "displayName": "GPT-5.1",
+      "gpt-5.2": {
+        "displayName": "GPT-5.2",
         "provider": "openai",
         "tier": "TIER_1",
-        "description": "Best reasoning capability"
+        "description": "Latest state-of-the-art reasoning capability"
       },
       "gpt-5-mini": {
         "displayName": "GPT-5 Mini",
