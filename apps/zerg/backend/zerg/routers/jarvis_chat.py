@@ -91,6 +91,7 @@ async def _chat_stream_generator(
                     timeout=600,  # 10 min safety net; deferred state kicks in before this
                     model_override=model,
                     reasoning_effort=reasoning_effort,
+                    return_on_deferred=False,
                 )
         except Exception as e:
             logger.exception(f"Background supervisor execution failed for run {run_id}: {e}")
