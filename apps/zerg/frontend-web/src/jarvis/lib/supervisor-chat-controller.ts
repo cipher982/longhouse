@@ -74,6 +74,9 @@ interface SSESupervisorEvent {
       total_tokens?: number | null;
       reasoning_tokens?: number | null;
     };
+    // Deferred state fields
+    attach_url?: string;
+    timeout_seconds?: number;
   };
   client_correlation_id?: string;
 }
@@ -193,14 +196,33 @@ export class SupervisorChatController {
 
   /**
    * Start the 60s watchdog timer
+   * v2.2: On timeout, show deferred message instead of error (work continues on server)
    */
   private startWatchdog(correlationId: string): void {
     this.clearWatchdog();
-    this.watchdogTimer = window.setTimeout(() => {
-      logger.warn(`[SupervisorChat] Watchdog timeout for ${correlationId}`);
-      stateManager.updateAssistantStatus(correlationId, 'error');
-      stateManager.showToast('Timed out waiting for response', 'error');
-      this.cancel();
+    this.watchdogTimer = window.setTimeout(async () => {
+      logger.warn(`[SupervisorChat] Watchdog timeout for ${correlationId} - marking as deferred`);
+
+      // v2.2: Don't cancel or show error - the server work continues in background
+      const deferredMsg = 'Still working on this in the background. The server will continue processing...';
+
+      // Show deferred message as assistant response (not error toast)
+      conversationController.startStreaming(correlationId);
+      conversationController.appendStreaming(deferredMsg, correlationId);
+      await conversationController.finalizeStreaming();
+
+      stateManager.updateAssistantStatus(correlationId, 'final', deferredMsg);
+
+      // Emit deferred event for UI
+      if (this.currentRunId) {
+        eventBus.emit('supervisor:deferred', {
+          runId: this.currentRunId,
+          message: deferredMsg,
+          timestamp: Date.now(),
+        });
+      }
+
+      // DON'T call cancel() - let server continue working
     }, this.WATCHDOG_TIMEOUT_MS);
   }
 
@@ -499,6 +521,33 @@ export class SupervisorChatController {
             timestamp: Date.now(),
             // Token usage for debug/power mode
             usage: payload.usage,
+          });
+        }
+        break;
+      }
+
+      case 'supervisor_deferred': {
+        // Timeout migration: run continues in background, we show a friendly message
+        this.clearWatchdog();
+        logger.info('[SupervisorChat] Supervisor deferred (timeout migration)');
+        const deferredMsg = payload.message || 'Still working on this in the background...';
+
+        // Show deferred message as an assistant response (not error toast)
+        conversationController.startStreaming(correlationId);
+        conversationController.appendStreaming(deferredMsg, correlationId);
+        await conversationController.finalizeStreaming();
+
+        if (correlationId) {
+          // Use 'final' status since this is a valid response
+          stateManager.updateAssistantStatus(correlationId, 'final', deferredMsg);
+        }
+
+        if (this.currentRunId) {
+          eventBus.emit('supervisor:deferred', {
+            runId: this.currentRunId,
+            message: deferredMsg,
+            attachUrl: payload.attach_url,
+            timestamp: Date.now(),
           });
         }
         break;

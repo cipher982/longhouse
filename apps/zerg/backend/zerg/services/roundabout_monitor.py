@@ -185,31 +185,19 @@ def make_heuristic_decision(ctx: DecisionContext) -> tuple[RoundaboutDecision, s
                     f"Final answer pattern detected: {pattern}",
                 )
 
-    # Priority 3: Cancel if stuck too long
+    # Priority 3: Warn (not cancel) if stuck too long
+    # v2.2: Timeouts stop waiting, not working. Let hard timeout be the safety net.
     if ctx.is_stuck and ctx.stuck_seconds > ROUNDABOUT_CANCEL_STUCK_THRESHOLD:
-        return (
-            RoundaboutDecision.CANCEL,
-            f"Operation stuck for {ctx.stuck_seconds:.0f}s (threshold: {ROUNDABOUT_CANCEL_STUCK_THRESHOLD}s)",
-        )
+        logger.warning(f"Job {ctx.job_id}: operation stuck for {ctx.stuck_seconds:.0f}s - " "continuing (hard timeout is safety net)")
+        # Don't cancel - just log. LLM may be thinking or waiting for SSH response.
 
-    # Priority 4: Cancel if no progress for too many polls
-    # Guard: Only cancel if we've been running long enough AND at least one tool has started
-    # This prevents false cancels on short tasks that haven't emitted events yet
-    min_elapsed_for_cancel = ROUNDABOUT_CHECK_INTERVAL * 4  # At least 20s before cancel
-    has_tool_activity = len(ctx.tool_activities) > 0
+    # Priority 4: Warn (not cancel) if no progress for too many polls
+    # v2.2: Timeouts stop waiting, not working. Let hard timeout be the safety net.
     if ctx.polls_without_progress >= ROUNDABOUT_NO_PROGRESS_POLLS:
-        if ctx.elapsed_seconds >= min_elapsed_for_cancel and has_tool_activity:
-            return (
-                RoundaboutDecision.CANCEL,
-                f"No progress for {ctx.polls_without_progress} consecutive polls",
-            )
-        elif ctx.elapsed_seconds >= ROUNDABOUT_CANCEL_STUCK_THRESHOLD:
-            # Extended grace period (60s) expired even without tool activity
-            # This allows for long initial model calls before first tool event
-            return (
-                RoundaboutDecision.CANCEL,
-                f"No tool activity after {ctx.elapsed_seconds:.0f}s",
-            )
+        logger.warning(
+            f"Job {ctx.job_id}: {ctx.polls_without_progress} polls without progress - " "continuing (hard timeout is safety net)"
+        )
+        # Don't cancel - just log. LLM may be reasoning or waiting for external service.
 
     # Priority 5: Suggest peek if stuck but not cancel-worthy yet
     # (Future: could trigger LLM decision here)
