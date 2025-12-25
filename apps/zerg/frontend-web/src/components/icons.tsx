@@ -453,3 +453,61 @@ export function SidebarIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function CheckCircleIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="10" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+export function XCircleIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="10" />
+      <path d="m15 9-6 6" />
+      <path d="m9 9 6 6" />
+    </svg>
+  );
+}
+
+export function AlertTriangleIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+export function ClipboardIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    </svg>
+  );
+}
+
+export function MonitorIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <rect width="20" height="14" x="2" y="3" rx="2" />
+      <line x1="8" x2="16" y1="21" y2="21" />
+      <line x1="12" x2="12" y1="17" y2="21" />
+    </svg>
+  );
+}
+
+export function InfoCircleIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
