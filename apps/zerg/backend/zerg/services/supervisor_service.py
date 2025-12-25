@@ -388,6 +388,7 @@ class SupervisorService:
         timeout: int = 60,
         model_override: str | None = None,
         reasoning_effort: str | None = None,
+        return_on_deferred: bool = True,
     ) -> SupervisorRunResult:
         """Run the supervisor agent with a task.
 
@@ -405,6 +406,8 @@ class SupervisorService:
             timeout: Maximum execution time in seconds
             model_override: Optional model to use instead of agent's default
             reasoning_effort: Optional reasoning effort (none, low, medium, high)
+            return_on_deferred: If True, return a DEFERRED response once the timeout hits.
+                If False, emit SUPERVISOR_DEFERRED but continue running in the background until completion.
 
         Returns:
             SupervisorRunResult with run details and result
@@ -545,17 +548,25 @@ class SupervisorService:
                     },
                 )
 
-                logger.info(f"Supervisor run {run.id} deferred after {timeout}s timeout (task continues in background)")
+                logger.info(f"Supervisor run {run.id} deferred after {timeout}s timeout (continuing in background until completion)")
 
-                # Return deferred result - NOT an error
-                return SupervisorRunResult(
-                    run_id=run.id,
-                    thread_id=thread.id,
-                    status="deferred",
-                    result="Still working on this in the background. I'll let you know when it's done.",
-                    duration_ms=duration_ms,
-                    debug_url=f"/supervisor/{run.id}",
-                )
+                if return_on_deferred:
+                    # Return deferred result - NOT an error.
+                    # Note: In the production HTTP flows, supervisor runs are executed in a long-lived
+                    # background task (see jarvis_supervisor/jarvis_chat) and can pass
+                    # return_on_deferred=False to keep the DB session alive until completion.
+                    return SupervisorRunResult(
+                        run_id=run.id,
+                        thread_id=thread.id,
+                        status="deferred",
+                        result="Still working on this in the background. I'll let you know when it's done.",
+                        duration_ms=duration_ms,
+                        debug_url=f"/supervisor/{run.id}",
+                    )
+
+                # Background mode: keep awaiting the original run_task to completion, then mark the run
+                # finished and persist the result (SSE streams can close on SUPERVISOR_DEFERRED).
+                created_messages = await run_task
             finally:
                 # Always reset context even on timeout/deferred
                 reset_supervisor_run_id(_supervisor_ctx_token)

@@ -1,6 +1,6 @@
 # Durable Runs v2.2: Timeout Migration & Completion Notifications
 
-> **Status**: MVP Complete (Phases 1-4, 6 done; Phase 5 pending)
+> **Status**: MVP Complete (Phases 1-3, 6 done; Phase 5 pending)
 > **Date**: 2025-12-25
 > **Updated**: 2025-12-25
 > **Authors**: Post-mortem analysis + prior art research
@@ -472,152 +472,13 @@ def handle_heartbeat(payload):
 
 ---
 
-### Phase 4: Completion Webhooks
+### Phase 4: Completion Notifications (Not Needed in MVP)
 
-**Goal**: Notify supervisor when background workers complete.
+**Goal**: Ensure DEFERRED runs eventually transition to SUCCESS/FAILED and results are persisted.
 
-#### Task 4.1: Create continuation endpoint
+In v2.2 MVP, this is achieved by keeping the *original* supervisor run executing in the background after emitting `SUPERVISOR_DEFERRED`. When the supervisor finishes (often immediately after a worker completes), it updates the same `AgentRun` row to `SUCCESS`/`FAILED` and persists the final assistant message.
 
-**File**: `apps/zerg/backend/zerg/routers/jarvis_internal.py` (new file)
-
-```python
-router = APIRouter(prefix="/internal", tags=["internal"])
-
-class ContinuationPayload(BaseModel):
-    trigger: str  # "worker_complete"
-    job_id: int
-    worker_id: str
-    status: str
-    result_summary: str
-
-@router.post("/runs/{run_id}/continue")
-async def continue_run(
-    run_id: int,
-    payload: ContinuationPayload,
-    db: Session = Depends(get_db),
-):
-    """Handle worker completion - inject result and trigger supervisor continuation."""
-
-    # Get original run to find thread
-    original_run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-    if not original_run:
-        raise HTTPException(404, f"Run {run_id} not found")
-
-    # Inject worker result as tool message
-    crud.create_thread_message(
-        db=db,
-        thread_id=original_run.thread_id,
-        role="tool",
-        content=f"[Worker job {payload.job_id} completed]\n\n{payload.result_summary}",
-        processed=False,  # Supervisor will process this
-    )
-    db.commit()
-
-    # Trigger new supervisor run (continuation)
-    supervisor_service = SupervisorService(db)
-    asyncio.create_task(
-        supervisor_service.run_continuation(
-            run_id=run_id,
-            thread_id=original_run.thread_id,
-            owner_id=original_run.agent.owner_id,
-        )
-    )
-
-    return {"status": "continuation_triggered", "original_run_id": run_id}
-```
-
-#### Task 4.2: Call webhook on worker completion
-
-**File**: `apps/zerg/backend/zerg/services/worker_job_processor.py`
-
-```python
-# After line ~181 (WORKER_COMPLETE event):
-
-# Trigger supervisor continuation if this was a background/deferred job
-if job.supervisor_run_id:
-    try:
-        # Internal webhook (same process, but could be HTTP for distributed)
-        await trigger_continuation(
-            run_id=job.supervisor_run_id,
-            job_id=job.id,
-            worker_id=result.worker_id,
-            status=result.status,
-            result_summary=result.summary or result.result[:500],
-        )
-    except Exception as e:
-        logger.error(f"Failed to trigger continuation for run {job.supervisor_run_id}: {e}")
-```
-
-#### Task 4.3: Add run_continuation method
-
-**File**: `apps/zerg/backend/zerg/services/supervisor_service.py`
-
-```python
-async def run_continuation(
-    self,
-    original_run_id: int,
-    thread_id: int,
-    owner_id: int,
-) -> SupervisorRunResult:
-    """Continue a deferred run after worker completion.
-
-    Creates a NEW run on the same thread to process the injected
-    worker result. Links to original via continuation_of_run_id.
-    """
-    # Get original run info
-    original_run = self.db.query(AgentRun).filter(AgentRun.id == original_run_id).first()
-    if not original_run:
-        raise ValueError(f"Original run {original_run_id} not found")
-
-    agent = original_run.agent
-
-    # Create NEW run (not reusing original run_id)
-    continuation_run = AgentRun(
-        agent_id=agent.id,
-        thread_id=thread_id,
-        status=RunStatus.RUNNING,
-        trigger=RunTrigger.CONTINUATION,
-        continuation_of_run_id=original_run_id,  # Link to parent
-    )
-    self.db.add(continuation_run)
-    self.db.commit()
-    self.db.refresh(continuation_run)
-
-    logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
-
-    # Run supervisor to process the new tool message
-    return await self.run_supervisor(
-        owner_id=owner_id,
-        task="[CONTINUATION] Process worker result and provide final answer.",
-        run_id=continuation_run.id,  # NEW run_id
-        timeout=300,
-    )
-```
-
-#### Task 4.4: Add continuation_of_run_id to AgentRun model
-
-**File**: `apps/zerg/backend/zerg/models/models.py`
-
-```python
-class AgentRun(Base):
-    # ... existing fields ...
-    continuation_of_run_id = Column(Integer, ForeignKey("agent_run.id"), nullable=True)
-
-    # Relationship for tracing
-    continued_from = relationship("AgentRun", remote_side=[id], backref="continuations")
-```
-
-#### Task 4.5: Add CONTINUATION trigger type
-
-**File**: `apps/zerg/backend/zerg/models/enums.py`
-
-```python
-class RunTrigger(str, Enum):
-    API = "api"
-    SCHEDULE = "schedule"
-    WEBHOOK = "webhook"
-    CONTINUATION = "continuation"  # NEW: triggered by worker completion
-```
+This avoids creating "continuation runs" and avoids any internal webhook surface area.
 
 ---
 
