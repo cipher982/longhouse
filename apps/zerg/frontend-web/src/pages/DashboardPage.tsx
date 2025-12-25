@@ -1273,6 +1273,8 @@ function formatRunStatusIcon(status: AgentRun["status"]): ReactElement {
   switch (status) {
     case "running":
       return <PlayIcon width={12} height={12} />;
+    case "deferred":
+      return <LoaderIcon width={12} height={12} className="animate-spin" />;
     case "success":
       return <CheckCircleIcon width={12} height={12} />;
     case "failed":
