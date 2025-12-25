@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchRunners, type Runner } from "../../services/api";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
+import { CheckCircleIcon, MonitorIcon, ClipboardIcon, AlertTriangleIcon, ChevronRightIcon, ChevronDownIcon } from "../icons";
 
 interface RunnerSetupData {
   enroll_token: string;
@@ -166,7 +167,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
     return (
       <div className="runner-setup-card runner-setup-card-success">
         <div className="runner-setup-header">
-          <span className="runner-setup-icon">✅</span>
+          <span className="runner-setup-icon"><CheckCircleIcon width={20} height={20} /></span>
           <span className="runner-setup-title">Runner Connected!</span>
         </div>
         <div className="runner-setup-body">
@@ -201,7 +202,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
   return (
     <div className={`runner-setup-card ${status === "expired" ? "runner-setup-card-expired" : ""}`}>
       <div className="runner-setup-header">
-        <span className="runner-setup-icon">🖥️</span>
+        <span className="runner-setup-icon"><MonitorIcon width={20} height={20} /></span>
         <span className="runner-setup-title">Connect Your Infrastructure</span>
       </div>
 
@@ -220,7 +221,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
             onClick={handleCopyOneLiner}
             disabled={status === "expired"}
           >
-            {copied ? "✓ Copied" : "📋 Copy"}
+            {copied ? "✓ Copied" : <><ClipboardIcon width={14} height={14} /> Copy</>}
           </button>
         </div>
 
@@ -232,7 +233,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
             className="runner-setup-manual-toggle-button"
             onClick={() => setShowManualSetup(!showManualSetup)}
           >
-            {showManualSetup ? "▼ Hide manual setup (2 steps)" : "▶ Show manual setup (2 steps)"}
+            {showManualSetup ? <><ChevronDownIcon width={14} height={14} /> Hide manual setup (2 steps)</> : <><ChevronRightIcon width={14} height={14} /> Show manual setup (2 steps)</>}
           </button>
         </div>
 
@@ -251,7 +252,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
                 onClick={handleCopyManual}
                 disabled={status === "expired"}
               >
-                {copied ? "✓ Copied" : "📋 Copy"}
+                {copied ? "✓ Copied" : <><ClipboardIcon width={14} height={14} /> Copy</>}
               </button>
             </div>
           </div>
@@ -271,7 +272,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
           )}
           {status === "expired" && (
             <span className="runner-status-expired">
-              ⚠️ Token expired. Ask me to generate a new one.
+              <AlertTriangleIcon width={16} height={16} /> Token expired. Ask me to generate a new one.
             </span>
           )}
         </div>
@@ -283,7 +284,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
               className="runner-setup-raw-toggle"
               onClick={() => setShowRawOutput(!showRawOutput)}
             >
-              {showRawOutput ? "▼ Hide raw output" : "▶ Show raw output"}
+              {showRawOutput ? <><ChevronDownIcon width={14} height={14} /> Hide raw output</> : <><ChevronRightIcon width={14} height={14} /> Show raw output</>}
             </button>
             {showRawOutput && (
               <div className="runner-setup-raw-content">
