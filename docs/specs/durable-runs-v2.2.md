@@ -1,6 +1,6 @@
 # Durable Runs v2.2: Timeout Migration & Completion Notifications
 
-> **Status**: Complete (v2.2 MVP)
+> **Status**: Complete
 > **Date**: 2025-12-25
 > **Updated**: 2025-12-25
 > **Authors**: Post-mortem analysis + prior art research
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Runs should be **durable** - they survive client disconnects, timeouts, and network blips. Timeouts should stop *waiting*, not kill *work*. When background work completes, the supervisor should be notified and resume automatically.
+Runs are now **durable** - they survive client disconnects, timeouts, and network blips. Timeouts stop *waiting*, not kill *work*. When background work completes, the supervisor is notified and resume automatically. The dashboard stays in sync via real-time WebSocket updates.
 
 ### Durability Scope (v2.2)
 
@@ -16,13 +16,13 @@ Runs should be **durable** - they survive client disconnects, timeouts, and netw
 - Client disconnects (SSE drops, tab closes, network blips)
 - Client-side timeouts (watchdog, user impatience)
 - Server-side wait timeouts (supervisor stops blocking, work continues)
-- **Status Visibility**: Runs can be queried via API even after disconnect.
+- **Status Visibility**: Runs are tracked in the database and updated in real-time on the dashboard via WebSockets.
+- **Re-attachment**: Clients can poll/query run status and get current results after re-connecting.
 
 **What's NOT durable yet (future work):**
 - Backend process restarts (DEFERRED runs would be orphaned)
 - Server crashes (would need persistent job queue + "resume pending on boot")
-
-This is "session durability", not "infrastructure durability". True crash recovery requires a durable executor (Redis queue, Postgres-backed job table with polling, etc.).
+- True SSE streaming re-attach (currently returns status snapshots to avoid infinite blocking in ASGI test environments)
 
 ---
 
