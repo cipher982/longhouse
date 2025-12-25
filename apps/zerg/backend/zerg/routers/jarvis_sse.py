@@ -1,0 +1,151 @@
+"""SSE streaming helpers for Jarvis."""
+
+import asyncio
+import json
+import logging
+from datetime import datetime
+from datetime import timezone
+from typing import Optional
+
+from zerg.events import EventType
+from zerg.events.event_bus import event_bus
+
+logger = logging.getLogger(__name__)
+
+
+async def stream_run_events(
+    run_id: int,
+    owner_id: int,
+    client_correlation_id: Optional[str] = None,
+):
+    """Generate SSE events for a specific run.
+
+    Subscribes to all supervisor and worker events filtered by run_id.
+    This is used for both initial chat and re-attaching to an in-progress run.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    pending_workers = 0
+    supervisor_done = False
+
+    async def event_handler(event):
+        """Filter and queue relevant events."""
+        # Security: only emit events for this owner
+        if event.get("owner_id") != owner_id:
+            return
+
+        # Filter by run_id
+        if "run_id" in event and event.get("run_id") != run_id:
+            return
+
+        # Tool events MUST have run_id to prevent leaking across runs
+        event_type = event.get("event_type") or event.get("type")
+        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
+            if "run_id" not in event:
+                logger.warning(f"Tool event missing run_id, dropping: {event_type}")
+                return
+
+        await queue.put(event)
+
+    # Subscribe to all relevant events
+    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
+    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
+    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
+    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+    event_bus.subscribe(EventType.ERROR, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+
+    try:
+        # Send initial heartbeat to confirm connection immediately
+        # This prevents test timeouts and improves perceived responsiveness
+        yield {
+            "event": "heartbeat",
+            "data": json.dumps(
+                {
+                    "message": "Stream connected",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+            ),
+        }
+
+        # Stream events until supervisor completes or errors
+        complete = False
+        while not complete:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                event_type = event.get("event_type") or event.get("type") or "event"
+                # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled.
+                if event_type != EventType.SUPERVISOR_TOKEN.value:
+                    logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
+
+                # Track worker lifecycle so we don't close the stream until workers finish
+                if event_type == "worker_spawned":
+                    pending_workers += 1
+                elif event_type == "worker_complete" and pending_workers > 0:
+                    pending_workers -= 1
+                elif event_type == "worker_summary_ready" and pending_workers > 0:
+                    pending_workers -= 1
+                elif event_type == "supervisor_complete":
+                    supervisor_done = True
+                elif event_type == "supervisor_deferred":
+                    # v2.2: Timeout migration - supervisor deferred, close stream
+                    complete = True
+                elif event_type == "error":
+                    complete = True
+
+                # Close once supervisor is done AND all workers for this run have finished
+                if supervisor_done and pending_workers == 0:
+                    complete = True
+
+                # Format payload
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
+
+                yield {
+                    "event": event_type,
+                    "data": json.dumps(
+                        {
+                            "type": event_type,
+                            "payload": payload,
+                            "client_correlation_id": client_correlation_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
+                }
+
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    ),
+                }
+
+    except asyncio.CancelledError:
+        logger.info(f"SSE stream disconnected for run {run_id}")
+    finally:
+        # Unsubscribe from all events
+        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
+        event_bus.unsubscribe(EventType.ERROR, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)

@@ -540,10 +540,24 @@ class SupervisorService:
                     {
                         "event_type": EventType.SUPERVISOR_DEFERRED,
                         "run_id": run.id,
+                        "agent_id": agent.id,
                         "thread_id": thread.id,
                         "message": "Still working on this in the background. I'll continue when ready.",
                         "timeout_seconds": timeout,
                         "attach_url": f"/api/jarvis/runs/{run.id}/stream",
+                        "owner_id": owner_id,
+                    },
+                )
+
+                # v2.2: Also emit RUN_UPDATED for dashboard visibility
+                await event_bus.publish(
+                    EventType.RUN_UPDATED,
+                    {
+                        "event_type": EventType.RUN_UPDATED,
+                        "run_id": run.id,
+                        "agent_id": agent.id,
+                        "status": "deferred",
+                        "thread_id": thread.id,
                         "owner_id": owner_id,
                     },
                 )
@@ -601,6 +615,7 @@ class SupervisorService:
                 {
                     "event_type": EventType.SUPERVISOR_COMPLETE,
                     "run_id": run.id,
+                    "agent_id": agent.id,
                     "thread_id": thread.id,
                     "result": result_text or "(No result)",
                     "status": "success",
@@ -614,6 +629,21 @@ class SupervisorService:
                         "total_tokens": runner.usage_total_tokens,
                         "reasoning_tokens": runner.usage_reasoning_tokens,
                     },
+                },
+            )
+
+            # v2.2: Also emit RUN_UPDATED for dashboard visibility
+            await event_bus.publish(
+                EventType.RUN_UPDATED,
+                {
+                    "event_type": EventType.RUN_UPDATED,
+                    "run_id": run.id,
+                    "agent_id": agent.id,
+                    "status": "success",
+                    "finished_at": end_time.isoformat(),
+                    "duration_ms": duration_ms,
+                    "thread_id": thread.id,
+                    "owner_id": owner_id,
                 },
             )
             reset_seq(run.id)
@@ -646,26 +676,27 @@ class SupervisorService:
                 {
                     "event_type": EventType.SUPERVISOR_COMPLETE,
                     "run_id": run.id,
+                    "agent_id": agent.id,
                     "thread_id": thread.id,
                     "status": "cancelled",
-                    "message": "Supervisor run cancelled",
                     "duration_ms": duration_ms,
-                    "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
                 },
             )
-            reset_seq(run.id)
-            clear_evidence_mount_warning(run.id)
 
-            logger.info(f"Supervisor run {run.id} cancelled after {duration_ms}ms")
-
-            return SupervisorRunResult(
-                run_id=run.id,
-                thread_id=thread.id,
-                status="cancelled",
-                result=None,
-                duration_ms=duration_ms,
-                debug_url=f"/supervisor/{run.id}",
+            # v2.2: Also emit RUN_UPDATED for dashboard visibility
+            await event_bus.publish(
+                EventType.RUN_UPDATED,
+                {
+                    "event_type": EventType.RUN_UPDATED,
+                    "run_id": run.id,
+                    "agent_id": agent.id,
+                    "status": "cancelled",
+                    "finished_at": end_time.isoformat(),
+                    "duration_ms": duration_ms,
+                    "thread_id": thread.id,
+                    "owner_id": owner_id,
+                },
             )
 
         except Exception as e:
@@ -685,10 +716,27 @@ class SupervisorService:
                 {
                     "event_type": EventType.ERROR,
                     "run_id": run.id,
+                    "agent_id": agent.id,
                     "thread_id": thread.id,
                     "message": str(e),
                     "status": "error",
                     "debug_url": f"/supervisor/{run.id}",
+                    "owner_id": owner_id,
+                },
+            )
+
+            # v2.2: Also emit RUN_UPDATED for dashboard visibility
+            await event_bus.publish(
+                EventType.RUN_UPDATED,
+                {
+                    "event_type": EventType.RUN_UPDATED,
+                    "run_id": run.id,
+                    "agent_id": agent.id,
+                    "status": "failed",
+                    "finished_at": end_time.isoformat(),
+                    "duration_ms": duration_ms,
+                    "error": str(e),
+                    "thread_id": thread.id,
                     "owner_id": owner_id,
                 },
             )
