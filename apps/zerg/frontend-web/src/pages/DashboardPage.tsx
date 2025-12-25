@@ -15,7 +15,7 @@ import {
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
-import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon } from "../components/icons";
+import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon, InfoCircleIcon, CheckCircleIcon, XCircleIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
@@ -832,14 +832,16 @@ export default function DashboardPage() {
                       </Badge>
                       {agent.last_error && agent.last_error.trim() && (
                         <span className="info-icon" title={agent.last_error}>
-                          ℹ
+                          <InfoCircleIcon width={14} height={14} />
                         </span>
                       )}
                       {lastRunIndicator !== null && (
                         <span
                           className={lastRunIndicator ? "last-run-indicator last-run-success" : "last-run-indicator last-run-failure"}
                         >
-                          {lastRunIndicator ? " (Last: ✓)" : " (Last: ✗)"}
+                          {lastRunIndicator
+                            ? <> (Last: <CheckCircleIcon width={12} height={12} />)</>
+                            : <> (Last: <XCircleIcon width={12} height={12} />)</>}
                         </span>
                       )}
                     </Table.Cell>
