@@ -312,11 +312,55 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         phase
             Phase name for metrics tracking (e.g., "reasoning", "synthesis")
         """
+        import asyncio
         from datetime import datetime
         from datetime import timezone
 
         # Track timing for metrics
         start_time = datetime.now(timezone.utc)
+
+        # Phase 6: Start heartbeat task to signal progress during long LLM calls
+        # This prevents roundabout from thinking the worker is stuck during reasoning
+        heartbeat_task = None
+        heartbeat_cancelled = asyncio.Event()
+
+        async def emit_heartbeats():
+            """Emit heartbeats every 10 seconds during LLM call."""
+            from zerg.context import get_worker_context
+            from zerg.events import EventType
+            from zerg.events import event_bus
+
+            ctx = get_worker_context()
+            if not ctx:
+                # No worker context - must be a supervisor run
+                # We could emit SUPERVISOR_HEARTBEAT here if needed
+                return
+
+            try:
+                while not heartbeat_cancelled.is_set():
+                    await asyncio.sleep(10)  # Wait 10 seconds between heartbeats
+                    if not heartbeat_cancelled.is_set():
+                        await event_bus.publish(
+                            EventType.WORKER_HEARTBEAT,
+                            {
+                                "event_type": EventType.WORKER_HEARTBEAT,
+                                "worker_id": ctx.worker_id,
+                                "owner_id": ctx.owner_id,
+                                "run_id": ctx.run_id,
+                                "job_id": ctx.job_id,
+                                "activity": "llm_reasoning",
+                                "phase": phase,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        logger.debug(f"Emitted heartbeat for worker {ctx.worker_id} during {phase}")
+            except asyncio.CancelledError:
+                pass  # Normal shutdown
+            except Exception as e:
+                logger.warning(f"Error in heartbeat task: {e}")
+
+        # Start heartbeat task in background
+        heartbeat_task = asyncio.create_task(emit_heartbeats())
 
         # Create LLM dynamically with current enable_token_stream flag
         llm_with_tools = _make_llm(agent_row, tools)
@@ -372,17 +416,30 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 # Evidence mounting is best-effort - don't fail if context is unavailable
                 _warn_once(f"Evidence mounting disabled for supervisor run_id={supervisor_run_id}: {e}")
 
-        if enable_token_stream:
-            from zerg.callbacks.token_stream import WsTokenCallback
+        try:
+            if enable_token_stream:
+                from zerg.callbacks.token_stream import WsTokenCallback
 
-            callback = WsTokenCallback()
-            # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
-            # With langchain-core 1.2.5+, usage_metadata is populated on the result
-            result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
-        else:
-            # CRITICAL: Always use the wrapped LLM (with evidence mounting) even when not streaming
-            # Using _call_model_sync would bypass the EvidenceMountingLLM wrapper
-            result = await llm_with_tools.ainvoke(messages)
+                callback = WsTokenCallback()
+                # Pass callbacks via config - LangChain will call on_llm_new_token during streaming
+                # With langchain-core 1.2.5+, usage_metadata is populated on the result
+                result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
+            else:
+                # CRITICAL: Always use the wrapped LLM (with evidence mounting) even when not streaming
+                # Using _call_model_sync would bypass the EvidenceMountingLLM wrapper
+                result = await llm_with_tools.ainvoke(messages)
+        finally:
+            # Phase 6: Stop heartbeat task after LLM call completes
+            heartbeat_cancelled.set()
+            if heartbeat_task:
+                try:
+                    await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
 
         end_time = datetime.now(timezone.utc)
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
