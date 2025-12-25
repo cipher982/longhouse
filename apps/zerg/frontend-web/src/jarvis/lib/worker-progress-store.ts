@@ -183,6 +183,10 @@ class WorkerProgressStore {
       this.handleComplete(data.runId, data.result, data.status);
     });
 
+    eventBus.on('supervisor:deferred', () => {
+      this.handleDeferred();
+    });
+
     eventBus.on('supervisor:error', (data) => {
       this.handleError(data.message);
     });
@@ -466,6 +470,15 @@ class WorkerProgressStore {
    */
   private handleComplete(runId: number, result: string, status: string): void {
     console.log(`[WorkerProgress] Complete: ${runId} (${status})`);
+    this.setState({ supervisorDone: true });
+    this.maybeScheduleClear();
+  }
+
+  /**
+   * Handle supervisor deferred
+   */
+  private handleDeferred(): void {
+    console.log('[WorkerProgress] Deferred');
     this.setState({ supervisorDone: true });
     this.maybeScheduleClear();
   }
