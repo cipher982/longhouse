@@ -32,6 +32,8 @@ class AgentRun(Base):
     # Foreign keys -------------------------------------------------------
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
     thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
+    # Durable runs v2.2: Link continuation runs to original deferred run
+    continuation_of_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
 
     # Lifecycle ----------------------------------------------------------
     status = Column(
@@ -71,3 +73,5 @@ class AgentRun(Base):
     # Relationships ------------------------------------------------------
     agent = relationship("Agent", back_populates="runs")
     thread = relationship("Thread", backref="runs")
+    # Durable runs v2.2: Self-referential relationship for continuation chains
+    continued_from = relationship("AgentRun", remote_side=[id], backref="continuations")

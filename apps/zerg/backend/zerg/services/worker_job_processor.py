@@ -180,6 +180,18 @@ class WorkerJobProcessor:
                     },
                 )
 
+                # Durable runs v2.2 Phase 4: Trigger supervisor continuation for deferred runs
+                # If this worker was spawned by a supervisor run, notify it of completion
+                # The continuation endpoint will check if the run is actually DEFERRED
+                if supervisor_run_id and result.status == "success":
+                    await self._trigger_continuation(
+                        supervisor_run_id=supervisor_run_id,
+                        job_id=job.id,
+                        worker_id=result.worker_id,
+                        status=result.status,
+                        result_summary=result.summary or result.result[:500] if result.result else "Task completed",
+                    )
+
                 # Emit WORKER_SUMMARY_READY if we have a summary
                 if result.summary:
                     await event_bus.publish(
@@ -240,6 +252,66 @@ class WorkerJobProcessor:
         # Process with its own session
         await self._process_job_by_id(job_id)
         return True
+
+    async def _trigger_continuation(
+        self,
+        supervisor_run_id: int,
+        job_id: int,
+        worker_id: str,
+        status: str,
+        result_summary: str,
+    ) -> None:
+        """Trigger supervisor continuation for completed worker.
+
+        Durable runs v2.2 Phase 4: When a worker completes, notify the supervisor
+        so it can continue processing (if the run was deferred due to timeout).
+
+        This is an internal webhook call - in a distributed setup this would be
+        an HTTP POST to the continuation endpoint.
+
+        Args:
+            supervisor_run_id: The supervisor run that spawned this worker
+            job_id: Completed worker job ID
+            worker_id: Worker ID for artifact lookup
+            status: Worker completion status
+            result_summary: Summary of worker result
+        """
+        from zerg.services.supervisor_service import SupervisorService
+
+        logger.info(f"Triggering continuation check for supervisor run {supervisor_run_id} " f"(job={job_id}, worker={worker_id})")
+
+        try:
+            # Use a fresh DB session for the continuation
+            with db_session() as db:
+                from zerg.models.enums import RunStatus
+                from zerg.models.models import AgentRun
+
+                # Check if run is actually deferred (quick check before expensive continuation)
+                run = db.query(AgentRun).filter(AgentRun.id == supervisor_run_id).first()
+                if not run:
+                    logger.warning(f"Supervisor run {supervisor_run_id} not found for continuation")
+                    return
+
+                if run.status != RunStatus.DEFERRED:
+                    logger.debug(
+                        f"Supervisor run {supervisor_run_id} is {run.status.value}, not DEFERRED - "
+                        "skipping continuation (supervisor may have completed normally)"
+                    )
+                    return
+
+                # Trigger continuation
+                supervisor_service = SupervisorService(db)
+                result = await supervisor_service.run_continuation(
+                    original_run_id=supervisor_run_id,
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    result_summary=result_summary,
+                )
+
+                logger.info(f"Continuation run {result.run_id} completed for deferred run {supervisor_run_id}: " f"{result.status}")
+
+        except Exception as e:
+            logger.exception(f"Failed to trigger continuation for supervisor run {supervisor_run_id}: {e}")
 
 
 # Singleton instance for application-wide use
