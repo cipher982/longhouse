@@ -9,8 +9,7 @@ Workers running in Docker containers cannot use SSH aliases from `~/.ssh/config`
 For SSH fallback to work in containerized workers:
 
 - ✅ **SSH private key mounted** into container filesystem
-- ✅ **Correct file permissions** (600 for private key, 644 for known_hosts)
-- ✅ **known_hosts strategy** configured (see options below)
+- ✅ **Correct file permissions** (private key should not be group/world-readable)
 - ✅ **User context configured** with concrete SSH details:
   - `ssh_user` - Remote username (not aliases like "drose@server")
   - `ssh_host` - IP address or FQDN
@@ -25,38 +24,19 @@ services:
     volumes:
       # Mount SSH private key (read-only)
       - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-
-      # Option 1: Mount existing known_hosts
-      - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro
-
-      # Option 2: Use StrictHostKeyChecking=no (less secure)
-      # No known_hosts mount needed
-    environment:
-      # Disable strict host checking if not using known_hosts
-      - SSH_OPTS=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 ```
 
-## known_hosts Strategies
+## Host Key Verification (Current Behavior)
 
-| Strategy | Security | Setup Complexity |
-|----------|----------|------------------|
-| Mount host's `known_hosts` | ✅ Verified | Low (if host already has entries) |
-| `StrictHostKeyChecking=no` | ⚠️ MITM risk | Lowest (no setup) |
-| Pre-populate via `ssh-keyscan` | ✅ Verified | Medium (build-time or init script) |
+The current `ssh_exec` implementation disables host key verification (`StrictHostKeyChecking=no`) and writes host keys to a temp file under `/tmp` inside the container. This is convenient for single-user/dev, but it has MITM risk.
 
-**Pre-populate example:**
-```bash
-# In Dockerfile or entrypoint script
-ssh-keyscan -H clifford.example.com >> /root/.ssh/known_hosts
-ssh-keyscan -H REDACTED_IP >> /root/.ssh/known_hosts
-```
+If you want verified host keys, change `apps/zerg/backend/zerg/tools/builtin/ssh_tools.py` to enable strict checking and/or accept a mounted known_hosts path.
 
 ## Troubleshooting
 
 | Error | Likely Cause | Fix |
 |-------|--------------|-----|
 | `Permission denied (publickey)` | Key not mounted or wrong permissions | Check volume mount, run `chmod 600` on key |
-| `Host key verification failed` | Missing/mismatched known_hosts entry | Mount known_hosts or disable strict checking |
 | `Connection refused` | Wrong port or firewall blocking | Verify `ssh_port` in user context, check firewall |
 | `ssh: Could not resolve hostname` | Invalid `ssh_host` | Use IP address instead of hostname |
 
