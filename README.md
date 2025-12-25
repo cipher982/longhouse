@@ -33,8 +33,9 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 
 ## Highlights
 
-- **Worker supervision (Phases 1–6 complete):** tool events, activity ticker, roundabout monitoring, heuristic/LLM decisions, fail-fast critical errors.
-- **Unified frontend (Phases 0–7 complete):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
+- **Durable Runs (v2.2):** Runs survive disconnects and timeouts. `asyncio.shield()` prevents server-side cancellation on client timeout; `DEFERRED` state for long-running work.
+- **Worker supervision (v2.1):** tool events, activity ticker, roundabout monitoring (heuristic warnings, no auto-cancel), fail-fast critical errors.
+- **Unified frontend (v2.1):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
 - **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.
 - **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker/docker-compose.dev.yml`; enable auth in prod.
 

@@ -1,12 +1,13 @@
 # Swarm Platform Deployment Guide
 
-**Version**: 2.0
+**Version**: 2.2
 **Date**: December 2025
-**Status**: Production Ready
+**Status**: Production Ready (Durable Runs supported)
 
 ## Overview
 
 This guide covers deploying the Swarm Platform (Jarvis + Zerg) to production environments.
+V2.2 introduces **Durable Runs**, allowing executions to survive client disconnects and timeouts.
 
 ## Architecture
 
