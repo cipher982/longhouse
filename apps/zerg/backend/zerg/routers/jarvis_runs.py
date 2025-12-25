@@ -214,7 +214,7 @@ def get_run_status(
 
 
 @router.get("/runs/{run_id}/stream")
-def attach_to_run_stream(
+async def attach_to_run_stream(
     run_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
@@ -226,17 +226,7 @@ def attach_to_run_stream(
     If run is in progress, returns current status (streaming not implemented yet).
 
     Future enhancement: Stream remaining events for in-progress runs.
-
-    Args:
-        run_id: ID of the run to attach to
-        db: Database session
-        current_user: Authenticated user (multi-tenant filtered)
-
-    Returns:
-        JSONResponse with status and result
-
-    Raises:
-        HTTPException: 404 if run not found or not owned by user
+    Note: Infinite SSE streams in tests currently cause timeouts with httpx/ASGITransport.
     """
     # Multi-tenant security: only return runs owned by the current user
     run = (
@@ -256,7 +246,6 @@ def attach_to_run_stream(
         result = _get_last_assistant_message(db, run.thread_id)
 
     # Return status for both complete and in-progress runs
-    # TODO: Implement SSE streaming for in-progress runs
     return JSONResponse(
         {
             "run_id": run.id,

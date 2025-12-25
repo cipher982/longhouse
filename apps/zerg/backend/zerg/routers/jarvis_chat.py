@@ -22,6 +22,7 @@ from zerg.events.event_bus import event_bus
 from zerg.models.models import AgentRun
 from zerg.routers.jarvis_auth import _is_tool_enabled
 from zerg.routers.jarvis_auth import get_current_jarvis_user
+from zerg.routers.jarvis_sse import stream_run_events
 from zerg.routers.jarvis_supervisor import _pop_supervisor_task
 from zerg.routers.jarvis_supervisor import _register_supervisor_task
 
@@ -52,29 +53,7 @@ async def _chat_stream_generator(
     Subscribes to supervisor events and streams assistant responses.
     The background task is started from within this generator to avoid race conditions.
     """
-    queue: asyncio.Queue = asyncio.Queue()
     task_handle: Optional[asyncio.Task] = None
-    pending_workers = 0
-    supervisor_done = False
-
-    async def event_handler(event):
-        """Filter and queue relevant events."""
-        # Security: only emit events for this owner
-        if event.get("owner_id") != owner_id:
-            return
-
-        # Filter by run_id
-        if "run_id" in event and event.get("run_id") != run_id:
-            return
-
-        # Tool events MUST have run_id to prevent leaking across runs
-        event_type = event.get("event_type") or event.get("type")
-        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
-            if "run_id" not in event:
-                logger.warning(f"Tool event missing run_id, dropping: {event_type}")
-                return
-
-        await queue.put(event)
 
     async def run_supervisor_background():
         """Execute supervisor in background."""
@@ -108,117 +87,26 @@ async def _chat_stream_generator(
         finally:
             await _pop_supervisor_task(run_id)
 
-    # Subscribe to supervisor events BEFORE starting background task
-    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)  # Real-time LLM tokens
-    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)  # Timeout migration
-    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
-    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
-    event_bus.subscribe(EventType.ERROR, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    # Send initial connection event
+    yield {
+        "event": "connected",
+        "data": json.dumps(
+            {
+                "message": "Chat stream connected",
+                "run_id": run_id,
+                "client_correlation_id": client_correlation_id,
+            }
+        ),
+    }
 
-    try:
-        # Send initial connection event
-        yield {
-            "event": "connected",
-            "data": json.dumps(
-                {
-                    "message": "Chat stream connected",
-                    "run_id": run_id,
-                    "client_correlation_id": client_correlation_id,
-                }
-            ),
-        }
+    # NOW start the background task - after subscriptions are ready and connected event sent
+    logger.info(f"Chat SSE: starting background supervisor for run {run_id}")
+    task_handle = asyncio.create_task(run_supervisor_background())
+    await _register_supervisor_task(run_id, task_handle)
 
-        # NOW start the background task - after subscriptions are ready and connected event sent
-        logger.info(f"Chat SSE: starting background supervisor for run {run_id}")
-        task_handle = asyncio.create_task(run_supervisor_background())
-        await _register_supervisor_task(run_id, task_handle)
-
-        # Stream events until supervisor completes or errors
-        complete = False
-        while not complete:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-
-                event_type = event.get("event_type") or event.get("type") or "event"
-                # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled.
-                if event_type != EventType.SUPERVISOR_TOKEN.value:
-                    logger.debug(f"Chat SSE: received event {event_type} for run {run_id}")
-
-                # Track worker lifecycle so we don't close the stream until workers finish
-                if event_type == "worker_spawned":
-                    pending_workers += 1
-                elif event_type == "worker_complete" and pending_workers > 0:
-                    pending_workers -= 1
-                elif event_type == "worker_summary_ready" and pending_workers > 0:
-                    # In rare cases worker_complete may be dropped; treat summary_ready as completion
-                    pending_workers -= 1
-                elif event_type == "supervisor_complete":
-                    supervisor_done = True
-                elif event_type == "supervisor_deferred":
-                    # v2.2: Timeout migration - supervisor deferred, close stream
-                    complete = True
-                elif event_type == "error":
-                    complete = True
-
-                # Close once supervisor is done AND all workers for this run have finished
-                if supervisor_done and pending_workers == 0:
-                    complete = True
-
-                # Format payload
-                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
-
-                yield {
-                    "event": event_type,
-                    "data": json.dumps(
-                        {
-                            "type": event_type,
-                            "payload": payload,
-                            "client_correlation_id": client_correlation_id,
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
-                    ),
-                }
-
-            except asyncio.TimeoutError:
-                # Send heartbeat
-                yield {
-                    "event": "heartbeat",
-                    "data": json.dumps(
-                        {
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
-                    ),
-                }
-
-    except asyncio.CancelledError:
-        # v2.2: SSE disconnect doesn't cancel the run - work continues in background
-        logger.info(f"Chat SSE stream disconnected for run {run_id} - run continues in background")
-        # DON'T cancel the task - let it continue
-        # if task_handle and not task_handle.done():
-        #     task_handle.cancel()
-    finally:
-        # Unsubscribe from all events
-        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
-        event_bus.unsubscribe(EventType.ERROR, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    # Delegate to shared generator for event streaming
+    async for event in stream_run_events(run_id, owner_id, client_correlation_id):
+        yield event
 
 
 @router.post("/chat")
@@ -305,6 +193,31 @@ async def jarvis_chat(
     db.add(run)
     db.commit()
     db.refresh(run)
+
+    # v2.2: Notify dashboard of new run
+    await event_bus.publish(
+        EventType.RUN_CREATED,
+        {
+            "event_type": "run_created",
+            "agent_id": agent.id,
+            "run_id": run.id,
+            "status": run.status.value,
+            "thread_id": thread.id,
+            "owner_id": current_user.id,
+        },
+    )
+    await event_bus.publish(
+        EventType.RUN_UPDATED,
+        {
+            "event_type": "run_updated",
+            "agent_id": agent.id,
+            "run_id": run.id,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "thread_id": thread.id,
+            "owner_id": current_user.id,
+        },
+    )
 
     logger.info(
         f"Jarvis chat: created run {run.id} for user {current_user.id}, "
