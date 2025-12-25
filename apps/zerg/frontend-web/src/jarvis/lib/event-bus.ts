@@ -66,6 +66,7 @@ export interface EventMap {
     };
   };
   'supervisor:error': { message: string; details?: string; timestamp: number };
+  'supervisor:deferred': { runId: number; message: string; attachUrl?: string; timestamp: number };
   'supervisor:cleared': { timestamp: number };
 
   // Worker Tool Events (Phase 2: Activity Ticker)

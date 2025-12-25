@@ -27,6 +27,7 @@ class AgentStatus(str, Enum):
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"

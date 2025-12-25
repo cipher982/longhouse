@@ -54,6 +54,7 @@ class EventType(str, Enum):
     SUPERVISOR_THINKING = "supervisor_thinking"
     SUPERVISOR_TOKEN = "supervisor_token"  # Real-time LLM token streaming
     SUPERVISOR_COMPLETE = "supervisor_complete"
+    SUPERVISOR_DEFERRED = "supervisor_deferred"  # Timeout migration: still running, caller stopped waiting
     WORKER_SPAWNED = "worker_spawned"
     WORKER_STARTED = "worker_started"
     WORKER_COMPLETE = "worker_complete"

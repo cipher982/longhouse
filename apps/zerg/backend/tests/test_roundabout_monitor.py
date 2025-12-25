@@ -184,8 +184,8 @@ class TestMakeHeuristicDecision:
         assert decision == RoundaboutDecision.EXIT
         assert "pattern" in reason.lower()
 
-    def test_cancel_when_stuck_too_long(self):
-        """Should return CANCEL when stuck beyond threshold."""
+    def test_warn_when_stuck_too_long(self):
+        """v2.2: Should return WAIT (not CANCEL) when stuck beyond threshold - just warns."""
         ctx = self._make_context(
             status="running",
             is_stuck=True,
@@ -193,11 +193,12 @@ class TestMakeHeuristicDecision:
         )
         decision, reason = make_heuristic_decision(ctx)
 
-        assert decision == RoundaboutDecision.CANCEL
-        assert "stuck" in reason.lower()
+        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
+        assert decision == RoundaboutDecision.WAIT
+        assert "monitor" in reason.lower() or "continuing" in reason.lower()
 
-    def test_cancel_when_no_progress_with_tool_activity(self):
-        """Should return CANCEL after too many polls without progress (with tool activity)."""
+    def test_warn_when_no_progress_with_tool_activity(self):
+        """v2.2: Should return WAIT (not CANCEL) after too many polls without progress - just warns."""
         ctx = self._make_context(
             status="running",
             polls_without_progress=7,  # Beyond 6 poll threshold
@@ -206,8 +207,9 @@ class TestMakeHeuristicDecision:
         )
         decision, reason = make_heuristic_decision(ctx)
 
-        assert decision == RoundaboutDecision.CANCEL
-        assert "progress" in reason.lower()
+        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
+        assert decision == RoundaboutDecision.WAIT
+        assert "monitor" in reason.lower() or "continuing" in reason.lower()
 
     def test_no_cancel_when_no_progress_but_too_early(self):
         """Should NOT cancel if no progress but not enough time elapsed."""
@@ -222,8 +224,8 @@ class TestMakeHeuristicDecision:
         # Should wait, not cancel
         assert decision == RoundaboutDecision.WAIT
 
-    def test_cancel_when_no_tool_activity_after_extended_time(self):
-        """Should cancel if no tool activity after extended grace period (60s)."""
+    def test_warn_when_no_tool_activity_after_extended_time(self):
+        """v2.2: Should return WAIT (not CANCEL) if no tool activity after extended grace period - just warns."""
         ctx = self._make_context(
             status="running",
             polls_without_progress=15,
@@ -232,8 +234,9 @@ class TestMakeHeuristicDecision:
         )
         decision, reason = make_heuristic_decision(ctx)
 
-        assert decision == RoundaboutDecision.CANCEL
-        assert "activity" in reason.lower()
+        # v2.2: Timeouts stop waiting, not working. We warn but don't cancel.
+        assert decision == RoundaboutDecision.WAIT
+        assert "monitor" in reason.lower() or "continuing" in reason.lower()
 
     def test_no_cancel_when_no_tool_activity_but_under_threshold(self):
         """Should NOT cancel if no tool activity but under 60s threshold."""
@@ -261,8 +264,12 @@ class TestMakeHeuristicDecision:
 
 
 @pytest.mark.asyncio
-async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_path):
-    """Monitor should cancel when no progress for many polls (with tool activity)."""
+async def test_roundabout_warns_but_continues_on_no_progress(monkeypatch, db_session, tmp_path):
+    """v2.2: Monitor should warn (not cancel) when no progress for many polls.
+
+    In v2.2 durable runs, heuristic cancellation is removed. The monitor
+    will log warnings but continue until hard timeout.
+    """
     monkeypatch.setattr(rm, "ROUNDABOUT_CHECK_INTERVAL", 0.02)
     monkeypatch.setattr(rm, "ROUNDABOUT_NO_PROGRESS_POLLS", 3)  # Lower for fast test
     monkeypatch.setenv("SWARMLET_DATA_PATH", str(tmp_path / "workers"))
@@ -290,7 +297,7 @@ async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_pa
             db_session,
             job.id,
             owner_id=1,
-            timeout_seconds=2,  # Higher than we need
+            timeout_seconds=0.5,  # Short timeout for fast test
         )
         monitor_task = asyncio.create_task(monitor.wait_for_completion())
 
@@ -311,10 +318,9 @@ async def test_roundabout_cancels_on_no_progress(monkeypatch, db_session, tmp_pa
 
         result = await monitor_task
 
-        # Should be cancelled due to no progress (or timeout, which is also acceptable)
-        assert result.status in ("cancelled", "monitor_timeout")
-        if result.status == "cancelled":
-            assert result.decision == RoundaboutDecision.CANCEL
+        # v2.2: Monitor should hit timeout, NOT cancel due to no progress
+        # The hard timeout is now the only cancellation trigger
+        assert result.status == "monitor_timeout"
     finally:
         event_bus._subscribers = original_subs
 
