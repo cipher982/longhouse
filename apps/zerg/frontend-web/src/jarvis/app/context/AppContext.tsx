@@ -40,7 +40,7 @@ const initialState: AppState = {
   // Chat preferences
   availableModels: [],
   preferences: {
-    chat_model: 'gpt-5.1',
+    chat_model: 'gpt-5.2',
     reasoning_effort: 'none',
   },
 }

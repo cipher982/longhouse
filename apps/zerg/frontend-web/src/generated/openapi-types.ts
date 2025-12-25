@@ -3730,7 +3730,7 @@ export interface components {
             client_correlation_id?: string | null;
             /**
              * Model
-             * @description Model to use for this request (e.g., gpt-5.1)
+             * @description Model to use for this request (e.g., gpt-5.2)
              */
             model?: string | null;
             /**
@@ -3804,7 +3804,7 @@ export interface components {
         JarvisModelInfo: {
             /**
              * Id
-             * @description Model ID (e.g., gpt-5.1)
+             * @description Model ID (e.g., gpt-5.2)
              */
             id: string;
             /**

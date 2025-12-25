@@ -117,7 +117,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         self.usage_prompt_tokens: int | None = None
         self.usage_completion_tokens: int | None = None
         self.usage_total_tokens: int | None = None
-        self.usage_reasoning_tokens: int | None = None  # For reasoning models (gpt-5, o1, o3)
+        self.usage_reasoning_tokens: int | None = None  # For reasoning models (gpt-5.x, o1, o3)
 
         # Whether this runner/LLM emits per-token chunks – treat env value
         # case-insensitively; anything truthy like "1", "true", "yes" enables

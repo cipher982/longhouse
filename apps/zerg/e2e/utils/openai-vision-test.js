@@ -42,7 +42,7 @@ async function testVisionAPI(imagePath, prompt) {
 
     // Make API call
     const response = await openai.chat.completions.create({
-      model: "gpt-5.1", // Using gpt-4o for vision capabilities
+      model: "gpt-5.2", // Using gpt-4o for vision capabilities
       messages: [
         {
           role: "user",
@@ -120,7 +120,7 @@ Be detailed and specific about pixel-level differences, color codes, spacing mea
     const reactBase64 = imageToBase64(reactScreenshot);
 
     const response = await openai.chat.completions.create({
-      model: "gpt-5.1",
+      model: "gpt-5.2",
       messages: [
         {
           role: "user",

@@ -196,13 +196,13 @@ def _make_llm(agent_row, tools):
     logger.info(f"[_make_llm] Creating LLM with model={agent_row.model}, reasoning_effort={reasoning_effort}")
 
     # Enforce a maximum completion length if configured (>0)
-    # Note: O1-series/reasoning models require max_completion_tokens instead of max_tokens
+    # Note: Reasoning-capable models require max_completion_tokens instead of max_tokens
     try:
         max_toks = int(get_settings().max_output_tokens)
     except Exception:  # noqa: BLE001 – defensive parsing
         max_toks = 0
     if max_toks and max_toks > 0:
-        # O1-series models (gpt-5.1, o1-*, etc.) require max_completion_tokens
+        # Reasoning-capable models (gpt-5.x, o1-*, etc.) require max_completion_tokens
         is_reasoning_model = agent_row.model.startswith(("gpt-5", "o1-", "o3-"))
         if is_reasoning_model:
             kwargs["max_completion_tokens"] = max_toks

@@ -36,7 +36,7 @@ class JarvisChatRequest(BaseModel):
 
     message: str = Field(..., description="User message text")
     client_correlation_id: Optional[str] = Field(None, description="Client-generated correlation ID")
-    model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.1)")
+    model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.2)")
     reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
 
 
