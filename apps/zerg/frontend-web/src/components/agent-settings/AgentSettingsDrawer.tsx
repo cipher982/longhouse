@@ -23,6 +23,7 @@ import { TOOL_GROUPS, UTILITY_TOOLS } from "../../constants/toolGroups";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
 import type { ConnectorStatus } from "../../types/connectors";
 import { Link } from "react-router-dom";
+import { PlugIcon } from "../icons";
 
 type AgentSettingsDrawerProps = {
   agentId: number;
@@ -425,7 +426,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
                   <div className="integration-info">
                     <div className="integration-icon">
                       {/* Use the emoji icon from metadata if available, or fallback */}
-                      {connector.icon && connector.icon.length < 5 ? connector.icon : "🔌"}
+                      {connector.icon && connector.icon.length < 5 ? connector.icon : <PlugIcon width={18} height={18} />}
                     </div>
                     <div>
                       <h4>{connector.name}</h4>
