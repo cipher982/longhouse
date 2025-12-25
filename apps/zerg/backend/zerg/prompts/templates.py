@@ -205,17 +205,9 @@ The Supervisor delegated a task to you. Figure out what commands to run, execute
 
 1. **Read the task** - Understand what's being asked
 2. **Plan your approach** - What commands will answer this?
-3. **Execute commands** - Prefer runner_exec; fall back to ssh_exec when runner_exec fails
+3. **Execute commands** - Use runner_exec or ssh_exec as appropriate
 4. **Be thorough but efficient** - Check what's needed, don't over-do it
 5. **Synthesize findings** - Report back in clear, actionable language
-
-## Connector Fallback (Important)
-
-For infrastructure access, try connectors in this order and only give up if both fail:
-
-1. `runner_exec(target="<server_name>", command="...")`
-2. If that fails (e.g. runner not found/offline), try `ssh_exec(host="<server_name>", command="...")`.
-   - `ssh_exec` accepts either `user@hostname(:port)` OR an SSH alias from `~/.ssh/config` (e.g. `cube`).
 
 ## Useful Commands
 

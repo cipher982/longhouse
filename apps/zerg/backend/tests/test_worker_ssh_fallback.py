@@ -176,16 +176,14 @@ class TestCriticalErrorDetection:
 
 
 class TestPromptInstructions:
-    """Test that worker prompts include fallback instructions."""
+    """Test that worker prompts mention available tools."""
 
-    def test_worker_prompt_includes_fallback_guidance(self):
-        """Test that worker system prompt includes runner->SSH fallback instructions."""
+    def test_worker_prompt_mentions_exec_tools(self):
+        """Test that worker system prompt mentions runner_exec and ssh_exec."""
         from zerg.prompts.templates import BASE_WORKER_PROMPT
 
-        # Check for key phrases from the fallback instructions
+        # LLM should know both tools exist (it decides which to use)
         assert "runner_exec" in BASE_WORKER_PROMPT.lower()
-        assert "fallback" in BASE_WORKER_PROMPT.lower()
-        # Should mention trying runner first, then SSH
         assert "ssh_exec" in BASE_WORKER_PROMPT.lower()
 
     def test_server_metadata_includes_ssh_details(self):
