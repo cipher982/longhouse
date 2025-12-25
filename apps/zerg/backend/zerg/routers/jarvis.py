@@ -49,6 +49,7 @@ from zerg.models.models import ThreadMessage
 from zerg.routers import jarvis_agents
 from zerg.routers import jarvis_chat
 from zerg.routers import jarvis_dispatch
+from zerg.routers import jarvis_internal
 from zerg.routers import jarvis_runs
 from zerg.routers import jarvis_supervisor
 from zerg.routers.jarvis_auth import _is_tool_enabled
@@ -65,6 +66,8 @@ router.include_router(jarvis_runs.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_dispatch.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_supervisor.router, prefix="", tags=["jarvis"])
 router.include_router(jarvis_chat.router, prefix="", tags=["jarvis"])
+# Internal endpoints for durable runs (no auth - service-to-service only)
+router.include_router(jarvis_internal.router, prefix="", tags=["internal"])
 
 # ---------------------------------------------------------------------------
 # Deprecated Authentication Endpoint

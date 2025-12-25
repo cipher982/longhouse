@@ -39,6 +39,7 @@ class RunTrigger(str, Enum):
     CHAT = "chat"
     WEBHOOK = "webhook"
     API = "api"  # Generic fallback for other API calls
+    CONTINUATION = "continuation"  # Triggered by worker completion (durable runs v2.2)
 
 
 class ThreadType(str, Enum):

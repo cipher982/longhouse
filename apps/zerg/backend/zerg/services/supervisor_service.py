@@ -24,6 +24,7 @@ from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
@@ -693,6 +694,89 @@ class SupervisorService:
                 duration_ms=duration_ms,
                 debug_url=f"/supervisor/{run.id}",
             )
+
+    async def run_continuation(
+        self,
+        original_run_id: int,
+        job_id: int,
+        worker_id: str,
+        result_summary: str,
+    ) -> SupervisorRunResult:
+        """Continue a deferred run after worker completion.
+
+        Durable runs v2.2 Phase 4: When a worker completes and the original
+        supervisor run was deferred (timeout migration), this method:
+        1. Injects the worker result as a tool message into the thread
+        2. Creates a NEW run linked to the original via continuation_of_run_id
+        3. Runs the supervisor to synthesize the final answer
+
+        Args:
+            original_run_id: The deferred run that spawned the worker
+            job_id: The completed worker job ID
+            worker_id: Worker ID for artifact lookup
+            result_summary: Summary of worker result
+
+        Returns:
+            SupervisorRunResult from the continuation run
+        """
+        # Get original run to find thread and owner
+        original_run = self.db.query(AgentRun).filter(AgentRun.id == original_run_id).first()
+        if not original_run:
+            raise ValueError(f"Original run {original_run_id} not found")
+
+        thread = original_run.thread
+        agent = original_run.agent
+        owner_id = agent.owner_id
+
+        logger.info(f"Starting continuation for deferred run {original_run_id} " f"(thread={thread.id}, job={job_id}, worker={worker_id})")
+
+        # Inject worker result as tool message into thread
+        # This provides context for the supervisor to synthesize the final answer
+        tool_result_content = f"[Worker job {job_id} completed]\n\n" f"Worker ID: {worker_id}\n" f"Result:\n{result_summary}"
+        crud.create_thread_message(
+            db=self.db,
+            thread_id=thread.id,
+            role="tool",
+            content=tool_result_content,
+            processed=False,  # Supervisor will process this
+        )
+        self.db.commit()
+
+        # Create NEW run (not reusing original run_id)
+        continuation_run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.CONTINUATION,
+            continuation_of_run_id=original_run_id,  # Link to parent
+        )
+        self.db.add(continuation_run)
+        self.db.commit()
+        self.db.refresh(continuation_run)
+
+        logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
+
+        # Emit event for SSE subscribers
+        await event_bus.publish(
+            EventType.SUPERVISOR_STARTED,
+            {
+                "event_type": EventType.SUPERVISOR_STARTED,
+                "run_id": continuation_run.id,
+                "thread_id": thread.id,
+                "task": f"[CONTINUATION] Processing worker result from job {job_id}",
+                "continuation_of": original_run_id,
+                "owner_id": owner_id,
+            },
+        )
+
+        # Run supervisor to process the tool message and synthesize final answer
+        # Use shorter timeout for continuations (result is already available)
+        return await self.run_supervisor(
+            owner_id=owner_id,
+            task="[CONTINUATION] Process the worker result above and provide the final answer to the user's original request.",
+            run_id=continuation_run.id,
+            timeout=120,  # 2 min should be plenty for synthesis
+        )
 
 
 __all__ = ["SupervisorService", "SupervisorRunResult", "SUPERVISOR_THREAD_TYPE"]
