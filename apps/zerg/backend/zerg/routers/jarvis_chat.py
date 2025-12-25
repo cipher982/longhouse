@@ -161,6 +161,9 @@ async def _chat_stream_generator(
                     pending_workers -= 1
                 elif event_type == "supervisor_complete":
                     supervisor_done = True
+                elif event_type == "supervisor_deferred":
+                    # v2.2: Timeout migration - supervisor deferred, close stream
+                    complete = True
                 elif event_type == "error":
                     complete = True
 
