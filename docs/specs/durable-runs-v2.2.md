@@ -1,7 +1,8 @@
 # Durable Runs v2.2: Timeout Migration & Completion Notifications
 
-> **Status**: Draft
+> **Status**: MVP Complete (Phases 1-4, 6 done; Phase 5 pending)
 > **Date**: 2025-12-25
+> **Updated**: 2025-12-25
 > **Authors**: Post-mortem analysis + prior art research
 > **Depends on**: docs/specs/TRACE_FIRST_NORTH_STAR.md, docs/specs/worker-supervision-roundabout.md
 
