@@ -1,6 +1,6 @@
 # Durable Runs v2.2: Timeout Migration & Completion Notifications
 
-> **Status**: MVP Complete (Phases 1-3, 6 done; Phase 5 pending)
+> **Status**: Complete (v2.2 MVP)
 > **Date**: 2025-12-25
 > **Updated**: 2025-12-25
 > **Authors**: Post-mortem analysis + prior art research
@@ -16,6 +16,7 @@ Runs should be **durable** - they survive client disconnects, timeouts, and netw
 - Client disconnects (SSE drops, tab closes, network blips)
 - Client-side timeouts (watchdog, user impatience)
 - Server-side wait timeouts (supervisor stops blocking, work continues)
+- **Status Visibility**: Runs can be queried via API even after disconnect.
 
 **What's NOT durable yet (future work):**
 - Backend process restarts (DEFERRED runs would be orphaned)
@@ -271,7 +272,7 @@ Roundabout tracks heartbeats as progress, not just tool events.
 
 ## Implementation
 
-### Phase 1: Stop Killing Runs on Timeout (Critical)
+### Phase 1: Stop Killing Runs on Timeout (Complete)
 
 **Goal**: Timeout stops waiting, run continues.
 
@@ -354,7 +355,7 @@ timeout=600,
 
 ---
 
-### Phase 2: Remove Heuristic Cancellation + Frontend Watchdog
+### Phase 2: Remove Heuristic Cancellation + Frontend Watchdog (Complete)
 
 **Goal**: Align with spec - don't auto-cancel work. Keep heuristic mode (cheap) but remove the cancel action.
 
@@ -414,7 +415,7 @@ if ctx.is_stuck and ctx.stuck_seconds > ROUNDABOUT_CANCEL_STUCK_THRESHOLD:
 
 ---
 
-### Phase 3: Add Heartbeats
+### Phase 3: Add Heartbeats (Complete)
 
 **Goal**: Progress signals during LLM reasoning.
 
@@ -472,19 +473,21 @@ def handle_heartbeat(payload):
 
 ---
 
-### Phase 4: Completion Notifications (Not Needed in MVP)
+### Phase 4: Status Endpoints (Complete)
 
-**Goal**: Ensure DEFERRED runs eventually transition to SUCCESS/FAILED and results are persisted.
+**Goal**: Allow clients to check the status and result of a deferred run.
 
-In v2.2 MVP, this is achieved by keeping the *original* supervisor run executing in the background after emitting `SUPERVISOR_DEFERRED`. When the supervisor finishes (often immediately after a worker completes), it updates the same `AgentRun` row to `SUCCESS`/`FAILED` and persists the final assistant message.
+Implemented via `apps/zerg/backend/zerg/routers/jarvis_runs.py`:
+- `GET /api/jarvis/runs/{run_id}`: Returns status, duration, and final result if complete.
+- `GET /api/jarvis/runs/{run_id}/stream`: Re-attaches to the SSE stream of an in-progress run.
 
-This avoids creating "continuation runs" and avoids any internal webhook surface area.
-
----
-
-### Phase 5: SSE Re-attach
+### Phase 5: SSE Re-attach & Decoupling (Complete)
 
 **Goal**: Streams are views, runs are durable.
+
+Implemented in `apps/zerg/backend/zerg/routers/jarvis_chat.py`:
+- SSE disconnect (`asyncio.CancelledError`) no longer cancels the supervisor task.
+- Background task is registered in a central registry to prevent orphan tracking issues.
 
 #### Task 5.1: Add run status endpoint
 
@@ -573,7 +576,7 @@ async def _chat_stream_generator(...):
 
 ---
 
-### Phase 6: Frontend Updates
+### Phase 6: Frontend Updates (Complete - Simplified)
 
 #### Task 6.1: Handle deferred state
 
@@ -636,70 +639,13 @@ export function DeferredRunBanner({ runId, attachUrl }: Props) {
 
 ---
 
-## Recommended Implementation Order
-
-**Minimal viable fix (stop the bleeding):**
-1. Phase 1.1: `asyncio.shield()` - stop timeout from killing runs
-2. Phase 1.4: Increase timeout to 600s
-3. Phase 2.1-2.3: Remove all heuristic cancellation (warn only)
-4. Phase 2.2: Fix frontend watchdog (defer, don't cancel)
-5. Phase 5.2: Decouple run from SSE (don't cancel on disconnect)
-
-**This gets you**: Runs survive timeouts and disconnects. Final answer persists in DB even if SSE dies.
-
-**Then evaluate**: Do you need Phase 4 webhooks (auto-continuation) now, or is "user can refresh to see result" enough for v2.2?
-
-**Full implementation later:**
-- Phase 3: Heartbeats (nice-to-have, reduces false "stuck" warnings)
-- Phase 4: Webhooks + continuation (auto-notify user when background work finishes)
-- Phase 5.1: Re-attach endpoint (reconnect to in-progress runs)
-- Phase 6: Frontend polish
-
----
-
-## Migration Notes
-
-### Database
-
-Add `DEFERRED` to RunStatus enum:
-```sql
-ALTER TYPE runstatus ADD VALUE 'deferred' AFTER 'running';
-```
-
-Add `continuation_of_run_id` to AgentRun (Phase 4 only):
-```sql
-ALTER TABLE agent_run ADD COLUMN continuation_of_run_id INTEGER REFERENCES agent_run(id);
-```
-
-Add `CONTINUATION` to RunTrigger enum (Phase 4 only):
-```sql
-ALTER TYPE runtrigger ADD VALUE 'continuation';
-```
-
-### Config Changes
-
-| Setting | Old | New |
-|---------|-----|-----|
-| Supervisor timeout | 120s | 600s (safety net) |
-| Roundabout NO_PROGRESS_POLLS | cancel | warn only |
-| Roundabout STUCK_THRESHOLD | cancel | warn only |
-| Frontend WATCHDOG_TIMEOUT | cancel | defer |
-
-**Note**: Keep `decision_mode="heuristic"` - it's cheap. The fix is removing cancel actions, not changing the decision engine.
-
-### Breaking Changes
-
-None - all changes are additive or behavioral improvements.
-
----
-
-## Success Criteria
+## Success Criteria (v2.2 MVP)
 
 1. **No lost work**: Timeout = defer, not kill
 2. **Always an answer**: Even on error/timeout, assistant message rendered
-3. **Background completion**: Workers finishing trigger supervisor continuation
-4. **Re-attachable**: SSE disconnect doesn't orphan runs
-5. **Progress visible**: Heartbeats during LLM thinking
+3. **Background completion**: Original supervisor run continues until finished, updating DB status
+4. **Re-attachable**: SSE disconnect doesn't orphan runs; `/runs/{id}/stream` allows re-attaching
+5. **Progress visible**: Heartbeats emitted during LLM reasoning to prevent false "stuck" warnings
 
 ---
 

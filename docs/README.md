@@ -26,4 +26,4 @@ Historical (superseded): [specs/super-siri-architecture.md](./specs/super-siri-a
 | `archive/`   | Obsolete/superseded      | Archive                          |
 | `research/`  | Research notes           | Reference                        |
 
-> **Note:** `work/` should be empty when no features are in flight. PRDs get deleted (not moved) once implemented.
+> **Note:** `work/` should be empty when no features are in flight. PRDs are either moved to `completed/` for historical reference or deleted once implemented.

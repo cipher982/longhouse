@@ -19,3 +19,5 @@ Use these documents to understand past decisions and context, not as current imp
 | [CODEBASE_SIMPLIFICATION_MASTER.md](CODEBASE_SIMPLIFICATION_MASTER.md) | Repo cleanup & canonicalization | Dec 2024 |
 | [WORKER_FALLBACK_SPEC.md](WORKER_FALLBACK_SPEC.md) | Infrastructure fallback (Runner → SSH) | Dec 2024 |
 | [PRD_Usage_Controls.md](PRD_Usage_Controls.md) | Token/Cost budgets & quotas | Dec 2024 |
+| [env-consolidation-2025-12-16.md](env-consolidation-2025-12-16.md) | .env file consolidation | Dec 2024 |
+| [test-skip-audit.md](test-skip-audit.md) | Audit and cleanup of skipped tests | Dec 2024 |
