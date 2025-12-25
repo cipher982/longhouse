@@ -1,4 +1,5 @@
 import React from 'react';
+import { AlertTriangleIcon } from './icons';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -34,11 +35,11 @@ function DefaultErrorFallback({
       textAlign: 'center',
     }}>
       <div style={{
-        fontSize: '48px',
         marginBottom: '16px',
         opacity: 0.6,
+        color: '#ef4444',
       }}>
-        ⚠️
+        <AlertTriangleIcon width={48} height={48} />
       </div>
       <h2 style={{
         color: '#ef4444',
