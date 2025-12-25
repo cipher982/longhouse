@@ -77,7 +77,7 @@ def main():
         mock_agent = MagicMock()
         mock_agent.id = 1
         mock_agent.owner_id = 1
-        mock_agent.model = "gpt-5.1"
+        mock_agent.model = "gpt-5.2"
         mock_agent.config = {}
         mock_agent.allowed_tools = []
         mock_agent.updated_at = None

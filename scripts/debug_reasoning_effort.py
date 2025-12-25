@@ -19,7 +19,7 @@ def test_reasoning_effort():
         return
 
     # Test with the model from config
-    model = "gpt-5.1"  # What's in config/models.json
+    model = "gpt-5.2"  # What's in config/models.json
 
     print(f"Testing model: {model}")
     print("-" * 50)

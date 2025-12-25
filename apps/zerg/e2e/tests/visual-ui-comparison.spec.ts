@@ -93,7 +93,7 @@ Be extremely detailed and specific. Provide exact measurements, color codes, and
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-5.1-chat-latest",
+      model: "gpt-5.2-chat-latest",
       messages: [
         {
           role: "user",
@@ -286,7 +286,7 @@ test.describe('Visual UI Comparison with AI Analysis', () => {
 
         try {
           const response = await openai.chat.completions.create({
-            model: "gpt-5.1-chat-latest",
+            model: "gpt-5.2-chat-latest",
             messages: [
               {
                 role: "user",

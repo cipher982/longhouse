@@ -46,7 +46,7 @@ test.describe('Agent Creation Full Workflow', () => {
         name: `Test Agent Worker ${workerId}`,
         system_instructions: 'You are a test agent for E2E testing',
         task_instructions: 'Perform test tasks as requested',
-        model: 'gpt-5.1',
+        model: 'gpt-5.2',
       }
     });
 

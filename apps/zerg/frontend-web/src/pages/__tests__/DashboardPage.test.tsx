@@ -42,7 +42,7 @@ function buildAgent(
     owner: overrides.owner ?? null,
     system_instructions: overrides.system_instructions ?? "",
     task_instructions: overrides.task_instructions ?? "",
-    model: overrides.model ?? "gpt-5.1-chat-latest",
+    model: overrides.model ?? "gpt-5.2-chat-latest",
     schedule: overrides.schedule ?? null,
     config: overrides.config ?? null,
     last_error: overrides.last_error ?? null,

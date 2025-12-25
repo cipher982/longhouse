@@ -29,7 +29,7 @@ const realtimeConfig = {
 
 const textConfig = {
   tiers: {
-    TIER_1: 'gpt-5.1',
+    TIER_1: 'gpt-5.2',
     TIER_2: 'gpt-5-mini',
     TIER_3: 'gpt-5-nano',
   },

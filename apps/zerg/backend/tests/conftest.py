@@ -586,7 +586,7 @@ from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.models_config import TEST_MODEL_ID
 
 # Re-export as module-level constants for tests that need direct import
-TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.1" - for tests needing best quality
+TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.2" - for tests needing best quality
 TEST_WORKER_MODEL = DEFAULT_WORKER_MODEL_ID  # "gpt-5-mini" - for worker tests
 TEST_MODEL_CHEAP = TEST_MODEL_ID  # "gpt-5-nano" - for CI tests needing speed/cost
 

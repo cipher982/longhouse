@@ -580,7 +580,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     const cid = correlationId || uuid()
 
     // Get preferences from bootstrap
-    const prefs = state.bootstrap?.preferences || { chat_model: 'gpt-5.1', reasoning_effort: 'none' }
+    const prefs = state.bootstrap?.preferences || { chat_model: 'gpt-5.2', reasoning_effort: 'none' }
     const model = options?.model || prefs.chat_model
     const reasoning_effort = options?.reasoning_effort || prefs.reasoning_effort
 
