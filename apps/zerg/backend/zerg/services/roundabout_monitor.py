@@ -281,6 +281,7 @@ class RoundaboutMonitor:
         self._start_time: datetime | None = None
         self._check_count = 0
         self._event_subscription = None
+        self._heartbeat_subscription = None  # Phase 6: Heartbeat event subscription
         # Phase 4: Decision tracking
         self._last_activity_count = 0  # Tool count at last poll
         self._polls_without_progress = 0  # Consecutive polls with no new events
@@ -493,12 +494,28 @@ class RoundaboutMonitor:
                     payload,
                 )
 
+        async def handle_heartbeat_event(payload: dict[str, Any]) -> None:
+            """Handle incoming heartbeat events (Phase 6)."""
+            # Filter to events for this job
+            event_job_id = payload.get("job_id")
+            if event_job_id != self.job_id:
+                return
+
+            # Reset no-progress counter - the worker is actively reasoning
+            self._polls_without_progress = 0
+            logger.debug(f"Job {self.job_id}: Heartbeat received, reset no-progress counter")
+
         # Subscribe to all tool event types
         self._event_subscription = handle_tool_event
         event_bus.subscribe(EventType.WORKER_TOOL_STARTED, handle_tool_event)
         event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, handle_tool_event)
         event_bus.subscribe(EventType.WORKER_TOOL_FAILED, handle_tool_event)
-        logger.debug(f"Subscribed to tool events for job {self.job_id}")
+
+        # Phase 6: Subscribe to heartbeat events to track LLM reasoning progress
+        self._heartbeat_subscription = handle_heartbeat_event
+        event_bus.subscribe(EventType.WORKER_HEARTBEAT, handle_heartbeat_event)
+
+        logger.debug(f"Subscribed to tool and heartbeat events for job {self.job_id}")
 
     async def _unsubscribe_from_tool_events(self) -> None:
         """Unsubscribe from tool events."""
@@ -514,6 +531,15 @@ class RoundaboutMonitor:
             except Exception as e:
                 logger.debug(f"Error unsubscribing from events: {e}")
             self._event_subscription = None
+
+        # Phase 6: Unsubscribe from heartbeat events
+        if self._heartbeat_subscription:
+            try:
+                event_bus.unsubscribe(EventType.WORKER_HEARTBEAT, self._heartbeat_subscription)
+                logger.debug(f"Unsubscribed from heartbeat events for job {self.job_id}")
+            except Exception as e:
+                logger.debug(f"Error unsubscribing from heartbeat events: {e}")
+            self._heartbeat_subscription = None
 
     def get_current_status(self) -> RoundaboutStatus:
         """Get current status snapshot (for future decision prompts)."""

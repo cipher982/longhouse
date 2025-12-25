@@ -65,6 +65,10 @@ class EventType(str, Enum):
     WORKER_TOOL_COMPLETED = "worker_tool_completed"
     WORKER_TOOL_FAILED = "worker_tool_failed"
 
+    # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
+    SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
+    WORKER_HEARTBEAT = "worker_heartbeat"
+
 
 class EventBus:
     """Central event bus for publishing and subscribing to events."""
