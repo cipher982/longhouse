@@ -362,3 +362,69 @@
 .jarvis-container .worker-progress--active {
   /* Active class applied when workers are displayed */
 }
+
+/* ------------------------------------------------------------------ */
+/* Status Icons (CSS-based, replacing emojis)                         */
+/* ------------------------------------------------------------------ */
+
+/* Tool status icons */
+.jarvis-container .icon-running::before {
+  content: '○';
+  display: inline-block;
+  animation: icon-spin 1s linear infinite;
+}
+
+@keyframes icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jarvis-container .icon-completed::before {
+  content: '✓';
+  display: inline-block;
+  color: var(--color-intent-success);
+}
+
+.jarvis-container .icon-failed::before {
+  content: '✗';
+  display: inline-block;
+  color: var(--color-intent-error);
+}
+
+.jarvis-container .icon-default::before {
+  content: '•';
+  display: inline-block;
+}
+
+/* Worker status icons */
+.jarvis-container .icon-spawned::before {
+  content: '◐';
+  display: inline-block;
+  font-weight: 600;
+}
+
+.jarvis-container .icon-worker-running::before {
+  content: '⚙';
+  display: inline-block;
+  animation: icon-spin 2s linear infinite;
+}
+
+.jarvis-container .icon-complete::before {
+  content: '✓';
+  display: inline-block;
+  color: var(--color-intent-success);
+  font-weight: 600;
+}
+
+.jarvis-container .icon-worker-failed::before {
+  content: '✗';
+  display: inline-block;
+  color: var(--color-intent-error);
+  font-weight: 600;
+}
+
+.jarvis-container .icon-queued::before {
+  content: '□';
+  display: inline-block;
+}

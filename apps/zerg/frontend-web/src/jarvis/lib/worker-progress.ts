@@ -645,13 +645,13 @@ export class WorkerProgressUI {
   private getToolStatusIcon(status: string): string {
     switch (status) {
       case 'running':
-        return '⏳';
+        return '<span class="icon-running"></span>';
       case 'completed':
-        return '✓';
+        return '<span class="icon-completed"></span>';
       case 'failed':
-        return '✗';
+        return '<span class="icon-failed"></span>';
       default:
-        return '•';
+        return '<span class="icon-default"></span>';
     }
   }
 
@@ -680,15 +680,15 @@ export class WorkerProgressUI {
   private getWorkerStatusIcon(status: string): string {
     switch (status) {
       case 'spawned':
-        return '🚀';
+        return '<span class="icon-spawned"></span>';
       case 'running':
-        return '⚙️';
+        return '<span class="icon-worker-running"></span>';
       case 'complete':
-        return '✅';
+        return '<span class="icon-complete"></span>';
       case 'failed':
-        return '❌';
+        return '<span class="icon-worker-failed"></span>';
       default:
-        return '📋';
+        return '<span class="icon-queued"></span>';
     }
   }
 
