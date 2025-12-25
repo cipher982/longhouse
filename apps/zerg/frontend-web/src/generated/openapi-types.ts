@@ -441,6 +441,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/configure-test-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Configure Test Model
+         * @description Configure the supervisor agent to use a test model.
+         *
+         *     This is a TEST-ONLY endpoint for E2E tests that need deterministic LLM behavior.
+         *     Only available when TESTING=1 is set.
+         *
+         *     Args:
+         *         request: Contains the model to use (default: gpt-scripted)
+         *
+         *     Returns:
+         *         Success message with agent ID
+         */
+        post: operations["configure_test_model_api_admin_configure_test_model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users With Usage
+         * @description List all users with their LLM usage statistics.
+         *
+         *     Returns users sorted by the specified field with usage stats for today, 7d, and 30d.
+         *     Admin-only endpoint.
+         */
+        get: operations["list_users_with_usage_api_admin_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{user_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Usage Details
+         * @description Get detailed LLM usage for a specific user.
+         *
+         *     Returns:
+         *     - User info with usage summary for all periods
+         *     - Daily breakdown for the specified period
+         *     - Top agents by cost for the specified period
+         *
+         *     Admin-only endpoint.
+         */
+        get: operations["get_user_usage_details_api_admin_users__user_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/email/webhook/google": {
         parameters: {
             query?: never;
@@ -826,6 +905,39 @@ export interface paths {
         };
         /** Get Run */
         get: operations["get_run_api_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runners/install.sh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Install Script
+         * @description Return shell script for one-liner runner installation.
+         *
+         *     This endpoint is designed to be used with curl:
+         *         curl -fsSL https://api.swarmlet.com/api/runners/install.sh?enroll_token=xxx | bash
+         *
+         *     Or with environment variables:
+         *         curl -fsSL https://api.swarmlet.com/api/runners/install.sh |             ENROLL_TOKEN=xxx RUNNER_NAME=my-runner bash
+         *
+         *     The script:
+         *     1. Registers the runner using the enroll token
+         *     2. Saves credentials to ~/.config/swarmlet/runner.env
+         *     3. Starts the runner container with docker run
+         *
+         *     No authentication required - this is for bootstrapping new runners.
+         */
+        get: operations["get_install_script_api_runners_install_sh_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1565,6 +1677,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/me/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Current User Usage
+         * @description Return the authenticated user's LLM usage stats.
+         *
+         *     Returns token counts, costs, and daily budget limit status.
+         *     The `limit` field always reflects today's daily limit usage,
+         *     regardless of the selected period.
+         */
+        get: operations["read_current_user_usage_api_users_me_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/me/avatar": {
         parameters: {
             query?: never;
@@ -1743,29 +1879,6 @@ export interface paths {
         patch: operations["patch_layout_api_graph_layout_patch"];
         trace?: never;
     };
-    "/api/jarvis/auth": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Jarvis Auth
-         * @description Deprecated: Jarvis now uses standard SaaS user authentication.
-         *
-         *     Jarvis is treated as a normal client (like the dashboard). It authenticates
-         *     using the same JWT bearer token as other frontend clients.
-         */
-        post: operations["jarvis_auth_api_jarvis_auth_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/jarvis/agents": {
         parameters: {
             query?: never;
@@ -1820,6 +1933,67 @@ export interface paths {
          *         List of run summaries ordered by created_at descending
          */
         get: operations["list_jarvis_runs_api_jarvis_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Status
+         * @description Get current status of a specific run.
+         *
+         *     Returns detailed status including timing, errors, and result if completed.
+         *     This endpoint is used for polling run status after async task submission.
+         *
+         *     Args:
+         *         run_id: ID of the run to query
+         *         db: Database session
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         Run status with result if completed
+         *
+         *     Raises:
+         *         HTTPException: 404 if run not found or not owned by user
+         */
+        get: operations["get_run_status_api_jarvis_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Attach To Run Stream
+         * @description Attach to an existing run's event stream.
+         *
+         *     For MVP: Returns the current status and result if available.
+         *     If run is complete, returns final result as JSON.
+         *     If run is in progress, returns current status (streaming not implemented yet).
+         *
+         *     Future enhancement: Stream remaining events for in-progress runs.
+         *     Note: Infinite SSE streams in tests currently cause timeouts with httpx/ASGITransport.
+         */
+        get: operations["attach_to_run_stream_api_jarvis_runs__run_id__stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1889,7 +2063,6 @@ export interface paths {
          *
          *     Args:
          *         request: Task and optional context/preferences
-         *         background_tasks: FastAPI background tasks
          *         db: Database session
          *         current_user: Authenticated user
          *
@@ -1993,47 +2166,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jarvis/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Jarvis Events
-         * @description Server-Sent Events stream for Jarvis.
-         *
-         *     Provides real-time updates for agent and run events. Jarvis listens to this
-         *     stream to update the Task Inbox UI without polling.
-         *
-         *     Authentication:
-         *     - Standard SaaS auth: `Authorization: Bearer <jwt>`
-         *     - SSE fallback: `?token=<jwt>` query parameter (EventSource cannot send headers)
-         *     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
-         *
-         *     Event types:
-         *     - connected: Initial connection confirmation
-         *     - heartbeat: Keep-alive ping every 30 seconds
-         *     - agent_updated: Agent status or configuration changed
-         *     - run_created: New agent run started
-         *     - run_updated: Agent run status changed (running → success/failed)
-         *
-         *     Args:
-         *         current_user: Authenticated user (Jarvis service account)
-         *
-         *     Returns:
-         *         EventSourceResponse streaming SSE events
-         */
-        get: operations["jarvis_events_api_jarvis_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/jarvis/chat": {
         parameters: {
             query?: never;
@@ -2075,6 +2207,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jarvis/auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Jarvis Auth
+         * @description Deprecated: Jarvis now uses standard SaaS user authentication.
+         *
+         *     Jarvis is treated as a normal client (like the dashboard). It authenticates
+         *     using the same JWT bearer token as other frontend clients.
+         */
+        post: operations["jarvis_auth_api_jarvis_auth_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jarvis Events
+         * @description Server-Sent Events stream for Jarvis.
+         *
+         *     Provides real-time updates for agent and run events. Jarvis listens to this
+         *     stream to update the Task Inbox UI without polling.
+         *
+         *     Authentication:
+         *     - Standard SaaS auth: `Authorization: Bearer <jwt>`
+         *     - SSE fallback: `?token=<jwt>` query parameter (EventSource cannot send headers)
+         *     - Development override: when `AUTH_DISABLED=1`, standard dev auth applies
+         *
+         *     Event types:
+         *     - connected: Initial connection confirmation
+         *     - heartbeat: Keep-alive ping every 30 seconds
+         *     - agent_updated: Agent status or configuration changed
+         *     - run_created: New agent run started
+         *     - run_updated: Agent run status changed (running → success/failed)
+         *
+         *     Args:
+         *         current_user: Authenticated user (Jarvis service account)
+         *
+         *     Returns:
+         *         EventSourceResponse streaming SSE events
+         */
+        get: operations["jarvis_events_api_jarvis_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/history": {
         parameters: {
             query?: never;
@@ -2103,11 +2299,13 @@ export interface paths {
         post?: never;
         /**
          * Jarvis Clear History
-         * @description Clear conversation history by creating a new Supervisor thread.
+         * @description Clear conversation history by deleting all messages from Supervisor thread.
          *
-         *     This creates a fresh thread for the user's Supervisor agent, effectively
-         *     clearing all conversation history. The old thread is preserved in the
-         *     database but no longer used.
+         *     This clears all conversation messages from the user's Supervisor thread.
+         *     The thread itself and the agent's system instructions are preserved.
+         *
+         *     System prompts are injected fresh on every run from agent.system_instructions,
+         *     so clearing history doesn't affect the agent's behavior.
          *
          *     Args:
          *         db: Database session
@@ -2753,7 +2951,7 @@ export interface paths {
          * Health Check
          * @description Health check endpoint with comprehensive system validation.
          */
-        get: operations["health_check_health_get"];
+        get: operations["health_check_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2835,6 +3033,53 @@ export interface components {
              * @description Metadata from last successful test
              */
             metadata?: Record<string, never> | null;
+        };
+        /**
+         * AdminUserDetailResponse
+         * @description Response for GET /api/admin/users/{id}/usage.
+         */
+        AdminUserDetailResponse: {
+            user: components["schemas"]["AdminUserRow"];
+            /** Period */
+            period: string;
+            summary: components["schemas"]["PeriodUsage"];
+            /** Daily Breakdown */
+            daily_breakdown: components["schemas"]["DailyBreakdown"][];
+            /** Top Agents */
+            top_agents: components["schemas"]["TopAgentUsage"][];
+        };
+        /**
+         * AdminUserRow
+         * @description User row with usage stats for admin list view.
+         */
+        AdminUserRow: {
+            /** Id */
+            id: number;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Role */
+            role: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Created At */
+            created_at?: string | null;
+            usage: components["schemas"]["UserUsageSummary"];
+        };
+        /**
+         * AdminUsersResponse
+         * @description Response for GET /api/admin/users.
+         */
+        AdminUsersResponse: {
+            /** Users */
+            users: components["schemas"]["AdminUserRow"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** Agent */
         Agent: {
@@ -3023,6 +3268,17 @@ export interface components {
          */
         CanvasUpdate: {
             canvas: components["schemas"]["WorkflowData-Input"];
+        };
+        /**
+         * ConfigureTestModelRequest
+         * @description Request model for configuring test model.
+         */
+        ConfigureTestModelRequest: {
+            /**
+             * Model
+             * @default gpt-scripted
+             */
+            model: string;
         };
         /**
          * ConnectorConfigureRequest
@@ -3236,6 +3492,23 @@ export interface components {
              */
             required: boolean;
         };
+        /**
+         * DailyBreakdown
+         * @description Single day's usage stats.
+         */
+        DailyBreakdown: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Tokens */
+            tokens: number;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Runs */
+            runs: number;
+        };
         /** DashboardSnapshot */
         DashboardSnapshot: {
             /** Scope */
@@ -3288,6 +3561,11 @@ export interface components {
              * @description Complete docker run command for easy setup
              */
             docker_command: string;
+            /**
+             * One Liner Install Command
+             * @description One-liner curl command for automated install
+             */
+            one_liner_install_command: string;
         };
         /**
          * ExecutionLogsResponse
@@ -3429,6 +3707,11 @@ export interface components {
              * @description Message timestamp
              */
             timestamp: string;
+            /**
+             * Usage
+             * @description Optional LLM usage metadata for this assistant response
+             */
+            usage?: Record<string, never> | null;
         };
         /**
          * JarvisChatRequest
@@ -3904,6 +4187,27 @@ export interface components {
             p95_ms: number;
         };
         /**
+         * PeriodUsage
+         * @description Usage stats for a single period.
+         */
+        PeriodUsage: {
+            /**
+             * Tokens
+             * @description Total tokens
+             */
+            tokens: number;
+            /**
+             * Cost Usd
+             * @description Total cost in USD
+             */
+            cost_usd: number;
+            /**
+             * Runs
+             * @description Number of runs
+             */
+            runs: number;
+        };
+        /**
          * Position
          * @description Node position on canvas.
          */
@@ -3976,7 +4280,28 @@ export interface components {
          * RunStatus
          * @enum {string}
          */
-        RunStatus: "queued" | "running" | "success" | "failed" | "cancelled";
+        RunStatus: "queued" | "running" | "deferred" | "success" | "failed" | "cancelled";
+        /**
+         * RunStatusResponse
+         * @description Detailed status of a specific run.
+         */
+        RunStatusResponse: {
+            /** Run Id */
+            run_id: number;
+            /** Status */
+            status: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Result */
+            result?: string | null;
+        };
         /**
          * RunTrigger
          * @enum {string}
@@ -4325,6 +4650,27 @@ export interface components {
             /** Series */
             series: components["schemas"]["OpsSeriesPoint"][];
         };
+        /**
+         * TokenBreakdown
+         * @description Breakdown of token usage by type.
+         */
+        TokenBreakdown: {
+            /**
+             * Prompt
+             * @description Prompt/input tokens (if tracked)
+             */
+            prompt?: number | null;
+            /**
+             * Completion
+             * @description Completion/output tokens (if tracked)
+             */
+            completion?: number | null;
+            /**
+             * Total
+             * @description Total tokens used
+             */
+            total: number;
+        };
         /** TokenOut */
         TokenOut: {
             /** Access Token */
@@ -4336,6 +4682,22 @@ export interface components {
             token_type: string;
             /** Expires In */
             expires_in: number;
+        };
+        /**
+         * TopAgentUsage
+         * @description Agent usage stats for user detail view.
+         */
+        TopAgentUsage: {
+            /** Agent Id */
+            agent_id: number;
+            /** Name */
+            name: string;
+            /** Tokens */
+            tokens: number;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Runs */
+            runs: number;
         };
         /**
          * TopAgentsResponse
@@ -4378,6 +4740,33 @@ export interface components {
             /** Config */
             config?: Record<string, never> | null;
         };
+        /**
+         * UsageLimit
+         * @description User's daily budget limit status.
+         */
+        UsageLimit: {
+            /**
+             * Daily Cost Cents
+             * @description Configured daily limit in cents (0=unlimited)
+             */
+            daily_cost_cents: number;
+            /**
+             * Used Percent
+             * @description Percentage of daily limit used
+             */
+            used_percent: number;
+            /**
+             * Remaining Usd
+             * @description Remaining budget in USD
+             */
+            remaining_usd: number;
+            /**
+             * Status
+             * @description ok=<80%, warning=80-99%, exceeded=>=100%, unlimited=no limit configured
+             * @enum {string}
+             */
+            status: "ok" | "warning" | "exceeded" | "unlimited";
+        };
         /** UserOut */
         UserOut: {
             /** Id */
@@ -4418,6 +4807,41 @@ export interface components {
             avatar_url?: string | null;
             /** Prefs */
             prefs?: Record<string, never> | null;
+        };
+        /**
+         * UserUsageResponse
+         * @description Response for GET /api/users/me/usage.
+         */
+        UserUsageResponse: {
+            /**
+             * Period
+             * @description Time period for usage stats
+             * @enum {string}
+             */
+            period: "today" | "7d" | "30d";
+            /** @description Token usage breakdown */
+            tokens: components["schemas"]["TokenBreakdown"];
+            /**
+             * Cost Usd
+             * @description Total cost in USD
+             */
+            cost_usd: number;
+            /**
+             * Runs
+             * @description Number of agent runs in period
+             */
+            runs: number;
+            /** @description Daily budget limit info (always today's limit) */
+            limit: components["schemas"]["UsageLimit"];
+        };
+        /**
+         * UserUsageSummary
+         * @description Multi-period usage summary for a user.
+         */
+        UserUsageSummary: {
+            today: components["schemas"]["PeriodUsage"];
+            seven_days: components["schemas"]["PeriodUsage"];
+            thirty_days: components["schemas"]["PeriodUsage"];
         };
         /** ValidationError */
         ValidationError: {
@@ -5693,6 +6117,117 @@ export interface operations {
             };
         };
     };
+    configure_test_model_api_admin_configure_test_model_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigureTestModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_with_usage_api_admin_users_get: {
+        parameters: {
+            query?: {
+                /** @description Sort field: cost_today, cost_7d, cost_30d, email, created_at */
+                sort?: "cost_today" | "cost_7d" | "cost_30d" | "email" | "created_at";
+                /** @description Sort order: asc or desc */
+                order?: "asc" | "desc";
+                /** @description Max results */
+                limit?: number;
+                /** @description Pagination offset */
+                offset?: number;
+                /** @description Filter by active status (true/false). Omit for all users. */
+                active?: boolean | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUsersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_usage_details_api_admin_users__user_id__usage_get: {
+        parameters: {
+            query?: {
+                /** @description Period for daily breakdown */
+                period?: "today" | "7d" | "30d";
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                user_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     gmail_webhook_api_email_webhook_google_post: {
         parameters: {
             query?: {
@@ -5940,7 +6475,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": Record<string, never> | null;
             };
         };
         responses: {
@@ -6387,6 +6922,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentRunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_install_script_api_runners_install_sh_get: {
+        parameters: {
+            query: {
+                enroll_token: string;
+                runner_name?: string | null;
+                swarmlet_url?: string | null;
+                runner_image?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -7691,6 +8260,39 @@ export interface operations {
             };
         };
     };
+    read_current_user_usage_api_users_me_usage_get: {
+        parameters: {
+            query?: {
+                /** @description Time period for usage stats */
+                period?: "today" | "7d" | "30d";
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_current_user_avatar_api_users_me_avatar_post: {
         parameters: {
             query?: {
@@ -8062,41 +8664,6 @@ export interface operations {
             };
         };
     };
-    jarvis_auth_api_jarvis_auth_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["JarvisAuthRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JarvisAuthResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_jarvis_agents_api_jarvis_agents_get: {
         parameters: {
             query?: {
@@ -8152,6 +8719,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JarvisRunSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_status_api_jarvis_runs__run_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_to_run_stream_api_jarvis_runs__run_id__stream_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -8308,18 +8945,22 @@ export interface operations {
             };
         };
     };
-    jarvis_events_api_jarvis_events_get: {
+    jarvis_chat_api_jarvis_chat_post: {
         parameters: {
             query?: {
+                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JarvisChatRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -8341,12 +8982,10 @@ export interface operations {
             };
         };
     };
-    jarvis_chat_api_jarvis_chat_post: {
+    jarvis_auth_api_jarvis_auth_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
             };
             header?: never;
             path?: never;
@@ -8354,9 +8993,42 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["JarvisChatRequest"];
+                "application/json": components["schemas"]["JarvisAuthRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JarvisAuthResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    jarvis_events_api_jarvis_events_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -9380,7 +10052,7 @@ export interface operations {
             };
         };
     };
-    health_check_health_get: {
+    health_check_get: {
         parameters: {
             query?: never;
             header?: never;

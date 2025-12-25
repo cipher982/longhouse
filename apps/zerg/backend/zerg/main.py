@@ -565,7 +565,8 @@ async def read_root():
     return {"message": "Agent Platform API is running"}
 
 
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.get("/health", operation_id="health_check_get")
+@app.head("/health", operation_id="health_check_head", include_in_schema=False)
 async def health_check():
     """Health check endpoint with comprehensive system validation."""
     from pathlib import Path
