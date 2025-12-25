@@ -15,7 +15,7 @@ import {
 import { buildUrl } from "../services/api";
 import { ConnectionStatus, useWebSocket } from "../lib/useWebSocket";
 import { useAuth } from "../lib/auth";
-import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon, InfoCircleIcon, CheckCircleIcon, XCircleIcon } from "../components/icons";
+import { MessageCircleIcon, PlayIcon, SettingsIcon, TrashIcon, PlusIcon, InfoCircleIcon, CheckCircleIcon, XCircleIcon, CircleIcon, CircleDotIcon, LoaderIcon, AlertTriangleIcon } from "../components/icons";
 import AgentSettingsDrawer from "../components/agent-settings/AgentSettingsDrawer";
 import UsageWidget from "../components/UsageWidget";
 import type { WebSocketMessage } from "../generated/ws-messages";
@@ -1215,17 +1215,17 @@ function formatDateTimeShort(iso: string | null | undefined): string {
   return `${year}-${month}-${day}${NBSP}${hours}:${minutes}`;
 }
 
-function formatStatus(status: string): string {
+function formatStatus(status: string): ReactElement {
   switch (status) {
     case "running":
-      return "● Running";
+      return <><CircleDotIcon width={12} height={12} /> Running</>;
     case "processing":
-      return "⏳ Processing";
+      return <><LoaderIcon width={12} height={12} /> Processing</>;
     case "error":
-      return "⚠ Error";
+      return <><AlertTriangleIcon width={12} height={12} /> Error</>;
     case "idle":
     default:
-      return "○ Idle";
+      return <><CircleIcon width={12} height={12} /> Idle</>;
   }
 }
 
@@ -1269,16 +1269,16 @@ function formatCost(cost?: number | null): string {
   return `$${cost.toFixed(4)}`;
 }
 
-function formatRunStatusIcon(status: AgentRun["status"]): string {
+function formatRunStatusIcon(status: AgentRun["status"]): ReactElement {
   switch (status) {
     case "running":
-      return "▶";
+      return <PlayIcon width={12} height={12} />;
     case "success":
-      return "✔";
+      return <CheckCircleIcon width={12} height={12} />;
     case "failed":
-      return "✖";
+      return <XCircleIcon width={12} height={12} />;
     default:
-      return "●";
+      return <CircleDotIcon width={12} height={12} />;
   }
 }
 
