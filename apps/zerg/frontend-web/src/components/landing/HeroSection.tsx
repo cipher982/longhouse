@@ -96,8 +96,8 @@ export function HeroSection({ onScrollToScenarios, heroAnimationsEnabled }: Hero
           <button className="btn-primary btn-lg landing-cta-main" onClick={handleStartFree}>
             Start Free
           </button>
-          <button className="btn-ghost btn-lg" onClick={onScrollToScenarios}>
-            See it in action ↓
+          <button className="btn-text btn-lg" onClick={onScrollToScenarios}>
+            See it in action <span className="btn-text-arrow">↓</span>
           </button>
         </div>
       </div>
