@@ -178,11 +178,15 @@ class TestGetRunStatus:
         assert data["result"] == "Message 3"
 
 
+import httpx
+import pytest_asyncio
+
+
 class TestAttachToRunStream:
     """Tests for GET /api/jarvis/runs/{run_id}/stream endpoint."""
 
     @pytest.fixture
-    def stream_components(self, db_session, test_user):
+    def run_components(self, db_session, test_user):
         """Create supervisor agent, thread, and run for stream testing."""
         service = SupervisorService(db_session)
         agent = service.get_or_create_supervisor_agent(test_user.id)
@@ -200,10 +204,26 @@ class TestAttachToRunStream:
 
         return {"agent": agent, "thread": thread, "run": run}
 
-    def test_attach_to_completed_run(self, client, db_session, stream_components):
+    @pytest_asyncio.fixture
+    async def async_client(self, db_session, auth_headers):
+        """Asynchronous client for testing SSE streams."""
+        from zerg.database import get_db
+        from zerg.main import app
+
+        def override_get_db():
+            yield db_session
+
+        app.dependency_overrides[get_db] = override_get_db
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+            ac.headers.update(auth_headers)
+            yield ac
+        app.dependency_overrides = {}
+
+    @pytest.mark.asyncio
+    async def test_attach_to_completed_run(self, async_client, db_session, run_components):
         """Test attaching to a completed run returns result immediately."""
-        run = stream_components["run"]
-        thread = stream_components["thread"]
+        run = run_components["run"]
+        thread = run_components["thread"]
 
         # Add result message
         message = ThreadMessage(
@@ -217,7 +237,7 @@ class TestAttachToRunStream:
         run.status = RunStatus.SUCCESS
         db_session.commit()
 
-        response = client.get(f"/api/jarvis/runs/{run.id}/stream")
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -226,16 +246,17 @@ class TestAttachToRunStream:
         assert data["result"] == "Analysis complete."
         assert data["error"] is None
 
-    def test_attach_to_failed_run(self, client, db_session, stream_components):
+    @pytest.mark.asyncio
+    async def test_attach_to_failed_run(self, async_client, db_session, run_components):
         """Test attaching to a failed run returns error."""
-        run = stream_components["run"]
+        run = run_components["run"]
 
         # Mark run as failed
         run.status = RunStatus.FAILED
         run.error = "Tool execution failed"
         db_session.commit()
 
-        response = client.get(f"/api/jarvis/runs/{run.id}/stream")
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -243,26 +264,28 @@ class TestAttachToRunStream:
         assert data["error"] == "Tool execution failed"
         assert data["result"] is None
 
-    def test_attach_to_in_progress_run(self, client, stream_components):
-        """Test attaching to an in-progress run returns current status (MVP)."""
-        run = stream_components["run"]
+    @pytest.mark.asyncio
+    async def test_attach_to_in_progress_run(self, async_client, run_components):
+        """Test attaching to an in-progress run returns current status snapshot."""
+        run = run_components["run"]
 
-        response = client.get(f"/api/jarvis/runs/{run.id}/stream")
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["run_id"] == run.id
         assert data["status"] == "running"
-        # For MVP, no streaming - just current status
         assert data["result"] is None
 
-    def test_attach_to_nonexistent_run(self, client):
+    @pytest.mark.asyncio
+    async def test_attach_to_nonexistent_run(self, async_client):
         """Test attaching to a run that doesn't exist."""
-        response = client.get("/api/jarvis/runs/99999/stream")
+        response = await async_client.get("/api/jarvis/runs/99999/stream")
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_attach_stream_multi_tenant_isolation(self, client, db_session, stream_components, other_user):
+    @pytest.mark.asyncio
+    async def test_attach_stream_multi_tenant_isolation(self, async_client, db_session, run_components, other_user):
         """Test that users cannot attach to runs owned by other users."""
         # Create a run owned by another user
         other_agent = SupervisorService(db_session).get_or_create_supervisor_agent(other_user.id)
@@ -279,14 +302,15 @@ class TestAttachToRunStream:
         db_session.refresh(other_run)
 
         # Try to attach to the other user's run
-        response = client.get(f"/api/jarvis/runs/{other_run.id}/stream")
+        response = await async_client.get(f"/api/jarvis/runs/{other_run.id}/stream")
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_attach_includes_finished_at(self, client, db_session, stream_components):
+    @pytest.mark.asyncio
+    async def test_attach_includes_finished_at(self, async_client, db_session, run_components):
         """Test that finished_at timestamp is included in response."""
-        run = stream_components["run"]
-        thread = stream_components["thread"]
+        run = run_components["run"]
+        thread = run_components["thread"]
 
         # Add result message
         message = ThreadMessage(
@@ -303,7 +327,7 @@ class TestAttachToRunStream:
         run.finished_at = datetime.now(timezone.utc)
         db_session.commit()
 
-        response = client.get(f"/api/jarvis/runs/{run.id}/stream")
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
