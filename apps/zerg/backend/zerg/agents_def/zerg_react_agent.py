@@ -329,17 +329,18 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             from zerg.context import get_worker_context
             from zerg.events import EventType
             from zerg.events import event_bus
+            from zerg.services.supervisor_context import get_supervisor_run_id
 
             ctx = get_worker_context()
-            if not ctx:
-                # No worker context - must be a supervisor run
-                # We could emit SUPERVISOR_HEARTBEAT here if needed
-                return
+            supervisor_run_id = get_supervisor_run_id()
 
             try:
                 while not heartbeat_cancelled.is_set():
                     await asyncio.sleep(10)  # Wait 10 seconds between heartbeats
-                    if not heartbeat_cancelled.is_set():
+                    if heartbeat_cancelled.is_set():
+                        break
+
+                    if ctx:
                         await event_bus.publish(
                             EventType.WORKER_HEARTBEAT,
                             {
@@ -354,6 +355,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                             },
                         )
                         logger.debug(f"Emitted heartbeat for worker {ctx.worker_id} during {phase}")
+                    elif supervisor_run_id:
+                        await event_bus.publish(
+                            EventType.SUPERVISOR_HEARTBEAT,
+                            {
+                                "event_type": EventType.SUPERVISOR_HEARTBEAT,
+                                "run_id": supervisor_run_id,
+                                "owner_id": agent_row.owner_id,
+                                "activity": "llm_reasoning",
+                                "phase": phase,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        logger.debug(f"Emitted heartbeat for supervisor run {supervisor_run_id} during {phase}")
             except asyncio.CancelledError:
                 pass  # Normal shutdown
             except Exception as e:
