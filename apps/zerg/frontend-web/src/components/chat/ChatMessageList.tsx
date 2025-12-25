@@ -6,6 +6,7 @@ import { SyntaxHighlighter, oneDark } from '../../lib/syntaxHighlighter';
 import { ThreadMessage } from "../../services/api";
 import { formatTimestamp } from "./chatUtils";
 import { ToolMessage } from "./ToolMessage";
+import { ClipboardIcon } from "../icons";
 
 interface ChatMessageListProps {
   messages: ThreadMessage[];
@@ -41,7 +42,7 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
           onClick={handleCopy}
           title="Copy code"
         >
-          {copied ? '✓ Copied' : '📋 Copy'}
+          {copied ? '✓ Copied' : <><ClipboardIcon width={14} height={14} /> Copy</>}
         </button>
       </div>
       <SyntaxHighlighter
