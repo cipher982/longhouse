@@ -10,9 +10,11 @@
 
 ## Architecture
 
-Current architecture spec (v2.1): **[specs/jarvis-supervisor-unification-v2.1.md](./specs/jarvis-supervisor-unification-v2.1.md)**
+Current architecture spec (v2.2): **[specs/durable-runs-v2.2.md](./specs/durable-runs-v2.2.md)**
 
-Historical (superseded) spec: [specs/super-siri-architecture.md](./specs/super-siri-architecture.md)
+Previous (v2.1): [specs/jarvis-supervisor-unification-v2.1.md](./specs/jarvis-supervisor-unification-v2.1.md)
+
+Historical (superseded): [specs/super-siri-architecture.md](./specs/super-siri-architecture.md)
 
 ## Directories
 

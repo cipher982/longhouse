@@ -229,4 +229,4 @@ Copy from `.env.example` if missing.
 
 ---
 
-**Last Updated**: 2025-12-20
+**Last Updated**: 2025-12-25

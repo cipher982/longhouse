@@ -4,17 +4,19 @@
 
 **Zerg** is an AI agent orchestration platform. **Jarvis** is a voice/text UI that connects to Zerg. Together they form a "swarm" system where Jarvis handles user interaction and Zerg manages multi-agent workflows.
 
-## Architecture Philosophy (v2.0)
+## Architecture Philosophy (v2.2)
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees.
 
 Key principles:
 - **No keyword routing** — Jarvis decides when to delegate, not keyword matching
 - **No specialized workers** — Workers are general-purpose agents with SSH access
+- **Session Durability** — Runs survive disconnects and timeouts; work continues in background
 - **No tool allowlists** — Security via capability boundaries (which hosts can SSH to), not tool restrictions
 - **Event-driven** — Workers notify when done, no polling loops
 
-Full spec: `docs/specs/super-siri-architecture.md`
+Full spec: `docs/specs/durable-runs-v2.2.md`
+Reference: `docs/specs/super-siri-architecture.md` (v2.0)
 
 ## For AI Agents
 

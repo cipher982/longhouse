@@ -117,35 +117,31 @@ Supervisor (LLM) interprets this and decides what to do. No heuristics.
 
 ---
 
-## Migration: Code to Remove
+## Migration: Simplified Monitoring
+
+**What's changed in v2.2:**
+Instead of a complex "Roundabout" decision engine that cancels jobs, we've simplified to **Passive Monitoring**.
 
 ```python
-# DELETE: RoundaboutMonitor class
+# SIMPLIFIED: RoundaboutMonitor
 class RoundaboutMonitor:
-    async def wait_for_completion(self, job_id):
-        while True:  # ❌ Polling loop
-            await asyncio.sleep(5)
-            decision = make_decision()  # ❌ Heuristics
-            ...
-
-# DELETE: Heuristic decision engine
-def make_heuristic_decision(context):  # ❌
-    if context.stuck > 60: return "CANCEL"
-    ...
-
-# DELETE: RoundaboutDecision enum, DecisionContext dataclass
+    # Now focuses on:
+    # 1. Heartbeat tracking (resets on tool/progress events)
+    # 2. Warning emission (if no progress for N polls)
+    # 3. Hard timeout enforcement (safety net only)
 ```
 
-## Migration: Code to Keep
+**Code to remove (logic-wise):**
 
-```python
-# KEEP: Tool activity events
-await event_bus.publish(EventType.WORKER_TOOL_STARTED, {...})
-await event_bus.publish(EventType.WORKER_TOOL_COMPLETED, {...})
+- **DELETE:** `make_heuristic_decision()` auto-cancel logic.
+- **DELETE:** `NO_PROGRESS_POLLS` triggering `CANCEL` (now triggers `WARN`).
+- **DELETE:** `STUCK_THRESHOLD` triggering `CANCEL`.
 
-# KEEP: SSE forwarding to UI
-event_bus.subscribe(EventType.WORKER_TOOL_STARTED, forward_to_sse)
-```
+**Code to keep/enhance:**
+
+- **KEEP:** Tool activity events (`EventType.WORKER_TOOL_STARTED`).
+- **KEEP:** SSE forwarding to UI.
+- **ENHANCE:** Heartbeat events (progress signals during LLM thinking).
 
 ---
 
