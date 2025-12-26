@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # 🚀 Deployment Guide - Coolify + Hetzner VPS
 
 This guide covers deploying the Zerg AI Agent Platform using Docker Compose on Coolify.

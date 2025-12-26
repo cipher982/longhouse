@@ -1,7 +1,14 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Jarvis Integration Architecture
 
 > **⚠️ DEPRECATED**: This document describes the original architecture.
-> As of December 2024, jarvis-server has been removed and all functionality moved to zerg-backend at `/api/jarvis/*`.
+> As of December 2024, jarvis-server has been removed and all functionality moved to backend at `/api/jarvis/*`.
 > See `AGENTS.md` for current architecture.
 
 **Version**: 1.0
@@ -458,9 +465,9 @@ All services run in a single Docker network with Nginx reverse proxy.
 JARPXY_PORT=30080         # External: Jarvis PWA entry point
 ZGPXY_PORT=30081          # External: Zerg Dashboard entry point
 JARVIS_WEB_PORT=8080      # Internal: jarvis-web container
-JARVIS_SERVER_PORT=8787   # Legacy: jarvis-server (removed; zerg-backend now serves /api/jarvis/*)
-ZERG_BACKEND_PORT=8000    # Internal: zerg-backend container
-ZERG_FRONTEND_PORT=5173   # Internal: zerg-frontend container
+JARVIS_SERVER_PORT=8787   # Legacy: jarvis-server (removed; backend now serves /api/jarvis/*)
+ZERG_BACKEND_PORT=8000    # Internal: backend container
+ZERG_FRONTEND_PORT=5173   # Internal: frontend-web container
 
 # Existing Zerg vars
 JARVIS_DEVICE_SECRET="your-secure-secret-change-me-min-32-chars"
@@ -500,7 +507,7 @@ DATABASE_URL="sqlite:///./app.db"
 JWT_SECRET="your-jwt-secret"
 ```
 
-**Jarvis Client** _(was `apps/jarvis/.env`, now integrated at `apps/zerg/frontend-web/`)_:
+**Jarvis Client** _(was `apps/zerg/frontend-web/src/jarvis/.env`, now integrated at `apps/zerg/frontend-web/`)_:
 
 ```bash
 # Direct connection to Zerg backend
@@ -574,8 +581,8 @@ curl -s -X POST http://localhost:30080/api/session \
   -d '{"device_secret":"your-secret"}' \
   -c "$COOKIE_JAR" -b "$COOKIE_JAR"
 
-# Note: Unified mode uses /api/jarvis/session (served by zerg-backend; jarvis-server removed)
-# All other /api/* routes are proxied to zerg-backend
+# Note: Unified mode uses /api/jarvis/session (served by backend; jarvis-server removed)
+# All other /api/* routes are proxied to backend
 ```
 
 #### Option B: Traditional Setup
@@ -610,7 +617,7 @@ curl -N http://localhost:47300/api/jarvis/events \
 **Note**: In unified mode, API routes are split between:
 
 - Legacy: `/api/session`, `/api/tool`, `/api/sync/*` → jarvis-server (Port 8787) (removed)
-- `/api/zerg/*` → zerg-backend (Port 8000)
+- `/api/zerg/*` → backend (Port 8000)
 
 ### Seeding Baseline Agents
 
@@ -832,6 +839,6 @@ client.connectEventStream({
 - **Blueprint**: `/swarm_platform_blueprint.md` _(archived/removed)_
 - **Progress Report**: `/JARVIS_INTEGRATION_PROGRESS.md` _(archived/removed)_
 - **Backend Router**: `/apps/zerg/backend/zerg/routers/jarvis.py` _(still valid)_
-- **TypeScript Client**: `/apps/jarvis/packages/core/src/jarvis-api-client.ts` _(now: `apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts`)_
+- **TypeScript Client**: `/apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts` _(now: `apps/zerg/frontend-web/src/jarvis/core/jarvis-api-client.ts`)_
 - **Seed Script**: `/apps/zerg/backend/scripts/seed_jarvis_agents.py` _(still valid)_
 - **Migration**: `/apps/zerg/backend/alembic/versions/a1b2c3d4e5f6_add_summary_to_agent_run.py` _(example path)_

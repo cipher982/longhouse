@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Remaining Tool Features — Pre-Beta Slim Spec
 
 **Status**: Beta-ready implementation spec (slimmed to match current codebase + pre-launch needs)

@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # Session Report: Swarmlet SPA Merge Cleanup & Stabilization
 
 **Date:** 2025-12-20
@@ -20,7 +27,7 @@ Successfully completed high-priority (P0/P1) tasks from the post-merge review. T
 - **Outcome:** Jarvis internal header is hidden when mounted within the SPA.
 
 ### 3. Dead Code Removal (P1)
-- **Problem:** `apps/jarvis/apps/web/` (legacy standalone frontend) was redundant and causing confusion.
+- **Problem:** `apps/zerg/frontend-web/src/jarvis/` (legacy standalone frontend) was redundant and causing confusion.
 - **Action:** Deleted the entire directory.
 - **Outcome:** Single source of truth for frontend code.
 

@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Frontend Alignment Spec: Zerg Dashboard + Jarvis Chat
 
 **Status:** Phases 1-3 Complete
@@ -72,11 +79,9 @@ This spec outlines a phased approach to align them as a cohesive product while p
 4. Align favicon if different
 
 **Files to modify:**
-- `apps/jarvis/apps/web/src/components/Header.tsx`
-- `apps/jarvis/apps/web/public/manifest.json`
-- `apps/jarvis/apps/web/index.html` (title tag)
-
-**Effort:** ~1 hour
+- `apps/zerg/frontend-web/src/jarvis/app/components/Header.tsx`
+- `apps/zerg/frontend-web/public/site.webmanifest`
+- `apps/zerg/frontend-web/index.html` (title tag)
 
 ---
 
@@ -145,29 +150,19 @@ Move global nav to a collapsible sidebar:
 **Recommendation:** Start with **Option B** - integrate nav into Jarvis header. Simplest path to cohesion.
 
 **Files to modify:**
-- `apps/jarvis/apps/web/src/components/Header.tsx`
-- `apps/jarvis/apps/web/styles/layout.css`
-
-**Effort:** ~4 hours
+- `apps/zerg/frontend-web/src/jarvis/app/components/Header.tsx`
+- `apps/zerg/frontend-web/src/jarvis/styles/layout.css`
 
 ---
 
 ### Phase 3: Shared Design Token Foundation
-**Scope:** Create a shared token package both UIs consume
+**Scope:** Establish a shared token foundation both contexts consume
 
 **Structure:**
 ```
-packages/design-tokens/
-├── tokens.json           # DTCG-compliant source (merge both systems)
-├── scripts/
-│   └── build.mjs        # Generates outputs
-└── dist/
-    ├── css/
-    │   ├── base.css     # Core tokens (shared)
-    │   ├── theme-solid.css   # Dashboard variant
-    │   └── theme-glass.css   # Chat variant
-    └── ts/
-        └── tokens.ts    # TypeScript exports
+apps/zerg/frontend-web/src/styles/tokens.css         # Shared tokens (single source of truth)
+apps/zerg/frontend-web/src/styles/legacy.css         # Imports tokens.css (layers)
+apps/zerg/frontend-web/src/jarvis/styles/base.css    # Imports ../../styles/tokens.css
 ```
 
 **Token Merge Strategy:**
@@ -184,12 +179,9 @@ packages/design-tokens/
 | Motion | Partial | Basic durations shared, complex animations per-theme |
 
 **Migration Path:**
-1. Create `packages/design-tokens/` with merged token file
-2. Update Zerg build to consume from shared package
-3. Update Jarvis to import shared base + glass theme
-4. Delete duplicate token definitions
-
-**Effort:** ~8 hours
+1. Keep shared tokens in `apps/zerg/frontend-web/src/styles/tokens.css`
+2. Import tokens into both dashboard and Jarvis CSS entrypoints
+3. Delete/avoid duplicate token definitions elsewhere
 
 ---
 
@@ -212,17 +204,8 @@ packages/design-tokens/
 
 **Structure:**
 ```
-packages/ui/
-├── src/
-│   ├── Button/
-│   ├── Input/
-│   ├── Modal/
-│   └── index.ts
-├── package.json
-└── tsconfig.json
+Defer. Keep shared components in `apps/zerg/frontend-web/src/components/` for now.
 ```
-
-**Effort:** ~16 hours
 
 **Recommendation:** Defer this phase. The UIs have few overlapping components, and the maintenance burden of a shared library may exceed benefits. Revisit when adding a third frontend or major features.
 
@@ -268,12 +251,9 @@ packages/ui/
 - [x] Brand logo links to /chat
 
 ### Phase 3: Tokens ✅
-- [x] Create `packages/design-tokens/` package
-- [x] Merge token definitions (DTCG format)
-- [x] Build script generates: core.css, theme-solid.css, theme-glass.css, tokens.ts
-- [x] Add `make build-tokens` command
-- [x] Migrate Jarvis to shared tokens
-- [ ] Migrate Zerg to shared tokens (optional - currently works fine)
+- [x] Create shared tokens in `apps/zerg/frontend-web/src/styles/tokens.css`
+- [x] Import tokens into Jarvis via `apps/zerg/frontend-web/src/jarvis/styles/base.css`
+- [x] Import tokens into dashboard via `apps/zerg/frontend-web/src/styles/legacy.css`
 
 ### Phase 4: Components (Deferred)
 - [ ] Identify candidate components

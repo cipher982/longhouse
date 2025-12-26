@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Swarmlet SPA Merge — Post‑Merge Review + Cleanup Spec
 
 **Date:** 2025-12-20
@@ -6,7 +13,7 @@
 ## Executive Summary
 The core merge is **COMPLETE and VERIFIED**.
 - `/chat` is served by the Zerg React app (SPA).
-- `apps/jarvis/apps/web/` has been **deleted**.
+- `apps/zerg/frontend-web/src/jarvis/` has been **deleted**.
 - CSS leakage has been fixed by scoping Jarvis styles under `.jarvis-container`.
 - Duplicate header issue is resolved via `embedded` prop.
 - `docker/docker-compose.prod.yml` and scripts have been updated to remove `jarvis-web`.
@@ -29,7 +36,7 @@ The core merge is **COMPLETE and VERIFIED**.
 - `scripts/dev-docker.sh` no longer waits for `jarvis-web` logs.
 
 ### Repo hygiene
-- `apps/jarvis/apps/web/` is **DELETED**.
+- `apps/zerg/frontend-web/src/jarvis/` is **DELETED**.
 - `Makefile` targets updated to remove dead references.
 
 ---
@@ -42,7 +49,7 @@ The core merge is **COMPLETE and VERIFIED**.
 - Refactored all CSS in `apps/zerg/frontend-web/src/jarvis/styles/` to scope under `.jarvis-container`.
 - Updated `theme-glass.css` to scope variables under `.jarvis-container`.
 
-2) **[DONE] Ensure `src/jarvis/` is committed**
+2) **[DONE] Ensure `apps/zerg/frontend-web/src/jarvis/` is committed**
 - Files are tracked in git.
 
 ### P1 — High Impact UX Simplifications
@@ -52,7 +59,7 @@ The core merge is **COMPLETE and VERIFIED**.
 - `JarvisChatPage` passes `embedded={true}`.
 
 4) **[DONE] Remove dead standalone Jarvis frontend**
-- `apps/jarvis/apps/web/` deleted.
+- `apps/zerg/frontend-web/src/jarvis/` deleted.
 
 5) **[DONE] Fix “prod nginx config drift”**
 - `docker/docker-compose.prod.yml` updated to remove `jarvis-web`.
