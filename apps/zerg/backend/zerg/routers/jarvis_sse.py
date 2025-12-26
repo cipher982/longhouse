@@ -13,6 +13,19 @@ from zerg.events.event_bus import event_bus
 logger = logging.getLogger(__name__)
 
 
+def _json_default(value):  # type: ignore[no-untyped-def]
+    """Fallback serializer for SSE payloads.
+
+    Some event payloads may contain datetime objects (or other non-JSON-safe
+    values). We prefer emitting a string rather than crashing the SSE stream.
+    """
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return value.isoformat()
+    return str(value)
+
+
 async def stream_run_events(
     run_id: int,
     owner_id: int,
@@ -71,7 +84,8 @@ async def stream_run_events(
                 {
                     "message": "Stream connected",
                     "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                }
+                },
+                default=_json_default,
             ),
         }
 
@@ -116,7 +130,8 @@ async def stream_run_events(
                             "payload": payload,
                             "client_correlation_id": client_correlation_id,
                             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
+                        },
+                        default=_json_default,
                     ),
                 }
 
@@ -127,7 +142,8 @@ async def stream_run_events(
                     "data": json.dumps(
                         {
                             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
+                        },
+                        default=_json_default,
                     ),
                 }
 

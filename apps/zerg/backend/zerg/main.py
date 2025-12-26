@@ -461,6 +461,18 @@ from fastapi.responses import JSONResponse
 @app.exception_handler(Exception)
 async def ensure_cors_on_errors(request: Request, exc: Exception):
     """Ensure CORS headers are included even in error responses."""
+    # If the underlying HTTP protocol is already broken (e.g. h11 raised while
+    # sending the response body), attempting to send a JSON error response can
+    # trigger additional protocol errors. Let Uvicorn close the connection.
+    try:  # pragma: no cover – depends on runtime transport
+        from h11._util import LocalProtocolError  # type: ignore
+
+        if isinstance(exc, LocalProtocolError):
+            raise exc
+    except Exception:
+        # h11 may not be importable in some environments; ignore.
+        pass
+
     # Log the actual error for debugging
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
 

@@ -165,34 +165,9 @@ class WorkerJobProcessor:
                     logger.error(f"Worker job {job.id} failed: {job.error}")
 
                 db.commit()
-
-                # Emit WORKER_COMPLETE event (include run_id for SSE correlation)
-                await event_bus.publish(
-                    EventType.WORKER_COMPLETE,
-                    {
-                        "event_type": EventType.WORKER_COMPLETE,
-                        "job_id": job.id,
-                        "worker_id": result.worker_id,
-                        "status": result.status,
-                        "duration_ms": result.duration_ms,
-                        "owner_id": owner_id,
-                        "run_id": supervisor_run_id,  # For SSE correlation
-                    },
-                )
-
-                # Emit WORKER_SUMMARY_READY if we have a summary
-                if result.summary:
-                    await event_bus.publish(
-                        EventType.WORKER_SUMMARY_READY,
-                        {
-                            "event_type": EventType.WORKER_SUMMARY_READY,
-                            "job_id": job.id,
-                            "worker_id": result.worker_id,
-                            "summary": result.summary,
-                            "owner_id": owner_id,
-                            "run_id": supervisor_run_id,  # For SSE correlation
-                        },
-                    )
+                # Note: runner.run_worker(...) is responsible for emitting WORKER_* events
+                # (including tool events, worker_complete, and summary_ready) when
+                # event_context is provided. Emitting here would duplicate events on SSE.
 
             except Exception as e:
                 logger.exception(f"Failed to process worker job {job.id}")
@@ -203,19 +178,8 @@ class WorkerJobProcessor:
                     job.error = str(e)
                     job.finished_at = datetime.now(timezone.utc)
                     db.commit()
-
-                    # Emit error event (include run_id for SSE correlation)
-                    await event_bus.publish(
-                        EventType.WORKER_COMPLETE,
-                        {
-                            "event_type": EventType.WORKER_COMPLETE,
-                            "job_id": job.id,
-                            "status": "failed",
-                            "error": str(e),
-                            "owner_id": owner_id,
-                            "run_id": supervisor_run_id,  # For SSE correlation
-                        },
-                    )
+                    # runner.run_worker(...) already emitted a WORKER_COMPLETE failure event
+                    # (best-effort) when event_context is provided.
                 except Exception as commit_error:
                     logger.error(f"Failed to commit error state for job {job.id}: {commit_error}")
 
