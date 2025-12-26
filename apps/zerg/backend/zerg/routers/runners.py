@@ -23,8 +23,10 @@ from fastapi import Response
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from fastapi import status
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from zerg.crud import runner_crud
 from zerg.database import get_db
@@ -646,7 +648,15 @@ async def runner_websocket(
             if reported_caps and set(reported_caps) != set(runner.capabilities):
                 logger.warning(f"Runner {runner_id} capability mismatch: DB={runner.capabilities}, reported={reported_caps}")
 
-        db.commit()
+        try:
+            db.commit()
+        except Exception as e:
+            # If DB commit fails, the session is poisoned until rollback.
+            # Close the websocket so the runner will reconnect cleanly.
+            db.rollback()
+            logger.error(f"Failed to mark runner {runner_id} online: {e}")
+            await websocket.close(code=1011, reason="Server DB error")
+            return
 
         logger.info(f"Runner {runner_id} (owner {owner_id}) connected")
 
@@ -658,8 +668,25 @@ async def runner_websocket(
 
                 if message_type == "heartbeat":
                     # Update last_seen_at (no log - too noisy at 30s intervals)
-                    runner.last_seen_at = utc_now_naive()
-                    db.commit()
+                    try:
+                        stmt = update(RunnerModel).where(RunnerModel.id == runner_id).values(last_seen_at=utc_now_naive())
+                        result = db.execute(stmt)
+                        if result.rowcount != 1:
+                            db.rollback()
+                            logger.warning(f"Runner {runner_id} missing during heartbeat (rowcount={result.rowcount})")
+                            await websocket.close(code=1008, reason="Runner not found")
+                            break
+                        db.commit()
+                    except StaleDataError as e:
+                        db.rollback()
+                        logger.warning(f"Runner {runner_id} stale during heartbeat: {e}")
+                        await websocket.close(code=1011, reason="Stale runner state")
+                        break
+                    except Exception as e:
+                        db.rollback()
+                        logger.error(f"DB error during heartbeat for runner {runner_id}: {e}")
+                        await websocket.close(code=1011, reason="Server DB error")
+                        break
 
                 elif message_type == "exec_chunk":
                     # Handle output streaming
@@ -753,11 +780,24 @@ async def runner_websocket(
 
             # Only mark runner offline if we actually unregistered it (wasn't replaced)
             if was_unregistered:
-                runner = runner_crud.get_runner(db, runner_id)
-                if runner:
-                    runner.status = "offline"
-                    db.commit()
-                    logger.info(f"Runner {runner_id} marked offline")
+                try:
+                    # If the session is in a failed state (e.g. earlier flush error), reset it first.
+                    db.rollback()
+                except Exception:
+                    pass
+
+                try:
+                    runner = runner_crud.get_runner(db, runner_id)
+                    if runner:
+                        runner.status = "offline"
+                        db.commit()
+                        logger.info(f"Runner {runner_id} marked offline")
+                except Exception as e:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")
 
         try:
             await websocket.close()
