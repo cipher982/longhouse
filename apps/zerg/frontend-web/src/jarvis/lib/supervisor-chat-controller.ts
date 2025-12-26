@@ -701,6 +701,61 @@ export class SupervisorChatController {
   }
 
   /**
+   * Attach to an existing run's event stream
+   * Used for reconnecting after page refresh
+   */
+  async attachToRun(runId: number): Promise<void> {
+    logger.info(`[SupervisorChat] Attaching to run ${runId}...`);
+
+    // Cancel any current stream
+    if (this.currentAbortController) {
+      this.currentAbortController.abort();
+    }
+
+    // Create new abort controller
+    this.currentAbortController = new AbortController();
+    this.currentRunId = runId;
+
+    try {
+      const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/runs/${runId}/stream`);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'text/event-stream',
+        },
+        credentials: 'include',
+        signal: this.currentAbortController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to attach to run: ${response.status} ${response.statusText}`);
+      }
+
+      const body = response.body;
+      if (!body) {
+        throw new Error('No response body for SSE stream');
+      }
+
+      // Process SSE stream (reuse existing logic)
+      await this.processSSEStream(body, this.currentAbortController.signal);
+
+      logger.info(`[SupervisorChat] Attached to run ${runId} and stream completed`);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        logger.info(`[SupervisorChat] Attach to run ${runId} aborted`);
+        return;
+      }
+
+      logger.error(`[SupervisorChat] Failed to attach to run ${runId}:`, error);
+      throw error;
+    } finally {
+      this.currentAbortController = null;
+      this.currentRunId = null;
+    }
+  }
+
+  /**
    * Clean up resources
    */
   dispose(): void {
