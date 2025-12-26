@@ -104,7 +104,13 @@ def clear_user_data(engine) -> dict[str, any]:
     all_tables = set(Base.metadata.tables.keys())
 
     # Tables to preserve (infrastructure/auth)
-    preserve_tables = {"users", "alembic_version"}
+    # Preserve infrastructure/auth tables.
+    #
+    # In development, a `dev-runner` container may be running continuously.
+    # If we clear the `runners` table, the runner will immediately start a noisy
+    # reconnect loop ("Runner not found by name") until the backend is restarted
+    # and auto-seeding runs again. Keeping runners is the least surprising DX.
+    preserve_tables = {"users", "alembic_version", "runners"}
 
     # Tables to clear (user-generated content)
     clear_tables = all_tables - preserve_tables

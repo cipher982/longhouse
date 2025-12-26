@@ -254,6 +254,43 @@ def run_auto_seed() -> dict:
     Returns:
         Dict with seeding results for logging.
     """
+    # In dev mode (AUTH_DISABLED=1), many subsystems (runners, user-context, credentials)
+    # assume at least one deterministic "dev@local" user exists. Most request paths
+    # create it lazily via the auth layer, but runner websockets can connect before
+    # any HTTP request occurs, causing noisy reconnect loops in logs.
+    #
+    # Creating the dev user here makes startup behavior deterministic and reduces log spam.
+    try:
+        from zerg.config import get_settings
+
+        settings = get_settings()
+        node_env = (os.getenv("NODE_ENV") or "").strip().lower()
+        # Unit tests use NODE_ENV=test but don't always set TESTING=1; avoid mutating
+        # the database state during tests.
+        if settings.auth_disabled and not settings.testing and node_env != "test":
+            from zerg import crud
+
+            db = default_session_factory()
+            try:
+                result = db.execute(select(User).limit(1))
+                user = result.scalar_one_or_none()
+                if not user:
+                    desired_role = "ADMIN" if settings.dev_admin else "USER"
+                    existing = crud.get_user_by_email(db, "dev@local")
+                    if not existing:
+                        crud.create_user(
+                            db,
+                            email="dev@local",
+                            provider="dev",
+                            provider_user_id="dev-user-1",
+                            role=desired_role,
+                        )
+            finally:
+                db.close()
+    except Exception:
+        # Never block app startup on auto-seed user creation.
+        pass
+
     results = {
         "user_context": "skipped",
         "credentials": "skipped",
