@@ -246,18 +246,28 @@ SSEEnvelope:
 
 ---
 
-### Phase 5: Wire Up Frontend
+### Phase 5: Wire Up Frontend ✅
 
 **Goal:** Frontend uses generated types for SSE handling
 
+**Status:** ✅ Complete (Commit: 0362f53)
+
 **Acceptance Criteria:**
-- [ ] `supervisor-chat-controller.ts` imports from `generated/sse-events`
-- [ ] `handleSSEEvent()` uses discriminated union for type safety
-- [ ] All payload access is type-checked
-- [ ] TypeScript compilation passes with strict mode
-- [ ] Frontend tests pass
+- [x] `supervisor-chat-controller.ts` imports from `generated/sse-events`
+- [x] `handleSSEEvent()` uses discriminated union for type safety
+- [x] All payload access is type-checked
+- [x] TypeScript compilation passes with strict mode
+- [x] Frontend tests pass
 
 **Test:** `make test` passes, TypeScript catches a deliberately wrong field access
+
+**Implementation Notes:**
+- Imported all payload types and SSEEventType from `generated/sse-events`
+- Removed old ad-hoc interfaces (SSEConnectedEvent, SSESupervisorEvent)
+- Added event type validation before dispatching to handler
+- Each case block now uses properly typed payloads with `as` assertions
+- Verified TypeScript catches invalid field access (e.g., `payload.nonexistent_field`)
+- All tests pass (1261 backend + 24 frontend)
 
 ---
 
