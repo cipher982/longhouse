@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -241,7 +241,9 @@ validate: ## Run all validation checks
 	@printf '\n🔍 Running all validation checks...\n\n'
 	@printf '1️⃣  Validating WebSocket code...\n'
 	@$(MAKE) validate-ws
-	@printf '\n2️⃣  Validating Makefile structure...\n'
+	@printf '\n2️⃣  Validating SSE code...\n'
+	@$(MAKE) validate-sse
+	@printf '\n3️⃣  Validating Makefile structure...\n'
 	@$(MAKE) validate-makefile
 	@printf '\n✅ All validations passed\n'
 
@@ -268,6 +270,28 @@ regen-ws: ## Regenerate WebSocket contract code
 	@echo "🔄 Regenerating WebSocket code..."
 	@bash scripts/regen-ws-code.sh
 	@echo "✅ WebSocket code regenerated"
+
+validate-sse: ## Check SSE code is in sync (for CI)
+	@bash scripts/regen-sse-code.sh >/dev/null 2>&1
+	@# Only check for drift in generated files to avoid false positives from unrelated changes
+	@if ! git diff --quiet \
+		apps/zerg/backend/zerg/generated/sse_events.py \
+		apps/zerg/frontend-web/src/generated/sse-events.ts \
+		schemas/sse-events.asyncapi.yml; then \
+		echo "❌ SSE code out of sync"; \
+		echo "   Run 'make regen-sse' and commit changes"; \
+		git diff \
+			apps/zerg/backend/zerg/generated/sse_events.py \
+			apps/zerg/frontend-web/src/generated/sse-events.ts \
+			schemas/sse-events.asyncapi.yml; \
+		exit 1; \
+	fi
+	@echo "✅ SSE code in sync"
+
+regen-sse: ## Regenerate SSE event contract code
+	@echo "🔄 Regenerating SSE code..."
+	@bash scripts/regen-sse-code.sh
+	@echo "✅ SSE code regenerated"
 
 # ---------------------------------------------------------------------------
 # Makefile Validation
