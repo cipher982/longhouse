@@ -60,11 +60,19 @@ class SSETypeGenerator:
         print(f"🚀 Generating SSE types from AsyncAPI 3.0 schema: {self.schema_path}")
 
         # Generate in parallel for speed
-        await asyncio.gather(
+        results = await asyncio.gather(
             self._generate_python_types(),
             self._generate_typescript_types(),
             return_exceptions=True
         )
+
+        # Check for failures - raise first exception encountered
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            print(f"❌ Generation failed with {len(errors)} error(s):")
+            for err in errors:
+                print(f"   - {err}")
+            raise errors[0]
 
         print("✅ SSE type generation complete!")
 
