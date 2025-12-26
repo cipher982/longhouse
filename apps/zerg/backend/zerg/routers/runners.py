@@ -23,7 +23,6 @@ from fastapi import Response
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from fastapi import status
-from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -597,15 +596,17 @@ async def runner_websocket(
         # Look up runner by ID or name
         # Name-based auth requires iterating users, but since the secret is unique
         # per runner, we can validate after finding by name across all users
+        # Import here for use in heartbeat updates (needed regardless of auth path)
+        from sqlalchemy import select
+        from sqlalchemy import update
+
+        from zerg.models.models import Runner as RunnerModel
+
         runner = None
         if runner_id:
             runner = runner_crud.get_runner(db, runner_id)
         elif runner_name:
             # Name-based auth: names are only unique per-owner, so we bind name+secret.
-            from sqlalchemy import select
-
-            from zerg.models.models import Runner as RunnerModel
-
             stmt = select(RunnerModel).where(RunnerModel.name == runner_name, RunnerModel.auth_secret_hash == computed_hash)
             runner = db.execute(stmt).scalar_one_or_none()
             if not runner:
