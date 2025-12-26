@@ -71,6 +71,7 @@ interface JarvisAppState {
   initialized: boolean
   connecting: boolean
   connected: boolean
+  reconnecting: boolean
   voiceStatus: 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
   bootstrap: BootstrapData | null
   currentContext: VoiceAgentConfig | null
@@ -90,6 +91,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     initialized: false,
     connecting: false,
     connected: false,
+    reconnecting: false,
     voiceStatus: 'idle',
     bootstrap: null,
     currentContext: null,
@@ -243,6 +245,49 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     }
   }, [dispatch])
 
+  const checkForActiveRun = useCallback(async () => {
+    try {
+      logger.info('[useJarvisApp] Checking for active run...')
+      const response = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/runs/active`), {
+        credentials: 'include',
+      })
+
+      if (response.status === 204) {
+        logger.info('[useJarvisApp] No active run found')
+        return null
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to check active run: ${response.status}`)
+      }
+
+      const data = await response.json()
+      logger.info(`[useJarvisApp] Found active run: ${data.run_id}`)
+      return data.run_id
+    } catch (error) {
+      logger.warn('[useJarvisApp] Failed to check for active run:', error)
+      return null
+    }
+  }, [])
+
+  const reconnectToRun = useCallback(async (runId: number) => {
+    if (!supervisorChatRef.current) {
+      logger.warn('[useJarvisApp] Cannot reconnect - supervisor chat not initialized')
+      return
+    }
+
+    try {
+      logger.info(`[useJarvisApp] Reconnecting to run ${runId}...`)
+      updateState({ reconnecting: true })
+      await supervisorChatRef.current.attachToRun(runId)
+      logger.info(`[useJarvisApp] Reconnected to run ${runId}`)
+    } catch (error) {
+      logger.error('[useJarvisApp] Failed to reconnect to run:', error)
+    } finally {
+      updateState({ reconnecting: false })
+    }
+  }, [updateState])
+
   // Main initialization
   const initialize = useCallback(async () => {
     if (state.initialized || initStartedRef.current) return
@@ -267,7 +312,14 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       // 5. Load history
       await loadSupervisorHistory()
 
-      // 6. Set up event listeners
+      // 6. Check for active run and reconnect if found
+      const activeRunId = await checkForActiveRun()
+      if (activeRunId) {
+        logger.info(`[useJarvisApp] Found active run ${activeRunId}, reconnecting...`)
+        await reconnectToRun(activeRunId)
+      }
+
+      // 7. Set up event listeners
       setupVoiceListeners()
       setupStreamingListeners()
 
@@ -278,7 +330,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       initStartedRef.current = false
       optionsRef.current.onError?.(error as Error)
     }
-  }, [state.initialized, initializeJarvisClient, fetchBootstrap, initializeContext, loadSupervisorHistory, updateState])
+  }, [state.initialized, initializeJarvisClient, fetchBootstrap, initializeContext, loadSupervisorHistory, checkForActiveRun, reconnectToRun, updateState])
 
   // Set up voice controller event listeners
   const setupVoiceListeners = useCallback(() => {
