@@ -64,6 +64,7 @@ from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
+from zerg.routers.stream import router as stream_router
 from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.templates import router as templates_router
@@ -544,6 +545,7 @@ app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
 app.include_router(sync_router)  # Conversation sync - includes /api/jarvis/sync prefix
+app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
 app.include_router(system_router, prefix=API_PREFIX)
 app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
 app.include_router(ops_router, prefix=f"{API_PREFIX}")
