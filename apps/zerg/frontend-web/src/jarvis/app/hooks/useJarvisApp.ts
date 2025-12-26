@@ -315,19 +315,20 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       supervisorChatRef.current = new SupervisorChatController({ maxRetries: 3 })
       await supervisorChatRef.current.initialize()
 
-      // 5. Load history
-      await loadSupervisorHistory()
-
-      // 6. Check for active run and reconnect if found
+      // 5. Check for active run and reconnect if found.
+      // Do this before loading history so a refresh can reattach to a running SSE stream ASAP.
       const activeRunId = await checkForActiveRun()
       if (activeRunId) {
         logger.info(`[useJarvisApp] Found active run ${activeRunId}, reconnecting...`)
         // Show UI immediately before SSE connects
         workerProgressStore.setReconnecting(activeRunId)
         await reconnectToRun(activeRunId)
+      } else {
+        // No active run → load history for the chat UI.
+        await loadSupervisorHistory()
       }
 
-      // 7. Set up event listeners
+      // 6. Set up event listeners
       setupVoiceListeners()
       setupStreamingListeners()
 
