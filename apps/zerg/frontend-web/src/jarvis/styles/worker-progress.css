@@ -360,7 +360,9 @@
 /* ------------------------------------------------------------------ */
 
 .jarvis-container .worker-progress--active {
-  /* Active class applied when workers are displayed */
+  display: block;
+  flex: none; /* Don't grow/shrink in flex container */
+  height: auto; /* Size to content */
 }
 
 /* ------------------------------------------------------------------ */
