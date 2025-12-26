@@ -23,7 +23,7 @@ export function NerdSection() {
     {
       icon: <BrainIcon width={32} height={32} />,
       title: "Latest AI models",
-      description: "GPT-4o, Claude, and more",
+      description: "OpenAI GPT-5.2, GPT-5 Mini, and more",
     },
     {
       icon: <BarChartIcon width={32} height={32} />,
