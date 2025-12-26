@@ -1,4 +1,5 @@
 import config from "../../lib/config";
+import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 interface Scenario {
   image: string;
@@ -65,9 +66,13 @@ export function ScenariosSection() {
         <div className="landing-scenarios-grid">
           {scenarios.map((scenario, index) => (
             <div key={index} className="landing-scenario-card" style={{ animationDelay: `${index * 100}ms` }}>
-              <div className="landing-scenario-image">
-                <img src={scenario.image} alt={scenario.title} />
-              </div>
+              <AppScreenshotFrame
+                src={scenario.image}
+                alt={scenario.title}
+                aspectRatio="16/9"
+                showChrome={false}
+                className="landing-scenario-frame"
+              />
               <h3 className="landing-scenario-title">{scenario.title}</h3>
               <p className="landing-scenario-desc">{scenario.description}</p>
               <ul className="landing-scenario-steps">

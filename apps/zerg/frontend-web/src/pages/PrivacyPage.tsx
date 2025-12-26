@@ -8,6 +8,10 @@ export default function PrivacyPage() {
 
   useEffect(() => {
     document.title = "Privacy Policy - Swarmlet";
+    const metaDescription = document.querySelector('meta[name="description"]');
+    if (metaDescription) {
+      metaDescription.setAttribute('content', 'How Swarmlet handles your data. We don\'t train AI on your conversations, don\'t sell your data, and give you full control over your information.');
+    }
   }, []);
 
   return (

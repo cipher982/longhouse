@@ -52,7 +52,7 @@ export function PASSection() {
           <h2 className="landing-section-label">The Solution</h2>
           <p>
             <strong>Swarmlet</strong> is a personal AI hub: plug in the tools you already use,
-            and it watches your life signals — health, location, messages, home — to keep you
+            and it can monitor signals like health and location to help keep you
             organized <em>automatically</em>.
           </p>
         </div>

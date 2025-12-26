@@ -8,6 +8,10 @@ export default function ChangelogPage() {
 
   useEffect(() => {
     document.title = "Changelog - Swarmlet";
+    const metaDescription = document.querySelector('meta[name="description"]');
+    if (metaDescription) {
+      metaDescription.setAttribute('content', 'Track Swarmlet\'s development progress. See new features, improvements, and fixes as we build the platform.');
+    }
   }, []);
 
   return (
