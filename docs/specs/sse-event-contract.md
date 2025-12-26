@@ -186,22 +186,38 @@ SSEEnvelope:
 
 ---
 
-### Phase 3: Add Make Target and Pre-commit
+### Phase 3: Add Make Target and Pre-commit ✅ COMPLETE
 
 **Goal:** Integrate into build system with drift detection
 
 **Acceptance Criteria:**
-- [ ] `make regen-sse` regenerates SSE types
-- [ ] `make validate-sse` checks for drift (like `validate-ws`)
-- [ ] Pre-commit hook runs drift check
-- [ ] `.pre-commit-config.yaml` updated
-- [ ] `Makefile` updated with new targets
-- [ ] AGENTS.md updated with new commands
+- [x] `make regen-sse` regenerates SSE types
+- [x] `make validate-sse` checks for drift (like `validate-ws`)
+- [x] Pre-commit hook runs drift check
+- [x] `.pre-commit-config.yaml` updated
+- [x] `Makefile` updated with new targets
+- [x] AGENTS.md updated with new commands
 
 **Test:**
-1. Modify schema, run `make validate-sse` → fails
-2. Run `make regen-sse`, then `make validate-sse` → passes
-3. Commit with drift → blocked by pre-commit
+1. Modify schema, run `make validate-sse` → fails ✅
+2. Run `make regen-sse`, then `make validate-sse` → passes ✅
+3. Commit with drift → blocked by pre-commit ✅
+
+**Implementation Notes:**
+- Created `scripts/regen-sse-code.sh` shell wrapper (mirrors `regen-ws-code.sh` pattern)
+- Added `regen-sse` and `validate-sse` targets to Makefile
+- Updated `validate` target to include SSE validation
+- Added SSE drift check to `.pre-commit-config.yaml` (triggers on schema or generated file changes)
+- Updated AGENTS.md documentation:
+  - Added `make regen-sse` to command list
+  - Added SSE files to "Generated Code" section
+  - Added SSE drift to pre-commit hooks table
+  - Added SSE drift fix to "Common Failures & Fixes"
+  - Updated "Generated Files — Never Edit" section
+- Drift detection works correctly:
+  - Detects when schema changes without regeneration
+  - Detects when generated files are manually modified
+  - Blocks commits via pre-commit hook when drift exists
 
 ---
 
