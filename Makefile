@@ -88,9 +88,7 @@ dev: env-check ## ⭐ Start development environment (Docker + Nginx)
 
 dev-bg: env-check ## Start development environment in background
 	@echo "🚀 Starting development environment (background)..."
-	$(COMPOSE_DEV) --profile dev up -d --build
-	@echo "⏳ Waiting for services..."
-	@sleep 10
+	$(COMPOSE_DEV) --profile dev up -d --build --wait
 	$(COMPOSE_DEV) --profile dev ps
 	@echo "✅ Services started in background. Use 'make logs' to tail."
 
