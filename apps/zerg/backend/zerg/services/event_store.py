@@ -70,15 +70,10 @@ async def emit_run_event(
         logger.error(f"Event payload not JSON-serializable for {event_type}: {e}")
         raise ValueError(f"Invalid event payload for {event_type}: {e}") from e
 
-    # 2. Get next sequence number (atomic)
-    max_seq = db.query(func.max(AgentRunEvent.sequence)).filter(AgentRunEvent.run_id == run_id).scalar() or 0
-    next_seq = max_seq + 1
-
-    # 3. Insert into database
+    # 2. Insert into database (id auto-increments, no sequence needed)
     event = AgentRunEvent(
         run_id=run_id,
         event_type=event_type,
-        sequence=next_seq,
         payload=json_payload,
     )
     db.add(event)
@@ -98,7 +93,7 @@ async def emit_run_event(
 
     # Only log non-token events to avoid spam
     if event_type != "supervisor_token":
-        logger.debug(f"Emitted {event_type} (seq={next_seq}, id={event.id}) for run {run_id}")
+        logger.debug(f"Emitted {event_type} (id={event.id}) for run {run_id}")
 
     return event.id
 
@@ -122,7 +117,7 @@ class EventStore:
             include_tokens: Whether to include SUPERVISOR_TOKEN events
 
         Returns:
-            List of events ordered by sequence
+            List of events ordered by id
         """
         query = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id)
 
@@ -132,35 +127,7 @@ class EventStore:
         if not include_tokens:
             query = query.filter(AgentRunEvent.event_type != "supervisor_token")
 
-        return query.order_by(AgentRunEvent.sequence).all()
-
-    @staticmethod
-    def get_events_after_sequence(
-        db: Session,
-        run_id: int,
-        after_sequence: int = 0,
-        include_tokens: bool = True,
-    ) -> List[AgentRunEvent]:
-        """Get events for a run after a specific sequence number.
-
-        Args:
-            db: Database session
-            run_id: Run identifier
-            after_sequence: Return events with sequence > this value (0 = all events)
-            include_tokens: Whether to include SUPERVISOR_TOKEN events
-
-        Returns:
-            List of events ordered by sequence
-        """
-        query = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id)
-
-        if after_sequence > 0:
-            query = query.filter(AgentRunEvent.sequence > after_sequence)
-
-        if not include_tokens:
-            query = query.filter(AgentRunEvent.event_type != "supervisor_token")
-
-        return query.order_by(AgentRunEvent.sequence).all()
+        return query.order_by(AgentRunEvent.id).all()
 
     @staticmethod
     def get_latest_event_id(db: Session, run_id: int) -> Optional[int]:
@@ -174,21 +141,6 @@ class EventStore:
             Latest event ID or None if no events exist
         """
         result = db.query(func.max(AgentRunEvent.id)).filter(AgentRunEvent.run_id == run_id).scalar()
-
-        return result
-
-    @staticmethod
-    def get_latest_sequence(db: Session, run_id: int) -> Optional[int]:
-        """Get the latest sequence number for a run.
-
-        Args:
-            db: Database session
-            run_id: Run identifier
-
-        Returns:
-            Latest sequence number or None if no events exist
-        """
-        result = db.query(func.max(AgentRunEvent.sequence)).filter(AgentRunEvent.run_id == run_id).scalar()
 
         return result
 
