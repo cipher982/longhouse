@@ -693,6 +693,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     initialized: state.initialized,
     connecting: state.connecting,
     connected: state.connected,
+    reconnecting: state.reconnecting,
     voiceStatus: state.voiceStatus,
     bootstrap: state.bootstrap,
 
