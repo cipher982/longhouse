@@ -86,15 +86,15 @@ async def test_emit_run_event_persists_to_db(db_session: Session, test_run: Agen
     assert event is not None
     assert event.run_id == test_run.id
     assert event.event_type == "supervisor_started"
-    assert event.sequence == 1
+    assert event.id == event_id  # Verify ID matches returned value
     assert event.payload == payload
     assert event.created_at is not None
     assert isinstance(event.created_at, datetime)
 
 
 @pytest.mark.asyncio
-async def test_sequence_numbers_are_monotonic(db_session: Session, test_run: AgentRun):
-    """Test that sequence numbers increment correctly."""
+async def test_event_ids_are_monotonic(db_session: Session, test_run: AgentRun):
+    """Test that event IDs are monotonically increasing (ordering mechanism)."""
     event_types = ["supervisor_started", "worker_spawned", "worker_complete", "supervisor_complete"]
 
     event_ids = []
@@ -108,15 +108,18 @@ async def test_sequence_numbers_are_monotonic(db_session: Session, test_run: Age
         )
         event_ids.append(event_id)
 
-    # Query all events and verify sequence numbers
+    # Query all events and verify IDs are monotonically increasing
     events = db_session.query(AgentRunEvent).filter(
         AgentRunEvent.run_id == test_run.id
-    ).order_by(AgentRunEvent.sequence).all()
+    ).order_by(AgentRunEvent.id).all()
 
     assert len(events) == 4
     for i, event in enumerate(events):
-        assert event.sequence == i + 1
+        assert event.id == event_ids[i]
         assert event.event_type == event_types[i]
+        # Verify IDs are strictly increasing
+        if i > 0:
+            assert event.id > events[i - 1].id
 
 
 @pytest.mark.asyncio
@@ -261,25 +264,10 @@ async def test_get_latest_event_id(db_session: Session, test_run: AgentRun):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Removed get_latest_sequence method (use get_latest_event_id instead)")
 async def test_get_latest_sequence(db_session: Session, test_run: AgentRun):
-    """Test getting the latest sequence number for a run."""
-    # No events yet
-    latest = EventStore.get_latest_sequence(db_session, test_run.id)
-    assert latest is None
-
-    # Create events
-    for i in range(3):
-        payload = {"event_type": f"event_{i}", "run_id": test_run.id}
-        await emit_run_event(
-            db=db_session,
-            run_id=test_run.id,
-            event_type=f"event_{i}",
-            payload=payload,
-        )
-
-    # Latest sequence should be 3
-    latest = EventStore.get_latest_sequence(db_session, test_run.id)
-    assert latest == 3
+    """Test removed - sequence column no longer exists."""
+    pass
 
 
 @pytest.mark.asyncio
@@ -340,30 +328,10 @@ async def test_get_event_count(db_session: Session, test_run: AgentRun):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Removed get_events_after_sequence method (use get_events_after with event ID)")
 async def test_get_events_after_sequence(db_session: Session, test_run: AgentRun):
-    """Test getting events after a specific sequence number."""
-    # Create events
-    for i in range(5):
-        payload = {"event_type": f"event_{i}", "run_id": test_run.id}
-        await emit_run_event(
-            db=db_session,
-            run_id=test_run.id,
-            event_type=f"event_{i}",
-            payload=payload,
-        )
-
-    # Get events after sequence 2 (should return seq 3, 4, 5)
-    events = EventStore.get_events_after_sequence(
-        db=db_session,
-        run_id=test_run.id,
-        after_sequence=2,
-        include_tokens=True,
-    )
-
-    assert len(events) == 3
-    assert events[0].sequence == 3
-    assert events[1].sequence == 4
-    assert events[2].sequence == 5
+    """Test removed - sequence-based filtering no longer supported."""
+    pass
 
 
 @pytest.mark.asyncio
@@ -393,8 +361,8 @@ async def test_datetime_serialization(db_session: Session, test_run: AgentRun):
 
 
 @pytest.mark.asyncio
-async def test_multiple_runs_isolated_sequences(db_session: Session, test_run: AgentRun):
-    """Test that sequence numbers are isolated per run."""
+async def test_multiple_runs_isolated_events(db_session: Session, test_run: AgentRun):
+    """Test that events are properly isolated per run."""
     # Create a second run
     run2 = AgentRun(
         agent_id=test_run.agent_id,
@@ -422,13 +390,19 @@ async def test_multiple_runs_isolated_sequences(db_session: Session, test_run: A
             payload={"event_type": f"run2_event_{i}"},
         )
 
-    # Both runs should have sequence numbers starting at 1
+    # Both runs should have their events properly isolated
     run1_events = EventStore.get_events_after(db_session, test_run.id)
     run2_events = EventStore.get_events_after(db_session, run2.id)
 
     assert len(run1_events) == 3
     assert len(run2_events) == 3
 
-    # Each run should have sequences 1, 2, 3
-    assert [e.sequence for e in run1_events] == [1, 2, 3]
-    assert [e.sequence for e in run2_events] == [1, 2, 3]
+    # Each run should have its own events (ordered by ID)
+    assert [e.event_type for e in run1_events] == ["run1_event_0", "run1_event_1", "run1_event_2"]
+    assert [e.event_type for e in run2_events] == ["run2_event_0", "run2_event_1", "run2_event_2"]
+
+    # IDs should be monotonically increasing within each run
+    for i in range(1, len(run1_events)):
+        assert run1_events[i].id > run1_events[i - 1].id
+    for i in range(1, len(run2_events)):
+        assert run2_events[i].id > run2_events[i - 1].id
