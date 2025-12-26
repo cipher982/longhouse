@@ -162,38 +162,67 @@ export interface WorkerToolFailedPayload {
   run_id?: number;
 }
 
-// SSE event type union
-export type SSEEventType =
-  "connected"
-  | "heartbeat"
-  | "supervisor_started"
-  | "supervisor_thinking"
-  | "supervisor_token"
-  | "supervisor_complete"
-  | "supervisor_deferred"
-  | "error"
-  | "worker_spawned"
-  | "worker_started"
-  | "worker_complete"
-  | "worker_summary_ready"
-  | "worker_tool_started"
-  | "worker_tool_completed"
-  | "worker_tool_failed";
+// All SSE event types as a constant array (use for validation)
+export const SSE_EVENT_TYPES = [
+  "connected",
+  "heartbeat",
+  "supervisor_started",
+  "supervisor_thinking",
+  "supervisor_token",
+  "supervisor_complete",
+  "supervisor_deferred",
+  "error",
+  "worker_spawned",
+  "worker_started",
+  "worker_complete",
+  "worker_summary_ready",
+  "worker_tool_started",
+  "worker_tool_completed",
+  "worker_tool_failed",
+] as const;
 
-// SSE event discriminated union for type-safe event handling
-export type SSEEventMap =
-  { event: "connected"; data: ConnectedPayload; id?: number }
-  | { event: "heartbeat"; data: HeartbeatPayload; id?: number }
-  | { event: "supervisor_started"; data: SupervisorStartedPayload; id?: number }
-  | { event: "supervisor_thinking"; data: SupervisorThinkingPayload; id?: number }
-  | { event: "supervisor_token"; data: SupervisorTokenPayload; id?: number }
-  | { event: "supervisor_complete"; data: SupervisorCompletePayload; id?: number }
-  | { event: "supervisor_deferred"; data: SupervisorDeferredPayload; id?: number }
-  | { event: "error"; data: ErrorPayload; id?: number }
-  | { event: "worker_spawned"; data: WorkerSpawnedPayload; id?: number }
-  | { event: "worker_started"; data: WorkerStartedPayload; id?: number }
-  | { event: "worker_complete"; data: WorkerCompletePayload; id?: number }
-  | { event: "worker_summary_ready"; data: WorkerSummaryReadyPayload; id?: number }
-  | { event: "worker_tool_started"; data: WorkerToolStartedPayload; id?: number }
-  | { event: "worker_tool_completed"; data: WorkerToolCompletedPayload; id?: number }
-  | { event: "worker_tool_failed"; data: WorkerToolFailedPayload; id?: number };
+// SSE event type union (derived from SSE_EVENT_TYPES)
+export type SSEEventType = typeof SSE_EVENT_TYPES[number];
+
+// SSE runtime types matching actual backend format
+//
+// IMPORTANT: The backend sends events in two formats:
+// 1. Direct payload (connected, heartbeat): data is the payload JSON directly
+// 2. Wrapped payload (all other events): data is { type, payload, client_correlation_id, timestamp }
+
+/**
+ * Wrapper format for most SSE events.
+ * After JSON.parse(event.data), you get this structure for non-heartbeat events.
+ */
+export interface SSEEventWrapper<T> {
+  type: SSEEventType;
+  payload: T;
+  client_correlation_id?: string;
+  timestamp?: string;
+}
+
+/**
+ * Type helper to extract the correct payload type for a given event.
+ * Use with: const payload = (parsed as SSEEventWrapper<SupervisorStartedPayload>).payload;
+ */
+export type SSEPayloadFor<T extends SSEEventType> =
+  T extends "connected" ? ConnectedPayload :
+  T extends "heartbeat" ? HeartbeatPayload :
+  T extends "supervisor_started" ? SupervisorStartedPayload :
+  T extends "supervisor_thinking" ? SupervisorThinkingPayload :
+  T extends "supervisor_token" ? SupervisorTokenPayload :
+  T extends "supervisor_complete" ? SupervisorCompletePayload :
+  T extends "supervisor_deferred" ? SupervisorDeferredPayload :
+  T extends "error" ? ErrorPayload :
+  T extends "worker_spawned" ? WorkerSpawnedPayload :
+  T extends "worker_started" ? WorkerStartedPayload :
+  T extends "worker_complete" ? WorkerCompletePayload :
+  T extends "worker_summary_ready" ? WorkerSummaryReadyPayload :
+  T extends "worker_tool_started" ? WorkerToolStartedPayload :
+  T extends "worker_tool_completed" ? WorkerToolCompletedPayload :
+  T extends "worker_tool_failed" ? WorkerToolFailedPayload :
+  never;
+
+// Payload type lookup (for direct payload access after unwrapping)
+export const SSE_DIRECT_PAYLOAD_EVENTS = ['connected', 'heartbeat'] as const;
+export type SSEDirectPayloadEvent = typeof SSE_DIRECT_PAYLOAD_EVENTS[number];
