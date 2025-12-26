@@ -107,8 +107,9 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         # Enable foreign keys and set timeout
         connect_args["timeout"] = 30
 
-    # For test environments, add pooling configurations
-    if os.getenv("NODE_ENV") == "test":
+    # Connection pool health: pre_ping verifies connections before use,
+    # pool_recycle closes connections after 5 minutes to handle DB restarts
+    if "sqlite" not in db_url:
         kwargs.setdefault("pool_pre_ping", True)
         kwargs.setdefault("pool_recycle", 300)
 
