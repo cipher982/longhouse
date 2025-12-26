@@ -261,8 +261,7 @@ async def _replay_and_stream(
                 if event_id:
                     last_sent_event_id = event_id
 
-                yield {
-                    "id": str(event_id) if event_id else None,  # Include event ID for resumption
+                sse_event = {
                     "event": event_type,
                     "data": json.dumps(
                         {
@@ -273,6 +272,10 @@ async def _replay_and_stream(
                         default=_json_default,
                     ),
                 }
+                # Only include id field when event_id exists (omit for id=null)
+                if event_id:
+                    sse_event["id"] = str(event_id)
+                yield sse_event
 
             except asyncio.TimeoutError:
                 # Send heartbeat to keep connection alive
