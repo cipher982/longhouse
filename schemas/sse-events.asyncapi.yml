@@ -1,0 +1,565 @@
+asyncapi: 3.0.0
+
+info:
+  title: Jarvis SSE Event Protocol
+  version: 1.0.0
+  description: |
+    Server-Sent Events (SSE) protocol for real-time updates from Jarvis backend to frontend.
+    Provides typed contracts for supervisor execution, worker lifecycle, and tool monitoring.
+
+    Features:
+    - Strongly-typed event payloads
+    - SSE envelope with event type, ID, and data
+    - Common type schemas for consistency
+    - Support for resumable streams via event IDs
+
+defaultContentType: application/json
+
+# ---------------------------------------------------------------------------
+# Channels - SSE is server-to-client only (unidirectional)
+# ---------------------------------------------------------------------------
+
+channels:
+  RunEventsChannel:
+    address: /api/jarvis/chat/stream
+    description: Real-time supervisor and worker events for a specific run
+    messages:
+      ConnectedEvent:
+        $ref: '#/components/messages/ConnectedEvent'
+      HeartbeatEvent:
+        $ref: '#/components/messages/HeartbeatEvent'
+      SupervisorStartedEvent:
+        $ref: '#/components/messages/SupervisorStartedEvent'
+      SupervisorThinkingEvent:
+        $ref: '#/components/messages/SupervisorThinkingEvent'
+      SupervisorTokenEvent:
+        $ref: '#/components/messages/SupervisorTokenEvent'
+      SupervisorCompleteEvent:
+        $ref: '#/components/messages/SupervisorCompleteEvent'
+      SupervisorDeferredEvent:
+        $ref: '#/components/messages/SupervisorDeferredEvent'
+      ErrorEvent:
+        $ref: '#/components/messages/ErrorEvent'
+      WorkerSpawnedEvent:
+        $ref: '#/components/messages/WorkerSpawnedEvent'
+      WorkerStartedEvent:
+        $ref: '#/components/messages/WorkerStartedEvent'
+      WorkerCompleteEvent:
+        $ref: '#/components/messages/WorkerCompleteEvent'
+      WorkerSummaryReadyEvent:
+        $ref: '#/components/messages/WorkerSummaryReadyEvent'
+      WorkerToolStartedEvent:
+        $ref: '#/components/messages/WorkerToolStartedEvent'
+      WorkerToolCompletedEvent:
+        $ref: '#/components/messages/WorkerToolCompletedEvent'
+      WorkerToolFailedEvent:
+        $ref: '#/components/messages/WorkerToolFailedEvent'
+
+# ---------------------------------------------------------------------------
+# Operations - SSE is always server → client (send only)
+# ---------------------------------------------------------------------------
+
+operations:
+  StreamRunEvents:
+    action: send
+    channel:
+      $ref: '#/channels/RunEventsChannel'
+    summary: Stream supervisor and worker events for a run
+
+# ---------------------------------------------------------------------------
+# Components - Messages and schemas
+# ---------------------------------------------------------------------------
+
+components:
+  messages:
+    # Connection lifecycle
+    ConnectedEvent:
+      name: connected
+      summary: Initial connection confirmation (deprecated, use heartbeat)
+      payload:
+        $ref: '#/components/schemas/ConnectedPayload'
+      x-sse-event-type: connected
+
+    HeartbeatEvent:
+      name: heartbeat
+      summary: Keep-alive heartbeat (sent every 30s or on initial connect)
+      payload:
+        $ref: '#/components/schemas/HeartbeatPayload'
+      x-sse-event-type: heartbeat
+
+    # Supervisor lifecycle
+    SupervisorStartedEvent:
+      name: supervisor_started
+      summary: Supervisor began processing task
+      payload:
+        $ref: '#/components/schemas/SupervisorStartedPayload'
+      x-sse-event-type: supervisor_started
+
+    SupervisorThinkingEvent:
+      name: supervisor_thinking
+      summary: Supervisor reasoning phase
+      payload:
+        $ref: '#/components/schemas/SupervisorThinkingPayload'
+      x-sse-event-type: supervisor_thinking
+
+    SupervisorTokenEvent:
+      name: supervisor_token
+      summary: LLM token stream (high frequency)
+      payload:
+        $ref: '#/components/schemas/SupervisorTokenPayload'
+      x-sse-event-type: supervisor_token
+
+    SupervisorCompleteEvent:
+      name: supervisor_complete
+      summary: Supervisor finished successfully
+      payload:
+        $ref: '#/components/schemas/SupervisorCompletePayload'
+      x-sse-event-type: supervisor_complete
+
+    SupervisorDeferredEvent:
+      name: supervisor_deferred
+      summary: Timeout migration - supervisor continues in background
+      payload:
+        $ref: '#/components/schemas/SupervisorDeferredPayload'
+      x-sse-event-type: supervisor_deferred
+
+    # Error handling
+    ErrorEvent:
+      name: error
+      summary: Execution error occurred
+      payload:
+        $ref: '#/components/schemas/ErrorPayload'
+      x-sse-event-type: error
+
+    # Worker lifecycle
+    WorkerSpawnedEvent:
+      name: worker_spawned
+      summary: Worker job queued
+      payload:
+        $ref: '#/components/schemas/WorkerSpawnedPayload'
+      x-sse-event-type: worker_spawned
+
+    WorkerStartedEvent:
+      name: worker_started
+      summary: Worker execution began
+      payload:
+        $ref: '#/components/schemas/WorkerStartedPayload'
+      x-sse-event-type: worker_started
+
+    WorkerCompleteEvent:
+      name: worker_complete
+      summary: Worker finished (success or failure)
+      payload:
+        $ref: '#/components/schemas/WorkerCompletePayload'
+      x-sse-event-type: worker_complete
+
+    WorkerSummaryReadyEvent:
+      name: worker_summary_ready
+      summary: Worker summary extracted
+      payload:
+        $ref: '#/components/schemas/WorkerSummaryReadyPayload'
+      x-sse-event-type: worker_summary_ready
+
+    # Worker tool monitoring
+    WorkerToolStartedEvent:
+      name: worker_tool_started
+      summary: Worker tool call began
+      payload:
+        $ref: '#/components/schemas/WorkerToolStartedPayload'
+      x-sse-event-type: worker_tool_started
+
+    WorkerToolCompletedEvent:
+      name: worker_tool_completed
+      summary: Worker tool call succeeded
+      payload:
+        $ref: '#/components/schemas/WorkerToolCompletedPayload'
+      x-sse-event-type: worker_tool_completed
+
+    WorkerToolFailedEvent:
+      name: worker_tool_failed
+      summary: Worker tool call failed
+      payload:
+        $ref: '#/components/schemas/WorkerToolFailedPayload'
+      x-sse-event-type: worker_tool_failed
+
+  schemas:
+    # ---------------------------------------------------------------------------
+    # SSE Envelope Structure
+    # ---------------------------------------------------------------------------
+    SSEEnvelope:
+      type: object
+      required: [event, data]
+      additionalProperties: false
+      properties:
+        event:
+          type: string
+          description: SSE event type (maps to `event:` line)
+          enum:
+            - connected
+            - heartbeat
+            - supervisor_started
+            - supervisor_thinking
+            - supervisor_token
+            - supervisor_complete
+            - supervisor_deferred
+            - error
+            - worker_spawned
+            - worker_started
+            - worker_complete
+            - worker_summary_ready
+            - worker_tool_started
+            - worker_tool_completed
+            - worker_tool_failed
+        id:
+          type: integer
+          description: Event ID for resumption (maps to `id:` line in SSE protocol)
+          minimum: 1
+        data:
+          type: object
+          description: JSON payload (maps to `data:` line)
+
+    # ---------------------------------------------------------------------------
+    # Common Types
+    # ---------------------------------------------------------------------------
+    UsageData:
+      type: object
+      description: LLM token usage statistics
+      properties:
+        prompt_tokens:
+          type: integer
+          minimum: 0
+        completion_tokens:
+          type: integer
+          minimum: 0
+        total_tokens:
+          type: integer
+          minimum: 0
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: Reasoning tokens (OpenAI o1/o3 models)
+
+    WorkerStatus:
+      type: string
+      enum: [success, failed]
+      description: Worker execution result
+
+    # ---------------------------------------------------------------------------
+    # Connection Lifecycle Payloads
+    # ---------------------------------------------------------------------------
+    ConnectedPayload:
+      type: object
+      required: [message, run_id]
+      properties:
+        message:
+          type: string
+          description: Connection confirmation message
+        run_id:
+          type: integer
+          minimum: 1
+          description: Run ID for this SSE stream
+        client_correlation_id:
+          type: string
+          description: Optional client-provided correlation ID
+
+    HeartbeatPayload:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Optional heartbeat message
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp
+
+    # ---------------------------------------------------------------------------
+    # Supervisor Event Payloads
+    # ---------------------------------------------------------------------------
+    SupervisorStartedPayload:
+      type: object
+      required: [task, thread_id]
+      properties:
+        run_id:
+          type: integer
+          minimum: 1
+          description: Run ID (may be omitted in legacy events)
+        thread_id:
+          type: integer
+          minimum: 1
+          description: Thread ID for this conversation
+        task:
+          type: string
+          minLength: 1
+          description: User's task/question
+
+    SupervisorThinkingPayload:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: Thinking status message
+        run_id:
+          type: integer
+          minimum: 1
+
+    SupervisorTokenPayload:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: LLM token (may be empty string)
+        run_id:
+          type: integer
+          minimum: 1
+        thread_id:
+          type: integer
+          minimum: 1
+
+    SupervisorCompletePayload:
+      type: object
+      required: [result, status]
+      properties:
+        result:
+          type: string
+          description: Final supervisor result
+        status:
+          type: string
+          const: success
+          description: Completion status (always 'success' for this event)
+        duration_ms:
+          type: integer
+          minimum: 0
+          description: Execution duration in milliseconds
+        usage:
+          $ref: '#/components/schemas/UsageData'
+        run_id:
+          type: integer
+          minimum: 1
+        agent_id:
+          type: integer
+          minimum: 1
+        thread_id:
+          type: integer
+          minimum: 1
+        debug_url:
+          type: string
+          description: URL for debug/inspection
+
+    SupervisorDeferredPayload:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: Deferred status message
+        attach_url:
+          type: string
+          description: URL to re-attach to the running execution
+        timeout_seconds:
+          type: number
+          minimum: 0
+          description: Timeout that triggered deferral
+        run_id:
+          type: integer
+          minimum: 1
+        agent_id:
+          type: integer
+          minimum: 1
+        thread_id:
+          type: integer
+          minimum: 1
+
+    # ---------------------------------------------------------------------------
+    # Error Payloads
+    # ---------------------------------------------------------------------------
+    ErrorPayload:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+        message:
+          type: string
+          description: Alternative error message field
+        run_id:
+          type: integer
+          minimum: 1
+
+    # ---------------------------------------------------------------------------
+    # Worker Event Payloads
+    # ---------------------------------------------------------------------------
+    WorkerSpawnedPayload:
+      type: object
+      required: [job_id, task]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+          description: Worker job ID
+        task:
+          type: string
+          minLength: 1
+          description: Worker task (may be truncated to 100 chars)
+        model:
+          type: string
+          description: LLM model for worker
+        run_id:
+          type: integer
+          minimum: 1
+
+    WorkerStartedPayload:
+      type: object
+      required: [job_id, worker_id]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+        worker_id:
+          type: string
+          minLength: 1
+          description: Worker execution ID
+        run_id:
+          type: integer
+          minimum: 1
+        task:
+          type: string
+          description: Worker task (may be truncated)
+
+    WorkerCompletePayload:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+        worker_id:
+          type: string
+          description: Worker execution ID
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        duration_ms:
+          type: integer
+          minimum: 0
+        error:
+          type: string
+          description: Error message (only present if status=failed)
+        run_id:
+          type: integer
+          minimum: 1
+
+    WorkerSummaryReadyPayload:
+      type: object
+      required: [job_id, summary]
+      properties:
+        job_id:
+          type: integer
+          minimum: 1
+        worker_id:
+          type: string
+          description: Worker execution ID
+        summary:
+          type: string
+          minLength: 1
+          description: Extracted worker summary
+        run_id:
+          type: integer
+          minimum: 1
+
+    # ---------------------------------------------------------------------------
+    # Worker Tool Monitoring Payloads
+    # ---------------------------------------------------------------------------
+    WorkerToolStartedPayload:
+      type: object
+      required: [worker_id, tool_name, tool_call_id]
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: LangChain tool call ID
+        tool_args_preview:
+          type: string
+          description: Preview of tool arguments (may be truncated)
+        run_id:
+          type: integer
+          minimum: 1
+          description: Required for security (prevents cross-run leakage)
+
+    WorkerToolCompletedPayload:
+      type: object
+      required: [worker_id, tool_name, tool_call_id, duration_ms]
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+        duration_ms:
+          type: integer
+          minimum: 0
+        result_preview:
+          type: string
+          description: Preview of tool result (may be truncated)
+        run_id:
+          type: integer
+          minimum: 1
+
+    WorkerToolFailedPayload:
+      type: object
+      required: [worker_id, tool_name, tool_call_id, duration_ms, error]
+      properties:
+        worker_id:
+          type: string
+          minLength: 1
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+        duration_ms:
+          type: integer
+          minimum: 0
+        error:
+          type: string
+          minLength: 1
+          description: Error message
+        run_id:
+          type: integer
+          minimum: 1
+
+# ---------------------------------------------------------------------------
+# Extensions for code generation
+# ---------------------------------------------------------------------------
+
+x-sse-protocol:
+  description: |
+    Server-Sent Events use a text-based protocol with:
+    - event: <type> - Event name (maps to message name)
+    - id: <number> - Event ID for resumption
+    - data: <json> - JSON payload
+    - (empty line) - Event separator
+
+x-security-notes:
+  - All events include owner_id in backend but it's filtered before SSE emission
+  - Tool events MUST include run_id to prevent cross-run leakage
+  - SSE stream filters events by run_id and owner_id
+
+x-performance-notes:
+  - supervisor_token events are high-frequency (per-token streaming)
+  - Heartbeat sent every 30s to prevent timeout
+  - Event IDs enable resumable streams (reconnect with Last-Event-ID header)
