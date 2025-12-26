@@ -116,10 +116,11 @@ async def websocket_endpoint(
         # Main message loop
         while True:
             try:
-                # Get a fresh DB session for each message
+                # Receive outside db_session - WebSocket close shouldn't trigger DB rollback log
+                raw_data = await websocket.receive_text()
+                data = json.loads(raw_data)
+                # Get a fresh DB session only for message processing
                 with db_session() as db:
-                    raw_data = await websocket.receive_text()
-                    data = json.loads(raw_data)
                     await dispatch_message(client_id, data, db)
 
             except json.JSONDecodeError as e:
