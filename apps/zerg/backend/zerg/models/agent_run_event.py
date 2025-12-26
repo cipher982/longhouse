@@ -7,7 +7,6 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
-from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -24,7 +23,7 @@ class AgentRunEvent(Base):
     here for full audit trail and resumable streaming.
 
     Key features:
-    - Sequential ordering within a run (via sequence column)
+    - Sequential ordering via auto-incrementing id (BigSerial is monotonic)
     - JSONB payload for flexible event data
     - Cascade delete when run is deleted
     - Efficient indexes for replay queries
@@ -39,7 +38,6 @@ class AgentRunEvent(Base):
 
     # Event metadata -----------------------------------------------------
     event_type = Column(String(50), nullable=False, index=True)  # supervisor_started, worker_complete, etc.
-    sequence = Column(Integer, nullable=False)  # Monotonic sequence within run for ordering
 
     # Event payload ------------------------------------------------------
     payload = Column(JSONB, nullable=False)  # Full event data (JSON-serializable)
@@ -52,7 +50,6 @@ class AgentRunEvent(Base):
 
     # Table constraints --------------------------------------------------
     __table_args__ = (
-        UniqueConstraint("run_id", "sequence", name="agent_run_events_unique_seq"),
         Index("idx_run_events_run_id", "run_id"),
         Index("idx_run_events_created_at", "created_at"),
         Index("idx_run_events_type", "event_type"),

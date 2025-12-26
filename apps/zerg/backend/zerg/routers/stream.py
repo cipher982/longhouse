@@ -58,7 +58,6 @@ async def _replay_and_stream(
     owner_id: int,
     status: RunStatus,
     after_event_id: int,
-    after_sequence: int,
     include_tokens: bool,
 ):
     """Generator that replays historical events, then streams live.
@@ -76,7 +75,6 @@ async def _replay_and_stream(
         owner_id: Owner ID for security filtering
         status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
         after_event_id: Resume from this event ID (0 = from start)
-        after_sequence: Resume from this sequence (0 = from start, alternative to event_id)
         include_tokens: Whether to include SUPERVISOR_TOKEN events
 
     Yields:
@@ -125,28 +123,12 @@ async def _replay_and_stream(
 
     try:
         # 2. Query historical events from EventStore
-        if after_event_id > 0:
-            historical = EventStore.get_events_after(
-                db=db,
-                run_id=run_id,
-                after_id=after_event_id,
-                include_tokens=include_tokens,
-            )
-        elif after_sequence > 0:
-            historical = EventStore.get_events_after_sequence(
-                db=db,
-                run_id=run_id,
-                after_sequence=after_sequence,
-                include_tokens=include_tokens,
-            )
-        else:
-            # Start from beginning (no last-event-id or sequence)
-            historical = EventStore.get_events_after(
-                db=db,
-                run_id=run_id,
-                after_id=0,
-                include_tokens=include_tokens,
-            )
+        historical = EventStore.get_events_after(
+            db=db,
+            run_id=run_id,
+            after_id=after_event_id,
+            include_tokens=include_tokens,
+        )
 
         # 3. Yield historical events with SSE id: field
         for event in historical:
@@ -284,7 +266,6 @@ async def stream_run_replay(
     run_id: int,
     request: Request,
     after_event_id: int = 0,
-    after_sequence: int = 0,
     include_tokens: bool = True,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
@@ -302,7 +283,6 @@ async def stream_run_replay(
         run_id: Run identifier
         request: HTTP request (for Last-Event-ID header)
         after_event_id: Resume from this event ID (0 = from start)
-        after_sequence: Resume from this sequence (alternative to event_id)
         include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
         db: Database session
         current_user: Authenticated user (multi-tenant filtered)
@@ -328,9 +308,6 @@ async def stream_run_replay(
 
         # Resume from specific event ID
         GET /api/stream/runs/123?after_event_id=456
-
-        # Resume from sequence number
-        GET /api/stream/runs/123?after_sequence=100
 
         # Skip token events (for bandwidth optimization)
         GET /api/stream/runs/123?include_tokens=false
@@ -358,9 +335,7 @@ async def stream_run_replay(
             logger.warning(f"Invalid Last-Event-ID header: {last_event_id_header}")
 
     logger.info(
-        f"Streaming run {run_id} (status={run.status.value}, "
-        f"after_event_id={after_event_id}, after_sequence={after_sequence}, "
-        f"include_tokens={include_tokens})"
+        f"Streaming run {run_id} (status={run.status.value}, " f"after_event_id={after_event_id}, " f"include_tokens={include_tokens})"
     )
 
     return EventSourceResponse(
@@ -370,7 +345,6 @@ async def stream_run_replay(
             owner_id=current_user.id,
             status=run.status,
             after_event_id=after_event_id,
-            after_sequence=after_sequence,
             include_tokens=include_tokens,
         )
     )
