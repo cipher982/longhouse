@@ -400,34 +400,55 @@ def emit_sse_event(
             return "unknown"
 
     def _generate_typescript_event_type(self) -> str:
-        """Generate SSEEventType union type."""
-        code = "// SSE event type union\n"
-
+        """Generate SSEEventType union type and constant array."""
         messages = self.schema.get("components", {}).get("messages", {})
         event_types = []
 
         for msg_data in messages.values():
             event_name = msg_data.get("x-sse-event-type") or msg_data.get("name", "unknown")
-            event_types.append(f'"{event_name}"')
+            event_types.append(event_name)
 
-        code += "export type SSEEventType =\n"
-        for i, event_type in enumerate(event_types):
-            is_last = i == len(event_types) - 1
-            if i == 0:
-                code += f"  {event_type}\n"
-            elif is_last:
-                code += f"  | {event_type};\n"
-            else:
-                code += f"  | {event_type}\n"
+        # Generate constant array first (source of truth)
+        code = "// All SSE event types as a constant array (use for validation)\n"
+        code += "export const SSE_EVENT_TYPES = [\n"
+        for event_type in event_types:
+            code += f'  "{event_type}",\n'
+        code += "] as const;\n\n"
 
-        code += "\n"
+        # Generate union type derived from the array
+        code += "// SSE event type union (derived from SSE_EVENT_TYPES)\n"
+        code += "export type SSEEventType = typeof SSE_EVENT_TYPES[number];\n\n"
+
         return code
 
     def _generate_typescript_event_map(self) -> str:
-        """Generate SSEEventMap discriminated union."""
-        code = "// SSE event discriminated union for type-safe event handling\n"
-        code += "export type SSEEventMap =\n"
+        """Generate SSE runtime types matching actual backend format."""
+        # Events that send payload directly (not wrapped)
+        direct_payload_events = {"connected", "heartbeat"}
 
+        code = """// SSE runtime types matching actual backend format
+//
+// IMPORTANT: The backend sends events in two formats:
+// 1. Direct payload (connected, heartbeat): data is the payload JSON directly
+// 2. Wrapped payload (all other events): data is { type, payload, client_correlation_id, timestamp }
+
+/**
+ * Wrapper format for most SSE events.
+ * After JSON.parse(event.data), you get this structure for non-heartbeat events.
+ */
+export interface SSEEventWrapper<T> {
+  type: SSEEventType;
+  payload: T;
+  client_correlation_id?: string;
+  timestamp?: string;
+}
+
+/**
+ * Type helper to extract the correct payload type for a given event.
+ * Use with: const payload = (parsed as SSEEventWrapper<SupervisorStartedPayload>).payload;
+ */
+export type SSEPayloadFor<T extends SSEEventType> =
+"""
         messages = self.schema.get("components", {}).get("messages", {})
         event_entries = []
 
@@ -440,15 +461,16 @@ def emit_sse_event(
                 event_entries.append((event_type, payload_type))
 
         for i, (event_type, payload_type) in enumerate(event_entries):
-            is_last = i == len(event_entries) - 1
-            if i == 0:
-                code += f'  {{ event: "{event_type}"; data: {payload_type}; id?: number }}\n'
-            elif is_last:
-                code += f'  | {{ event: "{event_type}"; data: {payload_type}; id?: number }};\n'
-            else:
-                code += f'  | {{ event: "{event_type}"; data: {payload_type}; id?: number }}\n'
+            code += f'  T extends "{event_type}" ? {payload_type} :\n'
 
+        code += "  never;\n\n"
+
+        # Also generate a simple lookup type for direct access
+        code += "// Payload type lookup (for direct payload access after unwrapping)\n"
+        code += "export const SSE_DIRECT_PAYLOAD_EVENTS = ['connected', 'heartbeat'] as const;\n"
+        code += "export type SSEDirectPayloadEvent = typeof SSE_DIRECT_PAYLOAD_EVENTS[number];\n"
         code += "\n"
+
         return code
 
 
