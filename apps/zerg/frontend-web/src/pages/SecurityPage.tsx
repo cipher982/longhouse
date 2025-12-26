@@ -9,6 +9,10 @@ export default function SecurityPage() {
 
   useEffect(() => {
     document.title = "Security - Swarmlet";
+    const metaDescription = document.querySelector('meta[name="description"]');
+    if (metaDescription) {
+      metaDescription.setAttribute('content', 'How Swarmlet protects your data. HTTPS-only connections, OAuth 2.0 authentication, encrypted credentials, and responsible disclosure policy.');
+    }
   }, []);
 
   return (

@@ -5,6 +5,26 @@
      - Follows the "Jarvis Glass" aesthetic by default.
      =========================================================================== */
 
+  /* --- Page Transitions --- */
+  /* Subtle fade animation for route changes */
+  @keyframes page-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* Apply to main content areas that change on route navigation */
+  .info-page,
+  .landing-page,
+  .dashboard-container,
+  .chat-page,
+  .canvas-page {
+    animation: page-fade-in 0.2s ease-out;
+  }
+
   /* --- Button --- */
   .ui-button {
     display: inline-flex;

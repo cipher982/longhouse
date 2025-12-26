@@ -9,6 +9,10 @@ export default function DocsPage() {
 
   useEffect(() => {
     document.title = "Documentation - Swarmlet";
+    const metaDescription = document.querySelector('meta[name="description"]');
+    if (metaDescription) {
+      metaDescription.setAttribute('content', 'Learn how to use Swarmlet. Quick start guides, visual workflow builder tutorials, and integration setup instructions.');
+    }
   }, []);
 
   return (

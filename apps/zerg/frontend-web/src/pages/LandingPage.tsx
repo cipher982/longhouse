@@ -9,6 +9,7 @@ import "../styles/landing.css";
 import { HeroSection } from "../components/landing/HeroSection";
 import { PASSection } from "../components/landing/PASSection";
 import { ScenariosSection } from "../components/landing/ScenariosSection";
+import { DemoSection } from "../components/landing/DemoSection";
 import { DifferentiationSection } from "../components/landing/DifferentiationSection";
 import { NerdSection } from "../components/landing/NerdSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
@@ -177,6 +178,7 @@ export default function LandingPage() {
         <HeroSection onScrollToScenarios={scrollToScenarios} heroAnimationsEnabled={heroAnimationsEnabled} />
         <PASSection />
         <ScenariosSection />
+        <DemoSection />
         <DifferentiationSection />
         <NerdSection />
         <IntegrationsSection />

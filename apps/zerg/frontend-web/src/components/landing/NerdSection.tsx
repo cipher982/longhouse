@@ -6,6 +6,7 @@ import {
   ZapIcon,
   PaletteIcon,
 } from "../icons";
+import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 export function NerdSection() {
   const features = [
@@ -71,10 +72,12 @@ export function NerdSection() {
 
         {/* Visual workflow canvas preview */}
         <div className="landing-nerd-canvas">
-          <img
+          <AppScreenshotFrame
             src="/images/landing/canvas-preview.png"
             alt="Visual workflow canvas showing AI agent nodes connected with triggers and actions"
-            className="landing-nerd-canvas-image"
+            title="Visual Workflow Builder"
+            aspectRatio="16/9"
+            showChrome={true}
           />
         </div>
 
