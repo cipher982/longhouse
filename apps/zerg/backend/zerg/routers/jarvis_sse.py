@@ -9,6 +9,7 @@ from typing import Optional
 
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
+from zerg.generated.sse_events import SSEEventType
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,13 @@ async def stream_run_events(
     try:
         # Send initial heartbeat to confirm connection immediately
         # This prevents test timeouts and improves perceived responsiveness
+        heartbeat_data = {
+            "message": "Stream connected",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
         yield {
-            "event": "heartbeat",
-            "data": json.dumps(
-                {
-                    "message": "Stream connected",
-                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                },
-                default=_json_default,
-            ),
+            "event": SSEEventType.HEARTBEAT.value,
+            "data": json.dumps(heartbeat_data, default=_json_default),
         }
 
         # Stream events until supervisor completes or errors
@@ -119,10 +118,11 @@ async def stream_run_events(
                 if supervisor_done and pending_workers == 0:
                     complete = True
 
-                # Format payload
-                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
+                # Format payload - extract event_id before filtering
+                event_id = event.get("event_id")
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
 
-                yield {
+                sse_event = {
                     "event": event_type,
                     "data": json.dumps(
                         {
@@ -135,16 +135,20 @@ async def stream_run_events(
                     ),
                 }
 
+                # Add id field if event_id is present
+                if event_id is not None:
+                    sse_event["id"] = str(event_id)
+
+                yield sse_event
+
             except asyncio.TimeoutError:
                 # Send heartbeat
+                heartbeat_data = {
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
                 yield {
-                    "event": "heartbeat",
-                    "data": json.dumps(
-                        {
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        },
-                        default=_json_default,
-                    ),
+                    "event": SSEEventType.HEARTBEAT.value,
+                    "data": json.dumps(heartbeat_data, default=_json_default),
                 }
 
     except asyncio.CancelledError:
