@@ -17,8 +17,8 @@ x-logging: &default-logging
     max-file: "3"
 
 x-healthcheck-defaults: &healthcheck-defaults
-  interval: 15s
-  timeout: 5s
+  interval: 3s
+  timeout: 3s
   retries: 3
 
 services:
@@ -99,7 +99,7 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       <<: *healthcheck-defaults
-      start_period: 30s
+      start_period: 10s
     networks:
       - swarm-network
     logging: *default-logging
@@ -130,7 +130,7 @@ services:
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
       <<: *healthcheck-defaults
-      start_period: 45s
+      start_period: 15s
     networks:
       - swarm-network
     logging: *default-logging
