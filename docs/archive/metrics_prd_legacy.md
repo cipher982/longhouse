@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 ⏺ Product Requirements Document: Modern Observability Infrastructure
 Implementation
 
@@ -94,7 +101,7 @@ opentelemetry-bootstrap -a integrate
 
 # Environment configuration
 
-OTEL_SERVICE_NAME=zerg-backend
+OTEL_SERVICE_NAME=backend
 OTEL_EXPORTER_OTLP_ENDPOINT=http://vector:4318
 
 WebSocket Event Correlation
@@ -160,7 +167,7 @@ address = "0.0.0.0:8080"
 type = "remap"
 inputs = ["frontend_events"]
 source = '''
-.service = "zerg-frontend"
+.service = "frontend-web"
 .environment = get_env_var("ENVIRONMENT") ?? "development"
 if .event_type == "websocket_message_processed" {
 .is_critical_path = true

@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Codebase Simplification Master (Swarmlet / Zerg)
 
 This is the living checklist for cleaning up the repo after multiple direction changes.
@@ -14,7 +21,7 @@ Rules for this effort:
 
 ## Current Baseline (as of start of this doc)
 
-- Repo structure is primarily under `apps/` (Zerg backend/frontend/e2e, Jarvis web/native, runner).
+- Repo structure is primarily under `apps/` (Zerg backend/frontend/e2e + runner). Jarvis lives inside `apps/zerg/frontend-web/src/jarvis/`.
 - There is significant drift in root scripts/configs that still assume old `backend/`, `frontend/`, `asyncapi/` paths.
 
 ---
@@ -97,11 +104,11 @@ Rules for this effort:
 
 ### 4.1 Remove tracked Yarn artifacts (Bun-first repo)
 
-- [x] Delete tracked `apps/jarvis/.yarn/install-state.gz` and stop tracking `.yarn/`. (N/A - apps/jarvis deleted)
+- [x] Delete tracked `apps/zerg/frontend-web/src/jarvis/.yarn/install-state.gz` and stop tracking `.yarn/`. (N/A - apps/jarvis deleted)
 
 ### 4.2 Remove committed symlink hacks (if feasible)
 
-- [x] Remove `apps/jarvis/swarm-packages/config` symlink and switch Jarvis to use the root Bun workspace cleanly. (N/A - apps/jarvis deleted)
+- [x] Remove `apps/zerg/frontend-web/src/jarvis/swarm-packages/config` symlink and switch Jarvis to use the root Bun workspace cleanly. (N/A - apps/jarvis deleted)
 
 ---
 
@@ -125,7 +132,7 @@ Rules for this effort:
 
 ### 6.1 Pre-commit Overhaul (AI Agent Safety)
 
-**Goal:** Make pre-commit a robust guardrail for AI agents. See `docs/work/PRECOMMIT_OVERHAUL_SPEC.md` for full spec.
+**Goal:** Make pre-commit a robust guardrail for AI agents. See `docs/completed/PRECOMMIT_OVERHAUL_SPEC.md` for full spec.
 
 **Baseline cleanup (one-time):**
 - [x] Fix ruff format violations (~72 files)

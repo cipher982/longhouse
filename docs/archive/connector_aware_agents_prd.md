@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # Connector-Aware Agents: Design & Implementation
 
 > Making agents aware of which integrations are configured, so they can accurately represent their capabilities to users.

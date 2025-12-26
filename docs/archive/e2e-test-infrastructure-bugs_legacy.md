@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # E2E Test Infrastructure Bugs
 
 **Date**: 2025-12-17
@@ -5,7 +12,7 @@
 
 ## Executive Summary
 
-The Jarvis E2E test infrastructure (`apps/jarvis/docker-compose.test.yml`) is currently broken. Tests cannot run because:
+The Jarvis E2E test infrastructure (`apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml`) is currently broken. Tests cannot run because:
 
 1. Database tables don't get created on fresh test DB
 2. Chat session never connects (input stays disabled)
@@ -48,7 +55,7 @@ This assumes tables already exist (created via `create_all()` or admin reset), b
 ### Workaround Found
 
 ```bash
-docker compose -f apps/jarvis/docker-compose.test.yml exec -T zerg-backend python -c "
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml exec -T backend python -c "
 from zerg.database import initialize_database
 initialize_database()
 "
@@ -177,8 +184,8 @@ The `docker-compose.test.yml` mounts source files as volumes:
 
 ```yaml
 volumes:
-  - ../../apps/jarvis/apps/web/src:/app/apps/web/src:ro
-  - ../../apps/jarvis/apps/web/lib:/app/apps/web/lib:ro
+  - ../../apps/zerg/frontend-web/src/jarvis/src:/app/apps/web/src:ro
+  - ../../apps/zerg/frontend-web/src/jarvis/lib:/app/apps/web/lib:ro
 ```
 
 However, if the built assets inside the container don't include the new code (because the image was built before the changes), the mounts won't help for compiled output.
@@ -199,23 +206,23 @@ Either:
 cd /Users/davidrose/git/zerg
 
 # Start test environment
-docker compose -f apps/jarvis/docker-compose.test.yml up -d
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml up -d
 
 # Wait for healthy
-docker compose -f apps/jarvis/docker-compose.test.yml ps
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml ps
 
 # Check backend logs - will show migration failures
-docker compose -f apps/jarvis/docker-compose.test.yml logs zerg-backend
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml logs backend
 
 # Run tests - all will fail
-docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright \
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml run --rm playwright \
   npx playwright test supervisor-progress-indicator.e2e.spec.ts
 
 # Check test results
-cat apps/jarvis/test-results/*/error-context.md
+cat apps/zerg/frontend-web/src/jarvis/test-results/*/error-context.md
 
 # Cleanup
-docker compose -f apps/jarvis/docker-compose.test.yml down -v
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml down -v
 ```
 
 ---
@@ -257,8 +264,8 @@ Consider using Vite dev server inside container for hot reload of TypeScript cha
 | ---------------------------------------------------------------------------- | ------------------------------ |
 | `apps/zerg/backend/alembic/versions/458f9a6a8779_initial_schema_baseline.py` | No-op migration                |
 | `apps/zerg/backend/start.sh`                                                 | Continues on migration failure |
-| `apps/jarvis/docker-compose.test.yml`                                        | Test environment config        |
-| `apps/jarvis/apps/web/lib/supervisor-chat-controller.ts`                     | Session/SSE connection         |
+| `apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml`                                        | Test environment config        |
+| `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`                     | Session/SSE connection         |
 | `apps/zerg/backend/zerg/routers/jarvis.py`                                   | SSE endpoint                   |
 
 ---
@@ -269,19 +276,19 @@ To run tests after manually fixing the database:
 
 ```bash
 # Start services
-docker compose -f apps/jarvis/docker-compose.test.yml up -d
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml up -d
 
 # Wait for healthy
 sleep 15
 
 # Initialize database manually
-docker compose -f apps/jarvis/docker-compose.test.yml exec -T zerg-backend python -c "
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml exec -T backend python -c "
 from zerg.database import initialize_database
 initialize_database()
 "
 
 # Run tests (still fails due to session connection issue)
-docker compose -f apps/jarvis/docker-compose.test.yml run --rm playwright \
+docker compose -f apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml run --rm playwright \
   npx playwright test --reporter=list
 ```
 

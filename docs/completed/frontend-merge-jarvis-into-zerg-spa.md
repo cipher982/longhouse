@@ -1,8 +1,17 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Merge Jarvis into Zerg Frontend
 
 **Status:** Completed
 **Date:** 2025-12-20
 **Owner:** AI agent + David
+
+> Note: This doc references the pre-merge `apps/zerg/frontend-web/src/jarvis/...` layout. Jarvis now lives in `apps/zerg/frontend-web/src/jarvis/`.
 
 ## Goal
 
@@ -22,8 +31,8 @@
 ## Current State (before merge)
 
 - **Zerg frontend:** `apps/zerg/frontend-web/` - React SPA with dashboard, canvas, settings
-- **Jarvis web:** `apps/jarvis/apps/web/` - Separate React app for chat UI
-- **Jarvis packages:** `apps/jarvis/packages/core/`, `apps/jarvis/packages/data/local/` - Shared utilities
+- **Jarvis web:** `apps/zerg/frontend-web/src/jarvis/` - Separate React app for chat UI
+- **Jarvis packages:** `apps/zerg/frontend-web/src/jarvis/core/`, `apps/zerg/frontend-web/src/jarvis/data/` - Shared utilities
 
 Both apps have their own `package.json`, `node_modules`, build configs.
 
@@ -36,11 +45,11 @@ Both apps have their own `package.json`, `node_modules`, build configs.
 **Move these into `apps/zerg/frontend-web/src/jarvis/`:**
 
 ```
-apps/jarvis/apps/web/src/        → src/jarvis/app/        (App.tsx, context/, hooks/, components/)
-apps/jarvis/apps/web/lib/        → src/jarvis/lib/        (voice-controller, session-handler, etc.)
-apps/jarvis/apps/web/styles/     → src/jarvis/styles/     (CSS files)
-apps/jarvis/packages/core/src/   → src/jarvis/core/       (logger, client, model-config)
-apps/jarvis/packages/data/local/ → src/jarvis/data/       (IndexedDB storage)
+apps/zerg/frontend-web/src/jarvis/src/        → apps/zerg/frontend-web/src/jarvis/app/        (App.tsx, context/, hooks/, components/)
+apps/zerg/frontend-web/src/jarvis/lib/        → apps/zerg/frontend-web/src/jarvis/lib/        (voice-controller, session-handler, etc.)
+apps/zerg/frontend-web/src/jarvis/styles/     → apps/zerg/frontend-web/src/jarvis/styles/     (CSS files)
+apps/zerg/frontend-web/src/jarvis/core/   → apps/zerg/frontend-web/src/jarvis/core/       (logger, client, model-config)
+apps/zerg/frontend-web/src/jarvis/data/ → apps/zerg/frontend-web/src/jarvis/data/       (IndexedDB storage)
 ```
 
 ### Phase 2: Update Imports
@@ -64,7 +73,7 @@ Add to `apps/zerg/frontend-web/package.json`:
 
 ### Phase 5: Cleanup
 
-- Remove `apps/jarvis/apps/web/` (or archive)
+- Remove `apps/zerg/frontend-web/src/jarvis/` (or archive)
 - Remove Jarvis from Docker Compose (no separate jarvis-web service needed)
 - Update nginx to remove `/chat/` legacy routing
 

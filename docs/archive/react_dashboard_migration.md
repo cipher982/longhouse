@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # React Frontend Migration Playbook
 
 This guide provides the end-to-end context, workflows, and task roadmap for replacing the Rust/WASM frontend with the new React stack that lives in `frontend-web/`.
