@@ -93,6 +93,7 @@ make test-e2e-ui   # Interactive mode
 # Regenerate generated code
 make generate-sdk  # OpenAPI types
 make regen-ws      # WebSocket contract code
+make regen-sse     # SSE event contract code
 
 # Seeding (local dev data)
 make seed-agents       # Seed Jarvis agents
@@ -263,9 +264,11 @@ The Jarvis code lives in `src/jarvis/` with this structure:
 - `apps/zerg/frontend-web/src/generated/` — OpenAPI types
 - `apps/zerg/backend/zerg/generated/ws_messages.py` — WebSocket messages (generated)
 - `apps/zerg/frontend-web/src/generated/ws-messages.ts` — WebSocket messages (generated)
+- `apps/zerg/backend/zerg/generated/sse_events.py` — SSE events (generated)
+- `apps/zerg/frontend-web/src/generated/sse-events.ts` — SSE events (generated)
 - `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` — Tool registry types (from `schemas/tools.yml`)
 
-Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API changes.
+Run `make regen-ws` if WebSocket schema changes. Run `make regen-sse` if SSE schema changes. Run `make generate-sdk` if API changes.
 
 ## Pre-commit (AI Agent Safety)
 
@@ -280,6 +283,7 @@ Pre-commit hooks run automatically on every commit. Agents should be aware of wh
 | TypeScript types | `tsc --noEmit` | **Yes** |
 | ESLint | Frontend lint | Warns only (100 max) |
 | WS drift | Contract sync check | **Yes** |
+| SSE drift | Contract sync check | **Yes** |
 | AsyncAPI | Schema validation | **Yes** |
 
 ### Common Failures & Fixes
@@ -291,6 +295,7 @@ Pre-commit hooks run automatically on every commit. Agents should be aware of wh
 | Line too long (E501) | Ignored in this repo | N/A (disabled) |
 | TypeScript type error | Actual type mismatch | Fix the types |
 | WS drift | Schema out of sync | Run `make regen-ws` |
+| SSE drift | Schema out of sync | Run `make regen-sse` |
 
 ### Ruff Configuration
 
@@ -318,9 +323,11 @@ git commit --no-verify -m "WIP: skip hooks"
 These are excluded from linting and regenerated from schemas:
 - `apps/zerg/backend/zerg/generated/ws_messages.py`
 - `apps/zerg/frontend-web/src/generated/ws-messages.ts`
+- `apps/zerg/backend/zerg/generated/sse_events.py`
+- `apps/zerg/frontend-web/src/generated/sse-events.ts`
 - `apps/zerg/frontend-web/src/generated/openapi-types.ts`
 
-If you edit these, your changes will be overwritten by `make regen-ws` or `make generate-sdk`.
+If you edit these, your changes will be overwritten by `make regen-ws`, `make regen-sse`, or `make generate-sdk`.
 
 ## Gotchas
 
