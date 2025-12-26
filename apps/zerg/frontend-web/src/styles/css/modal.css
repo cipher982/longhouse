@@ -68,6 +68,16 @@
   }
 }
 
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 /* --------------------------------------------------------- */
 
 /* Form styling for modals                                    */

@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -214,7 +215,7 @@ function MetricCard({
   );
 }
 
-// Confirmation Modal component
+// Confirmation Modal component with React Portal
 function ConfirmationModal({
   isOpen,
   onClose,
@@ -236,6 +237,31 @@ function ConfirmationModal({
 }) {
   const [password, setPassword] = useState("");
 
+  // Lock body scroll when modal is open
+  useEffect(() => {
+    if (isOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isOpen]);
+
+  // Handle Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleConfirm = () => {
@@ -243,9 +269,37 @@ function ConfirmationModal({
     setPassword("");
   };
 
-  return (
-    <div className="modal-overlay" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <Card style={{ maxWidth: '500px', width: '90%' }} onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      onClose();
+    }
+  };
+
+  const modalContent = (
+    <div
+      className="modal-overlay"
+      onClick={handleBackdropClick}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.85)',
+        backdropFilter: 'blur(4px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        padding: 'var(--space-4)'
+      }}
+    >
+      <Card
+        style={{
+          maxWidth: '500px',
+          width: '100%',
+          margin: 'auto',
+          animation: 'modalFadeIn 0.2s ease-out'
+        }}
+        onClick={(e: React.MouseEvent) => e.stopPropagation()}
+      >
         <Card.Header>
           <h3 style={{ margin: 0 }}>{title}</h3>
         </Card.Header>
@@ -259,6 +313,12 @@ function ConfirmationModal({
                 placeholder="Confirmation password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && password) {
+                    handleConfirm();
+                  }
+                }}
+                autoFocus
               />
             </div>
           )}
@@ -278,6 +338,9 @@ function ConfirmationModal({
       </Card>
     </div>
   );
+
+  // Render modal at document.body level using Portal
+  return createPortal(modalContent, document.body);
 }
 
 // Top agents table component - using real backend contract
