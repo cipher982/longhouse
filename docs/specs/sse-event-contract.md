@@ -144,11 +144,11 @@ SSEEnvelope:
 **Goal:** Define all SSE events in `schemas/sse-events.asyncapi.yml`
 
 **Acceptance Criteria:**
-- [ ] Schema file exists at `schemas/sse-events.asyncapi.yml`
-- [ ] All 15 event types defined with full payload schemas
-- [ ] SSE envelope structure defined (event, id, data)
-- [ ] Schema validates with AsyncAPI tooling
-- [ ] Common types extracted (UsageData, WorkerRef, etc.)
+- [x] Schema file exists at `schemas/sse-events.asyncapi.yml`
+- [x] All 15 event types defined with full payload schemas
+- [x] SSE envelope structure defined (event, id, data)
+- [x] Schema validates with AsyncAPI tooling
+- [x] Common types extracted (UsageData, WorkerRef, etc.)
 
 **Test:** `npx @asyncapi/cli validate schemas/sse-events.asyncapi.yml`
 
