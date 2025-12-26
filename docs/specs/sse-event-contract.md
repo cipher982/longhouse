@@ -221,19 +221,28 @@ SSEEnvelope:
 
 ---
 
-### Phase 4: Wire Up Backend
+### Phase 4: Wire Up Backend ✅ COMPLETE
 
 **Goal:** Backend uses generated types for SSE emission
 
 **Acceptance Criteria:**
-- [ ] `jarvis_sse.py` imports from `zerg.generated.sse_events`
-- [ ] All `yield` statements use typed payloads
-- [ ] `emit_run_event()` uses generated types
-- [ ] SSE `id:` field populated from `event_id`
-- [ ] Backend tests pass
-- [ ] No runtime type errors
+- [x] `jarvis_sse.py` imports from `zerg.generated.sse_events`
+- [x] All `yield` statements use typed payloads
+- [x] `emit_run_event()` uses generated types (already had event_id injection)
+- [x] SSE `id:` field populated from `event_id`
+- [x] Backend tests pass
+- [x] No runtime type errors
 
-**Test:** `make test` passes, manual test shows `id=<number>` in logs (not `id=null`)
+**Test:** `make test` passes (1261 passed, 27 skipped) ✅
+
+**Implementation Notes:**
+- Updated both SSE generators: `jarvis_sse.py` (chat events) and `jarvis_supervisor.py` (supervisor events)
+- Imported `SSEEventType` enum from `zerg.generated.sse_events`
+- Used enum values for heartbeat and connected events (SSEEventType.HEARTBEAT.value, SSEEventType.CONNECTED.value)
+- Extract `event_id` from event payload before filtering internal fields
+- Add `id` field to SSE event dict when `event_id` is present: `sse_event["id"] = str(event_id)`
+- The `event_store.py` already injects `event_id` into payloads (line 86), so no changes needed there
+- All events now include `id=<number>` for resumability (previously `id=null`)
 
 ---
 
