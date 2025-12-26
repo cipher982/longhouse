@@ -67,9 +67,12 @@ scripts/                # Dev tools + generators
 
 ## Docs to know
 
-- `docs/specs/frontend-unification-spec.md` – now marked complete (phases 0–7).
 - `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
-- `docs/specs/super-siri-architecture.md` – overall vision.
+- `docs/specs/durable-runs-v2.2.md` – durable runs (current core architecture).
+- `docs/specs/jarvis-supervisor-unification-v2.1.md` – supervisor/Jarvis unification (v2.1).
+- `docs/archive/super-siri-architecture.md` – v2.0 overall vision (historical).
+- `docs/completed/frontend-merge-jarvis-into-zerg-spa.md` – unified SPA merge notes (completed).
+- `docs/completed/frontend-alignment-spec.md` – frontend alignment plan (completed).
 - `docs/specs/supervisor-ui-spec.md` – pending (future UI work).
 - `docs/DEPLOYMENT.md` / `docker/docker-compose.dev.yml` – dev/prod entrypoints (profiles: `dev|prod`).
 

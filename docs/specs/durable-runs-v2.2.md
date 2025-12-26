@@ -606,36 +606,14 @@ private handleSSEEvent(event: SSEEvent) {
 
 #### Task 6.2: Add re-attach UI
 
-**File**: `apps/zerg/frontend-web/src/jarvis/components/DeferredRunBanner.tsx` (new)
+**Current implementation (v2.2):** no dedicated banner component.
 
-```typescript
-export function DeferredRunBanner({ runId, attachUrl }: Props) {
-    const [status, setStatus] = useState<"running" | "completed">("running");
+- Deferred is shown as a normal assistant message (not an error toast).
+- `attach_url` is plumbed through the controller/event payload for future UI work.
 
-    // Poll for completion
-    useEffect(() => {
-        const interval = setInterval(async () => {
-            const res = await fetch(`/api/jarvis/runs/${runId}`);
-            const data = await res.json();
-            if (data.status === "success") {
-                setStatus("completed");
-                // Could auto-fetch result here
-            }
-        }, 5000);
-        return () => clearInterval(interval);
-    }, [runId]);
-
-    return (
-        <div className="deferred-banner">
-            {status === "running" ? (
-                <span>Still working in background... <a href={attachUrl}>Watch progress</a></span>
-            ) : (
-                <span>Complete! <button onClick={fetchResult}>Show result</button></span>
-            )}
-        </div>
-    );
-}
-```
+**Files**:
+- `apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`
+- `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts`
 
 ---
 

@@ -16,7 +16,8 @@ Key principles:
 - **Event-driven** — Workers notify when done, no polling loops
 
 Full spec: `docs/specs/durable-runs-v2.2.md`
-Reference: `docs/specs/super-siri-architecture.md` (v2.0)
+Architecture overview (v2.1): `docs/specs/jarvis-supervisor-unification-v2.1.md`
+Historical (v2.0): `docs/archive/super-siri-architecture.md`
 
 ## For AI Agents
 
@@ -131,7 +132,7 @@ git show HEAD:<path>
 
 **Common footgun:** `.gitignore` patterns like `data/` or `dist/` excluding source code.
 - Use `/data/` for root-level only
-- Use `!packages/specific/dist/` for exceptions
+- Use `!apps/<workspace>/dist/` (or similar) for exceptions
 
 ### 3. Test Build Locally (Same Context as Coolify)
 ```bash
@@ -235,9 +236,9 @@ cd apps/zerg/backend && uv run python -m pytest tests/live --live-token <YOUR_JW
 ### Frontend Styling Conventions (2025 Refactor)
 - **Scope Styles**: CSS must be scoped to a container class (e.g., `.dashboard-container`, `.chat-view-container`) to prevent global collisions.
 - **Layers**: Use `@layer` to control specificity (`tokens`, `base`, `legacy`, `components`, `pages`).
-- **Tokens**: Use `--color-*` and `--space-*` variables from `src/styles/generated/tokens.css`.
+- **Tokens**: Use `--color-*` and `--space-*` variables from `src/styles/tokens.css`.
 - **No Global Classes**: Avoid generic class names like `.back-button` or `.empty-state` at the root level.
-- **Tools**: `bun run build:tokens` generates tokens; `bun run build` verifies nesting syntax.
+- **Tools**: Tokens are edited directly (no build step); `bun run build` catches invalid CSS nesting in the Vite build pipeline.
 
 ### Jarvis (TypeScript - integrated into Zerg frontend)
 - Chat UI: `apps/zerg/frontend-web/src/jarvis/` (integrated into Zerg SPA)
@@ -260,9 +261,9 @@ The Jarvis code lives in `src/jarvis/` with this structure:
 ## Generated Code — Do Not Edit
 
 - `apps/zerg/frontend-web/src/generated/` — OpenAPI types
-- `apps/zerg/backend/zerg/ws_protocol/generated/` — WebSocket protocol
+- `apps/zerg/backend/zerg/generated/ws_messages.py` — WebSocket messages (generated)
+- `apps/zerg/frontend-web/src/generated/ws-messages.ts` — WebSocket messages (generated)
 - `apps/zerg/backend/zerg/tools/generated/tool_definitions.py` — Tool registry types (from `schemas/tools.yml`)
-- `packages/contracts/` — Shared contract definitions
 
 Run `make regen-ws` if WebSocket schema changes. Run `make generate-sdk` if API changes.
 
@@ -556,5 +557,7 @@ Example:
 |-----|---------|
 | `docs/DEVELOPMENT.md` | Local dev setup, troubleshooting |
 | `docs/DEPLOYMENT.md` | Production deployment |
-| `docs/specs/super-siri-architecture.md` | **Main architecture spec** (v2.0) |
+| `docs/specs/durable-runs-v2.2.md` | **Main architecture spec** (v2.2) |
+| `docs/specs/jarvis-supervisor-unification-v2.1.md` | Architecture overview (v2.1) |
+| `docs/archive/super-siri-architecture.md` | Historical architecture (v2.0) |
 | `docs/work/` | Active PRDs (temporary, delete when done) |
