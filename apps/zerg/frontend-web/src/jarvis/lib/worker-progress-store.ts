@@ -61,6 +61,32 @@ class WorkerProgressStore {
     this.subscribeToEvents();
   }
 
+  private _rekeyWorker(newWorkers: Map<number, WorkerState>, worker: WorkerState, newJobId: number): void {
+    // Remove old key if present (e.g. orphan negative id), then re-insert under real job id.
+    if (newWorkers.has(worker.jobId)) {
+      newWorkers.delete(worker.jobId);
+    }
+    worker.jobId = newJobId;
+    newWorkers.set(newJobId, worker);
+  }
+
+  private _resolveWorkerForJobEvent(newWorkers: Map<number, WorkerState>, jobId: number, workerId?: string): WorkerState | undefined {
+    const direct = newWorkers.get(jobId);
+    if (direct) return direct;
+
+    if (!workerId) return undefined;
+
+    const byWorkerId = this.workersByWorkerId.get(workerId);
+    if (!byWorkerId) return undefined;
+
+    // If we previously created an orphan worker from tool events, re-key it now that we have a real job id.
+    if (byWorkerId.jobId !== jobId) {
+      this._rekeyWorker(newWorkers, byWorkerId, jobId);
+    }
+
+    return byWorkerId;
+  }
+
   /**
    * Get current state (for React)
    */
@@ -286,7 +312,7 @@ class WorkerProgressStore {
    */
   private handleWorkerStarted(jobId: number, workerId?: string): void {
     const newWorkers = new Map(this.state.workers);
-    const worker = newWorkers.get(jobId);
+    const worker = this._resolveWorkerForJobEvent(newWorkers, jobId, workerId);
     if (worker) {
       worker.status = 'running';
       worker.workerId = workerId;
@@ -304,8 +330,12 @@ class WorkerProgressStore {
    */
   private handleWorkerComplete(jobId: number, workerId?: string, status?: string, durationMs?: number): void {
     const newWorkers = new Map(this.state.workers);
-    const worker = newWorkers.get(jobId);
+    const worker = this._resolveWorkerForJobEvent(newWorkers, jobId, workerId);
     if (worker) {
+      if (worker.status === 'complete' || worker.status === 'failed') {
+        console.log(`[WorkerProgress] Duplicate worker_complete ignored: ${jobId} (${status}, ${durationMs}ms)`);
+        return;
+      }
       worker.status = status === 'success' ? 'complete' : 'failed';
       worker.workerId = workerId;
       worker.completedAt = Date.now();

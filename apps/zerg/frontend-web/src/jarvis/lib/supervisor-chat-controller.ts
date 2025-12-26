@@ -89,6 +89,7 @@ export class SupervisorChatController {
   private watchdogTimer: number | null = null;
   private isStreaming: boolean = false; // Track if we're receiving real tokens
   private readonly WATCHDOG_TIMEOUT_MS = 60000;
+  private onAnySseEventOnce: (() => void) | null = null;
 
   constructor(config: SupervisorChatConfig = {}) {
     this.config = {
@@ -354,6 +355,15 @@ export class SupervisorChatController {
         if (data) {
           try {
             const parsedData = JSON.parse(data);
+            if (this.onAnySseEventOnce) {
+              const fn = this.onAnySseEventOnce;
+              this.onAnySseEventOnce = null;
+              try {
+                fn();
+              } catch {
+                // ignore
+              }
+            }
             await this.handleSSEEvent(eventType || 'message', parsedData);
           } catch (error) {
             logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
@@ -737,10 +747,36 @@ export class SupervisorChatController {
         throw new Error('No response body for SSE stream');
       }
 
-      // Process SSE stream (reuse existing logic)
-      await this.processSSEStream(body, this.currentAbortController.signal);
+      // Start SSE processing in the background.
+      //
+      // Important: attachToRun() must resolve quickly (on first SSE event) so the UI
+      // can stop showing "reconnecting..." while the run is still active.
+      const signal = this.currentAbortController.signal;
+      const ready = new Promise<void>((resolve) => {
+        this.onAnySseEventOnce = resolve;
+      });
 
-      logger.info(`[SupervisorChat] Attached to run ${runId} and stream completed`);
+      void this.processSSEStream(body, signal)
+        .then(() => {
+          logger.info(`[SupervisorChat] Attached to run ${runId} and stream completed`);
+        })
+        .catch((error) => {
+          if (error instanceof Error && error.name === 'AbortError') {
+            logger.info(`[SupervisorChat] Attach to run ${runId} aborted`);
+            return;
+          }
+          logger.error(`[SupervisorChat] SSE stream error while attached to run ${runId}:`, error);
+        })
+        .finally(() => {
+          if (this.currentRunId === runId) {
+            this.currentAbortController = null;
+            this.currentRunId = null;
+            this.onAnySseEventOnce = null;
+          }
+        });
+
+      // Wait until the stream is actually live (first event/heartbeat), but don't block forever.
+      await Promise.race([ready, new Promise<void>((resolve) => setTimeout(resolve, 1500))]);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         logger.info(`[SupervisorChat] Attach to run ${runId} aborted`);
@@ -749,9 +785,6 @@ export class SupervisorChatController {
 
       logger.error(`[SupervisorChat] Failed to attach to run ${runId}:`, error);
       throw error;
-    } finally {
-      this.currentAbortController = null;
-      this.currentRunId = null;
     }
   }
 
