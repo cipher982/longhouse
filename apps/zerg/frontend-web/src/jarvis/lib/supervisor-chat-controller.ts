@@ -19,23 +19,25 @@ import { conversationController } from './conversation-controller';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 import { workerProgressStore } from './worker-progress-store';
-import type {
-  SSEEventType,
-  ConnectedPayload,
-  HeartbeatPayload,
-  SupervisorStartedPayload,
-  SupervisorThinkingPayload,
-  SupervisorTokenPayload,
-  SupervisorCompletePayload,
-  SupervisorDeferredPayload,
-  ErrorPayload,
-  WorkerSpawnedPayload,
-  WorkerStartedPayload,
-  WorkerCompletePayload,
-  WorkerSummaryReadyPayload,
-  WorkerToolStartedPayload,
-  WorkerToolCompletedPayload,
-  WorkerToolFailedPayload,
+import {
+  SSE_EVENT_TYPES,
+  type SSEEventType,
+  type SSEEventWrapper,
+  type ConnectedPayload,
+  type HeartbeatPayload,
+  type SupervisorStartedPayload,
+  type SupervisorThinkingPayload,
+  type SupervisorTokenPayload,
+  type SupervisorCompletePayload,
+  type SupervisorDeferredPayload,
+  type ErrorPayload,
+  type WorkerSpawnedPayload,
+  type WorkerStartedPayload,
+  type WorkerCompletePayload,
+  type WorkerSummaryReadyPayload,
+  type WorkerToolStartedPayload,
+  type WorkerToolCompletedPayload,
+  type WorkerToolFailedPayload,
 } from '../../generated/sse-events';
 
 export interface SupervisorChatMessage {
@@ -53,16 +55,6 @@ export interface SupervisorChatMessage {
 export interface SupervisorChatConfig {
   maxRetries?: number;
   retryDelay?: number;
-}
-
-/**
- * Legacy SSE event wrapper format from backend
- * Note: 'connected' and 'heartbeat' events don't follow this format
- */
-interface SSEEventWrapper {
-  type: string;
-  payload: unknown;
-  client_correlation_id?: string;
 }
 
 export class SupervisorChatController {
@@ -363,13 +355,8 @@ export class SupervisorChatController {
               }
             }
             // Validate eventType is a known SSE event type before handling
-            const validEventTypes: SSEEventType[] = [
-              'connected', 'heartbeat', 'supervisor_started', 'supervisor_thinking',
-              'supervisor_token', 'supervisor_complete', 'supervisor_deferred', 'error',
-              'worker_spawned', 'worker_started', 'worker_complete', 'worker_summary_ready',
-              'worker_tool_started', 'worker_tool_completed', 'worker_tool_failed'
-            ];
-            if (eventType && validEventTypes.includes(eventType as SSEEventType)) {
+            // Uses generated SSE_EVENT_TYPES to prevent drift from schema
+            if (eventType && (SSE_EVENT_TYPES as readonly string[]).includes(eventType)) {
               await this.handleSSEEvent(eventType as SSEEventType, parsedData);
             } else {
               logger.warn(`[SupervisorChat] Unknown SSE event type: ${eventType}`);
@@ -441,7 +428,7 @@ export class SupervisorChatController {
     }
 
     // All other events have format: { type: "...", payload: {...}, client_correlation_id?: string }
-    const wrapper = data as SSEEventWrapper;
+    const wrapper = data as SSEEventWrapper<unknown>;
     const correlationId = wrapper.client_correlation_id;
 
     switch (eventType) {
