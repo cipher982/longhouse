@@ -165,12 +165,17 @@ export function WorkerProgress({ mode = 'sticky' }: WorkerProgressProps) {
 
   const modeClass = mode === 'floating' ? 'worker-progress--floating' : mode === 'sticky' ? 'worker-progress--sticky' : '';
 
+  // Determine status label
+  const statusLabel = state.reconnecting
+    ? 'Reconnecting to active task...'
+    : 'Investigating...';
+
   const content = (
     <div className={`worker-progress worker-progress--active ${modeClass}`}>
       <div className="worker-progress-content">
         <div className="supervisor-status">
           <div className="supervisor-spinner"></div>
-          <span className="supervisor-label">Investigating...</span>
+          <span className="supervisor-label">{statusLabel}</span>
         </div>
         {workersArray.length > 0 && (
           <div className="supervisor-workers">
