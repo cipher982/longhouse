@@ -635,9 +635,6 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         from datetime import datetime
         from datetime import timezone
 
-        from zerg.events import EventType
-        from zerg.events import event_bus
-
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_call_id = tool_call.get("id")
@@ -656,23 +653,27 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 tool_call_id=tool_call_id,
                 args=safe_args,  # Redacted args (secrets masked)
             )
-            try:
-                await event_bus.publish(
-                    EventType.WORKER_TOOL_STARTED,
-                    {
-                        "event_type": EventType.WORKER_TOOL_STARTED,
-                        "worker_id": ctx.worker_id,
-                        "owner_id": ctx.owner_id,
-                        "run_id": ctx.run_id,
-                        "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                        "tool_name": tool_name,
-                        "tool_call_id": tool_call_id,
-                        "tool_args_preview": safe_preview(str(safe_args)),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-            except Exception:
-                logger.warning("Failed to emit WORKER_TOOL_STARTED event", exc_info=True)
+            # Use durable event store (Resumable SSE v1)
+            if ctx.run_id and ctx.db_session:
+                try:
+                    from zerg.services.event_store import emit_run_event
+
+                    await emit_run_event(
+                        db=ctx.db_session,
+                        run_id=ctx.run_id,
+                        event_type="worker_tool_started",
+                        payload={
+                            "worker_id": ctx.worker_id,
+                            "owner_id": ctx.owner_id,
+                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "tool_args_preview": safe_preview(str(safe_args)),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to emit WORKER_TOOL_STARTED event", exc_info=True)
 
         start_time = datetime.now(timezone.utc)
 
@@ -728,44 +729,52 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                     ctx.mark_critical_error(critical_msg)
                     logger.error(f"Critical tool error in worker {ctx.worker_id}: {critical_msg}")
 
-                try:
-                    await event_bus.publish(
-                        EventType.WORKER_TOOL_FAILED,
-                        {
-                            "event_type": EventType.WORKER_TOOL_FAILED,
-                            "worker_id": ctx.worker_id,
-                            "owner_id": ctx.owner_id,
-                            "run_id": ctx.run_id,
-                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "duration_ms": duration_ms,
-                            "error": safe_preview(error_msg or result_content, 500),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.warning("Failed to emit WORKER_TOOL_FAILED event", exc_info=True)
+                # Use durable event store (Resumable SSE v1)
+                if ctx.run_id and ctx.db_session:
+                    try:
+                        from zerg.services.event_store import emit_run_event
+
+                        await emit_run_event(
+                            db=ctx.db_session,
+                            run_id=ctx.run_id,
+                            event_type="worker_tool_failed",
+                            payload={
+                                "worker_id": ctx.worker_id,
+                                "owner_id": ctx.owner_id,
+                                "job_id": ctx.job_id,  # Critical for roundabout event correlation
+                                "tool_name": tool_name,
+                                "tool_call_id": tool_call_id,
+                                "duration_ms": duration_ms,
+                                "error": safe_preview(error_msg or result_content, 500),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    except Exception:
+                        logger.warning("Failed to emit WORKER_TOOL_FAILED event", exc_info=True)
             else:
                 ctx.record_tool_complete(tool_record, success=True)
-                try:
-                    await event_bus.publish(
-                        EventType.WORKER_TOOL_COMPLETED,
-                        {
-                            "event_type": EventType.WORKER_TOOL_COMPLETED,
-                            "worker_id": ctx.worker_id,
-                            "owner_id": ctx.owner_id,
-                            "run_id": ctx.run_id,
-                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "duration_ms": duration_ms,
-                            "result_preview": safe_preview(result_content),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.warning("Failed to emit WORKER_TOOL_COMPLETED event", exc_info=True)
+                # Use durable event store (Resumable SSE v1)
+                if ctx.run_id and ctx.db_session:
+                    try:
+                        from zerg.services.event_store import emit_run_event
+
+                        await emit_run_event(
+                            db=ctx.db_session,
+                            run_id=ctx.run_id,
+                            event_type="worker_tool_completed",
+                            payload={
+                                "worker_id": ctx.worker_id,
+                                "owner_id": ctx.owner_id,
+                                "job_id": ctx.job_id,  # Critical for roundabout event correlation
+                                "tool_name": tool_name,
+                                "tool_call_id": tool_call_id,
+                                "duration_ms": duration_ms,
+                                "result_preview": safe_preview(result_content),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    except Exception:
+                        logger.warning("Failed to emit WORKER_TOOL_COMPLETED event", exc_info=True)
 
         return result
 
