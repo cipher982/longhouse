@@ -10,6 +10,7 @@ Key features:
 - Handle DEFERRED runs correctly (streamable, not treated as complete)
 - SSE format with id: field for client resumption
 - Token filtering support
+- SHORT-LIVED DB sessions for replay (critical for test isolation)
 """
 
 import asyncio
@@ -17,6 +18,8 @@ import json
 import logging
 from datetime import datetime
 from datetime import timezone
+from typing import List
+from typing import Tuple
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -25,6 +28,7 @@ from fastapi import Request
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.database import db_session
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
@@ -52,8 +56,50 @@ def _json_default(value):  # type: ignore[no-untyped-def]
     return str(value)
 
 
+def _load_historical_events(
+    run_id: int,
+    after_event_id: int,
+    include_tokens: bool,
+) -> List[Tuple[int, str, dict, str]]:
+    """Load historical events from DB using a SHORT-LIVED session.
+
+    This is critical for test isolation: the DB session is opened, events are
+    loaded into memory, and the session is immediately closed. This prevents
+    the streaming connection from holding a DB connection indefinitely.
+
+    Args:
+        run_id: Run identifier
+        after_event_id: Resume from this event ID (0 = from start)
+        include_tokens: Whether to include SUPERVISOR_TOKEN events
+
+    Returns:
+        List of (event_id, event_type, payload, timestamp_str) tuples
+    """
+    events: List[Tuple[int, str, dict, str]] = []
+
+    with db_session() as db:
+        historical = EventStore.get_events_after(
+            db=db,
+            run_id=run_id,
+            after_id=after_event_id,
+            include_tokens=include_tokens,
+        )
+        # Load all events into memory before closing session
+        for event in historical:
+            events.append(
+                (
+                    event.id,
+                    event.event_type,
+                    event.payload,
+                    event.created_at.isoformat().replace("+00:00", "Z"),
+                )
+            )
+    # Session is now closed - no DB connection held during streaming
+
+    return events
+
+
 async def _replay_and_stream(
-    db: Session,
     run_id: int,
     owner_id: int,
     status: RunStatus,
@@ -64,13 +110,16 @@ async def _replay_and_stream(
 
     This is the core of Resumable SSE v1. It:
     1. Subscribes to live events FIRST (don't miss any while replaying)
-    2. Queries historical events from EventStore
+    2. Loads historical events using a SHORT-LIVED DB session
     3. Yields historical events with SSE id: field
     4. If run is complete, closes stream
     5. Otherwise, streams live events (filtering out already-replayed ones)
 
+    IMPORTANT: This function does NOT hold a DB connection open during streaming.
+    Historical events are loaded into memory first, then the DB session is closed
+    before any SSE events are yielded.
+
     Args:
-        db: Database session
         run_id: Run identifier
         owner_id: Owner ID for security filtering
         status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
@@ -122,26 +171,22 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
 
     try:
-        # 2. Query historical events from EventStore
-        historical = EventStore.get_events_after(
-            db=db,
-            run_id=run_id,
-            after_id=after_event_id,
-            include_tokens=include_tokens,
-        )
+        # 2. Load historical events using a SHORT-LIVED DB session
+        # This ensures we don't hold a DB connection during streaming
+        historical_events = _load_historical_events(run_id, after_event_id, include_tokens)
 
         # 3. Yield historical events with SSE id: field
-        for event in historical:
-            last_sent_event_id = event.id
+        for event_id, event_type, payload, timestamp_str in historical_events:
+            last_sent_event_id = event_id
 
             yield {
-                "id": str(event.id),  # SSE last-event-id for resumption
-                "event": event.event_type,
+                "id": str(event_id),  # SSE last-event-id for resumption
+                "event": event_type,
                 "data": json.dumps(
                     {
-                        "type": event.event_type,
-                        "payload": event.payload,
-                        "timestamp": event.created_at.isoformat().replace("+00:00", "Z"),
+                        "type": event_type,
+                        "payload": payload,
+                        "timestamp": timestamp_str,
                     },
                     default=_json_default,
                 ),
@@ -340,7 +385,6 @@ async def stream_run_replay(
 
     return EventSourceResponse(
         _replay_and_stream(
-            db=db,
             run_id=run_id,
             owner_id=current_user.id,
             status=run.status,
