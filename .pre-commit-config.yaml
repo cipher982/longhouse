@@ -76,6 +76,16 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # SSE contract drift guard
+      # -----------------------------------------------------------------------
+      - id: sse-contract-drift
+        name: SSE contract drift check
+        entry: make validate-sse
+        language: system
+        files: ^(schemas/sse-events\.asyncapi\.yml|apps/zerg/backend/zerg/generated/sse_events\.py|apps/zerg/frontend-web/src/generated/sse-events\.ts)$
+        pass_filenames: false
+
+      # -----------------------------------------------------------------------
       # AsyncAPI spec validation
       # -----------------------------------------------------------------------
       - id: asyncapi-validate
