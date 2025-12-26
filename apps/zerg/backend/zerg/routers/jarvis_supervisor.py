@@ -20,6 +20,7 @@ from sse_starlette.sse import EventSourceResponse
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
+from zerg.generated.sse_events import SSEEventType
 from zerg.models.models import Agent
 from zerg.models.models import AgentRun
 from zerg.routers.jarvis_auth import _is_tool_enabled
@@ -271,7 +272,7 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     try:
         # Send initial connection event with seq
         yield {
-            "event": "connected",
+            "event": SSEEventType.CONNECTED.value,
             "data": json.dumps(
                 {
                     "message": "Supervisor SSE stream connected",
@@ -310,13 +311,14 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                 if supervisor_done and pending_workers == 0:
                     complete = True
 
-                # Format payload (remove internal fields)
-                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id"}}
+                # Format payload (remove internal fields) - extract event_id before filtering
+                event_id = event.get("event_id")
+                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
 
                 # Add monotonically increasing seq for idempotent reconnect handling
                 seq = get_next_seq(run_id)
 
-                yield {
+                sse_event = {
                     "event": event_type,
                     "data": json.dumps(
                         {
@@ -328,10 +330,16 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                     ),
                 }
 
+                # Add id field if event_id is present
+                if event_id is not None:
+                    sse_event["id"] = str(event_id)
+
+                yield sse_event
+
             except asyncio.TimeoutError:
                 # Send heartbeat with seq
                 yield {
-                    "event": "heartbeat",
+                    "event": SSEEventType.HEARTBEAT.value,
                     "data": json.dumps(
                         {
                             "seq": get_next_seq(run_id),
