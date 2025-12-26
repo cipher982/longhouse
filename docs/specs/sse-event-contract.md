@@ -154,26 +154,35 @@ SSEEnvelope:
 
 ---
 
-### Phase 2: Create Code Generator
+### Phase 2: Create Code Generator ✅ COMPLETE
 
 **Goal:** Script to generate Python and TypeScript from schema
 
 **Acceptance Criteria:**
-- [ ] Script at `scripts/generate-sse-types.py`
-- [ ] Generates `apps/zerg/backend/zerg/generated/sse_events.py`:
+- [x] Script at `scripts/generate-sse-types.py`
+- [x] Generates `apps/zerg/backend/zerg/generated/sse_events.py`:
   - Pydantic models for each payload type
   - `SSEEventType` enum
   - `emit_sse_event()` typed emitter function
-- [ ] Generates `apps/zerg/frontend-web/src/generated/sse-events.ts`:
+- [x] Generates `apps/zerg/frontend-web/src/generated/sse-events.ts`:
   - TypeScript interfaces for each payload type
   - `SSEEventType` string literal union
   - `SSEEventMap` discriminated union
-- [ ] Generator handles:
+- [x] Generator handles:
   - Optional fields (`?` in TS, `Optional[]` in Python)
-  - Nested objects (Usage, WorkerRef)
+  - Nested objects (UsageData, WorkerStatus)
   - Enums/literals for status fields
 
-**Test:** `python scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml` produces valid files
+**Test:** `python scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml` produces valid files ✅
+
+**Implementation Notes:**
+- Generator adapted from existing WebSocket generator (`generate-ws-types-modern.py`)
+- Must run with `uv run` for PyYAML dependency access
+- Escapes apostrophes in descriptions for valid Python strings
+- Formats TypeScript unions cleanly (no leading `|`)
+- `emit_sse_event()` returns dict ready for SSE `yield` statement
+- Python uses Pydantic Field() with constraints (ge, min_length, etc.)
+- TypeScript uses discriminated unions for type-safe event handling
 
 ---
 
