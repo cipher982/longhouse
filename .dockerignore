@@ -32,6 +32,10 @@ e2e/playwright-report/
 **/dist/
 **/pkg/
 
+# Python virtual environments (large, rebuilt in container)
+**/.venv/
+**/venv/
+
 # Environment files (should be passed as build args)
 .env*
 !.env.example
