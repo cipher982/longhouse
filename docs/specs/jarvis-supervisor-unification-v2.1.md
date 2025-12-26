@@ -2,7 +2,7 @@
 
 **Date:** December 19, 2025
 **Audience:** Implementation handoff (Jarvis web + Zerg backend)
-**Status:** Proposed (supersedes parts of `docs/specs/super-siri-architecture.md` v2.0)
+**Status:** Proposed (supersedes parts of `docs/archive/super-siri-architecture.md` v2.0)
 
 ## 0) Executive Summary
 

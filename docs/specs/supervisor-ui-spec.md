@@ -33,7 +33,7 @@ This document covers UI components for supervisor tasks. For the current archite
 
 **Hides:** Worker IDs, job IDs, phase labels.
 
-**Location:** `apps/zerg/frontend-web/src/jarvis/lib/worker-progress.ts`
+**Location:** `apps/zerg/frontend-web/src/jarvis/app/components/WorkerProgress.tsx` (UI) + `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts` (state)
 
 ### 2. Result Display
 
@@ -137,7 +137,7 @@ Jarvis: "The backup ran at 3am successfully."
 
 ## Current Implementation
 
-Implemented in `apps/zerg/frontend-web/src/jarvis/lib/worker-progress.ts`:
+Implemented in `apps/zerg/frontend-web/src/jarvis/app/components/WorkerProgress.tsx` + `apps/zerg/frontend-web/src/jarvis/lib/worker-progress-store.ts`:
 
 - Shows task descriptions directly
 - Displays tool calls with simple status icons

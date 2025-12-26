@@ -92,7 +92,7 @@ User connects GitHub (once via OAuth)
 
 ### Pattern Matching Semantics (Important)
 
-Include/exclude patterns are evaluated against **repo-relative POSIX paths** (e.g. `docs/runbook.md`) using **gitignore-style matching** via `pathspec` (`gitwildmatch`).
+Include/exclude patterns are evaluated against **repo-relative POSIX paths** (e.g. `docs/README.md`) using **gitignore-style matching** via `pathspec` (`gitwildmatch`).
 
 - Patterns without `/` match at any depth (e.g. `.env*` matches `foo/.env.local`)
 - `**` is supported (e.g. `**/*.md`)
@@ -1187,13 +1187,10 @@ We store `sync_schedule`, but do not run scheduled syncs today.
 | `apps/zerg/backend/zerg/connectors/github_api.py`                          | Shared GitHub API utilities |
 | `apps/zerg/backend/zerg/connectors/credentials.py`                         | Account credential helpers  |
 | `apps/zerg/frontend-web/src/pages/KnowledgeSourcesPage.tsx`                | Knowledge sources list page |
-| `apps/zerg/frontend-web/src/components/knowledge/AddSourceModal.tsx`       | Add source wizard           |
-| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoPicker.tsx`     | Repo selection              |
-| `apps/zerg/frontend-web/src/components/knowledge/GitHubRepoConfig.tsx`     | Configuration form          |
-| `apps/zerg/frontend-web/src/components/knowledge/KnowledgeSourceCard.tsx`  | Source card                 |
-| `apps/zerg/frontend-web/src/components/knowledge/KnowledgeSearchPanel.tsx` | V1.1: Search panel          |
+| `apps/zerg/frontend-web/src/components/AddKnowledgeSourceModal.tsx`        | Add source wizard (includes repo selection + config) |
+| `apps/zerg/frontend-web/src/components/KnowledgeSourceCard.tsx`            | Source card                 |
+| `apps/zerg/frontend-web/src/components/KnowledgeSearchPanel.tsx`           | V1.1: Search panel          |
 | `apps/zerg/frontend-web/src/hooks/useKnowledgeSources.ts`                  | Knowledge source hooks      |
-| `apps/zerg/frontend-web/src/hooks/useGitHubRepos.ts`                       | GitHub repo hooks           |
 | `apps/zerg/backend/tests/test_knowledge_github.py`                         | GitHub sync tests           |
 
 ### Modified Files
@@ -1205,7 +1202,7 @@ We store `sync_schedule`, but do not run scheduled syncs today.
 | `apps/zerg/backend/zerg/routers/knowledge.py`               | Add GitHub endpoints, validation         |
 | `apps/zerg/backend/zerg/tools/builtin/github_tools.py`      | Import from shared module                |
 | `apps/zerg/backend/zerg/tools/builtin/knowledge_tools.py`   | V1.1: Fix context resolution             |
-| `apps/zerg/backend/zerg/agents/prompts/*.py`                | V1.1: Add knowledge_search to allowlists |
+| `apps/zerg/backend/zerg/prompts/*.py`                       | V1.1: Add knowledge_search to allowlists |
 | `apps/zerg/frontend-web/src/routes/App.tsx`                 | Add `/settings/knowledge` route          |
 
 ---

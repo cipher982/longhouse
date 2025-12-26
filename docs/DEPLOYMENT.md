@@ -16,13 +16,11 @@ V2.2 introduces **Durable Runs**, allowing executions to survive client disconne
 │                    Production Setup                      │
 ├─────────────────────────────────────────────────────────┤
 │                                                          │
-│  [Jarvis PWA]  ←→  [Nginx/Caddy]  ←→  [Zerg Backend]   │
-│   (Static)           (Reverse            (FastAPI)      │
-│                       Proxy)              + Workers      │
+│   [Reverse Proxy]  ←→  [Unified SPA]  ←→  [Zerg Backend] │
+│   (Coolify/Caddy)       (React: /, /chat)   (FastAPI)    │
 │                                                │         │
 │                                          [PostgreSQL]    │
 │                                                │         │
-│                                          [Redis/Cache]   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -31,17 +29,13 @@ V2.2 introduces **Durable Runs**, allowing executions to survive client disconne
 ### System Requirements
 
 - **OS**: Linux (Ubuntu 22.04+ recommended)
-- **Python**: 3.11+
-- **Node.js**: 18+
-- **Database**: PostgreSQL 14+ (or SQLite for small deployments)
-- **Memory**: 2GB+ RAM
-- **Storage**: 10GB+ disk space
+- **Docker**: Docker Engine + `docker compose` plugin (recommended deployment path)
+- **Database**: PostgreSQL 14+
 
 ### Required Services
 
 - PostgreSQL database
-- (Optional) Redis for caching
-- (Optional) Nginx/Caddy for reverse proxy
+- Reverse proxy / TLS termination (handled by Coolify in the standard setup)
 
 ## Deployment Options
 
@@ -57,10 +51,10 @@ docker compose -f docker/docker-compose.dev.yml --profile dev up
 docker compose -f docker/docker-compose.prod.yml up -d
 ```
 
-| Profile | Services                                              | Use Case                         |
-| ------- | ----------------------------------------------------- | -------------------------------- |
-| `dev`   | postgres, backend, frontend, reverse-proxy            | Full platform via nginx at 30080 |
-| `prod`  | postgres, zerg-backend-prod, zerg-frontend-prod       | Production hardened              |
+| Profile | Services                                   | Use Case                         |
+| ------- | ------------------------------------------ | -------------------------------- |
+| `dev`   | postgres, backend, frontend, reverse-proxy | Full platform via nginx at 30080 |
+| `prod`  | postgres, backend, frontend, reverse-proxy | Production hardened              |
 
 Deploy to Coolify:
 
@@ -124,19 +118,22 @@ ENVIRONMENT="production"
 AUTH_DISABLED="0"
 ```
 
-#### Jarvis Frontend
+#### Frontend (Unified SPA)
 
 ```bash
-# API URL - use same-origin (preferred) or explicit URL for non-standard setups
-# The frontend uses /api by default (same-origin via nginx proxy)
-# Only set VITE_API_BASE_URL if you need a different origin
-# VITE_API_BASE_URL="/api"  # Default, usually not needed
+# Same-origin API (recommended) vs explicit API origin (if you deploy split domains)
+VITE_API_BASE_URL="/api"
 
-# Device Secret (must match backend)
-VITE_JARVIS_DEVICE_SECRET="<same-as-backend-secret>"
+# WebSocket base (dev uses ws://, prod should be wss:// behind TLS)
+# VITE_WS_BASE_URL="wss://swarmlet.com/ws"
 
-# OpenAI for local voice processing
-OPENAI_API_KEY="sk-..."
+# Frontend auth guard (should match AUTH_DISABLED inverse)
+VITE_AUTH_ENABLED="true"
+
+# Analytics (optional)
+VITE_UMAMI_WEBSITE_ID="..."
+VITE_UMAMI_SCRIPT_SRC="https://analytics.drose.io/script.js"
+VITE_UMAMI_DOMAINS="swarmlet.com"
 ```
 
 ### Generating Secrets
@@ -233,89 +230,39 @@ sudo systemctl status zerg-backend
 
 ## Nginx Configuration
 
-### Jarvis PWA
+If you're deploying via Docker (recommended), use the repo-managed configs:
 
-Create `/etc/nginx/sites-available/jarvis`:
+- Dev: `docker/nginx/docker-compose.unified.conf` (reverse-proxy container)
+- Prod: `docker/nginx/docker-compose.prod.conf` (reverse-proxy container)
 
-```nginx
-server {
-    listen 80;
-    server_name jarvis.yourdomain.com;
+If you're running Nginx outside Docker, the rule is the same:
 
-    # Redirect to HTTPS
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name jarvis.yourdomain.com;
-
-    ssl_certificate /etc/letsencrypt/live/jarvis.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/jarvis.yourdomain.com/privkey.pem;
-
-    # SPA static files (includes /chat)
-    root /opt/swarm/apps/zerg/frontend-web/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API proxy to Zerg backend
-    location /api/ {
-        proxy_pass http://localhost:47300;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # SSE specific
-        proxy_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 24h;
-    }
-}
-```
+- Serve the SPA on `/` (includes `/chat`)
+- Proxy `/api/` (and `/ws`) to the backend
+- Disable buffering + set long timeouts for SSE endpoints under `/api/stream/` and streaming routes
 
 ## Health Checks
 
 ### Backend Health
 
 ```bash
-# Via same-origin (preferred)
-curl https://swarmlet.com/api/health
+# Reverse proxy health (fast)
+curl https://swarmlet.com/health
+
+# Backend readiness (includes DB check)
+curl https://swarmlet.com/api/system/health
 
 # Expected response:
-# {"status": "healthy", "version": "1.0.0"}
-```
-
-### Database Connectivity
-
-```bash
-curl https://swarmlet.com/api/health/db
-
-# Expected response:
-# {"status": "healthy", "database": "connected"}
+# {"status":"ok","db":{"status":"ok"},...}
 ```
 
 ### SSE Stream
 
-```bash
-# Authenticate (stores HttpOnly session cookie)
-curl -s -X POST https://swarmlet.com/api/jarvis/auth \
-  -H "Content-Type: application/json" \
-  -d '{"device_secret":"<device-secret>"}' \
-  -c cookies.txt -b cookies.txt
+SSE endpoints are authenticated and tied to an active run. The easiest verification is the UI:
 
-# Stream events using the stored session
-curl -N https://swarmlet.com/api/jarvis/events \
-  -b cookies.txt
-
-# Should receive connected event immediately
-```
+- Open `https://swarmlet.com/chat`
+- Send a message that triggers workers/tools
+- Confirm progress events stream without nginx buffering/timeouts
 
 ### Production Smoke Tests
 
@@ -485,30 +432,18 @@ server {
 }
 ```
 
-**Note**: Requires shared PostgreSQL and Redis for state.
+**Note**: Requires shared PostgreSQL. WebSocket/SSE fanout is in-memory today; multi-instance WS requires either sticky routing or a shared broker.
 
 ### Database Scaling
 
 For high load:
 
 1. Use PostgreSQL connection pooling (pgBouncer)
-2. Add read replicas for `/api/jarvis/agents` and `/api/jarvis/runs`
-3. Cache agent listings in Redis (60s TTL)
+2. Add read replicas for high-traffic read endpoints
+3. Consider app-level caching only after measuring (avoid adding Redis by default)
 
 ### Background Workers
-
-Separate LangGraph execution into dedicated workers:
-
-```bash
-# Worker 1: Scheduled agents
-uv run python -m zerg.services.scheduler_service
-
-# Worker 2: On-demand dispatches
-uv run python -m zerg.workers.dispatch_worker
-
-# Worker 3: Email triggers
-uv run python -m zerg.services.email_trigger_service
-```
+Separate long-running jobs into dedicated processes only if/when needed (start with the unified backend service).
 
 ## Troubleshooting
 
@@ -589,7 +524,7 @@ cd apps/zerg/backend && uv run alembic upgrade head
 sudo systemctl restart zerg-backend
 
 # 6. Verify health
-curl https://swarmlet.com/api/health
+curl https://swarmlet.com/health
 ```
 
 ### Database Maintenance
@@ -638,7 +573,7 @@ Before going live:
 
 ### Testing
 
-- [ ] Run integration tests: `./scripts/test-jarvis-integration.sh`
+- [ ] Run smoke tests: `./scripts/smoke-prod.sh`
 - [ ] Test Jarvis authentication
 - [ ] Verify SSE streaming works
 - [ ] Test agent dispatch
@@ -658,7 +593,7 @@ For issues or questions:
 
 - Check logs: `sudo journalctl -u zerg-backend -f`
 - Review documentation: `docs/completed/jarvis_integration.md`
-- Test integration: `./scripts/test-jarvis-integration.sh`
+- Run smoke tests: `./scripts/smoke-prod.sh`
 
 ## Rollback Procedure
 
@@ -678,7 +613,7 @@ git reset --hard <previous-commit>
 sudo systemctl start zerg-backend
 
 # 5. Verify
-curl https://swarmlet.com/api/health
+curl https://swarmlet.com/health
 ```
 
 ## Performance Tuning
@@ -708,26 +643,17 @@ engine = create_engine(
 
 ### Caching
 
-Add Redis for agent listings:
-
-```python
-# Cache agent list for 60 seconds
-@router.get("/api/jarvis/agents")
-@cache(expire=60)
-async def list_jarvis_agents(...):
-    ...
-```
+Avoid adding Redis by default. Add caching only after measuring real hotspots.
 
 ## Next Steps
 
 After deployment:
 
-1. Test all endpoints with `./scripts/test-jarvis-integration.sh`
-2. Seed agents with `make seed-jarvis-agents`
-3. Monitor logs for first 24 hours
-4. Set up automated backups
-5. Configure monitoring alerts
-6. Document any custom configuration
+1. Validate endpoints with `./scripts/smoke-prod.sh`
+2. Seed agents with `make seed-agents` (idempotent)
+3. Review logs and error rates
+4. Ensure backups are configured
+5. Document any custom configuration
 
 For ongoing development:
 
