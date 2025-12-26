@@ -1,9 +1,9 @@
 #!/bin/bash
-# Fetch latest Coolify deployment logs for zerg application
-# Usage: ./scripts/get-coolify-logs.sh [limit]
+# Fetch latest Coolify deployment logs
+# Usage: ./scripts/get-coolify-logs.sh [limit] [app_id]
 
 LIMIT=${1:-1}
-APP_ID="30"  # zerg application ID in Coolify
+APP_ID="${2:-${APP_ID:-30}}"
 
 set -euo pipefail
 

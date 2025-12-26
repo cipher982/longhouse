@@ -8,7 +8,7 @@ import { AuthProvider } from "./lib/auth";
 // CSS Layer order declaration (MUST be first)
 import "./styles/layers.css";
 
-// Core styles (tokens defined in legacy.css via generated/tokens.css)
+// Core styles (tokens defined in legacy.css via styles/tokens.css)
 import "./styles/legacy.css";
 
 // Shared UI primitives (@layer components)
