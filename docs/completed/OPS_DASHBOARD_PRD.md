@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Ops Dashboard PRD (Backend complete; Frontend next)
 
 This document specifies an admin‑only “Ops Dashboard” and compact “Ops HUD” to give engineering a clear, always‑on operational view for daily decisions.

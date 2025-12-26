@@ -1,5 +1,12 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 > ⚠️ **HISTORICAL (Dec 2024):** This document predates the unified SPA merge (2025-12-20).
-> Jarvis no longer has a standalone `apps/jarvis/apps/web/` frontend; the chat UI lives in `apps/zerg/frontend-web/src/jarvis/` and is served at `/chat`.
+> Jarvis no longer has a standalone `apps/zerg/frontend-web/src/jarvis/` frontend; the chat UI lives in `apps/zerg/frontend-web/src/jarvis/` and is served at `/chat`.
 
 ⏺ Zerg Platform Refactor - Phase 2: Shared Packages (Ready to Start)
 
@@ -83,8 +90,8 @@ All services healthy:
 
 ```
 postgres           - Up (healthy)
-zerg-backend       - Up (healthy)
-zerg-frontend      - Up (healthy)
+backend       - Up (healthy)
+frontend-web      - Up (healthy)
 jarvis-web         - Up (healthy)
 reverse-proxy      - Up (healthy)
 ```
@@ -147,7 +154,7 @@ Create proper workspace package with:
 **Current imports to replace:**
 
 ```typescript
-// apps/jarvis/packages/core/src/model-config.ts
+// apps/zerg/frontend-web/src/jarvis/core/model-config.ts
 import modelsConfig from "../../../config/models.json"; // BRITTLE
 
 // Should become:
@@ -236,9 +243,9 @@ Skip this package. Premature abstraction is worse than duplication.
 
 ```json
 "workspaces": [
-  "apps/jarvis/apps/*",
-  "apps/jarvis/packages/*",
-  "apps/jarvis/packages/data/*",
+  "apps/zerg/frontend-web/src/jarvis/apps/*",
+  "apps/zerg/frontend-web/src/jarvis/packages/*",
+  "apps/zerg/frontend-web/src/jarvis/packages/data/*",
   "apps/zerg/frontend-web",
   "apps/zerg/e2e"
   // Add: "packages/*" after creating Phase 2 packages
@@ -272,7 +279,7 @@ grep -r "export const" --include="*.ts" src/ | head -30
 #### Analyze Jarvis Frontend
 
 ```bash
-cd apps/jarvis/apps/web/src
+cd apps/zerg/frontend-web/src/jarvis/src
 
 # Check for utility directories
 ls -la hooks/ components/ lib/
@@ -459,7 +466,7 @@ import { modelsConfig, TEXT_TIER_1 } from "@swarm/config";
 #### Update Vitest Config (remove workaround)
 
 ```typescript
-// apps/jarvis/apps/web/vitest.config.ts
+// apps/zerg/frontend-web/src/jarvis/vitest.config.ts
 // REMOVE this line (no longer needed):
 // '../../../config/models.json': resolve(__dirname, '../../../../config/models.json')
 ```
@@ -559,11 +566,11 @@ git add package.json
 git commit -m "chore: add packages/* to workspace"
 
 # Commit 3: Update consumers
-git add apps/jarvis/packages/core/src/model-config.ts
+git add apps/zerg/frontend-web/src/jarvis/core/model-config.ts
 git commit -m "refactor: use @swarm/config in @jarvis/core"
 
 # Commit 4: Remove Vitest workaround
-git add apps/jarvis/apps/web/vitest.config.ts
+git add apps/zerg/frontend-web/src/jarvis/vitest.config.ts
 git commit -m "refactor: remove models.json alias workaround"
 
 # etc.
@@ -605,7 +612,7 @@ Phase 2 is complete when:
 ### Docker Context
 
 - Jarvis Dockerfiles expect repo root context
-- Paths like `COPY apps/jarvis/...` not `COPY apps/...`
+- Paths like `COPY apps/zerg/frontend-web/src/jarvis/...` not `COPY apps/...`
 - Building from wrong directory will fail
 
 ### Imports
@@ -660,16 +667,16 @@ git status  # Don't let it grow to dozens of files
 ```bash
 # Understand current dependencies
 cat apps/zerg/frontend-web/package.json
-cat apps/jarvis/apps/web/package.json
+cat apps/zerg/frontend-web/src/jarvis/package.json
 
 # See how models.json is currently used
-cat apps/jarvis/packages/core/src/model-config.ts
+cat apps/zerg/frontend-web/src/jarvis/core/model-config.ts
 
 # Survey Zerg frontend structure
 ls -R apps/zerg/frontend-web/src/
 
 # Survey Jarvis frontend structure
-ls -R apps/jarvis/apps/web/src/
+ls -R apps/zerg/frontend-web/src/jarvis/src/
 ```
 
 ---
@@ -682,7 +689,7 @@ make stop && make dev
 
 # Check logs
 docker logs docker-jarvis-web-1
-docker logs docker-zerg-frontend-1
+docker logs docker-frontend-web-1
 
 # Check container status
 docker ps --format "table {{.Names}}\t{{.Status}}"
@@ -706,9 +713,9 @@ bun run --help
 ## Related Documentation
 
 - **Phase 1 Results:** `docker/docker-compose.yml` (unified compose)
-- **React Migration:** `apps/jarvis/MIGRATION.md`
+- **React Migration:** `apps/zerg/frontend-web/src/jarvis/MIGRATION.md`
 - **Platform Overview:** `AGENTS.md`
-- **E2E Testing:** `apps/jarvis/apps/web/tests/E2E.md`
+- **E2E Testing:** `apps/zerg/frontend-web/src/jarvis/tests/E2E.md`
 - **Git Log:** `git log --oneline -20` (see recent work)
 
 ---
@@ -723,7 +730,7 @@ bun run --help
 
 ```bash
 cd apps/zerg/frontend-web/src && grep -r "export" src/ | head -50
-cd apps/jarvis/apps/web/src && grep -r "export" src/ | head -50
+cd apps/zerg/frontend-web/src/jarvis/src && grep -r "export" src/ | head -50
 # Compare and document in PHASE_2_FINDINGS.md
 ```
 

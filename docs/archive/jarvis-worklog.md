@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # Jarvis E2E Test Failure Investigation - Work Log
 
 **Date**: December 9-10, 2025
@@ -186,9 +193,9 @@ Every code change required:
 ```yaml
 jarvis-web:
   volumes:
-    - ../../apps/jarvis/apps/web/src:/app/apps/web/src:ro
-    - ../../apps/jarvis/apps/web/lib:/app/apps/web/lib:ro
-    - ../../apps/jarvis/packages:/app/packages:ro
+    - ../../apps/zerg/frontend-web/src/jarvis/src:/app/apps/web/src:ro
+    - ../../apps/zerg/frontend-web/src/jarvis/lib:/app/apps/web/lib:ro
+    - ../../apps/zerg/frontend-web/src/jarvis/packages:/app/packages:ro
     - ./tests:/app/tests:ro
 ```
 
@@ -213,7 +220,7 @@ make test-jarvis-e2e-ui      # Interactive UI
 
 ### 3. Local Testing Script 🔍
 
-**File**: `apps/jarvis/test-local.sh`
+**File**: `apps/zerg/frontend-web/src/jarvis/test-local.sh`
 
 ```bash
 ./test-local.sh e2e text-message    # Visible browser
@@ -225,7 +232,7 @@ make test-jarvis-e2e-ui      # Interactive UI
 
 ### 4. Comprehensive Guide 📚
 
-**File**: `apps/jarvis/TESTING.md`
+**File**: `apps/zerg/frontend-web/src/jarvis/TESTING.md`
 
 Complete reference with:
 
@@ -277,10 +284,10 @@ Complete reference with:
 ### In Git Stash: "Core fixes: best-effort persistence + isInitialized tracking"
 
 ```
-M apps/jarvis/apps/web/src/context/types.ts
-M apps/jarvis/apps/web/src/hooks/useRealtimeSession.ts
-M apps/jarvis/apps/web/src/hooks/useTextChannel.ts
-M apps/jarvis/apps/web/tests/text-channel-persistence.test.ts
+M apps/zerg/frontend-web/src/jarvis/src/context/types.ts
+M apps/zerg/frontend-web/src/jarvis/src/hooks/useRealtimeSession.ts
+M apps/zerg/frontend-web/src/jarvis/src/hooks/useTextChannel.ts
+M apps/zerg/frontend-web/src/jarvis/tests/text-channel-persistence.test.ts
 ```
 
 **Summary**: Makes persistence best-effort, tracks initialization, updates tests
@@ -291,9 +298,9 @@ M apps/jarvis/apps/web/tests/text-channel-persistence.test.ts
 
 ```
 M Makefile
-M apps/jarvis/docker-compose.test.yml
-A apps/jarvis/TESTING.md
-A apps/jarvis/test-local.sh
+M apps/zerg/frontend-web/src/jarvis/docker-compose.test.yml
+A apps/zerg/frontend-web/src/jarvis/TESTING.md
+A apps/zerg/frontend-web/src/jarvis/test-local.sh
 ```
 
 ---
@@ -456,7 +463,7 @@ Message appears in .transcript
 ### Key Files
 
 ```
-apps/jarvis/apps/web/
+apps/zerg/frontend-web/src/jarvis/
 ├── src/
 │   ├── components/
 │   │   ├── ChatContainer.tsx    # Renders messages
@@ -472,7 +479,7 @@ apps/jarvis/apps/web/
 └── tests/
     └── text-channel-persistence.test.ts  # Unit tests
 
-apps/jarvis/tests/
+apps/zerg/frontend-web/src/jarvis/tests/
 └── text-message-happy-path.e2e.spec.ts  # E2E tests (Playwright)
 ```
 
@@ -530,8 +537,8 @@ make test-jarvis-text
 
 ## Resources
 
-- **Testing Guide**: `apps/jarvis/TESTING.md`
-- **Test Script**: `apps/jarvis/test-local.sh`
+- **Testing Guide**: `apps/zerg/frontend-web/src/jarvis/TESTING.md`
+- **Test Script**: `apps/zerg/frontend-web/src/jarvis/test-local.sh`
 - **Make Targets**: Run `make help | grep jarvis`
 - **Stashed Fixes**: `git stash show -p` to preview
 - **Previous Commits**:

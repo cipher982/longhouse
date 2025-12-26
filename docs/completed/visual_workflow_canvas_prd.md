@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # PRD: Visual Workflow Canvas - Tool & Trigger Nodes
 
 _Status: 🟡 IN PROGRESS - Phase 1 Complete, Phase 2+ Active_

@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 Good news: you can get a _pretty_ legit iMessage connector running locally with existing building blocks. I’ll lay out concrete “hooks” you can drop into your agent framework.
 
 I’ll break it into three levels:

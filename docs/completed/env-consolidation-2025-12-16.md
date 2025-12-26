@@ -1,9 +1,16 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # .env Consolidation Summary - Zerg Monorepo
 
 **Date:** 2025-12-16
 **Status:** ✅ Complete
 
-> Note (2025-12-20): `apps/jarvis/apps/web/` was deleted during the unified SPA merge.
+> Note (2025-12-20): `apps/zerg/frontend-web/src/jarvis/` was deleted during the unified SPA merge.
 > This doc is still accurate as a record of what was backed up on 2025-12-16.
 
 ## Overview
@@ -27,7 +34,7 @@ Backup includes:
 - `.env-backups-2025-12-16/.env` (root .env - original)
 - `.env-backups-2025-12-16/apps/zerg/frontend-web/.env`
 - `.env-backups-2025-12-16/apps/zerg/backend/.env`
-- `.env-backups-2025-12-16/apps/jarvis/apps/web/.env`
+- `.env-backups-2025-12-16/apps/zerg/frontend-web/src/jarvis/.env`
 
 **⚠️ DO NOT DELETE THE BACKUP DIRECTORY** - It contains the only copies of the original configuration.
 
@@ -59,7 +66,7 @@ Backup includes:
 - `TMPDIR`, `XDG_CACHE_HOME` - UV cache directories
 - `DOCKER_HOST` - Docker socket path
 
-### From `apps/jarvis/apps/web/.env`
+### From `apps/zerg/frontend-web/src/jarvis/.env`
 
 - `VITE_ZERG_API_URL` - Zerg backend URL for Jarvis
 - `VITE_JARVIS_DEVICE_SECRET` - Device authentication secret
@@ -83,7 +90,7 @@ const repoRoot = path.resolve(__dirname, "../../..");
 const rootEnv = loadEnv(mode, repoRoot, "");
 ```
 
-#### `apps/jarvis/apps/web/vite.config.ts`
+#### `apps/zerg/frontend-web/src/jarvis/vite.config.ts`
 
 **Changed:**
 
@@ -127,7 +134,7 @@ Replaced with notice files pointing to root `.env`:
 
 - `apps/zerg/frontend-web/.env` - Notice file
 - `apps/zerg/backend/.env` - Notice file
-- `apps/jarvis/apps/web/.env` - Notice file
+- `apps/zerg/frontend-web/src/jarvis/.env` - Notice file
 
 ## Root `.env` Structure
 
@@ -178,7 +185,7 @@ Then check the browser console or network tab to verify:
 ### 3. Verify Jarvis Web Loads Environment Correctly
 
 ```bash
-cd ~/git/zerg/apps/jarvis/apps/web
+cd ~/git/zerg/apps/zerg/frontend-web/src/jarvis/apps/web
 bun run dev
 ```
 
@@ -265,11 +272,11 @@ cd ~/git/zerg
 cp .env-backups-2025-12-16/.env .env
 cp .env-backups-2025-12-16/apps/zerg/frontend-web/.env apps/zerg/frontend-web/.env
 cp .env-backups-2025-12-16/apps/zerg/backend/.env apps/zerg/backend/.env
-cp .env-backups-2025-12-16/apps/jarvis/apps/web/.env apps/jarvis/apps/web/.env
+cp .env-backups-2025-12-16/apps/zerg/frontend-web/src/jarvis/.env apps/zerg/frontend-web/src/jarvis/.env
 
 # Revert vite.config.ts changes
 git checkout apps/zerg/frontend-web/vite.config.ts
-git checkout apps/jarvis/apps/web/vite.config.ts
+git checkout apps/zerg/frontend-web/src/jarvis/vite.config.ts
 ```
 
 ## Git Status
@@ -279,9 +286,9 @@ The following files were modified (not committed):
 - `.env` - Consolidated all variables
 - `apps/zerg/frontend-web/.env` - Replaced with notice file
 - `apps/zerg/backend/.env` - Replaced with notice file
-- `apps/jarvis/apps/web/.env` - Replaced with notice file
+- `apps/zerg/frontend-web/src/jarvis/.env` - Replaced with notice file
 - `apps/zerg/frontend-web/vite.config.ts` - Updated to load from repo root
-- `apps/jarvis/apps/web/vite.config.ts` - Updated to load from repo root
+- `apps/zerg/frontend-web/src/jarvis/vite.config.ts` - Updated to load from repo root
 
 The backup directory `.env-backups-2025-12-16/` should be added to `.gitignore`.
 

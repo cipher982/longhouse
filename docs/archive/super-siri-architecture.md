@@ -1,3 +1,10 @@
+# ⚠️ ARCHIVED / HISTORICAL REFERENCE ONLY
+
+> **Note:** Paths and implementation details in this document may be outdated.
+> For current information, refer to [AGENTS.md](../../AGENTS.md) or the root `docs/README.md`.
+
+---
+
 # Super Siri Architecture Specification
 
 **Version:** 2.0
@@ -888,8 +895,8 @@ language summary of what you found.
 | Worker artifact store | `zerg/services/worker_artifact_store.py`     |
 | Worker runner         | `zerg/services/worker_runner.py`             |
 | Jarvis router         | `zerg/routers/jarvis.py`                     |
-| Jarvis frontend       | `apps/jarvis/apps/web/`                      |
-| History hydration     | `apps/jarvis/apps/web/lib/history-mapper.ts` |
+| Jarvis frontend       | `apps/zerg/frontend-web/src/jarvis/`                      |
+| History hydration     | `apps/zerg/frontend-web/src/jarvis/lib/history-mapper.ts` |
 
 ---
 

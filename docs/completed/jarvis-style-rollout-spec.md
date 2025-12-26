@@ -1,3 +1,10 @@
+# ✅ COMPLETED / HISTORICAL REFERENCE ONLY
+
+> **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
+> For current documentation, see the root `docs/` directory.
+
+---
+
 # Jarvis Look-and-Feel → Swarmlet UI System (Spec + Roadmap)
 
 **Date:** 2025-12-22
