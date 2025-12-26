@@ -34,6 +34,7 @@ export interface WorkerProgressState {
   isActive: boolean;
   currentRunId: number | null;
   supervisorDone: boolean;
+  reconnecting: boolean;
   workers: Map<number, WorkerState>;
 }
 
@@ -47,6 +48,7 @@ class WorkerProgressStore {
     isActive: false,
     currentRunId: null,
     supervisorDone: false,
+    reconnecting: false,
     workers: new Map(),
   };
 
@@ -151,8 +153,33 @@ class WorkerProgressStore {
       isActive: false,
       currentRunId: null,
       supervisorDone: false,
+      reconnecting: false,
       workers: new Map(),
     });
+  }
+
+  /**
+   * Set reconnecting state - shows UI immediately while SSE connects
+   */
+  setReconnecting(runId: number): void {
+    console.log(`[WorkerProgress] Reconnecting to run ${runId}...`);
+    this.setState({
+      isActive: true,
+      currentRunId: runId,
+      reconnecting: true,
+      supervisorDone: false,
+      workers: new Map(),
+    });
+  }
+
+  /**
+   * Clear reconnecting state (called when SSE connects)
+   */
+  clearReconnecting(): void {
+    if (this.state.reconnecting) {
+      console.log('[WorkerProgress] Reconnection complete');
+      this.setState({ reconnecting: false });
+    }
   }
 
   /**
@@ -218,6 +245,7 @@ class WorkerProgressStore {
     this.setState({
       currentRunId: runId,
       supervisorDone: false,
+      reconnecting: false, // Clear reconnecting - we're actively running
       workers: new Map(),
     });
     console.log(`[WorkerProgress] Tracking run ${runId}: ${task}`);
@@ -246,6 +274,7 @@ class WorkerProgressStore {
 
     this.setState({
       isActive: true,
+      reconnecting: false, // Clear reconnecting - we're receiving events
       workers: newWorkers,
     });
 
@@ -343,8 +372,13 @@ class WorkerProgressStore {
       return;
     }
 
+    // Clear reconnecting state - we're receiving real events now
+    const stateUpdates: Partial<WorkerProgressState> = { reconnecting: false };
     if (!this.state.isActive) {
-      this.setState({ isActive: true });
+      stateUpdates.isActive = true;
+    }
+    if (Object.keys(stateUpdates).length > 0) {
+      this.setState(stateUpdates);
     }
 
     const worker = this.findOrCreateWorkerByWorkerId(workerId);
@@ -470,7 +504,7 @@ class WorkerProgressStore {
    */
   private handleComplete(runId: number, result: string, status: string): void {
     console.log(`[WorkerProgress] Complete: ${runId} (${status})`);
-    this.setState({ supervisorDone: true });
+    this.setState({ supervisorDone: true, reconnecting: false });
     this.maybeScheduleClear();
   }
 
@@ -479,7 +513,7 @@ class WorkerProgressStore {
    */
   private handleDeferred(): void {
     console.log('[WorkerProgress] Deferred');
-    this.setState({ supervisorDone: true });
+    this.setState({ supervisorDone: true, reconnecting: false });
     this.maybeScheduleClear();
   }
 
