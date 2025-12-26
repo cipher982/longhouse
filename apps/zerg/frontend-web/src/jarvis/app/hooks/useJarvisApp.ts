@@ -282,12 +282,17 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       updateState({ reconnecting: true })
       await supervisorChatRef.current.attachToRun(runId)
       logger.info(`[useJarvisApp] Reconnected to run ${runId}`)
+
+      // Reload history to show the response that completed during reconnection
+      // The response is stored in the database, so this will pick it up
+      logger.info('[useJarvisApp] Reloading history after reconnection...')
+      await loadSupervisorHistory()
     } catch (error) {
       logger.error('[useJarvisApp] Failed to reconnect to run:', error)
     } finally {
       updateState({ reconnecting: false })
     }
-  }, [updateState])
+  }, [updateState, loadSupervisorHistory])
 
   // Main initialization
   const initialize = useCallback(async () => {
