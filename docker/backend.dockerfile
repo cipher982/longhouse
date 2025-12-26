@@ -135,11 +135,5 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH="/app" \
     PYTHONUNBUFFERED=1
 
-# Development command with hot reload - use uvicorn directly
-CMD ["uvicorn", "zerg.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--reload", \
-     "--reload-dir", "/app/zerg", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips", "*"]
+# Development command - run migrations then uvicorn with hot reload
+CMD ["./start-dev.sh"]
