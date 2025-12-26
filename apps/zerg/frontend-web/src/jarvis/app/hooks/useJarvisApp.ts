@@ -27,6 +27,7 @@ import { feedbackSystem } from '../../lib/feedback-system'
 import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
 import { bootstrapSession, type BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
+import { workerProgressStore } from '../../lib/worker-progress-store'
 import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
@@ -316,6 +317,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       const activeRunId = await checkForActiveRun()
       if (activeRunId) {
         logger.info(`[useJarvisApp] Found active run ${activeRunId}, reconnecting...`)
+        // Show UI immediately before SSE connects
+        workerProgressStore.setReconnecting(activeRunId)
         await reconnectToRun(activeRunId)
       }
 
