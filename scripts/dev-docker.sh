@@ -119,9 +119,8 @@ echo -e "${BLUE}📦 Starting containers (profile: $COMPOSE_PROFILE)...${NC}"
 compose_cmd up -d --build
 STARTED=true
 
-# Wait for health checks
-echo -e "${YELLOW}⏳ Waiting for services to be healthy...${NC}"
-sleep 5
+# Health checks are handled by compose dependencies - no sleep needed
+# Container start is gated by healthcheck conditions in docker-compose.dev.yml
 
 # Show status
 compose_cmd ps
