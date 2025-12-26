@@ -3,6 +3,7 @@
 # Re-export from split model files
 from .agent import Agent
 from .agent import AgentMessage
+from .agent_run_event import AgentRunEvent
 from .connector import Connector
 
 # Re-export remaining models from models.py
@@ -36,6 +37,7 @@ __all__ = [
     "Agent",
     "AgentMessage",
     "AgentRun",
+    "AgentRunEvent",
     "Connector",
     "Thread",
     "ThreadMessage",
