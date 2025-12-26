@@ -9,6 +9,10 @@ export default function PricingPage() {
 
   useEffect(() => {
     document.title = "Pricing - Swarmlet";
+    const metaDescription = document.querySelector('meta[name="description"]');
+    if (metaDescription) {
+      metaDescription.setAttribute('content', 'Free during beta. Full access to Swarmlet\'s AI agent platform while we build and refine the product.');
+    }
   }, []);
 
   const handleGetStarted = () => {

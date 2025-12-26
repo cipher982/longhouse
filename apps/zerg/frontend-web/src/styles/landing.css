@@ -161,7 +161,7 @@
     margin-bottom: var(--space-6);
   }
 
-  .gradient-text {
+  .landing-page .gradient-text {
     background: linear-gradient(
       135deg,
       var(--color-brand-primary) 0%,
@@ -601,26 +601,12 @@
       0 0 24px rgb(99 102 241 / 10%);
   }
 
-  .landing-scenario-image {
-    width: 100%;
-    height: 200px;
+  .landing-scenario-frame {
     margin-bottom: var(--space-4);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    background: var(--color-surface-page);
   }
 
-  .landing-scenario-image img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: center;
-    transition: transform var(--motion-duration-normal)
-      var(--motion-easing-standard);
-  }
-
-  .landing-scenario-card:hover .landing-scenario-image img {
-    transform: scale(1.05);
+  .landing-scenario-card:hover .landing-scenario-frame {
+    transform: none;
   }
 
   .landing-scenario-title {
@@ -1124,6 +1110,241 @@
     text-align: center;
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);
+  }
+
+  /* --------------------------------------------------------
+   DEMO SECTION
+   -------------------------------------------------------- */
+
+  .landing-demo {
+    padding: var(--space-16) 0;
+    text-align: center;
+    background: var(--color-surface-section);
+  }
+
+  /* --------------------------------------------------------
+   DEMO VIDEO PLACEHOLDER
+   -------------------------------------------------------- */
+
+  .demo-video-placeholder {
+    margin: var(--space-12) 0;
+  }
+
+  .demo-video-frame {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow:
+      var(--shadow-xl),
+      0 0 64px rgb(99 102 241 / 15%);
+  }
+
+  .demo-video-chrome {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-section);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .demo-video-dots {
+    display: flex;
+    gap: var(--space-1\.5);
+  }
+
+  .demo-video-dots .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: block;
+  }
+
+  .demo-video-title {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
+    text-align: center;
+    flex: 1;
+  }
+
+  .demo-video-content {
+    aspect-ratio: 16 / 9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    background: var(--color-surface-section);
+    padding: var(--space-12);
+  }
+
+  .demo-video-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: var(--color-brand-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-3xl);
+    color: white;
+    box-shadow: var(--shadow-glow);
+  }
+
+  .demo-video-text {
+    text-align: center;
+  }
+
+  .demo-video-text h3 {
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-2xl);
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-2);
+  }
+
+  .demo-video-text p {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-lg);
+    margin: 0;
+  }
+
+  .demo-video-player {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* --------------------------------------------------------
+   APP SCREENSHOT FRAME
+   -------------------------------------------------------- */
+
+  .app-screenshot-frame {
+    background: var(--color-surface-card);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow:
+      var(--shadow-lg),
+      0 0 48px rgb(99 102 241 / 10%);
+    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+  }
+
+  .app-screenshot-frame:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      var(--shadow-xl),
+      0 0 64px rgb(99 102 241 / 20%);
+  }
+
+  .app-screenshot-chrome {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface-section);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .app-screenshot-dots {
+    display: flex;
+    gap: var(--space-1\.5);
+  }
+
+  .app-screenshot-dots .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: block;
+  }
+
+  .landing-page .dot-red {
+    background: #ff5f56;
+  }
+
+  .landing-page .dot-yellow {
+    background: #ffbd2e;
+  }
+
+  .landing-page .dot-green {
+    background: #27c93f;
+  }
+
+  .app-screenshot-title {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-medium);
+    text-align: center;
+    flex: 1;
+  }
+
+  .app-screenshot-content {
+    position: relative;
+    width: 100%;
+    background: var(--color-surface-page);
+    overflow: hidden;
+  }
+
+  .app-screenshot-content img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: opacity var(--motion-duration-normal);
+  }
+
+  .app-screenshot-skeleton {
+    position: absolute;
+    inset: 0;
+    background: var(--color-surface-section);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .skeleton-pulse {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-section) 0%,
+      var(--color-surface-card) 50%,
+      var(--color-surface-section) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite;
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  .app-screenshot-error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    background: var(--color-surface-section);
+  }
+
+  .error-icon {
+    font-size: var(--font-size-4xl);
+    opacity: 0.5;
+  }
+
+  .app-screenshot-error p {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    margin: 0;
   }
 
   /* --------------------------------------------------------
