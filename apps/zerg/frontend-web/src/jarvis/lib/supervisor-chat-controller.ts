@@ -19,6 +19,24 @@ import { conversationController } from './conversation-controller';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 import { workerProgressStore } from './worker-progress-store';
+import type {
+  SSEEventType,
+  ConnectedPayload,
+  HeartbeatPayload,
+  SupervisorStartedPayload,
+  SupervisorThinkingPayload,
+  SupervisorTokenPayload,
+  SupervisorCompletePayload,
+  SupervisorDeferredPayload,
+  ErrorPayload,
+  WorkerSpawnedPayload,
+  WorkerStartedPayload,
+  WorkerCompletePayload,
+  WorkerSummaryReadyPayload,
+  WorkerToolStartedPayload,
+  WorkerToolCompletedPayload,
+  WorkerToolFailedPayload,
+} from '../../generated/sse-events';
 
 export interface SupervisorChatMessage {
   role: 'user' | 'assistant';
@@ -38,47 +56,12 @@ export interface SupervisorChatConfig {
 }
 
 /**
- * SSE event types from /api/jarvis/chat
+ * Legacy SSE event wrapper format from backend
+ * Note: 'connected' and 'heartbeat' events don't follow this format
  */
-interface SSEConnectedEvent {
-  message: string;
-  run_id: number;
-  client_correlation_id?: string;
-}
-
-interface SSESupervisorEvent {
-  type: string; // All event types including worker_* events
-  payload: {
-    // Core fields
-    run_id?: number;
-    message?: string;
-    result?: string;
-    error?: string;
-    status?: string;
-    // Token streaming
-    token?: string;
-    // Worker lifecycle fields
-    job_id?: number;
-    task?: string;
-    worker_id?: string;
-    summary?: string;
-    duration_ms?: number;
-    // Worker tool fields
-    tool_name?: string;
-    tool_call_id?: string;
-    tool_args_preview?: string;
-    result_preview?: string;
-    // Usage metadata (for reasoning effort feature)
-    usage?: {
-      prompt_tokens?: number | null;
-      completion_tokens?: number | null;
-      total_tokens?: number | null;
-      reasoning_tokens?: number | null;
-    };
-    // Deferred state fields
-    attach_url?: string;
-    timeout_seconds?: number;
-  };
+interface SSEEventWrapper {
+  type: string;
+  payload: unknown;
   client_correlation_id?: string;
 }
 
@@ -379,7 +362,18 @@ export class SupervisorChatController {
                 // ignore
               }
             }
-            await this.handleSSEEvent(eventType || 'message', parsedData);
+            // Validate eventType is a known SSE event type before handling
+            const validEventTypes: SSEEventType[] = [
+              'connected', 'heartbeat', 'supervisor_started', 'supervisor_thinking',
+              'supervisor_token', 'supervisor_complete', 'supervisor_deferred', 'error',
+              'worker_spawned', 'worker_started', 'worker_complete', 'worker_summary_ready',
+              'worker_tool_started', 'worker_tool_completed', 'worker_tool_failed'
+            ];
+            if (eventType && validEventTypes.includes(eventType as SSEEventType)) {
+              await this.handleSSEEvent(eventType as SSEEventType, parsedData);
+            } else {
+              logger.warn(`[SupervisorChat] Unknown SSE event type: ${eventType}`);
+            }
           } catch (error) {
             logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
           }
@@ -419,40 +413,40 @@ export class SupervisorChatController {
   }
 
   /**
-   * Handle individual SSE events
+   * Handle individual SSE events with type-safe payload access
    */
-  private async handleSSEEvent(eventType: string, data: any): Promise<void> {
+  private async handleSSEEvent(eventType: SSEEventType, data: unknown): Promise<void> {
     logger.debug('[SupervisorChat] SSE event:', { eventType, data });
 
     // Clear reconnecting state on first event (for resumable SSE reconnect flow)
     workerProgressStore.clearReconnecting();
 
-    const correlationId = data.client_correlation_id;
-
-    // Handle connected event separately
+    // Handle connected event separately (direct payload format)
     if (eventType === 'connected') {
-      this.petWatchdog(correlationId);
-      this.currentRunId = data.run_id;
-      logger.info(`[SupervisorChat] Connected to run ${data.run_id}, correlationId: ${correlationId}`);
-      if (correlationId) {
-        stateManager.updateAssistantStatus(correlationId, 'typing');
+      const payload = data as ConnectedPayload;
+      this.petWatchdog(payload.client_correlation_id);
+      this.currentRunId = payload.run_id;
+      logger.info(`[SupervisorChat] Connected to run ${payload.run_id}, correlationId: ${payload.client_correlation_id}`);
+      if (payload.client_correlation_id) {
+        stateManager.updateAssistantStatus(payload.client_correlation_id, 'typing');
       }
       return;
     }
 
-    // Handle heartbeat
+    // Handle heartbeat (direct payload format)
     if (eventType === 'heartbeat') {
       this.petWatchdog();
       logger.debug('[SupervisorChat] Heartbeat');
       return;
     }
 
-    // All other events have format: { type: "...", payload: {...}, timestamp: "..." }
-    const event = data as SSESupervisorEvent;
-    const payload = event.payload || {};
+    // All other events have format: { type: "...", payload: {...}, client_correlation_id?: string }
+    const wrapper = data as SSEEventWrapper;
+    const correlationId = wrapper.client_correlation_id;
 
     switch (eventType) {
-      case 'supervisor_started':
+      case 'supervisor_started': {
+        const payload = wrapper.payload as SupervisorStartedPayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor started');
         if (payload.run_id) {
@@ -465,13 +459,15 @@ export class SupervisorChatController {
         if (this.currentRunId) {
           eventBus.emit('supervisor:started', {
             runId: this.currentRunId,
-            task: 'Processing message...',
+            task: payload.task || 'Processing message...',
             timestamp: Date.now(),
           });
         }
         break;
+      }
 
-      case 'supervisor_thinking':
+      case 'supervisor_thinking': {
+        const payload = wrapper.payload as SupervisorThinkingPayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor thinking:', payload.message);
         if (correlationId) {
@@ -485,12 +481,14 @@ export class SupervisorChatController {
           });
         }
         break;
+      }
 
       case 'supervisor_token': {
+        const payload = wrapper.payload as SupervisorTokenPayload;
         // Real-time token streaming from LLM
         this.petWatchdog(correlationId);
         const token = payload.token;
-        if (token && typeof token === 'string') {
+        if (token !== undefined && token !== null) {
           // Start streaming if not already
           if (!this.isStreaming) {
             this.isStreaming = true;
@@ -503,17 +501,14 @@ export class SupervisorChatController {
       }
 
       case 'supervisor_complete': {
+        const payload = wrapper.payload as SupervisorCompletePayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Supervisor complete');
         const result = payload.result;
         const wasStreaming = this.isStreaming;
         this.isStreaming = false; // Reset for next message
 
-        if (payload.status === 'cancelled') {
-          if (correlationId) {
-            stateManager.updateAssistantStatus(correlationId, 'canceled');
-          }
-        } else if (result && typeof result === 'string') {
+        if (result) {
           if (wasStreaming) {
             // Real tokens were streamed - just finalize the message
             logger.info('[SupervisorChat] Finalizing real-time streamed response');
@@ -555,6 +550,7 @@ export class SupervisorChatController {
       }
 
       case 'supervisor_deferred': {
+        const payload = wrapper.payload as SupervisorDeferredPayload;
         // Timeout migration: run continues in background, we show a friendly message
         this.clearWatchdog();
         logger.info('[SupervisorChat] Supervisor deferred (timeout migration)');
@@ -582,6 +578,7 @@ export class SupervisorChatController {
       }
 
       case 'error': {
+        const payload = wrapper.payload as ErrorPayload;
         logger.error('[SupervisorChat] Supervisor error:', payload.error || payload.message);
         const errorMsg = payload.error || payload.message || 'Unknown error';
         stateManager.showToast(`Error: ${errorMsg}`, 'error');
@@ -600,87 +597,101 @@ export class SupervisorChatController {
       }
 
       // ===== Worker lifecycle events (v2.1) =====
-      case 'worker_spawned':
+      case 'worker_spawned': {
+        const payload = wrapper.payload as WorkerSpawnedPayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Worker spawned:', payload.job_id);
         eventBus.emit('supervisor:worker_spawned', {
-          jobId: payload.job_id || 0,
-          task: payload.task || 'Worker task',
+          jobId: payload.job_id,
+          task: payload.task,
           timestamp: Date.now(),
         });
         break;
+      }
 
-      case 'worker_started':
+      case 'worker_started': {
+        const payload = wrapper.payload as WorkerStartedPayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Worker started:', payload.job_id);
         eventBus.emit('supervisor:worker_started', {
-          jobId: payload.job_id || 0,
+          jobId: payload.job_id,
           workerId: payload.worker_id,
           timestamp: Date.now(),
         });
         break;
+      }
 
-      case 'worker_complete':
+      case 'worker_complete': {
+        const payload = wrapper.payload as WorkerCompletePayload;
         this.petWatchdog(correlationId);
         logger.info(`[SupervisorChat] Worker complete: job=${payload.job_id} status=${payload.status}`);
         eventBus.emit('supervisor:worker_complete', {
-          jobId: payload.job_id || 0,
+          jobId: payload.job_id,
           workerId: payload.worker_id,
-          status: payload.status || 'unknown',
+          status: payload.status,
           durationMs: payload.duration_ms,
           timestamp: Date.now(),
         });
         break;
+      }
 
-      case 'worker_summary_ready':
+      case 'worker_summary_ready': {
+        const payload = wrapper.payload as WorkerSummaryReadyPayload;
         this.petWatchdog(correlationId);
         logger.info('[SupervisorChat] Worker summary ready:', payload.job_id);
         eventBus.emit('supervisor:worker_summary', {
-          jobId: payload.job_id || 0,
+          jobId: payload.job_id,
           workerId: payload.worker_id,
-          summary: payload.summary || '',
+          summary: payload.summary,
           timestamp: Date.now(),
         });
         break;
+      }
 
       // ===== Worker tool events (v2.1 Activity Ticker) =====
-      case 'worker_tool_started':
+      case 'worker_tool_started': {
+        const payload = wrapper.payload as WorkerToolStartedPayload;
         this.petWatchdog(correlationId);
         logger.debug('[SupervisorChat] Worker tool started:', payload.tool_name);
         eventBus.emit('worker:tool_started', {
-          workerId: payload.worker_id || '',
-          toolName: payload.tool_name || '',
-          toolCallId: payload.tool_call_id || '',
+          workerId: payload.worker_id,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
           argsPreview: payload.tool_args_preview,
           timestamp: Date.now(),
         });
         break;
+      }
 
-      case 'worker_tool_completed':
+      case 'worker_tool_completed': {
+        const payload = wrapper.payload as WorkerToolCompletedPayload;
         this.petWatchdog(correlationId);
         logger.debug('[SupervisorChat] Worker tool completed:', payload.tool_name);
         eventBus.emit('worker:tool_completed', {
-          workerId: payload.worker_id || '',
-          toolName: payload.tool_name || '',
-          toolCallId: payload.tool_call_id || '',
-          durationMs: payload.duration_ms || 0,
+          workerId: payload.worker_id,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
+          durationMs: payload.duration_ms,
           resultPreview: payload.result_preview,
           timestamp: Date.now(),
         });
         break;
+      }
 
-      case 'worker_tool_failed':
+      case 'worker_tool_failed': {
+        const payload = wrapper.payload as WorkerToolFailedPayload;
         this.petWatchdog(correlationId);
         logger.warn(`[SupervisorChat] Worker tool failed: ${payload.tool_name} - ${payload.error}`);
         eventBus.emit('worker:tool_failed', {
-          workerId: payload.worker_id || '',
-          toolName: payload.tool_name || '',
-          toolCallId: payload.tool_call_id || '',
-          durationMs: payload.duration_ms || 0,
-          error: payload.error || 'Unknown error',
+          workerId: payload.worker_id,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
+          durationMs: payload.duration_ms,
+          error: payload.error,
           timestamp: Date.now(),
         });
         break;
+      }
 
       default:
         logger.debug('[SupervisorChat] Unknown SSE event type:', { eventType, data });
