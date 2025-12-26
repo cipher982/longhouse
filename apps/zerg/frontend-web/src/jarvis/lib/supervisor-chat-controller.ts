@@ -18,6 +18,7 @@ import { stateManager } from './state-manager';
 import { conversationController } from './conversation-controller';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
+import { workerProgressStore } from './worker-progress-store';
 
 export interface SupervisorChatMessage {
   role: 'user' | 'assistant';
@@ -90,6 +91,7 @@ export class SupervisorChatController {
   private isStreaming: boolean = false; // Track if we're receiving real tokens
   private readonly WATCHDOG_TIMEOUT_MS = 60000;
   private onAnySseEventOnce: (() => void) | null = null;
+  private lastEventId: number = 0; // Track last received event ID for resumption
 
   constructor(config: SupervisorChatConfig = {}) {
     this.config = {
@@ -336,6 +338,7 @@ export class SupervisorChatController {
         const lines = message.split('\n');
         let eventType = '';
         let data = '';
+        let eventId: number | null = null;
 
         // Parse SSE message format
         for (const line of lines) {
@@ -343,12 +346,24 @@ export class SupervisorChatController {
             eventType = line.substring(6).trim();
           } else if (line.startsWith('data:')) {
             data = line.substring(5).trim();
+          } else if (line.startsWith('id:')) {
+            // Extract event ID for resumption
+            const idStr = line.substring(3).trim();
+            const parsed = parseInt(idStr, 10);
+            if (!isNaN(parsed)) {
+              eventId = parsed;
+            }
           }
+        }
+
+        // Update lastEventId if we got one
+        if (eventId !== null) {
+          this.lastEventId = eventId;
         }
 
         // Skip logging high-frequency token events to reduce console spam
         if (eventType && eventType !== 'supervisor_token') {
-          logger.info(`[SupervisorChat] Processing SSE event: ${eventType}`);
+          logger.info(`[SupervisorChat] Processing SSE event: ${eventType} (id=${eventId})`);
         }
 
         // Handle the event
@@ -408,6 +423,9 @@ export class SupervisorChatController {
    */
   private async handleSSEEvent(eventType: string, data: any): Promise<void> {
     logger.debug('[SupervisorChat] SSE event:', { eventType, data });
+
+    // Clear reconnecting state on first event (for resumable SSE reconnect flow)
+    workerProgressStore.clearReconnecting();
 
     const correlationId = data.client_correlation_id;
 
@@ -712,10 +730,10 @@ export class SupervisorChatController {
 
   /**
    * Attach to an existing run's event stream
-   * Used for reconnecting after page refresh
+   * Used for reconnecting after page refresh (Resumable SSE v1)
    */
   async attachToRun(runId: number): Promise<void> {
-    logger.info(`[SupervisorChat] Attaching to run ${runId}...`);
+    logger.info(`[SupervisorChat] Attaching to run ${runId} (lastEventId=${this.lastEventId})...`);
 
     // Cancel any current stream
     if (this.currentAbortController) {
@@ -727,13 +745,29 @@ export class SupervisorChatController {
     this.currentRunId = runId;
 
     try {
-      const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/runs/${runId}/stream`);
+      // Use new resumable SSE endpoint: /api/stream/runs/{run_id}
+      // This endpoint supports replay from lastEventId
+      const url = new URL(toAbsoluteUrl(`/api/stream/runs/${runId}`));
 
-      const response = await fetch(url, {
+      // Add resumption parameter if we have a last event ID
+      if (this.lastEventId > 0) {
+        url.searchParams.set('after_event_id', String(this.lastEventId));
+        logger.info(`[SupervisorChat] Resuming from event ID: ${this.lastEventId}`);
+      }
+
+      const headers: Record<string, string> = {
+        'Accept': 'text/event-stream',
+      };
+
+      // Alternative: Use Last-Event-ID header (SSE standard)
+      // The backend prefers this over query param
+      if (this.lastEventId > 0) {
+        headers['Last-Event-ID'] = String(this.lastEventId);
+      }
+
+      const response = await fetch(url.toString(), {
         method: 'GET',
-        headers: {
-          'Accept': 'text/event-stream',
-        },
+        headers,
         credentials: 'include',
         signal: this.currentAbortController.signal,
       });

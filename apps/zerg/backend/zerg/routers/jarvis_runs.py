@@ -173,7 +173,7 @@ def get_active_run(
 ):
     """Get the user's currently running agent run (if any).
 
-    Returns the most recent RUNNING run for the user's supervisor agent.
+    Returns the most recent RUNNING or DEFERRED run for the user's supervisor agent.
     Returns 204 No Content if no active run exists.
 
     This endpoint enables run reconnection after page refresh.
@@ -191,11 +191,12 @@ def get_active_run(
     supervisor_service = SupervisorService(db)
     supervisor_agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
 
-    # Find the most recent RUNNING run for this user's supervisor
+    # Find the most recent RUNNING or DEFERRED run for this user's supervisor
+    # DEFERRED runs are streamable (work continues in background)
     active_run = (
         db.query(AgentRun)
         .filter(AgentRun.agent_id == supervisor_agent.id)
-        .filter(AgentRun.status == RunStatus.RUNNING)
+        .filter(AgentRun.status.in_([RunStatus.RUNNING, RunStatus.DEFERRED]))
         .order_by(AgentRun.created_at.desc())
         .first()
     )
