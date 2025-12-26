@@ -1,9 +1,8 @@
 # Landing Page Screenshot Capture & Validation
 
 **Created:** 2025-12-25
-**Assignee:** [Other Dev]
+**Assignee:** (unassigned)
 **Status:** Ready for capture
-**Estimated Time:** 30-60 minutes
 
 ---
 
@@ -31,7 +30,7 @@ We've completed the landing page polish (Phases 3-5). The visual components are 
 
 ### 1.1 Visual Workflow Builder (Canvas)
 
-**Target:** Replace the illustration in NerdSection with a real canvas screenshot
+**Target:** Replace the current canvas image in NerdSection with a real canvas screenshot
 
 **Steps:**
 1. Start the dev server: `make dev`
@@ -44,7 +43,7 @@ We've completed the landing page polish (Phases 3-5). The visual components are 
    - Connect them with edges
 4. Zoom/pan to frame the workflow nicely (not too zoomed in/out)
 5. Take screenshot: **1920x1080** or **2560x1440** (16:9 aspect ratio)
-6. Save as: `apps/zerg/frontend-web/public/images/landing/canvas-screenshot.png`
+6. Replace: `apps/zerg/frontend-web/public/images/landing/canvas-preview.png` (existing)
 
 **Quality Checklist:**
 - [ ] Nodes are clearly visible with readable labels
@@ -61,7 +60,7 @@ We've completed the landing page polish (Phases 3-5). The visual components are 
 1. Navigate to: `http://localhost:30080/dashboard`
 2. Ensure there's some sample data (agents, runs)
 3. Take screenshot: **1920x1080** or **2560x1440**
-4. Save as: `apps/zerg/frontend-web/public/images/landing/dashboard-screenshot.png`
+4. Save as: `public/images/landing/dashboard-screenshot.png` (under `apps/zerg/frontend-web/`)
 
 **Quality Checklist:**
 - [ ] Shows agent cards or run history
@@ -80,21 +79,13 @@ Find this line (around line 130):
 ```tsx
 <AppScreenshotFrame title="Visual Workflow Builder">
   <img
-    src="/images/landing/canvas-preview.png"  // ← Change this
+    src="/images/landing/canvas-preview.png"
     alt="Visual workflow canvas..."
   />
 </AppScreenshotFrame>
 ```
 
-Change to:
-```tsx
-<AppScreenshotFrame title="Visual Workflow Builder">
-  <img
-    src="/images/landing/canvas-screenshot.png"  // ← New screenshot
-    alt="Visual workflow canvas showing AI agent nodes connected with triggers and actions"
-  />
-</AppScreenshotFrame>
-```
+No code change needed if you replace the existing `canvas-preview.png` file.
 
 ### 2.2 Update Scenario Cards (Optional)
 
@@ -110,7 +101,7 @@ The scenarios currently use illustrations. You could:
 
 ---
 
-## Task 3: Demo Video (Future)
+## Task 3: Demo Video (Optional/Future)
 
 When ready to add a demo video:
 
@@ -147,7 +138,7 @@ Uncomment and update:
 />
 ```
 
-Save video to: `apps/zerg/frontend-web/public/videos/swarmlet-demo.mp4`
+Save video to: `public/videos/swarmlet-demo.mp4` (under `apps/zerg/frontend-web/`; optional)
 
 ---
 
@@ -196,11 +187,10 @@ apps/zerg/frontend-web/
 ├── public/
 │   ├── images/
 │   │   └── landing/
-│   │       ├── canvas-preview.png      # Current illustration
-│   │       ├── canvas-screenshot.png   # NEW: Real screenshot
-│   │       └── dashboard-screenshot.png # NEW: Optional
-│   └── videos/
-│       └── swarmlet-demo.mp4           # NEW: When ready
+│   │       ├── canvas-preview.png       # Replace with real screenshot
+│   │       └── dashboard-screenshot.png # Optional (not currently used)
+│   └── videos/                          # Optional
+│       └── swarmlet-demo.mp4            # Optional
 ├── src/
 │   ├── components/
 │   │   └── landing/
@@ -217,7 +207,7 @@ apps/zerg/frontend-web/
 
 ## Questions?
 
-- Slack: #swarmlet-dev
+- (Ping David)
 - The original implementation PR: [link to PR if applicable]
 - Design reference: The current illustrations set the visual tone - screenshots should match the dark theme aesthetic
 

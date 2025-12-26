@@ -1,5 +1,5 @@
 # Production Docker Compose - Optimized for production deployment
-# Use: docker-compose -f docker/docker-compose.prod.yml up
+# Use: docker compose -f docker/docker-compose.prod.yml up
 
 # Docker Compose for Swarmlet - Production Mode
 

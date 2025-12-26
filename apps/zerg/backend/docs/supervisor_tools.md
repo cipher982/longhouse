@@ -266,7 +266,7 @@ uv run python examples/supervisor_tools_demo.py
 - `tests/test_supervisor_tools.py` - Unit tests
 - `tests/test_supervisor_tools_integration.py` - Integration tests
 - `examples/supervisor_tools_demo.py` - Demo script
-- `docs/supervisor_tools.md` - This document
+- `apps/zerg/backend/docs/supervisor_tools.md` - This document
 
 ### Modified:
 
