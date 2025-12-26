@@ -237,7 +237,8 @@ class TestAttachToRunStream:
         run.status = RunStatus.SUCCESS
         db_session.commit()
 
-        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
+        # Use the JSON endpoint, not the SSE stream endpoint
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -256,7 +257,8 @@ class TestAttachToRunStream:
         run.error = "Tool execution failed"
         db_session.commit()
 
-        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
+        # Use the JSON endpoint, not the SSE stream endpoint
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -269,7 +271,8 @@ class TestAttachToRunStream:
         """Test attaching to an in-progress run returns current status snapshot."""
         run = run_components["run"]
 
-        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
+        # Use the JSON endpoint, not the SSE stream endpoint
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -280,7 +283,8 @@ class TestAttachToRunStream:
     @pytest.mark.asyncio
     async def test_attach_to_nonexistent_run(self, async_client):
         """Test attaching to a run that doesn't exist."""
-        response = await async_client.get("/api/jarvis/runs/99999/stream")
+        # Use the JSON endpoint, not the SSE stream endpoint
+        response = await async_client.get("/api/jarvis/runs/99999")
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -301,8 +305,8 @@ class TestAttachToRunStream:
         db_session.commit()
         db_session.refresh(other_run)
 
-        # Try to attach to the other user's run
-        response = await async_client.get(f"/api/jarvis/runs/{other_run.id}/stream")
+        # Try to attach to the other user's run (use JSON endpoint)
+        response = await async_client.get(f"/api/jarvis/runs/{other_run.id}")
 
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -327,7 +331,8 @@ class TestAttachToRunStream:
         run.finished_at = datetime.now(timezone.utc)
         db_session.commit()
 
-        response = await async_client.get(f"/api/jarvis/runs/{run.id}/stream")
+        # Use the JSON endpoint, not the SSE stream endpoint
+        response = await async_client.get(f"/api/jarvis/runs/{run.id}")
 
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
