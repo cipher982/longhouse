@@ -66,5 +66,5 @@ docker exec -it <container-id> ssh -vvv user@host
 
 ## Related Docs
 
-- `docs/work/WORKER_FALLBACK_SPEC.md` - Full technical specification
+- `docs/completed/WORKER_FALLBACK_SPEC.md` - Full technical specification
 - `AGENTS.md` - User context configuration format

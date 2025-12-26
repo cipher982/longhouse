@@ -48,10 +48,10 @@ else
     check_fail "apps/zerg/ missing"
 fi
 
-if [ -d "packages/config" ]; then
-    check_pass "packages/config/ exists"
+if [ -f "config/models.json" ]; then
+    check_pass "config/models.json exists"
 else
-    check_fail "packages/config/ missing"
+    check_fail "config/models.json missing"
 fi
 
 # 2. Check dependencies
@@ -63,7 +63,7 @@ if command -v node &> /dev/null; then
     NODE_VERSION=$(node --version)
     check_pass "Node.js installed ($NODE_VERSION)"
 else
-    check_fail "Node.js not found - install Node.js 18+"
+    check_warn "Node.js not found (some scripts use node, but Bun covers most workflows)"
 fi
 
 if command -v bun &> /dev/null; then
@@ -132,11 +132,13 @@ if [ -f ".env" ]; then
         check_warn "JWT_SECRET is default value - change for production"
     fi
 
-    if grep -q "DATABASE_URL" .env; then
-        check_pass "DATABASE_URL configured"
-    else
-        check_fail "DATABASE_URL not set in .env"
-    fi
+    for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB APP_PUBLIC_URL; do
+        if grep -q "^${var}=" .env && ! grep -q "^${var}=\"\"$" .env; then
+            check_pass "${var} configured"
+        else
+            check_fail "${var} not set in .env"
+        fi
+    done
 
 else
     check_fail ".env file missing - copy from .env.example.swarm"
@@ -215,9 +217,9 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "  1. Run migrations: cd apps/zerg/backend && uv run alembic upgrade head"
-    echo "  2. Seed agents: make seed-jarvis-agents"
-    echo "  3. Start platform: make swarm-dev"
-    echo "  4. Test integration: ./scripts/test-jarvis-integration.sh"
+    echo "  2. Seed agents: make seed-agents"
+    echo "  3. Start platform: make dev"
+    echo "  4. Run tests: make test-all"
 elif [ $ERRORS -eq 0 ]; then
     echo -e "${YELLOW}⚠ Setup has $WARNINGS warning(s)${NC}"
     echo ""
@@ -229,7 +231,7 @@ else
     echo "Fix errors above before starting the platform."
     echo ""
     echo "Quick fixes:"
-    echo "  - Missing .env: cp .env.example.swarm .env && nano .env"
+    echo "  - Missing .env: cp .env.example .env && nano .env"
     echo "  - Missing deps: bun install"
     echo "  - Python deps: cd apps/zerg/backend && uv sync"
     exit 1
