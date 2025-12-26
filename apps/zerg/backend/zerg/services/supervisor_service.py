@@ -20,8 +20,6 @@ from sqlalchemy.orm import Session
 
 from zerg.agents_def.zerg_react_agent import clear_evidence_mount_warning
 from zerg.crud import crud
-from zerg.events import EventType
-from zerg.events import event_bus
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.enums import RunStatus
 from zerg.models.enums import RunTrigger
@@ -451,11 +449,13 @@ class SupervisorService:
         logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...")
 
         # Emit supervisor started event
-        await event_bus.publish(
-            EventType.SUPERVISOR_STARTED,
-            {
-                "event_type": EventType.SUPERVISOR_STARTED,
-                "run_id": run.id,
+        from zerg.services.event_store import emit_run_event
+
+        await emit_run_event(
+            db=self.db,
+            run_id=run.id,
+            event_type="supervisor_started",
+            payload={
                 "thread_id": thread.id,
                 "task": task,
                 "owner_id": owner_id,
@@ -493,11 +493,11 @@ class SupervisorService:
             self.db.commit()
 
             # Emit thinking event
-            await event_bus.publish(
-                EventType.SUPERVISOR_THINKING,
-                {
-                    "event_type": EventType.SUPERVISOR_THINKING,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="supervisor_thinking",
+                payload={
                     "message": "Analyzing your request...",
                     "owner_id": owner_id,
                 },
@@ -510,9 +510,11 @@ class SupervisorService:
             _supervisor_ctx_token = set_supervisor_run_id(run.id)
 
             # Set user context for token streaming (required for real-time SSE tokens)
+            from zerg.callbacks.token_stream import set_current_db_session
             from zerg.callbacks.token_stream import set_current_user_id
 
             _user_ctx_token = set_current_user_id(owner_id)
+            _db_ctx_token = set_current_db_session(self.db)
 
             # Run the agent with timeout (shielded so timeout doesn't cancel work)
             runner = AgentRunner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
@@ -535,11 +537,11 @@ class SupervisorService:
                 self.db.commit()
 
                 # Emit deferred event (not error)
-                await event_bus.publish(
-                    EventType.SUPERVISOR_DEFERRED,
-                    {
-                        "event_type": EventType.SUPERVISOR_DEFERRED,
-                        "run_id": run.id,
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="supervisor_deferred",
+                    payload={
                         "agent_id": agent.id,
                         "thread_id": thread.id,
                         "message": "Still working on this in the background. I'll continue when ready.",
@@ -550,11 +552,11 @@ class SupervisorService:
                 )
 
                 # v2.2: Also emit RUN_UPDATED for dashboard visibility
-                await event_bus.publish(
-                    EventType.RUN_UPDATED,
-                    {
-                        "event_type": EventType.RUN_UPDATED,
-                        "run_id": run.id,
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="run_updated",
+                    payload={
                         "agent_id": agent.id,
                         "status": "deferred",
                         "thread_id": thread.id,
@@ -585,9 +587,11 @@ class SupervisorService:
                 # Always reset context even on timeout/deferred
                 reset_supervisor_run_id(_supervisor_ctx_token)
                 # Reset user context
+                from zerg.callbacks.token_stream import current_db_session_var
                 from zerg.callbacks.token_stream import current_user_id_var
 
                 current_user_id_var.reset(_user_ctx_token)
+                current_db_session_var.reset(_db_ctx_token)
 
             # Extract final result (last assistant message)
             result_text = None
@@ -610,11 +614,11 @@ class SupervisorService:
             # Emit completion event with SupervisorResult-aligned schema
             # Note: summary/recommendations/caveats would require parsing agent response
             # For now, include required fields and let frontend extract details
-            await event_bus.publish(
-                EventType.SUPERVISOR_COMPLETE,
-                {
-                    "event_type": EventType.SUPERVISOR_COMPLETE,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="supervisor_complete",
+                payload={
                     "agent_id": agent.id,
                     "thread_id": thread.id,
                     "result": result_text or "(No result)",
@@ -633,11 +637,11 @@ class SupervisorService:
             )
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await event_bus.publish(
-                EventType.RUN_UPDATED,
-                {
-                    "event_type": EventType.RUN_UPDATED,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="run_updated",
+                payload={
                     "agent_id": agent.id,
                     "status": "success",
                     "finished_at": end_time.isoformat(),
@@ -671,11 +675,11 @@ class SupervisorService:
                 run.finished_at = end_time
                 self.db.commit()
 
-            await event_bus.publish(
-                EventType.SUPERVISOR_COMPLETE,
-                {
-                    "event_type": EventType.SUPERVISOR_COMPLETE,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="supervisor_complete",
+                payload={
                     "agent_id": agent.id,
                     "thread_id": thread.id,
                     "status": "cancelled",
@@ -685,11 +689,11 @@ class SupervisorService:
             )
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await event_bus.publish(
-                EventType.RUN_UPDATED,
-                {
-                    "event_type": EventType.RUN_UPDATED,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="run_updated",
+                payload={
                     "agent_id": agent.id,
                     "status": "cancelled",
                     "finished_at": end_time.isoformat(),
@@ -711,11 +715,11 @@ class SupervisorService:
             self.db.commit()
 
             # Emit error event with consistent schema
-            await event_bus.publish(
-                EventType.ERROR,
-                {
-                    "event_type": EventType.ERROR,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="error",
+                payload={
                     "agent_id": agent.id,
                     "thread_id": thread.id,
                     "message": str(e),
@@ -726,11 +730,11 @@ class SupervisorService:
             )
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
-            await event_bus.publish(
-                EventType.RUN_UPDATED,
-                {
-                    "event_type": EventType.RUN_UPDATED,
-                    "run_id": run.id,
+            await emit_run_event(
+                db=self.db,
+                run_id=run.id,
+                event_type="run_updated",
+                payload={
                     "agent_id": agent.id,
                     "status": "failed",
                     "finished_at": end_time.isoformat(),
@@ -816,11 +820,13 @@ class SupervisorService:
         logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
 
         # Emit event for SSE subscribers
-        await event_bus.publish(
-            EventType.SUPERVISOR_STARTED,
-            {
-                "event_type": EventType.SUPERVISOR_STARTED,
-                "run_id": continuation_run.id,
+        from zerg.services.event_store import emit_run_event
+
+        await emit_run_event(
+            db=self.db,
+            run_id=continuation_run.id,
+            event_type="supervisor_started",
+            payload={
                 "thread_id": thread.id,
                 "task": f"[CONTINUATION] Processing worker result from job {job_id}",
                 "continuation_of": original_run_id,

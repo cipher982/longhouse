@@ -27,8 +27,6 @@ from zerg.context import WorkerContext
 from zerg.context import reset_worker_context
 from zerg.context import set_worker_context
 from zerg.crud import crud
-from zerg.events import EventType
-from zerg.events import event_bus
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.models import Agent as AgentModel
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
@@ -146,12 +144,14 @@ class WorkerRunner:
         # This context is read by zerg_react_agent._call_tool_async to emit
         # WORKER_TOOL_STARTED/COMPLETED/FAILED events
         # job_id is critical for roundabout event correlation
+        # db_session is for Resumable SSE v1 event persistence
         worker_context = WorkerContext(
             worker_id=worker_id,
             owner_id=owner_for_events,
             run_id=event_ctx.get("run_id"),
             job_id=job_id,
             task=task[:100],
+            db_session=db,
         )
         context_token = set_worker_context(worker_context)
 
@@ -167,15 +167,15 @@ class WorkerRunner:
         try:
             # Start worker (marks as running)
             self.artifact_store.start_worker(worker_id)
-            if event_context is not None:
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
-                    EventType.WORKER_STARTED,
-                    {
-                        "event_type": EventType.WORKER_STARTED,
+                    db=db,
+                    run_id=event_ctx["run_id"],
+                    event_type="worker_started",
+                    payload={
                         "job_id": job_id,
                         "worker_id": worker_id,
                         "owner_id": owner_for_events,
-                        "run_id": event_ctx.get("run_id"),
                         "task": task[:100],
                     },
                 )
@@ -247,18 +247,18 @@ class WorkerRunner:
                 # Mark worker failed
                 self.artifact_store.complete_worker(worker_id, status="failed", error=worker_context.critical_error_message)
 
-                if event_context is not None:
+                if event_context is not None and event_ctx.get("run_id"):
                     await self._emit_event(
-                        EventType.WORKER_COMPLETE,
-                        {
-                            "event_type": EventType.WORKER_COMPLETE,
+                        db=db,
+                        run_id=event_ctx["run_id"],
+                        event_type="worker_complete",
+                        payload={
                             "job_id": job_id,
                             "worker_id": worker_id,
                             "status": "failed",
                             "error": worker_context.critical_error_message,
                             "duration_ms": duration_ms,
                             "owner_id": owner_for_events,
-                            "run_id": event_ctx.get("run_id"),
                         },
                     )
 
@@ -288,30 +288,30 @@ class WorkerRunner:
             summary, summary_meta = await self._extract_summary(task, result_for_summary)
             self.artifact_store.update_summary(worker_id, summary, summary_meta)
 
-            if event_context is not None:
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
-                    EventType.WORKER_COMPLETE,
-                    {
-                        "event_type": EventType.WORKER_COMPLETE,
+                    db=db,
+                    run_id=event_ctx["run_id"],
+                    event_type="worker_complete",
+                    payload={
                         "job_id": job_id,
                         "worker_id": worker_id,
                         "status": "success",
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
-                        "run_id": event_ctx.get("run_id"),
                     },
                 )
 
                 if summary:
                     await self._emit_event(
-                        EventType.WORKER_SUMMARY_READY,
-                        {
-                            "event_type": EventType.WORKER_SUMMARY_READY,
+                        db=db,
+                        run_id=event_ctx["run_id"],
+                        event_type="worker_summary_ready",
+                        payload={
                             "job_id": job_id,
                             "worker_id": worker_id,
                             "summary": summary,
                             "owner_id": owner_for_events,
-                            "run_id": event_ctx.get("run_id"),
                         },
                     )
 
@@ -350,18 +350,18 @@ class WorkerRunner:
 
             logger.exception(f"Worker {worker_id} failed after {duration_ms}ms")
 
-            if event_context is not None:
+            if event_context is not None and event_ctx.get("run_id"):
                 await self._emit_event(
-                    EventType.WORKER_COMPLETE,
-                    {
-                        "event_type": EventType.WORKER_COMPLETE,
+                    db=db,
+                    run_id=event_ctx["run_id"],
+                    event_type="worker_complete",
+                    payload={
                         "job_id": job_id,
                         "worker_id": worker_id,
                         "status": "failed",
                         "error": error_msg,
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
-                        "run_id": event_ctx.get("run_id"),
                     },
                 )
 
@@ -392,10 +392,17 @@ class WorkerRunner:
                     db.rollback()
                     logger.warning("Failed to clean up temporary agent after failure", exc_info=True)
 
-    async def _emit_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
-        """Best-effort event emission for worker lifecycle."""
+    async def _emit_event(self, db: Session, run_id: int, event_type: str, payload: dict[str, Any]) -> None:
+        """Best-effort event emission for worker lifecycle using durable event store."""
         try:
-            await event_bus.publish(event_type, payload)
+            from zerg.services.event_store import emit_run_event
+
+            await emit_run_event(
+                db=db,
+                run_id=run_id,
+                event_type=event_type,
+                payload=payload,
+            )
         except Exception:
             logger.warning("Failed to emit worker event %s", event_type, exc_info=True)
 
