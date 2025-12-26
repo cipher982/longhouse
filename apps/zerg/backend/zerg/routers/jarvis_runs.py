@@ -1,5 +1,6 @@
 """Jarvis run history endpoints."""
 
+import json
 import logging
 from datetime import datetime
 from typing import List
@@ -11,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from zerg.crud import crud
 from zerg.database import get_db
@@ -164,6 +166,54 @@ class RunStatusResponse(BaseModel):
     result: Optional[str] = None
 
 
+@router.get("/runs/active")
+def get_active_run(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+):
+    """Get the user's currently running agent run (if any).
+
+    Returns the most recent RUNNING run for the user's supervisor agent.
+    Returns 204 No Content if no active run exists.
+
+    This endpoint enables run reconnection after page refresh.
+
+    Args:
+        db: Database session
+        current_user: Authenticated user (multi-tenant filtered)
+
+    Returns:
+        JSONResponse with run details if found, or 204 No Content
+    """
+    # Import here to avoid circular dependency
+    from zerg.services.supervisor_service import SupervisorService
+
+    supervisor_service = SupervisorService(db)
+    supervisor_agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+
+    # Find the most recent RUNNING run for this user's supervisor
+    active_run = (
+        db.query(AgentRun)
+        .filter(AgentRun.agent_id == supervisor_agent.id)
+        .filter(AgentRun.status == RunStatus.RUNNING)
+        .order_by(AgentRun.created_at.desc())
+        .first()
+    )
+
+    if not active_run:
+        # No active run - return 204 No Content
+        return JSONResponse(status_code=204, content=None)
+
+    # Return run details for reconnection
+    return JSONResponse(
+        {
+            "run_id": active_run.id,
+            "status": active_run.status.value,
+            "created_at": active_run.created_at.isoformat(),
+        }
+    )
+
+
 @router.get("/runs/{run_id}", response_model=RunStatusResponse)
 def get_run_status(
     run_id: int,
@@ -221,12 +271,18 @@ async def attach_to_run_stream(
 ):
     """Attach to an existing run's event stream.
 
-    For MVP: Returns the current status and result if available.
-    If run is complete, returns final result as JSON.
-    If run is in progress, returns current status (streaming not implemented yet).
+    For RUNNING runs: Streams events via SSE as they occur.
+    For completed runs: Returns a single completion event and closes.
 
-    Future enhancement: Stream remaining events for in-progress runs.
-    Note: Infinite SSE streams in tests currently cause timeouts with httpx/ASGITransport.
+    This enables run reconnection after page refresh.
+
+    Args:
+        run_id: ID of the run to attach to
+        db: Database session
+        current_user: Authenticated user (multi-tenant filtered)
+
+    Returns:
+        EventSourceResponse for SSE streaming
     """
     # Multi-tenant security: only return runs owned by the current user
     run = (
@@ -240,26 +296,45 @@ async def attach_to_run_stream(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Get result if available
-    result = None
-    if run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
-        result = _get_last_assistant_message(db, run.thread_id)
+    # Check run status
+    if run.status == RunStatus.RUNNING:
+        # Stream live events using existing stream_run_events
+        from zerg.routers.jarvis_sse import stream_run_events
 
-    # Return status for both complete and in-progress runs
-    return JSONResponse(
-        {
-            "run_id": run.id,
-            "status": run.status.value if hasattr(run.status, "value") else str(run.status),
-            "result": result,
-            "error": run.error,
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-        }
-    )
+        return EventSourceResponse(
+            stream_run_events(
+                run_id=run.id,
+                owner_id=current_user.id,
+                client_correlation_id=None,
+            )
+        )
+    else:
+        # Run is complete/failed - return single completion event and close
+        async def completed_stream():
+            # Get result if available
+            result = None
+            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
+                result = _get_last_assistant_message(db, run.thread_id)
 
+            # Send completion event matching the format from jarvis_sse.py
+            event_type = "supervisor_complete" if run.status == RunStatus.SUCCESS else "error"
+            payload = {
+                "run_id": run.id,
+                "status": run.status.value,
+                "result": result,
+                "error": run.error,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            }
 
-# TODO: Implement SSE re-attach for in-progress runs
-# This would require:
-# 1. Event log table to store all SSE events per run
-# 2. Cursor-based replay from last_event_id
-# 3. Hybrid: replay past events + stream new ones
-# 4. Connection manager to handle multiple clients per run
+            yield {
+                "event": event_type,
+                "data": json.dumps(
+                    {
+                        "type": event_type,
+                        "payload": payload,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                ),
+            }
+
+        return EventSourceResponse(completed_stream())
