@@ -3,7 +3,7 @@
 **Status:** Draft
 **Author:** AI Assistant
 **Date:** 2024-12-17
-**Related:** `docs/work/PRD_Usage_Controls.md`, `docs/work/OPS_DASHBOARD_PRD.md`
+**Related:** (none)
 
 ---
 
@@ -414,11 +414,9 @@ LIMIT :limit OFFSET :offset
 
 1. Add `GET /api/users/me/usage` endpoint in `routers/users.py`
 2. Add service function `get_user_usage(db, user_id, period)` in `services/usage_service.py`
-3. Add Pydantic response models in `schemas/usage.py`
+3. Add Pydantic response models in `apps/zerg/backend/zerg/schemas/usage.py`
 
 **Frontend:** 4. Add `UsageWidget` component 5. Add to Dashboard and/or Profile page 6. Implement polling (60s interval) 7. Add warning toast logic (80% threshold, localStorage debounce)
-
-**Estimate:** 4-6 hours
 
 ### Phase 2: Admin Per-User View (P1)
 
@@ -429,8 +427,6 @@ LIMIT :limit OFFSET :offset
 3. Add admin-only service functions
 
 **Frontend:** 4. Add Users table to Admin page (or new route) 5. Add user detail modal/slide-out
-
-**Estimate:** 6-8 hours
 
 ### Phase 3: Enhancements (P2)
 

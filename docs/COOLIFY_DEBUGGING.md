@@ -13,7 +13,7 @@ clifford (master)           zerg (build server)
 
 - **Coolify master runs on clifford** - manages deployments, stores logs in PostgreSQL
 - **Builds/containers run on zerg** - target server for Swarmlet deployment
-- **App ID**: 30 (zerg/swarmlet application in Coolify)
+- **App ID**: 30 by default (see `scripts/get-coolify-logs.sh`, override via `APP_ID=...`)
 
 ## Triggering Deploys (Agent-Friendly)
 
