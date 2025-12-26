@@ -20,8 +20,6 @@ from typing import Optional
 
 from zerg.crud import crud
 from zerg.database import db_session
-from zerg.events import EventType
-from zerg.events import event_bus
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
 
@@ -109,10 +107,8 @@ class WorkerJobProcessor:
                 logger.debug(f"Job {job_id} already being processed (status: {job.status})")
                 return
 
-            # Capture fields for event emission
-            owner_id = job.owner_id
-            task = job.task
-            supervisor_run_id = job.supervisor_run_id  # For SSE correlation
+            # Capture supervisor run ID for SSE correlation
+            supervisor_run_id = job.supervisor_run_id
 
             try:
                 # Update job status to running
@@ -122,17 +118,8 @@ class WorkerJobProcessor:
 
                 logger.info(f"Starting worker job {job.id} for task: {job.task[:50]}...")
 
-                # Emit WORKER_STARTED event (include run_id for SSE correlation)
-                await event_bus.publish(
-                    EventType.WORKER_STARTED,
-                    {
-                        "event_type": EventType.WORKER_STARTED,
-                        "job_id": job.id,
-                        "task": task[:100],
-                        "owner_id": owner_id,
-                        "run_id": supervisor_run_id,  # For SSE correlation
-                    },
-                )
+                # WORKER_STARTED event is emitted by WorkerRunner.run_worker()
+                # (removed duplicate emission here as per Resumable SSE v1 Phase 2)
 
                 # Create worker runner
                 artifact_store = WorkerArtifactStore()

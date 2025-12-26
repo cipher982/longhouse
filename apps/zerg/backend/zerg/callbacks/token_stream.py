@@ -45,6 +45,12 @@ current_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.Context
     default=None,
 )
 
+# DB session context for token event persistence (Resumable SSE v1)
+current_db_session_var: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(  # noqa: E501
+    "current_db_session_var",
+    default=None,
+)
+
 # ---------------------------------------------------------------------------
 # Callback implementation
 # ---------------------------------------------------------------------------
@@ -120,21 +126,40 @@ class WsTokenCallback(AsyncCallbackHandler):
         run_id = get_supervisor_run_id()
 
         # Publish to event bus for SSE consumers (Jarvis chat)
+        # Token events are now persisted via emit_run_event (Resumable SSE v1)
         if run_id is not None:
             try:
-                from zerg.events import EventType
-                from zerg.events import event_bus
+                from zerg.services.event_store import emit_run_event
 
-                await event_bus.publish(
-                    EventType.SUPERVISOR_TOKEN,
-                    {
-                        "event_type": EventType.SUPERVISOR_TOKEN,
-                        "run_id": run_id,
-                        "thread_id": thread_id,
-                        "token": token,
-                        "owner_id": user_id,
-                    },
-                )
+                db_session = current_db_session_var.get()
+                if db_session is not None:
+                    # Use durable event store (persists + publishes)
+                    await emit_run_event(
+                        db=db_session,
+                        run_id=run_id,
+                        event_type="supervisor_token",
+                        payload={
+                            "thread_id": thread_id,
+                            "token": token,
+                            "owner_id": user_id,
+                        },
+                    )
+                else:
+                    # Fallback to direct event bus publish if no db session available
+                    # This ensures tokens are still streamed even if persistence fails
+                    from zerg.events import EventType
+                    from zerg.events import event_bus
+
+                    await event_bus.publish(
+                        EventType.SUPERVISOR_TOKEN,
+                        {
+                            "event_type": EventType.SUPERVISOR_TOKEN,
+                            "run_id": run_id,
+                            "thread_id": thread_id,
+                            "token": token,
+                            "owner_id": user_id,
+                        },
+                    )
             except Exception:  # noqa: BLE001 – token streaming is best-effort
                 logger.exception("Error publishing token to event bus for run %s", run_id)
 
@@ -199,9 +224,22 @@ def set_current_user_id(user_id: int | None):  # noqa: D401 – tiny setter help
     return current_user_id_var.set(int(user_id))
 
 
+def set_current_db_session(db_session: Any):  # noqa: D401 – tiny setter helper
+    """Set *db_session* as the active context for token event persistence.
+
+    Returns the *Token* object from ``ContextVar.set`` so callers can restore
+    the previous value via ``ContextVar.reset`` if desired.
+
+    This is used for Resumable SSE v1 to persist token events to the database.
+    """
+    return current_db_session_var.set(db_session)
+
+
 __all__ = [
     "WsTokenCallback",
     "current_thread_id_var",
+    "current_db_session_var",
+    "set_current_db_session",
     "current_user_id_var",
     "set_current_thread_id",
     "reset_current_thread_id",
