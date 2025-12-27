@@ -34,6 +34,8 @@ import { uuid } from '../../lib/uuid'
 // Keep stateManager for streaming events from supervisor-chat-controller
 // TODO: Refactor supervisor-chat-controller to use callbacks instead
 import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
+import { eventBus } from '../../lib/event-bus'
+import { timelineLogger } from '../../lib/timeline-logger'
 
 // Types (previously in state-manager.ts)
 export interface ModelInfo {
@@ -639,6 +641,15 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     }
 
     const cid = correlationId || uuid()
+
+    // Set correlation ID for timeline tracking
+    timelineLogger.setCorrelationId(cid)
+
+    // Emit text_channel:sent event for timeline tracking
+    eventBus.emit('text_channel:sent', {
+      text: text,
+      timestamp: Date.now(),
+    })
 
     // Get preferences from bootstrap
     const prefs = state.bootstrap?.preferences || { chat_model: 'gpt-5.2', reasoning_effort: 'none' }
