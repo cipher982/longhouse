@@ -162,4 +162,25 @@ export const test = base.extend<TestFixtures>({
   // context.
 });
 
+// ---------------------------------------------------------------------------
+// Jarvis chat thread isolation:
+// The Supervisor thread is long-lived in normal usage, and per-worker DBs mean
+// it can persist across tests within the same Playwright worker. Clearing it
+// here keeps tests and perf assertions deterministic without requiring every
+// spec to remember to do it.
+// ---------------------------------------------------------------------------
+
+test.beforeEach(async ({ request }, testInfo) => {
+  try {
+    const response = await request.delete('/api/jarvis/history');
+    if (!response.ok()) {
+      // Avoid failing the entire suite if Jarvis endpoints are temporarily
+      // unavailable; individual chat specs should still assert correctness.
+      console.warn(`[fixtures] Failed to clear Jarvis history (worker=${testInfo.workerIndex}): HTTP ${response.status()}`);
+    }
+  } catch (error) {
+    console.warn(`[fixtures] Failed to clear Jarvis history (worker=${testInfo.workerIndex}):`, error);
+  }
+});
+
 export { expect } from '@playwright/test';
