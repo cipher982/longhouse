@@ -467,12 +467,11 @@ async def ensure_cors_on_errors(request: Request, exc: Exception):
     # trigger additional protocol errors. Let Uvicorn close the connection.
     try:  # pragma: no cover – depends on runtime transport
         from h11._util import LocalProtocolError  # type: ignore
-
-        if isinstance(exc, LocalProtocolError):
-            raise exc
     except Exception:
-        # h11 may not be importable in some environments; ignore.
-        pass
+        LocalProtocolError = None  # type: ignore[assignment,misc]
+
+    if LocalProtocolError is not None and isinstance(exc, LocalProtocolError):
+        raise exc
 
     # Log the actual error for debugging
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
