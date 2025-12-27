@@ -1,7 +1,8 @@
 # Chat Observability & Eval System
 
-**Status:** Phase 0 - Spec Complete
+**Status:** Phase 1 Complete
 **Created:** 2025-12-27
+**Last Updated:** 2025-12-27
 **Protocol:** SDP-1
 
 ## Executive Summary
@@ -174,22 +175,34 @@ test('chat response latency - with worker', async ({ page }) => {
 
 ## Implementation Phases
 
-### Phase 1: Correlation ID Infrastructure
+### Phase 1: Correlation ID Infrastructure ✅ COMPLETE
 **Goal:** Add correlation ID propagation through the entire system
 
-**Changes:**
-- Frontend: Generate UUID at message send, include in request body
-- Backend: Extract and store correlationId on AgentRun
-- Backend: Include correlationId in all SSE events
-- Frontend: Parse correlationId from events
+**Status:** Complete (2025-12-27)
+
+**Changes Implemented:**
+- Frontend: UUID generation already in place (useTextChannel.ts line 69)
+- Backend: Added `correlation_id` column to AgentRun model (apps/zerg/backend/zerg/models/run.py)
+- Backend: Store correlationId from request in jarvis_chat.py endpoint
+- Backend: correlationId already included in ALL SSE events via jarvis_sse.py (line 131)
+- Frontend: correlationId already parsed from SSE wrapper (supervisor-chat-controller.ts line 432)
 
 **Acceptance Criteria:**
-- [ ] Message send generates unique correlationId
-- [ ] correlationId appears in SSE connected event
-- [ ] correlationId appears in supervisor_complete event
-- [ ] correlationId appears in worker_* events (when workers spawn)
+- [x] Message send generates unique correlationId (useTextChannel.ts generates UUID)
+- [x] correlationId sent in POST /api/jarvis/chat request body
+- [x] correlationId stored on AgentRun record
+- [x] correlationId appears in SSE connected event (ConnectedPayload.client_correlation_id)
+- [x] correlationId appears in all SSE event wrappers (SSEEventWrapper.client_correlation_id)
+- [x] correlationId appears in supervisor_complete event
+- [x] correlationId appears in worker_* events (when workers spawn)
 
-**Test:** `make test-e2e-grep GREP="correlation"`
+**Test:** `make test-e2e-single TEST="tests/chat_correlation_id.spec.ts"`
+
+**Implementation Notes:**
+- Much of the infrastructure was already in place; Phase 1 primarily added database persistence
+- The `client_correlation_id` field was already defined in SSE schema and included in events
+- Frontend already had UUID generation and backend parsing
+- Key addition: `correlation_id` column on AgentRun for persistent storage and future querying
 
 ### Phase 2: Timeline Logging (Frontend)
 **Goal:** Add clean timeline console output
