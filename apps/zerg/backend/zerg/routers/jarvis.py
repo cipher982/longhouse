@@ -305,13 +305,20 @@ def jarvis_clear_history(
         db: Database session
         current_user: Authenticated user
     """
-    from zerg.services.supervisor_service import SupervisorService
+    from zerg.crud import crud
+    from zerg.models.enums import ThreadType
 
-    supervisor_service = SupervisorService(db)
+    agents = crud.get_agents(db, owner_id=current_user.id)
+    agent = next((a for a in agents if (a.config or {}).get("is_supervisor")), None)
+    if agent is None:
+        logger.info(f"Jarvis history cleared: no supervisor agent found for user {current_user.id} (noop)")
+        return
 
-    # Get supervisor agent and current thread
-    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
-    old_thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+    threads = crud.get_threads(db, agent_id=agent.id)
+    old_thread = next((t for t in threads if t.thread_type == ThreadType.SUPER), None)
+    if old_thread is None:
+        logger.info(f"Jarvis history cleared: no supervisor thread found for user {current_user.id} (noop)")
+        return
 
     # Delete all messages from the thread (keeps thread, clears history)
     deleted_count = (
