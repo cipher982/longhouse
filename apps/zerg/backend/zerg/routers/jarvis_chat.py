@@ -189,6 +189,7 @@ async def jarvis_chat(
         thread_id=thread.id,
         status=RunStatus.RUNNING,
         trigger=RunTrigger.API,
+        correlation_id=request.client_correlation_id,  # Phase 1: Store correlation ID
     )
     db.add(run)
     db.commit()
