@@ -454,44 +454,6 @@ else:
         )
         cors_origins = ["http://localhost:30080"]
 
-# Custom exception handler to ensure CORS headers are included in error responses
-from fastapi import Request
-from fastapi.responses import JSONResponse
-
-
-@app.exception_handler(Exception)
-async def ensure_cors_on_errors(request: Request, exc: Exception):
-    """Ensure CORS headers are included even in error responses."""
-    # If the underlying HTTP protocol is already broken (e.g. h11 raised while
-    # sending the response body), attempting to send a JSON error response can
-    # trigger additional protocol errors. Let Uvicorn close the connection.
-    try:  # pragma: no cover – depends on runtime transport
-        from h11._util import LocalProtocolError  # type: ignore
-    except Exception:
-        LocalProtocolError = None  # type: ignore[assignment,misc]
-
-    if LocalProtocolError is not None and isinstance(exc, LocalProtocolError):
-        raise exc
-
-    # Log the actual error for debugging
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-
-    # Determine allowed origin strictly (no wildcard fallback in prod).
-    origin = request.headers.get("origin")
-    headers = {"Vary": "Origin"}
-    if origin and ("*" in cors_origins or origin in cors_origins):
-        headers.update(
-            {
-                "Access-Control-Allow-Origin": origin if "*" not in cors_origins else "*",
-                "Access-Control-Allow-Credentials": "true",  # Match middleware config for cookie auth
-                "Access-Control-Allow-Methods": "*",
-                "Access-Control-Allow-Headers": "*",
-            }
-        )
-
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"}, headers=headers)
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -520,6 +482,16 @@ try:
 except Exception:  # pragma: no cover – keep startup resilient
     # Defer logging until *logger* is available (defined right below).
     pass
+
+# ---------------------------------------------------------------------------
+# SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
+# In Starlette, add_middleware() inserts at the START of the list, so the last
+# middleware added becomes the outermost layer that sees requests first and
+# handles exceptions from all inner layers.
+# ---------------------------------------------------------------------------
+from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
+
+app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
 # Include our API routers with centralized prefixes
 app.include_router(agents_router, prefix=f"{API_PREFIX}{AGENTS_PREFIX}")
