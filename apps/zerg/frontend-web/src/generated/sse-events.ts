@@ -162,6 +162,53 @@ export interface WorkerToolFailedPayload {
   run_id?: number;
 }
 
+export interface SupervisorToolStartedPayload {
+  tool_name: string;
+  /** Stable ID linking all events for this tool call */
+  tool_call_id: string;
+  /** Preview of tool arguments (may be truncated) */
+  tool_args_preview?: string;
+  /** Full tool arguments (for persistence/raw view) */
+  tool_args?: Record<string, any>;
+  /** Supervisor run ID for correlation */
+  run_id?: number;
+}
+
+export interface SupervisorToolProgressPayload {
+  tool_call_id: string;
+  /** Progress message (log line) */
+  message: string;
+  /** Log level for styling */
+  level?: "debug" | "info" | "warn" | "error";
+  /** Optional progress percentage */
+  progress_pct?: number;
+  /** Optional structured data (metrics, artifacts preview) */
+  data?: Record<string, any>;
+  run_id?: number;
+}
+
+export interface SupervisorToolCompletedPayload {
+  tool_name: string;
+  tool_call_id: string;
+  duration_ms: number;
+  /** Condensed result for collapsed view */
+  result_preview?: string;
+  /** Full result (for persistence/raw view) */
+  result?: Record<string, any>;
+  run_id?: number;
+}
+
+export interface SupervisorToolFailedPayload {
+  tool_name: string;
+  tool_call_id: string;
+  duration_ms: number;
+  /** Error message */
+  error: string;
+  /** Full error details (stack trace, context) */
+  error_details?: Record<string, any>;
+  run_id?: number;
+}
+
 // All SSE event types as a constant array (use for validation)
 export const SSE_EVENT_TYPES = [
   "connected",
@@ -179,6 +226,10 @@ export const SSE_EVENT_TYPES = [
   "worker_tool_started",
   "worker_tool_completed",
   "worker_tool_failed",
+  "supervisor_tool_started",
+  "supervisor_tool_progress",
+  "supervisor_tool_completed",
+  "supervisor_tool_failed",
 ] as const;
 
 // SSE event type union (derived from SSE_EVENT_TYPES)
@@ -221,6 +272,10 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "worker_tool_started" ? WorkerToolStartedPayload :
   T extends "worker_tool_completed" ? WorkerToolCompletedPayload :
   T extends "worker_tool_failed" ? WorkerToolFailedPayload :
+  T extends "supervisor_tool_started" ? SupervisorToolStartedPayload :
+  T extends "supervisor_tool_progress" ? SupervisorToolProgressPayload :
+  T extends "supervisor_tool_completed" ? SupervisorToolCompletedPayload :
+  T extends "supervisor_tool_failed" ? SupervisorToolFailedPayload :
   never;
 
 // Payload type lookup (for direct payload access after unwrapping)
