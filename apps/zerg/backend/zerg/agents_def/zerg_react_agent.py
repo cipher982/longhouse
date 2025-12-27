@@ -627,9 +627,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     async def _call_tool_async(tool_call: dict):  # noqa: D401 – coroutine helper
         """Run tool execution in a worker thread with event emission.
 
-        If running in a worker context (set by WorkerRunner), emits
-        WORKER_TOOL_STARTED, WORKER_TOOL_COMPLETED, or WORKER_TOOL_FAILED
-        events for real-time monitoring.
+        Emits tool lifecycle events for real-time monitoring:
+        - In worker context: WORKER_TOOL_STARTED, WORKER_TOOL_COMPLETED, WORKER_TOOL_FAILED
+        - In supervisor context: SUPERVISOR_TOOL_STARTED, SUPERVISOR_TOOL_COMPLETED, SUPERVISOR_TOOL_FAILED
         """
         import asyncio
         from datetime import datetime
@@ -642,6 +642,10 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # Get worker context (None if not running as a worker)
         ctx = get_worker_context()
         tool_record = None
+
+        # Get supervisor context (for supervisor tool events when not in worker)
+        from zerg.services.supervisor_context import get_supervisor_context
+        sup_ctx = get_supervisor_context() if not ctx else None
 
         # Redact sensitive fields from args for event emission
         safe_args = redact_sensitive_args(tool_args)
@@ -674,6 +678,27 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                     )
                 except Exception:
                     logger.warning("Failed to emit WORKER_TOOL_STARTED event", exc_info=True)
+
+        # Emit STARTED event if in supervisor context (not worker)
+        elif sup_ctx:
+            try:
+                from zerg.services.event_store import emit_run_event
+
+                await emit_run_event(
+                    db=sup_ctx.db,
+                    run_id=sup_ctx.run_id,
+                    event_type="supervisor_tool_started",
+                    payload={
+                        "owner_id": sup_ctx.owner_id,
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "tool_args_preview": safe_preview(str(safe_args)),
+                        "tool_args": safe_args,  # Full args for persistence/raw view
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.warning("Failed to emit SUPERVISOR_TOOL_STARTED event", exc_info=True)
 
         start_time = datetime.now(timezone.utc)
 
@@ -775,6 +800,49 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                         )
                     except Exception:
                         logger.warning("Failed to emit WORKER_TOOL_COMPLETED event", exc_info=True)
+
+        # Emit appropriate event if in supervisor context (not worker)
+        elif sup_ctx:
+            if is_error:
+                try:
+                    from zerg.services.event_store import emit_run_event
+
+                    await emit_run_event(
+                        db=sup_ctx.db,
+                        run_id=sup_ctx.run_id,
+                        event_type="supervisor_tool_failed",
+                        payload={
+                            "owner_id": sup_ctx.owner_id,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "duration_ms": duration_ms,
+                            "error": safe_preview(error_msg or result_content, 500),
+                            "error_details": {"raw_error": error_msg or result_content},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to emit SUPERVISOR_TOOL_FAILED event", exc_info=True)
+            else:
+                try:
+                    from zerg.services.event_store import emit_run_event
+
+                    await emit_run_event(
+                        db=sup_ctx.db,
+                        run_id=sup_ctx.run_id,
+                        event_type="supervisor_tool_completed",
+                        payload={
+                            "owner_id": sup_ctx.owner_id,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "duration_ms": duration_ms,
+                            "result_preview": safe_preview(result_content),
+                            "result": {"raw": result_content[:2000] if len(result_content) > 2000 else result_content},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to emit SUPERVISOR_TOOL_COMPLETED event", exc_info=True)
 
         return result
 
