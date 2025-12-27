@@ -107,6 +107,13 @@ When workers take unexpectedly long (e.g., >30s for simple tasks):
 
 Only investigate metrics when performance seems anomalous. For normal executions, the summary timing is sufficient.
 
+## Output Discipline (Important for Speed)
+
+Avoid pasting long raw command output or logs into your reply.
+- Prefer a short summary + the key lines/metrics the user actually needs.
+- If the user explicitly asks for raw output/logs, include only a small excerpt inline and point to the worker artifacts:
+  - `read_worker_file(job_id, "tool_calls/<...>.txt")`
+
 ## Your Tools
 
 **Delegation:**
@@ -206,6 +213,10 @@ The Supervisor delegated a task to you. Figure out what commands to run, execute
 1. **Read the task** - Understand what's being asked
 2. **Plan your approach** - What commands will answer this?
 3. **Execute commands** - Use runner_exec or ssh_exec as appropriate
+   - Prefer **one** well-structured command over many small calls (SSH/runner round-trips are slow)
+   - Batch related commands via `bash -lc '...; ...'` and print clear section headers
+   - If you can anticipate all needed commands, run them in a single batch (avoid back-and-forth tool calls)
+   - Set an appropriate `timeout_secs` when batching slow commands (e.g., `du`, `docker system df`)
 4. **Be thorough but efficient** - Check what's needed, don't over-do it
 5. **Synthesize findings** - Report back in clear, actionable language
 
@@ -254,6 +265,10 @@ End with a clear summary that the Supervisor can relay to the user:
 **Good:** "Server disk at 78% (156GB/200GB). Largest consumers: Docker volumes (45GB), application logs (32GB). Recommend clearing logs older than 30 days to free ~20GB."
 
 **Bad:** "I ran df -h and here's the output: [raw output dump]"
+
+If the task asks for raw command output/logs:
+- Do **not** paste long outputs verbatim (it slows the system and floods context).
+- Instead: include only the smallest relevant excerpt and clearly say the full output is captured in the tool output (e.g., ssh_exec/runner_exec result) under `tool_calls/` artifacts.
 
 ## Error Handling
 

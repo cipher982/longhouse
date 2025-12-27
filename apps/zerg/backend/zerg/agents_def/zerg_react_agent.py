@@ -813,6 +813,41 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # Start by calling the model with the current context
         llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
 
+        # Robustness: some model/provider combinations can occasionally return an empty
+        # assistant message with no tool calls. That produces "successful" but useless
+        # workers (no output, no commands). Retry once with a hard constraint.
+        if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+            content = llm_response.content
+            content_text = ""
+            if isinstance(content, list):
+                # Multimodal blocks: collect any text.
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        content_text += str(part.get("text") or "")
+                    elif isinstance(part, str):
+                        content_text += part
+            else:
+                content_text = str(content or "")
+
+            if not content_text.strip():
+                from langchain_core.messages import SystemMessage
+
+                logger.warning("Agent produced empty response with no tool calls; retrying once")
+                current_messages = add_messages(
+                    current_messages,
+                    [
+                        SystemMessage(
+                            content=(
+                                "Your previous response was empty. You MUST either:\n"
+                                "1) Call the appropriate tool(s), OR\n"
+                                "2) Provide a final answer.\n\n"
+                                "Do not return an empty message."
+                            )
+                        )
+                    ],
+                )
+                llm_response = await _call_model_async(current_messages, enable_token_stream, phase="empty_retry")
+
         # Until the model stops calling tools, continue the loop
         import asyncio
 
@@ -882,7 +917,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
     @entrypoint(checkpointer=checkpointer)
     def agent_executor(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
-        enable_token_stream = get_settings().llm_token_stream
+        # Token streaming is only useful for user-facing supervisor/Jarvis flows.
+        # Workers run in the background and don't have the WS/SSE context needed
+        # to deliver tokens; disabling streaming avoids extra overhead and weird
+        # edge cases where providers return empty final content.
+        enable_token_stream = get_settings().llm_token_stream and get_worker_context() is None
         return _agent_executor_sync(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     # Attach the *async* implementation manually – LangGraph picks this up so
@@ -890,7 +929,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # the blocking ``.invoke`` API.
 
     async def _agent_executor_async_wrapper(messages: List[BaseMessage], *, previous: Optional[List[BaseMessage]] = None):
-        enable_token_stream = get_settings().llm_token_stream
+        enable_token_stream = get_settings().llm_token_stream and get_worker_context() is None
         return await _agent_executor_async(messages, previous=previous, enable_token_stream=enable_token_stream)
 
     agent_executor.afunc = _agent_executor_async_wrapper  # type: ignore[attr-defined]
