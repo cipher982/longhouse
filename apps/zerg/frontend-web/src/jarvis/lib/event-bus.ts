@@ -235,9 +235,13 @@ export class EventBus {
 // Export a singleton instance
 export const eventBus = new EventBus();
 
-// Enable debug mode in development
-if (import.meta.env?.DEV) {
-  eventBus.setDebugMode(true);
+// Enable debug mode only for verbose logging
+if (import.meta.env?.DEV && typeof window !== 'undefined') {
+  const params = new URLSearchParams(window.location.search);
+  const logLevel = params.get('log');
+  if (logLevel === 'verbose') {
+    eventBus.setDebugMode(true);
+  }
 }
 
 // Expose the bus for Playwright E2E injection (dev server only).
