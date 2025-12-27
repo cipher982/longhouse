@@ -1,6 +1,6 @@
 # Chat Observability & Eval System
 
-**Status:** Phase 1 Complete
+**Status:** Phase 2 Complete
 **Created:** 2025-12-27
 **Last Updated:** 2025-12-27
 **Protocol:** SDP-1
@@ -204,23 +204,33 @@ test('chat response latency - with worker', async ({ page }) => {
 - Frontend already had UUID generation and backend parsing
 - Key addition: `correlation_id` column on AgentRun for persistent storage and future querying
 
-### Phase 2: Timeline Logging (Frontend)
+### Phase 2: Timeline Logging (Frontend) ✅ COMPLETE
 **Goal:** Add clean timeline console output
 
-**Changes:**
-- Add TimelineLogger class in `src/jarvis/lib/timeline-logger.ts`
-- Capture events from eventBus with timestamps
-- Calculate offsets from first event
-- Output formatted timeline on completion
-- URL param `?timeline=true` to enable
+**Status:** Complete (2025-12-27)
+
+**Changes Implemented:**
+- Created TimelineLogger class in `apps/zerg/frontend-web/src/jarvis/lib/timeline-logger.ts`
+- Listens to EventBus events: supervisor:started, supervisor:thinking, supervisor:complete, worker_spawned, worker_started, worker_complete, worker:tool_started, worker:tool_completed, worker:tool_failed
+- Calculates T+offset from first event (text_channel:sent)
+- Outputs formatted timeline on supervisor:complete or supervisor:error
+- Enabled via URL param `?timeline=true`
+- Integrated in useTextChannel and useJarvisApp to emit text_channel:sent event
+- Sets correlationId for timeline tracking
 
 **Acceptance Criteria:**
-- [ ] `?timeline=true` shows condensed timeline in console
-- [ ] Timeline shows T+offset for each phase
-- [ ] Timeline shows durations for completion events
-- [ ] Existing verbose logging unchanged when timeline disabled
+- [x] `?timeline=true` shows condensed timeline in console
+- [x] Timeline shows T+offset for each phase
+- [x] Timeline shows durations for completion events (durationMs metadata)
+- [x] Existing verbose logging unchanged when timeline disabled
 
 **Test:** Manual verification with `?timeline=true`
+
+**Implementation Notes:**
+- Timeline events are captured with timestamps from EventBus
+- Output uses console.groupCollapsed for cleaner display
+- Reset after each completion to track next message
+- Singleton instance exported from timeline-logger.ts
 
 ### Phase 3: Backend Timeline Endpoint
 **Goal:** Expose timing data via API
