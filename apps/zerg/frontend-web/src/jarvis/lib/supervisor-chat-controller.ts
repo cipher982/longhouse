@@ -38,6 +38,10 @@ import {
   type WorkerToolStartedPayload,
   type WorkerToolCompletedPayload,
   type WorkerToolFailedPayload,
+  type SupervisorToolStartedPayload,
+  type SupervisorToolProgressPayload,
+  type SupervisorToolCompletedPayload,
+  type SupervisorToolFailedPayload,
 } from '../../generated/sse-events';
 
 export interface SupervisorChatMessage {
@@ -675,6 +679,70 @@ export class SupervisorChatController {
           toolCallId: payload.tool_call_id,
           durationMs: payload.duration_ms,
           error: payload.error,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      // ===== Supervisor tool events (uniform treatment with worker tools) =====
+      case 'supervisor_tool_started': {
+        const payload = wrapper.payload as SupervisorToolStartedPayload;
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Supervisor tool started:', payload.tool_name);
+        eventBus.emit('supervisor:tool_started', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
+          argsPreview: payload.tool_args_preview,
+          args: payload.tool_args,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'supervisor_tool_progress': {
+        const payload = wrapper.payload as SupervisorToolProgressPayload;
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Supervisor tool progress:', payload.message);
+        eventBus.emit('supervisor:tool_progress', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          toolCallId: payload.tool_call_id,
+          message: payload.message,
+          level: payload.level,
+          progressPct: payload.progress_pct,
+          data: payload.data,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'supervisor_tool_completed': {
+        const payload = wrapper.payload as SupervisorToolCompletedPayload;
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Supervisor tool completed:', payload.tool_name);
+        eventBus.emit('supervisor:tool_completed', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
+          durationMs: payload.duration_ms,
+          resultPreview: payload.result_preview,
+          result: payload.result,
+          timestamp: Date.now(),
+        });
+        break;
+      }
+
+      case 'supervisor_tool_failed': {
+        const payload = wrapper.payload as SupervisorToolFailedPayload;
+        this.petWatchdog(correlationId);
+        logger.warn(`[SupervisorChat] Supervisor tool failed: ${payload.tool_name} - ${payload.error}`);
+        eventBus.emit('supervisor:tool_failed', {
+          runId: payload.run_id ?? this.currentRunId ?? 0,
+          toolName: payload.tool_name,
+          toolCallId: payload.tool_call_id,
+          durationMs: payload.duration_ms,
+          error: payload.error,
+          errorDetails: payload.error_details,
           timestamp: Date.now(),
         });
         break;
