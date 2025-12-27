@@ -1,6 +1,6 @@
 # Chat Observability & Eval System
 
-**Status:** Phase 2 Complete
+**Status:** Phase 3 Complete
 **Created:** 2025-12-27
 **Last Updated:** 2025-12-27
 **Protocol:** SDP-1
@@ -45,6 +45,15 @@ This spec defines:
 **Choice:** JSON file export per test run in `apps/zerg/e2e/metrics/`
 **Rationale:** Simple, git-ignorable, can be consumed by any dashboard later
 **Revisit if:** Need historical trending across many runs
+
+### Decision: Summary calculation approach
+**Context:** Need to calculate supervisor thinking time, worker execution time, tool execution time
+**Choice:** Use first occurrence of phase transitions (supervisor_started → worker_spawned, etc.)
+**Rationale:**
+- Simple and deterministic
+- Handles partial flows gracefully (metrics are Optional, None if phase not present)
+- Tool time tracks from first tool_started to last tool_completed/tool_failed (handles multiple tools)
+**Revisit if:** Need more granular per-tool timing or multiple worker support
 
 ## Architecture
 
@@ -232,22 +241,38 @@ test('chat response latency - with worker', async ({ page }) => {
 - Reset after each completion to track next message
 - Singleton instance exported from timeline-logger.ts
 
-### Phase 3: Backend Timeline Endpoint
+### Phase 3: Backend Timeline Endpoint ✅ COMPLETE
 **Goal:** Expose timing data via API
 
-**Changes:**
-- Add `GET /api/jarvis/runs/{run_id}/timeline` endpoint
-- Query agent_run_events for run
-- Calculate offsets and summaries
-- Return structured timeline response
+**Status:** Complete (2025-12-27)
+
+**Changes Implemented:**
+- Added `GET /api/jarvis/runs/{run_id}/timeline` endpoint in jarvis_runs.py
+- Queries agent_run_events for the given run
+- Calculates offsets from first event timestamp
+- Computes summary statistics (total, supervisor thinking, worker execution, tool execution)
+- Returns structured timeline response with events and summary
+- Multi-tenant security (only access own runs)
+- Handles empty event lists gracefully
+- Supports partial flows (supervisor-only, no workers)
 
 **Acceptance Criteria:**
-- [ ] Endpoint returns timeline for completed run
-- [ ] Summary includes totalDurationMs, supervisorThinkingMs, workerExecutionMs
-- [ ] Events sorted by timestamp with offsetMs calculated
-- [ ] 404 for non-existent run_id
+- [x] Endpoint returns timeline for completed run
+- [x] Summary includes totalDurationMs, supervisorThinkingMs, workerExecutionMs, toolExecutionMs
+- [x] Events sorted by timestamp with offsetMs calculated
+- [x] 404 for non-existent run_id
+- [x] Multi-tenant isolation enforced
+- [x] Handles empty events gracefully
+- [x] Unit tests cover all scenarios
 
-**Test:** `make test` (add backend unit test)
+**Test:** `uv run python -m pytest tests/test_jarvis_runs.py::TestGetRunTimeline -v`
+
+**Implementation Notes:**
+- Response includes correlation_id from AgentRun for tracing
+- Metadata from events is included in timeline events
+- Summary metrics are optional (None if phase not present in flow)
+- Offset calculation uses created_at timestamps from AgentRunEvent table
+- Tool execution time tracks from first tool_started to last tool_completed/tool_failed
 
 ### Phase 4: E2E Performance Eval Tests
 **Goal:** Automated profiling with metric export
