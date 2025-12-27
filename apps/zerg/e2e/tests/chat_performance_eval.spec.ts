@@ -214,7 +214,7 @@ test.describe('Chat Performance Evaluation', () => {
     console.log(`\n💾 Metrics exported to: ${metricsPath}`);
   });
 
-  test('compare simple vs worker latency', async ({ page }) => {
+  test('compare simple vs worker latency', async ({ page, request }) => {
     console.log('\n🧪 TEST: Compare simple vs worker latency\n');
 
     await navigateToChatPage(page);
@@ -230,10 +230,14 @@ test.describe('Chat Performance Evaluation', () => {
 
     console.log(`Simple query duration: ${events1.totalDurationMs}ms`);
 
-    // Wait before second query
-    await page.waitForTimeout(1000);
+    // Clear thread history between tests for isolation
+    await request.delete('/api/jarvis/history');
+    console.log('🧹 Cleared Jarvis history between queries');
 
-    // Test 2: Worker query
+    // Navigate fresh to reset frontend state
+    await navigateToChatPage(page);
+
+    // Test 2: Worker query (isolated - no previous conversation context)
     console.log('\n--- Part 2: Worker query ---');
     const timeline2 = new TimelineCapture(page);
     await timeline2.start();
@@ -244,7 +248,7 @@ test.describe('Chat Performance Evaluation', () => {
 
     console.log(`Worker query duration: ${events2.totalDurationMs}ms`);
 
-    // Comparison
+    // Comparison (both queries now have isolated conversation context)
     console.log('\n📊 COMPARISON:');
     console.log(`  Simple: ${events1.totalDurationMs}ms`);
     console.log(`  Worker: ${events2.totalDurationMs}ms`);
