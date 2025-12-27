@@ -64,7 +64,6 @@ export function TextInput({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={disabled}
       />
       <button
         className="send-button"
