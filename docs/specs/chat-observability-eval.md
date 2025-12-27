@@ -1,6 +1,6 @@
 # Chat Observability & Eval System
 
-**Status:** Phase 3 Complete
+**Status:** Phase 4 Complete
 **Created:** 2025-12-27
 **Last Updated:** 2025-12-27
 **Protocol:** SDP-1
@@ -274,23 +274,38 @@ test('chat response latency - with worker', async ({ page }) => {
 - Offset calculation uses created_at timestamps from AgentRunEvent table
 - Tool execution time tracks from first tool_started to last tool_completed/tool_failed
 
-### Phase 4: E2E Performance Eval Tests
+### Phase 4: E2E Performance Eval Tests ✅ COMPLETE
 **Goal:** Automated profiling with metric export
 
-**Changes:**
-- Add `TimelineCapture` helper class in `apps/zerg/e2e/helpers/`
-- Add `chat_performance_eval.spec.ts` with timing tests
-- Add metrics export to `apps/zerg/e2e/metrics/` (gitignored)
-- Add `make test-perf` target
+**Status:** Complete (2025-12-27)
+
+**Changes Implemented:**
+- Created `TimelineCapture` helper class in `apps/zerg/e2e/helpers/timeline-capture.ts`
+- Created `chat_performance_eval.spec.ts` with 4 test scenarios:
+  1. Simple query (baseline latency)
+  2. Worker spawn query (worker latency)
+  3. Tool execution query (tool latency)
+  4. Comparison test (simple vs worker overhead)
+- Created `apps/zerg/e2e/metrics/` directory with .gitkeep
+- Added `metrics/*.json` to `.gitignore` (metrics are not committed)
+- Added `make test-perf` target to Makefile
 
 **Acceptance Criteria:**
-- [ ] `make test-perf` runs performance eval tests
-- [ ] Tests capture full timeline for each scenario
-- [ ] Tests assert on key latency thresholds
-- [ ] Metrics exported to JSON file
-- [ ] CI can optionally run perf tests
+- [x] `make test-perf` runs performance eval tests
+- [x] Tests capture full timeline for each scenario
+- [x] Tests assert on key latency thresholds (30s simple, 60s worker, 90s tool)
+- [x] Metrics exported to JSON file per test run
+- [x] CI can optionally run perf tests (via `make test-perf`)
 
 **Test:** `make test-perf`
+
+**Implementation Notes:**
+- TimelineCapture intercepts SSE events by injecting EventSource wrapper into page context
+- Events are captured with timestamps and metadata from SSE payloads
+- Summary calculation matches backend algorithm (supervisor thinking, worker execution, tool execution)
+- Metrics files are timestamped and named by test scenario
+- Tests use existing fixtures (database reset, worker isolation)
+- No LLM calls required - tests rely on actual chat flow
 
 ### Phase 5: Log Noise Reduction
 **Goal:** Clean up existing logging for better signal
