@@ -93,6 +93,43 @@ export interface EventMap {
     error: string;
     timestamp: number;
   };
+
+  // Supervisor Tool Events (uniform treatment with worker tools)
+  'supervisor:tool_started': {
+    runId: number;
+    toolName: string;
+    toolCallId: string;
+    argsPreview?: string;
+    args?: Record<string, unknown>;  // Full args for raw view
+    timestamp: number;
+  };
+  'supervisor:tool_progress': {
+    runId: number;
+    toolCallId: string;
+    message: string;
+    level?: 'debug' | 'info' | 'warn' | 'error';
+    progressPct?: number;
+    data?: Record<string, unknown>;
+    timestamp: number;
+  };
+  'supervisor:tool_completed': {
+    runId: number;
+    toolName: string;
+    toolCallId: string;
+    durationMs: number;
+    resultPreview?: string;
+    result?: Record<string, unknown>;  // Full result for raw view
+    timestamp: number;
+  };
+  'supervisor:tool_failed': {
+    runId: number;
+    toolName: string;
+    toolCallId: string;
+    durationMs: number;
+    error: string;
+    errorDetails?: Record<string, unknown>;
+    timestamp: number;
+  };
 }
 
 // Interaction state machine types

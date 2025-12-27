@@ -152,6 +152,45 @@ class WorkerToolFailedPayload(BaseModel):
     error: str = Field(min_length=1, description='Error message')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
 
+class SupervisorToolStartedPayload(BaseModel):
+    """Payload for SupervisorToolStartedPayload"""
+
+    tool_name: str = Field(min_length=1, description='')
+    tool_call_id: str = Field(min_length=1, description='Stable ID linking all events for this tool call')
+    tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
+    tool_args: Optional[Dict[str, Any]] = Field(default=None, description='Full tool arguments (for persistence/raw view)')
+    run_id: Optional[int] = Field(default=None, ge=1, description='Supervisor run ID for correlation')
+
+class SupervisorToolProgressPayload(BaseModel):
+    """Payload for SupervisorToolProgressPayload"""
+
+    tool_call_id: str = Field(min_length=1, description='')
+    message: str = Field(description='Progress message (log line)')
+    level: Optional[Literal['debug', 'info', 'warn', 'error']] = Field(default=None, description='Log level for styling')
+    progress_pct: Optional[int] = Field(default=None, ge=0, le=100, description='Optional progress percentage')
+    data: Optional[Dict[str, Any]] = Field(default=None, description='Optional structured data (metrics, artifacts preview)')
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
+
+class SupervisorToolCompletedPayload(BaseModel):
+    """Payload for SupervisorToolCompletedPayload"""
+
+    tool_name: str = Field(min_length=1, description='')
+    tool_call_id: str = Field(min_length=1, description='')
+    duration_ms: int = Field(ge=0, description='')
+    result_preview: Optional[str] = Field(default=None, description='Condensed result for collapsed view')
+    result: Optional[Dict[str, Any]] = Field(default=None, description='Full result (for persistence/raw view)')
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
+
+class SupervisorToolFailedPayload(BaseModel):
+    """Payload for SupervisorToolFailedPayload"""
+
+    tool_name: str = Field(min_length=1, description='')
+    tool_call_id: str = Field(min_length=1, description='')
+    duration_ms: int = Field(ge=0, description='')
+    error: str = Field(min_length=1, description='Error message')
+    error_details: Optional[Dict[str, Any]] = Field(default=None, description='Full error details (stack trace, context)')
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
+
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""
 
@@ -170,6 +209,10 @@ class SSEEventType(str, Enum):
     WORKER_TOOL_STARTED = "worker_tool_started"
     WORKER_TOOL_COMPLETED = "worker_tool_completed"
     WORKER_TOOL_FAILED = "worker_tool_failed"
+    SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
+    SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
+    SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
+    SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
 
 
 # Typed emitter for SSE events
