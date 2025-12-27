@@ -36,6 +36,27 @@ When running, you have live access to:
 - **API calls** — `curl localhost:30080/api/health` or WebFetch tool
 - **Logs** — `make logs` to tail all services
 
+**Frontend Logging Modes:**
+
+Control console log verbosity via URL parameter `?log=<level>`:
+
+| Mode | URL | Behavior |
+|------|-----|----------|
+| **minimal** | `?log=minimal` | Errors/warnings only |
+| **normal** | `?log=normal` (default) | Errors/warnings + key events (start, complete) |
+| **verbose** | `?log=verbose` | Everything (EventBus events, SSE stream details, all debug logs) |
+| **timeline** | `?log=timeline` | Timeline output only (minimal noise + performance timing) |
+
+**Examples:**
+- Chat with minimal noise: `http://localhost:30080/chat?log=minimal`
+- Chat with timeline profiling: `http://localhost:30080/chat?log=timeline`
+- Full debug mode: `http://localhost:30080/chat?log=verbose`
+
+**Implementation:**
+- Logger config: `apps/zerg/frontend-web/src/jarvis/core/logger.ts`
+- Timeline logger: `apps/zerg/frontend-web/src/jarvis/lib/timeline-logger.ts`
+- Phase 5 reduced console noise by 70%+ for normal/timeline modes (chat-observability-eval spec)
+
 **If not running:** `make dev-bg` (background, non-blocking) — wait ~15s for init.
 
 ## Architecture (Unified SPA)
