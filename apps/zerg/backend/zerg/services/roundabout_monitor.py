@@ -53,7 +53,8 @@ logger = logging.getLogger(__name__)
 
 
 # Configuration
-ROUNDABOUT_CHECK_INTERVAL = 5  # seconds between status checks
+# Chat UX is latency-sensitive; tighter polling makes "wait=True" feel snappier.
+ROUNDABOUT_CHECK_INTERVAL = 1  # seconds between status checks
 ROUNDABOUT_HARD_TIMEOUT = 300  # seconds (5 minutes) max time in roundabout
 ROUNDABOUT_STUCK_THRESHOLD = 30  # seconds - flag operation as slow
 ROUNDABOUT_ACTIVITY_LOG_MAX = 20  # max entries to track
