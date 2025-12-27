@@ -6,6 +6,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
+from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -34,6 +35,10 @@ class AgentRun(Base):
     thread_id = Column(Integer, ForeignKey("agent_threads.id"), nullable=False)
     # Durable runs v2.2: Link continuation runs to original deferred run
     continuation_of_run_id = Column(Integer, ForeignKey("agent_runs.id"), nullable=True)
+
+    # Observability ------------------------------------------------------
+    # Phase 1: Correlation ID for tracing requests end-to-end (chat-observability-eval)
+    correlation_id = Column(String, nullable=True, index=True)
 
     # Lifecycle ----------------------------------------------------------
     status = Column(
