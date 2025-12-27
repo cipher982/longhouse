@@ -97,6 +97,10 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       try {
         logger.info(`[useTextChannel] Sending message, correlationId: ${correlationId}`)
 
+        // Yield to browser to ensure placeholder renders before SSE events arrive
+        // This prevents React batching from skipping the typing indicator
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
         // Send to backend via SupervisorChatController
         await supervisorChatRef.current.sendMessage(trimmedText, correlationId, {
           model: preferences.chat_model,
