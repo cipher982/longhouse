@@ -148,4 +148,33 @@ Implemented in `apps/zerg/frontend-web/src/jarvis/app/components/WorkerProgress.
 
 ---
 
+## Supervisor Tool Visibility (v1)
+
+**New in December 2025:** Supervisor-direct tool calls (not via workers) now have their own visibility.
+
+When the supervisor calls tools like `get_current_location`, `web_search`, or `get_whoop_data` directly, these are displayed inline in the conversation as **ToolCards**.
+
+```
+User: "where am I?"
+
+┌─────────────────────────────────────────────────────────────┐
+│ 📍 get_current_location                              ✓ 0.2s │
+└─────────────────────────────────────────────────────────────┘
+
+Jarvis: "You're at Central Park West, near 81st Street..."
+```
+
+**Key differences from worker tool progress:**
+
+| Aspect | Worker Tools | Supervisor Tools |
+|--------|--------------|------------------|
+| Location | Floating toast (WorkerProgress) | Inline in chat (ActivityStream) |
+| Persistence | Ephemeral (clears after run) | Permanent artifact (stays in thread) |
+| Nesting | Under worker task | Standalone |
+| Disclosure | Status + duration only | Collapsed → Expanded → Raw JSON |
+
+**Full specification:** [supervisor-tool-visibility-v1.md](./supervisor-tool-visibility-v1.md)
+
+---
+
 _For current architecture direction, see [jarvis-supervisor-unification-v2.1.md](./jarvis-supervisor-unification-v2.1.md)._
