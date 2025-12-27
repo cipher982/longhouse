@@ -336,6 +336,9 @@ def build_agent_context(
     db: "Session",
     owner_id: int,
     agent_id: int | None = None,
+    *,
+    allowed_tools: list[str] | None = None,
+    compact_json: bool = True,
 ) -> str:
     """Build the full context injection string for an agent turn.
 
@@ -376,11 +379,29 @@ def build_agent_context(
         agent_id=agent_id,
     )
 
+    # Reduce context bloat: only include connectors that matter for this agent's tool allowlist.
+    # For example, workers typically do not need personal connectors (WHOOP/Obsidian) when they
+    # only have infra tools enabled.
+    if allowed_tools:
+        allowed = set(allowed_tools)
+        filtered: dict[str, Any] = {}
+        for connector_type in ConnectorType:
+            required_tools = set(get_tools_for_connector(connector_type))
+            if required_tools and (required_tools & allowed):
+                filtered[connector_type.value] = connector_status.get(connector_type.value, {})
+        connector_status = filtered
+
     # Format as XML with JSON inside
+    json_kwargs: dict[str, Any] = {"ensure_ascii": False}
+    if compact_json:
+        json_kwargs.update(separators=(",", ":"))
+    else:
+        json_kwargs.update(indent=2)
+
     context = f"""<current_time>{current_time}</current_time>
 
 <connector_status captured_at="{current_time}">
-{json.dumps(connector_status, indent=2)}
+{json.dumps(connector_status, **json_kwargs)}
 </connector_status>"""
 
     return context
