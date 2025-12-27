@@ -54,6 +54,15 @@ channels:
         $ref: '#/components/messages/WorkerToolCompletedEvent'
       WorkerToolFailedEvent:
         $ref: '#/components/messages/WorkerToolFailedEvent'
+      # Supervisor tool monitoring (same treatment as worker tools)
+      SupervisorToolStartedEvent:
+        $ref: '#/components/messages/SupervisorToolStartedEvent'
+      SupervisorToolProgressEvent:
+        $ref: '#/components/messages/SupervisorToolProgressEvent'
+      SupervisorToolCompletedEvent:
+        $ref: '#/components/messages/SupervisorToolCompletedEvent'
+      SupervisorToolFailedEvent:
+        $ref: '#/components/messages/SupervisorToolFailedEvent'
 
 # ---------------------------------------------------------------------------
 # Operations - SSE is always server → client (send only)
@@ -182,6 +191,35 @@ components:
         $ref: '#/components/schemas/WorkerToolFailedPayload'
       x-sse-event-type: worker_tool_failed
 
+    # Supervisor tool monitoring (uniform treatment with worker tools)
+    SupervisorToolStartedEvent:
+      name: supervisor_tool_started
+      summary: Supervisor tool call began
+      payload:
+        $ref: '#/components/schemas/SupervisorToolStartedPayload'
+      x-sse-event-type: supervisor_tool_started
+
+    SupervisorToolProgressEvent:
+      name: supervisor_tool_progress
+      summary: Supervisor tool progress update (streaming logs)
+      payload:
+        $ref: '#/components/schemas/SupervisorToolProgressPayload'
+      x-sse-event-type: supervisor_tool_progress
+
+    SupervisorToolCompletedEvent:
+      name: supervisor_tool_completed
+      summary: Supervisor tool call succeeded
+      payload:
+        $ref: '#/components/schemas/SupervisorToolCompletedPayload'
+      x-sse-event-type: supervisor_tool_completed
+
+    SupervisorToolFailedEvent:
+      name: supervisor_tool_failed
+      summary: Supervisor tool call failed
+      payload:
+        $ref: '#/components/schemas/SupervisorToolFailedPayload'
+      x-sse-event-type: supervisor_tool_failed
+
   schemas:
     # ---------------------------------------------------------------------------
     # SSE Envelope Structure
@@ -210,6 +248,10 @@ components:
             - worker_tool_started
             - worker_tool_completed
             - worker_tool_failed
+            - supervisor_tool_started
+            - supervisor_tool_progress
+            - supervisor_tool_completed
+            - supervisor_tool_failed
         id:
           type: integer
           description: Event ID for resumption (maps to `id:` line in SSE protocol)
@@ -538,6 +580,104 @@ components:
           type: string
           minLength: 1
           description: Error message
+        run_id:
+          type: integer
+          minimum: 1
+
+    # ---------------------------------------------------------------------------
+    # Supervisor Tool Monitoring Payloads
+    # ---------------------------------------------------------------------------
+    SupervisorToolStartedPayload:
+      type: object
+      required: [tool_name, tool_call_id]
+      properties:
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: Stable ID linking all events for this tool call
+        tool_args_preview:
+          type: string
+          description: Preview of tool arguments (may be truncated)
+        tool_args:
+          type: object
+          description: Full tool arguments (for persistence/raw view)
+        run_id:
+          type: integer
+          minimum: 1
+          description: Supervisor run ID for correlation
+
+    SupervisorToolProgressPayload:
+      type: object
+      required: [tool_call_id, message]
+      properties:
+        tool_call_id:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          description: Progress message (log line)
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+          description: Log level for styling
+        progress_pct:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Optional progress percentage
+        data:
+          type: object
+          description: Optional structured data (metrics, artifacts preview)
+        run_id:
+          type: integer
+          minimum: 1
+
+    SupervisorToolCompletedPayload:
+      type: object
+      required: [tool_name, tool_call_id, duration_ms]
+      properties:
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+        duration_ms:
+          type: integer
+          minimum: 0
+        result_preview:
+          type: string
+          description: Condensed result for collapsed view
+        result:
+          type: object
+          description: Full result (for persistence/raw view)
+        run_id:
+          type: integer
+          minimum: 1
+
+    SupervisorToolFailedPayload:
+      type: object
+      required: [tool_name, tool_call_id, duration_ms, error]
+      properties:
+        tool_name:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+        duration_ms:
+          type: integer
+          minimum: 0
+        error:
+          type: string
+          minLength: 1
+          description: Error message
+        error_details:
+          type: object
+          description: Full error details (stack trace, context)
         run_id:
           type: integer
           minimum: 1
