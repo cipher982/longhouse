@@ -339,3 +339,266 @@ class TestAttachToRunStream:
         assert data["finished_at"] is not None
         # Verify it's a valid ISO timestamp
         datetime.fromisoformat(data["finished_at"].replace("Z", "+00:00"))
+
+
+class TestGetRunTimeline:
+    """Tests for GET /api/jarvis/runs/{run_id}/timeline endpoint (Phase 3: chat-observability-eval)."""
+
+    @pytest.fixture
+    def run_with_events(self, db_session, test_user):
+        """Create a run with sample timeline events."""
+        from datetime import datetime, timezone, timedelta
+        from zerg.models.agent_run_event import AgentRunEvent
+
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Create a run with correlation ID
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.SUCCESS,
+            trigger=RunTrigger.API,
+            correlation_id="test-correlation-123",
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Create timeline events (simulating a full supervisor + worker flow)
+        base_time = datetime.now(timezone.utc)
+
+        events = [
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_started",
+                payload={"message": "Starting supervisor"},
+                created_at=base_time,
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_thinking",
+                payload={"status": "analyzing"},
+                created_at=base_time + timedelta(milliseconds=100),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="worker_spawned",
+                payload={"job_id": 1, "worker_type": "executor"},
+                created_at=base_time + timedelta(milliseconds=500),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="worker_started",
+                payload={"worker_id": "worker-123"},
+                created_at=base_time + timedelta(milliseconds=700),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="tool_started",
+                payload={"tool_name": "ssh_exec"},
+                created_at=base_time + timedelta(milliseconds=900),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="tool_completed",
+                payload={"tool_name": "ssh_exec", "duration_ms": 400},
+                created_at=base_time + timedelta(milliseconds=1300),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="worker_complete",
+                payload={"result": "Success"},
+                created_at=base_time + timedelta(milliseconds=1600),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_complete",
+                payload={"final_result": "Task complete"},
+                created_at=base_time + timedelta(milliseconds=2000),
+            ),
+        ]
+
+        for event in events:
+            db_session.add(event)
+        db_session.commit()
+
+        return {"agent": agent, "thread": thread, "run": run, "events": events}
+
+    def test_get_timeline_success(self, client, run_with_events):
+        """Test getting timeline for a run with events."""
+        run = run_with_events["run"]
+
+        response = client.get(f"/api/jarvis/runs/{run.id}/timeline")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        # Verify structure
+        assert data["correlation_id"] == "test-correlation-123"
+        assert data["run_id"] == run.id
+        assert "events" in data
+        assert "summary" in data
+
+        # Verify events
+        events = data["events"]
+        assert len(events) == 8  # All 8 events
+
+        # First event should have offset 0
+        assert events[0]["phase"] == "supervisor_started"
+        assert events[0]["offset_ms"] == 0
+        assert events[0]["timestamp"] is not None
+
+        # Last event should have highest offset
+        assert events[-1]["phase"] == "supervisor_complete"
+        assert events[-1]["offset_ms"] > 0
+
+        # Verify events are sorted by offset
+        offsets = [e["offset_ms"] for e in events]
+        assert offsets == sorted(offsets)
+
+        # Verify metadata is included
+        assert events[2]["metadata"]["job_id"] == 1
+        assert events[4]["metadata"]["tool_name"] == "ssh_exec"
+
+    def test_get_timeline_summary_calculations(self, client, run_with_events):
+        """Test that summary statistics are calculated correctly."""
+        run = run_with_events["run"]
+
+        response = client.get(f"/api/jarvis/runs/{run.id}/timeline")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        summary = data["summary"]
+
+        # Total duration should be from first to last event
+        assert summary["total_duration_ms"] == 2000
+
+        # Supervisor thinking time: supervisor_started to worker_spawned
+        assert summary["supervisor_thinking_ms"] == 500
+
+        # Worker execution time: worker_spawned to worker_complete
+        assert summary["worker_execution_ms"] == 1100
+
+        # Tool execution time: tool_started to tool_completed
+        assert summary["tool_execution_ms"] == 400
+
+    def test_get_timeline_empty_events(self, client, db_session, test_user):
+        """Test getting timeline for a run with no events yet."""
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Create a run with no events
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            correlation_id="empty-run-123",
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        response = client.get(f"/api/jarvis/runs/{run.id}/timeline")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        assert data["correlation_id"] == "empty-run-123"
+        assert data["run_id"] == run.id
+        assert data["events"] == []
+        assert data["summary"]["total_duration_ms"] == 0
+        assert data["summary"]["supervisor_thinking_ms"] is None
+        assert data["summary"]["worker_execution_ms"] is None
+        assert data["summary"]["tool_execution_ms"] is None
+
+    def test_get_timeline_nonexistent_run(self, client):
+        """Test getting timeline for a run that doesn't exist."""
+        response = client.get("/api/jarvis/runs/99999/timeline")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_get_timeline_multi_tenant_isolation(self, client, db_session, run_with_events, other_user):
+        """Test that users cannot access timelines for runs owned by other users."""
+        # Create a run owned by another user
+        other_agent = SupervisorService(db_session).get_or_create_supervisor_agent(other_user.id)
+        other_thread = SupervisorService(db_session).get_or_create_supervisor_thread(other_user.id, other_agent)
+
+        other_run = AgentRun(
+            agent_id=other_agent.id,
+            thread_id=other_thread.id,
+            status=RunStatus.SUCCESS,
+            trigger=RunTrigger.API,
+            correlation_id="other-user-run",
+        )
+        db_session.add(other_run)
+        db_session.commit()
+        db_session.refresh(other_run)
+
+        # Try to access the other user's run timeline (client is authenticated as test_user)
+        response = client.get(f"/api/jarvis/runs/{other_run.id}/timeline")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_get_timeline_partial_flow(self, client, db_session, test_user):
+        """Test timeline with partial flow (supervisor only, no worker)."""
+        from datetime import datetime, timezone, timedelta
+        from zerg.models.agent_run_event import AgentRunEvent
+
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.SUCCESS,
+            trigger=RunTrigger.API,
+            correlation_id="partial-flow",
+        )
+        db_session.add(run)
+        db_session.commit()
+        db_session.refresh(run)
+
+        # Only supervisor events (no worker spawned)
+        base_time = datetime.now(timezone.utc)
+        events = [
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_started",
+                payload={},
+                created_at=base_time,
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_thinking",
+                payload={},
+                created_at=base_time + timedelta(milliseconds=200),
+            ),
+            AgentRunEvent(
+                run_id=run.id,
+                event_type="supervisor_complete",
+                payload={},
+                created_at=base_time + timedelta(milliseconds=800),
+            ),
+        ]
+
+        for event in events:
+            db_session.add(event)
+        db_session.commit()
+
+        response = client.get(f"/api/jarvis/runs/{run.id}/timeline")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+
+        # Summary should handle missing worker/tool metrics gracefully
+        summary = data["summary"]
+        assert summary["total_duration_ms"] == 800
+        assert summary["supervisor_thinking_ms"] is None  # No worker_spawned event
+        assert summary["worker_execution_ms"] is None
+        assert summary["tool_execution_ms"] is None
