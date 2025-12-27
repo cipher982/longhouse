@@ -53,6 +53,7 @@ class TestWebSearch:
             query="Python programming",
             max_results=5,
             search_depth="basic",
+            topic="general",
         )
 
     @patch("zerg.tools.builtin.web_search.TavilyClient")
@@ -80,6 +81,7 @@ class TestWebSearch:
             query="test query",
             max_results=10,
             search_depth="advanced",
+            topic="general",
             include_domains=["example.com"],
             exclude_domains=["spam.com"],
         )
@@ -103,7 +105,7 @@ class TestWebSearch:
 
         assert result["ok"] is False
         assert "Invalid search_depth" in result["error"]
-        assert "Must be 'basic' or 'advanced'" in result["error"]
+        assert "fast" in result["error"] and "basic" in result["error"] and "advanced" in result["error"]
 
     @patch("zerg.tools.builtin.web_search.TavilyClient")
     @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
@@ -242,3 +244,213 @@ class TestWebSearch:
         mock_client.search.assert_called_once()
         call_kwargs = mock_client.search.call_args.kwargs
         assert call_kwargs["exclude_domains"] == ["wikipedia.org"]
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_news_topic(self, mock_tavily_client):
+        """Test web search with news topic."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "AI news",
+            "results": [
+                {
+                    "title": "Latest AI News",
+                    "url": "https://news.example.com/ai",
+                    "content": "Breaking AI news...",
+                    "score": 0.9,
+                    "published_date": "2025-01-15",
+                }
+            ],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("AI news", topic="news", days=7)
+
+        assert result["ok"] is True
+        assert result["results"][0]["published_date"] == "2025-01-15"
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["topic"] == "news"
+        assert call_kwargs["days"] == 7
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_include_answer(self, mock_tavily_client):
+        """Test web search with AI answer."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "What is Python?",
+            "answer": "Python is a high-level programming language known for its simplicity and readability.",
+            "results": [
+                {
+                    "title": "Python.org",
+                    "url": "https://python.org",
+                    "content": "Official Python site",
+                    "score": 0.99,
+                }
+            ],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("What is Python?", include_answer=True)
+
+        assert result["ok"] is True
+        assert "answer" in result
+        assert "programming language" in result["answer"]
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["include_answer"] is True
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_advanced_answer(self, mock_tavily_client):
+        """Test web search with advanced AI answer."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "answer": "Detailed answer...",
+            "results": [],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("test", include_answer="advanced")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["include_answer"] == "advanced"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_time_range(self, mock_tavily_client):
+        """Test web search with time range filter."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "results": [],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("test", time_range="week")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["time_range"] == "week"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_country_filter(self, mock_tavily_client):
+        """Test web search with country filter."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "results": [],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("test", country="US")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["country"] == "us"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_include_raw_content(self, mock_tavily_client):
+        """Test web search with raw content."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "results": [
+                {
+                    "title": "Test Page",
+                    "url": "https://example.com",
+                    "content": "Summary content",
+                    "score": 0.9,
+                    "raw_content": "# Full Page Content\n\nThis is the full markdown content of the page...",
+                }
+            ],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("test", include_raw_content=True)
+
+        assert result["ok"] is True
+        assert "raw_content" in result["results"][0]
+        assert "Full Page Content" in result["results"][0]["raw_content"]
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["include_raw_content"] == "markdown"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_fast_depth(self, mock_tavily_client):
+        """Test web search with fast search depth."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "results": [],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("test", search_depth="fast")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["search_depth"] == "fast"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_finance_topic(self, mock_tavily_client):
+        """Test web search with finance topic."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "NVIDIA stock",
+            "results": [
+                {
+                    "title": "NVIDIA Stock Analysis",
+                    "url": "https://finance.example.com/nvda",
+                    "content": "NVIDIA stock analysis...",
+                    "score": 0.95,
+                }
+            ],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        result = web_search("NVIDIA stock", topic="finance")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["topic"] == "finance"
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_invalid_topic(self, mock_tavily_client):
+        """Test web search rejects invalid topic."""
+        result = web_search("test query", topic="invalid")
+
+        assert result["ok"] is False
+        assert "Invalid topic" in result["error"]
+
+    @patch("zerg.tools.builtin.web_search.TavilyClient")
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "test-api-key"})
+    def test_web_search_country_only_with_general(self, mock_tavily_client):
+        """Test country filter is only applied for general topic."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "query": "test",
+            "results": [],
+        }
+        mock_tavily_client.return_value = mock_client
+
+        # Country should not be passed for news topic
+        result = web_search("test", topic="news", country="us")
+
+        assert result["ok"] is True
+        mock_client.search.assert_called_once()
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert "country" not in call_kwargs
