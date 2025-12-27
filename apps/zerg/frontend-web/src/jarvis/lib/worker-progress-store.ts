@@ -6,6 +6,7 @@
  */
 
 import { eventBus } from './event-bus';
+import { logger } from '../core';
 
 export interface ToolCall {
   toolCallId: string;
@@ -188,7 +189,7 @@ class WorkerProgressStore {
    * Set reconnecting state - shows UI immediately while SSE connects
    */
   setReconnecting(runId: number): void {
-    console.log(`[WorkerProgress] Reconnecting to run ${runId}...`);
+    logger.debug(`[WorkerProgress] Reconnecting to run ${runId}...`);
     this.setState({
       isActive: true,
       currentRunId: runId,
@@ -203,7 +204,7 @@ class WorkerProgressStore {
    */
   clearReconnecting(): void {
     if (this.state.reconnecting) {
-      console.log('[WorkerProgress] Reconnection complete');
+      logger.debug('[WorkerProgress] Reconnection complete');
       this.setState({ reconnecting: false });
     }
   }
@@ -274,7 +275,7 @@ class WorkerProgressStore {
       reconnecting: false, // Clear reconnecting - we're actively running
       workers: new Map(),
     });
-    console.log(`[WorkerProgress] Tracking run ${runId}: ${task}`);
+    logger.debug(`[WorkerProgress] Tracking run ${runId}: ${task}`);
   }
 
   /**
@@ -286,7 +287,7 @@ class WorkerProgressStore {
     // Activate UI on first worker
     if (!this.state.isActive) {
       this.startTicker();
-      console.log(`[WorkerProgress] UI activated - workers detected`);
+      logger.debug(`[WorkerProgress] UI activated - workers detected`);
     }
 
     const newWorkers = new Map(this.state.workers);
@@ -304,7 +305,7 @@ class WorkerProgressStore {
       workers: newWorkers,
     });
 
-    console.log(`[WorkerProgress] Worker spawned: ${jobId} - ${task}`);
+    logger.debug(`[WorkerProgress] Worker spawned: ${jobId} - ${task}`);
   }
 
   /**
@@ -322,7 +323,7 @@ class WorkerProgressStore {
       }
       this.setState({ workers: newWorkers });
     }
-    console.log(`[WorkerProgress] Worker started: ${jobId}`);
+    logger.debug(`[WorkerProgress] Worker started: ${jobId}`);
   }
 
   /**
@@ -333,7 +334,7 @@ class WorkerProgressStore {
     const worker = this._resolveWorkerForJobEvent(newWorkers, jobId, workerId);
     if (worker) {
       if (worker.status === 'complete' || worker.status === 'failed') {
-        console.log(`[WorkerProgress] Duplicate worker_complete ignored: ${jobId} (${status}, ${durationMs}ms)`);
+        logger.debug(`[WorkerProgress] Duplicate worker_complete ignored: ${jobId} (${status}, ${durationMs}ms)`);
         return;
       }
       worker.status = status === 'success' ? 'complete' : 'failed';
@@ -341,7 +342,7 @@ class WorkerProgressStore {
       worker.completedAt = Date.now();
       this.setState({ workers: newWorkers });
     }
-    console.log(`[WorkerProgress] Worker complete: ${jobId} (${status}, ${durationMs}ms)`);
+    logger.debug(`[WorkerProgress] Worker complete: ${jobId} (${status}, ${durationMs}ms)`);
     this.maybeScheduleClear();
   }
 
@@ -355,7 +356,7 @@ class WorkerProgressStore {
       worker.summary = summary;
       this.setState({ workers: newWorkers });
     }
-    console.log(`[WorkerProgress] Worker summary: ${jobId} - ${summary}`);
+    logger.debug(`[WorkerProgress] Worker summary: ${jobId} - ${summary}`);
     this.maybeScheduleClear();
   }
 
@@ -376,7 +377,7 @@ class WorkerProgressStore {
     }
 
     // Create orphan worker
-    console.warn(`[WorkerProgress] Creating orphan worker for workerId: ${workerId}`);
+    logger.warn(`[WorkerProgress] Creating orphan worker for workerId: ${workerId}`);
     const orphanJobId = -Date.now();
     const newWorkers = new Map(this.state.workers);
     worker = {
@@ -398,7 +399,7 @@ class WorkerProgressStore {
    */
   private handleToolStarted(workerId: string, toolCallId: string, toolName: string, argsPreview?: string): void {
     if (!workerId) {
-      console.warn('[WorkerProgress] Dropping tool_started with empty workerId');
+      logger.warn('[WorkerProgress] Dropping tool_started with empty workerId');
       return;
     }
 
@@ -422,7 +423,7 @@ class WorkerProgressStore {
 
     // Force update
     this.setState({ workers: new Map(this.state.workers) });
-    console.log(`[WorkerProgress] Tool started: ${toolName} (${toolCallId})`);
+    logger.debug(`[WorkerProgress] Tool started: ${toolName} (${toolCallId})`);
   }
 
   /**
@@ -430,7 +431,7 @@ class WorkerProgressStore {
    */
   private handleToolCompleted(workerId: string, toolCallId: string, toolName: string, durationMs: number, resultPreview?: string): void {
     if (!workerId) {
-      console.warn('[WorkerProgress] Dropping tool_completed with empty workerId');
+      logger.warn('[WorkerProgress] Dropping tool_completed with empty workerId');
       return;
     }
 
@@ -442,7 +443,7 @@ class WorkerProgressStore {
     let toolCall = worker.toolCalls.get(toolCallId);
 
     if (!toolCall) {
-      console.warn(`[WorkerProgress] Tool completed without prior started: ${toolCallId}`);
+      logger.warn(`[WorkerProgress] Tool completed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
         toolName: toolName || 'unknown',
@@ -462,7 +463,7 @@ class WorkerProgressStore {
     toolCall.completedAt = Date.now();
 
     this.setState({ workers: new Map(this.state.workers) });
-    console.log(`[WorkerProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
+    logger.debug(`[WorkerProgress] Tool completed: ${toolCall.toolName} (${durationMs}ms)`);
     this.maybeScheduleClear();
   }
 
@@ -471,7 +472,7 @@ class WorkerProgressStore {
    */
   private handleToolFailed(workerId: string, toolCallId: string, toolName: string, durationMs: number, error: string): void {
     if (!workerId) {
-      console.warn('[WorkerProgress] Dropping tool_failed with empty workerId');
+      logger.warn('[WorkerProgress] Dropping tool_failed with empty workerId');
       return;
     }
 
@@ -483,7 +484,7 @@ class WorkerProgressStore {
     let toolCall = worker.toolCalls.get(toolCallId);
 
     if (!toolCall) {
-      console.warn(`[WorkerProgress] Tool failed without prior started: ${toolCallId}`);
+      logger.warn(`[WorkerProgress] Tool failed without prior started: ${toolCallId}`);
       toolCall = {
         toolCallId,
         toolName: toolName || 'unknown',
@@ -503,7 +504,7 @@ class WorkerProgressStore {
     toolCall.completedAt = Date.now();
 
     this.setState({ workers: new Map(this.state.workers) });
-    console.log(`[WorkerProgress] Tool failed: ${toolCall.toolName} - ${error}`);
+    logger.debug(`[WorkerProgress] Tool failed: ${toolCall.toolName} - ${error}`);
     this.maybeScheduleClear();
   }
 
@@ -533,7 +534,7 @@ class WorkerProgressStore {
    * Handle supervisor complete
    */
   private handleComplete(runId: number, result: string, status: string): void {
-    console.log(`[WorkerProgress] Complete: ${runId} (${status})`);
+    logger.debug(`[WorkerProgress] Complete: ${runId} (${status})`);
     this.setState({ supervisorDone: true, reconnecting: false });
     this.maybeScheduleClear();
   }
@@ -542,7 +543,7 @@ class WorkerProgressStore {
    * Handle supervisor deferred
    */
   private handleDeferred(): void {
-    console.log('[WorkerProgress] Deferred');
+    logger.debug('[WorkerProgress] Deferred');
     this.setState({ supervisorDone: true, reconnecting: false });
     this.maybeScheduleClear();
   }
@@ -551,7 +552,7 @@ class WorkerProgressStore {
    * Handle error
    */
   private handleError(message: string): void {
-    console.error(`[WorkerProgress] Error: ${message}`);
+    logger.error(`[WorkerProgress] Error: ${message}`);
     this.scheduleClear(3000);
   }
 }
