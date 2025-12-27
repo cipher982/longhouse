@@ -79,7 +79,7 @@ export class SupervisorChatController {
    * Initialize the controller
    */
   async initialize(): Promise<void> {
-    logger.info('[SupervisorChat] Initialized');
+    logger.debug('[SupervisorChat] Initialized');
   }
 
   /**
@@ -88,7 +88,7 @@ export class SupervisorChatController {
    */
   async loadHistory(limit: number = 50): Promise<SupervisorChatMessage[]> {
     try {
-      logger.info('[SupervisorChat] Loading history from server...');
+      logger.debug('[SupervisorChat] Loading history from server...');
 
       const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/history?limit=${limit}`);
       const response = await fetch(url, {
@@ -111,7 +111,7 @@ export class SupervisorChatController {
         usage: msg.usage || undefined,
       }));
 
-      logger.info(`[SupervisorChat] Loaded ${messages.length} messages from history`);
+      logger.debug(`[SupervisorChat] Loaded ${messages.length} messages from history`);
       return messages;
     } catch (error) {
       logger.error('[SupervisorChat] Failed to load history:', error);
@@ -128,7 +128,7 @@ export class SupervisorChatController {
     }
 
     const trimmedText = text.trim();
-    logger.info(`[SupervisorChat] Sending message (clientCorrelationId=${clientCorrelationId}, model=${options?.model}, reasoning=${options?.reasoning_effort}): ${trimmedText}`);
+    logger.debug(`[SupervisorChat] Sending message (clientCorrelationId=${clientCorrelationId}, model=${options?.model}, reasoning=${options?.reasoning_effort}): ${trimmedText}`);
 
     // Cancel any previous stream
     if (this.currentAbortController) {
@@ -152,10 +152,10 @@ export class SupervisorChatController {
       // Start SSE stream
       await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId, options);
 
-      logger.info('[SupervisorChat] Message sent and stream completed');
+      logger.debug('[SupervisorChat] Message sent and stream completed');
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        logger.info('[SupervisorChat] Message stream aborted');
+        logger.debug('[SupervisorChat] Message stream aborted');
         return;
       }
 
@@ -235,7 +235,7 @@ export class SupervisorChatController {
   ): Promise<void> {
     const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/chat`);
 
-    logger.info('[SupervisorChat] Initiating SSE stream to:', url);
+    logger.debug('[SupervisorChat] Initiating SSE stream to:', url);
 
     const requestBody: Record<string, unknown> = { message, client_correlation_id };
     if (options?.model) {
@@ -256,8 +256,8 @@ export class SupervisorChatController {
       signal,
     });
 
-    logger.info(`[SupervisorChat] Response status: ${response.status} ${response.statusText}`);
-    logger.info('[SupervisorChat] Response headers:', {
+    logger.debug(`[SupervisorChat] Response status: ${response.status} ${response.statusText}`);
+    logger.debug('[SupervisorChat] Response headers:', {
       contentType: response.headers?.get?.('content-type') ?? null,
       transferEncoding: response.headers?.get?.('transfer-encoding') ?? null,
       connection: response.headers?.get?.('connection') ?? null,
@@ -285,7 +285,7 @@ export class SupervisorChatController {
     let buffer = '';
     let chunkCount = 0;
 
-    logger.info('[SupervisorChat] Starting to read SSE stream...');
+    logger.debug('[SupervisorChat] Starting to read SSE stream...');
 
     const abortDone = (): Promise<{ done: true; value: undefined }> =>
       new Promise((resolve) => {
@@ -338,7 +338,7 @@ export class SupervisorChatController {
 
         // Skip logging high-frequency token events to reduce console spam
         if (eventType && eventType !== 'supervisor_token') {
-          logger.info(`[SupervisorChat] Processing SSE event: ${eventType} (id=${eventId})`);
+          logger.debug(`[SupervisorChat] Processing SSE event: ${eventType} (id=${eventId})`);
         }
 
         // Handle the event
@@ -376,7 +376,7 @@ export class SupervisorChatController {
         chunkCount++;
 
         if (done) {
-          logger.info(`[SupervisorChat] Stream ended after ${chunkCount} reads`);
+          logger.debug(`[SupervisorChat] Stream ended after ${chunkCount} reads`);
           // Process any remaining complete messages in buffer
           if (buffer.trim()) {
             // Add a final \n\n to ensure the last message is processed
@@ -413,7 +413,7 @@ export class SupervisorChatController {
       const payload = data as ConnectedPayload;
       this.petWatchdog(payload.client_correlation_id);
       this.currentRunId = payload.run_id;
-      logger.info(`[SupervisorChat] Connected to run ${payload.run_id}, correlationId: ${payload.client_correlation_id}`);
+      logger.debug(`[SupervisorChat] Connected to run ${payload.run_id}, correlationId: ${payload.client_correlation_id}`);
       if (payload.client_correlation_id) {
         stateManager.updateAssistantStatus(payload.client_correlation_id, 'typing');
       }
@@ -435,7 +435,7 @@ export class SupervisorChatController {
       case 'supervisor_started': {
         const payload = wrapper.payload as SupervisorStartedPayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Supervisor started');
+        logger.debug('[SupervisorChat] Supervisor started');
         if (payload.run_id) {
           this.currentRunId = payload.run_id;
         }
@@ -456,7 +456,7 @@ export class SupervisorChatController {
       case 'supervisor_thinking': {
         const payload = wrapper.payload as SupervisorThinkingPayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Supervisor thinking:', payload.message);
+        logger.debug('[SupervisorChat] Supervisor thinking:', payload.message);
         if (correlationId) {
           stateManager.updateAssistantStatus(correlationId, 'typing');
         }
@@ -490,7 +490,7 @@ export class SupervisorChatController {
       case 'supervisor_complete': {
         const payload = wrapper.payload as SupervisorCompletePayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Supervisor complete');
+        logger.debug('[SupervisorChat] Supervisor complete');
         const result = payload.result;
         const wasStreaming = this.isStreaming;
         this.isStreaming = false; // Reset for next message
@@ -498,12 +498,12 @@ export class SupervisorChatController {
         if (result) {
           if (wasStreaming) {
             // Real tokens were streamed - just finalize the message
-            logger.info('[SupervisorChat] Finalizing real-time streamed response');
+            logger.debug('[SupervisorChat] Finalizing real-time streamed response');
             await conversationController.finalizeStreaming();
           } else {
             // Fallback: No real tokens received (LLM_TOKEN_STREAM disabled?)
             // Stream the result in chunks for smooth UX
-            logger.info('[SupervisorChat] Fallback: simulating streaming for response');
+            logger.debug('[SupervisorChat] Fallback: simulating streaming for response');
             conversationController.startStreaming(correlationId);
 
             const chunkSize = 10; // characters per chunk
@@ -540,7 +540,7 @@ export class SupervisorChatController {
         const payload = wrapper.payload as SupervisorDeferredPayload;
         // Timeout migration: run continues in background, we show a friendly message
         this.clearWatchdog();
-        logger.info('[SupervisorChat] Supervisor deferred (timeout migration)');
+        logger.debug('[SupervisorChat] Supervisor deferred (timeout migration)');
         const deferredMsg = payload.message || 'Still working on this in the background...';
 
         // Show deferred message as an assistant response (not error toast)
@@ -587,7 +587,7 @@ export class SupervisorChatController {
       case 'worker_spawned': {
         const payload = wrapper.payload as WorkerSpawnedPayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Worker spawned:', payload.job_id);
+        logger.debug('[SupervisorChat] Worker spawned:', payload.job_id);
         eventBus.emit('supervisor:worker_spawned', {
           jobId: payload.job_id,
           task: payload.task,
@@ -599,7 +599,7 @@ export class SupervisorChatController {
       case 'worker_started': {
         const payload = wrapper.payload as WorkerStartedPayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Worker started:', payload.job_id);
+        logger.debug('[SupervisorChat] Worker started:', payload.job_id);
         eventBus.emit('supervisor:worker_started', {
           jobId: payload.job_id,
           workerId: payload.worker_id,
@@ -611,7 +611,7 @@ export class SupervisorChatController {
       case 'worker_complete': {
         const payload = wrapper.payload as WorkerCompletePayload;
         this.petWatchdog(correlationId);
-        logger.info(`[SupervisorChat] Worker complete: job=${payload.job_id} status=${payload.status}`);
+        logger.debug(`[SupervisorChat] Worker complete: job=${payload.job_id} status=${payload.status}`);
         eventBus.emit('supervisor:worker_complete', {
           jobId: payload.job_id,
           workerId: payload.worker_id,
@@ -625,7 +625,7 @@ export class SupervisorChatController {
       case 'worker_summary_ready': {
         const payload = wrapper.payload as WorkerSummaryReadyPayload;
         this.petWatchdog(correlationId);
-        logger.info('[SupervisorChat] Worker summary ready:', payload.job_id);
+        logger.debug('[SupervisorChat] Worker summary ready:', payload.job_id);
         eventBus.emit('supervisor:worker_summary', {
           jobId: payload.job_id,
           workerId: payload.worker_id,
@@ -690,7 +690,7 @@ export class SupervisorChatController {
    */
   cancel(): void {
     if (this.currentAbortController) {
-      logger.info('[SupervisorChat] Cancelling current stream');
+      logger.debug('[SupervisorChat] Cancelling current stream');
       this.currentAbortController.abort();
       this.currentAbortController = null;
     }
@@ -707,7 +707,7 @@ export class SupervisorChatController {
    */
   async clearHistory(): Promise<void> {
     try {
-      logger.info('[SupervisorChat] Clearing server-side history...');
+      logger.debug('[SupervisorChat] Clearing server-side history...');
 
       const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/history`);
       const response = await fetch(url, {
@@ -719,7 +719,7 @@ export class SupervisorChatController {
         throw new Error(`Failed to clear history: ${response.status} ${response.statusText}`);
       }
 
-      logger.info('[SupervisorChat] Server-side history cleared');
+      logger.debug('[SupervisorChat] Server-side history cleared');
     } catch (error) {
       logger.error('[SupervisorChat] Failed to clear history:', error);
       throw error;
@@ -731,7 +731,7 @@ export class SupervisorChatController {
    * Used for reconnecting after page refresh (Resumable SSE v1)
    */
   async attachToRun(runId: number): Promise<void> {
-    logger.info(`[SupervisorChat] Attaching to run ${runId} (lastEventId=${this.lastEventId})...`);
+    logger.debug(`[SupervisorChat] Attaching to run ${runId} (lastEventId=${this.lastEventId})...`);
 
     // Cancel any current stream
     if (this.currentAbortController) {
@@ -750,7 +750,7 @@ export class SupervisorChatController {
       // Add resumption parameter if we have a last event ID
       if (this.lastEventId > 0) {
         url.searchParams.set('after_event_id', String(this.lastEventId));
-        logger.info(`[SupervisorChat] Resuming from event ID: ${this.lastEventId}`);
+        logger.debug(`[SupervisorChat] Resuming from event ID: ${this.lastEventId}`);
       }
 
       const headers: Record<string, string> = {
@@ -790,11 +790,11 @@ export class SupervisorChatController {
 
       void this.processSSEStream(body, signal)
         .then(() => {
-          logger.info(`[SupervisorChat] Attached to run ${runId} and stream completed`);
+          logger.debug(`[SupervisorChat] Attached to run ${runId} and stream completed`);
         })
         .catch((error) => {
           if (error instanceof Error && error.name === 'AbortError') {
-            logger.info(`[SupervisorChat] Attach to run ${runId} aborted`);
+            logger.debug(`[SupervisorChat] Attach to run ${runId} aborted`);
             return;
           }
           logger.error(`[SupervisorChat] SSE stream error while attached to run ${runId}:`, error);
@@ -811,7 +811,7 @@ export class SupervisorChatController {
       await Promise.race([ready, new Promise<void>((resolve) => setTimeout(resolve, 1500))]);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        logger.info(`[SupervisorChat] Attach to run ${runId} aborted`);
+        logger.debug(`[SupervisorChat] Attach to run ${runId} aborted`);
         return;
       }
 
@@ -825,6 +825,6 @@ export class SupervisorChatController {
    */
   dispose(): void {
     this.cancel();
-    logger.info('[SupervisorChat] Disposed');
+    logger.debug('[SupervisorChat] Disposed');
   }
 }
