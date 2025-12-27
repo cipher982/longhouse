@@ -33,7 +33,9 @@ class WorkerJobProcessor:
         """Initialize the worker job processor."""
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._check_interval = 5  # Check every 5 seconds
+        # Interactive latency matters: workers are typically spawned from chat flows.
+        # Keep polling reasonably tight so a queued job starts quickly.
+        self._check_interval = 1  # seconds
         self._max_concurrent_jobs = 5  # Process up to 5 jobs concurrently
 
     async def start(self) -> None:
