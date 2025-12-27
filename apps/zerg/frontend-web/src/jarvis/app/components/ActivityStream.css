@@ -1,0 +1,40 @@
+/**
+ * ActivityStream styles
+ *
+ * Container for tool cards displayed inline in conversation.
+ * Appears before the assistant response, after user message.
+ */
+
+.activity-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  margin: 8px 0;
+}
+
+/* Active state - subtle indicator that work is happening */
+.activity-stream--active {
+  position: relative;
+}
+
+.activity-stream--active::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-primary, #3b82f6);
+  border-radius: 1px;
+  animation: activity-pulse 2s ease-in-out infinite;
+}
+
+@keyframes activity-pulse {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
