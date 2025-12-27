@@ -9,7 +9,7 @@ export interface LogConfig {
   context: boolean;       // Context loading logs
   conversation: boolean;  // Conversation state changes
   tools: boolean;         // Tool execution logs
-  level: 'minimal' | 'normal' | 'verbose';
+  level: 'minimal' | 'normal' | 'verbose' | 'timeline';
 }
 
 class Logger {
@@ -25,18 +25,21 @@ class Logger {
     const logLevel = (urlParams.get('log') as LogConfig['level']) || 'normal';
     const isDev = hostname === 'localhost';
 
+    // Timeline mode: minimal noise + timeline logger active
+    const isTimeline = logLevel === 'timeline';
+
     this.config = {
       transport: isDev && logLevel === 'verbose',
       deltas: false,
-      performance: true,
+      performance: logLevel === 'verbose',
       errors: true,
-      context: logLevel !== 'minimal',
-      conversation: logLevel !== 'minimal',
-      tools: true,
+      context: logLevel === 'verbose',
+      conversation: logLevel === 'verbose',
+      tools: logLevel === 'verbose',
       level: logLevel
     };
 
-    if (typeof console !== 'undefined') {
+    if (typeof console !== 'undefined' && !isTimeline) {
       console.log('📊 Logger initialized:', this.config);
     }
   }
@@ -89,6 +92,7 @@ class Logger {
 
   // Info logs - context aware
   info(message: string, data?: unknown): void {
+    if (this.config.level === 'minimal' || this.config.level === 'timeline') return;
     console.log(`ℹ️ ${message}`, data || '');
   }
 
