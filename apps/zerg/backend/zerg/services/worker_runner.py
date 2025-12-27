@@ -523,7 +523,13 @@ class WorkerRunner:
                 )
 
                 # Connector status context (ephemeral at runtime) – include for debugging.
-                context_text = build_agent_context(db=db, owner_id=agent_row.owner_id, agent_id=agent_row.id)
+                context_text = build_agent_context(
+                    db=db,
+                    owner_id=agent_row.owner_id,
+                    agent_id=agent_row.id,
+                    allowed_tools=getattr(agent_row, "allowed_tools", None),
+                    compact_json=True,
+                )
                 self.artifact_store.save_message(
                     worker_id,
                     {
