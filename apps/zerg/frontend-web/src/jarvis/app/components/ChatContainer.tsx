@@ -71,22 +71,22 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
           <>
             {messages.map((message) => {
               const isAssistant = message.role === 'assistant';
-              const isQueued = isAssistant && message.status === 'queued';
-              const isTyping = isAssistant && message.status === 'typing';
               const hasContent = message.content && message.content.length > 0;
+              // Show typing dots for any pending assistant message without content
+              // This handles React batching where status jumps from queued -> streaming instantly
+              const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled';
+              const showTypingDots = isPending && !hasContent;
               const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
               const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 
               return (
                 <div
                   key={message.id}
-                  className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${isQueued ? ' queued' : ''}`}
+                  className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
                 >
                   <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
                     <div className="message-content">
-                      {isQueued && !hasContent ? (
-                        <div className="placeholder-shimmer" style={{ width: '100px', height: '20px', borderRadius: '4px', background: 'rgba(255,255,255,0.1)' }} />
-                      ) : isTyping && !hasContent ? (
+                      {showTypingDots ? (
                         <div className="thinking-dots thinking-dots--in-chat">
                           <span className="thinking-dot"></span>
                           <span className="thinking-dot"></span>
