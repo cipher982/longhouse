@@ -118,7 +118,6 @@ class SupervisorService:
                     "runner_list",
                     "runner_create_enroll_token",
                     "send_email",
-                    "contact_user",
                     "knowledge_search",
                     "web_search",
                     "web_fetch",
@@ -172,7 +171,6 @@ class SupervisorService:
             "runner_list",
             "runner_create_enroll_token",
             "send_email",
-            "contact_user",  # V1.3: notify owner about events
             # V1.1: knowledge base search for user context
             "knowledge_search",
             # V1.2: web research capabilities
@@ -503,11 +501,11 @@ class SupervisorService:
                 },
             )
 
-            # Set supervisor run context so spawn_worker can correlate workers
-            from zerg.services.supervisor_context import reset_supervisor_run_id
-            from zerg.services.supervisor_context import set_supervisor_run_id
+            # Set supervisor run context for spawn_worker correlation and tool event emission
+            from zerg.services.supervisor_context import reset_supervisor_context
+            from zerg.services.supervisor_context import set_supervisor_context
 
-            _supervisor_ctx_token = set_supervisor_run_id(run.id)
+            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, db=self.db, owner_id=owner_id)
 
             # Set user context for token streaming (required for real-time SSE tokens)
             from zerg.callbacks.token_stream import set_current_db_session
@@ -585,7 +583,7 @@ class SupervisorService:
                 created_messages = await run_task
             finally:
                 # Always reset context even on timeout/deferred
-                reset_supervisor_run_id(_supervisor_ctx_token)
+                reset_supervisor_context(_supervisor_ctx_tokens)
                 # Reset user context
                 from zerg.callbacks.token_stream import current_db_session_var
                 from zerg.callbacks.token_stream import current_user_id_var
