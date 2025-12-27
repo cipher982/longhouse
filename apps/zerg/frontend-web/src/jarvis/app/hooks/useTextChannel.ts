@@ -10,6 +10,8 @@ import { useAppState, useAppDispatch, type ChatMessage } from '../context'
 import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
 import { uuid } from '../../lib/uuid'
 import { logger } from '../../core'
+import { eventBus } from '../../lib/event-bus'
+import { timelineLogger } from '../../lib/timeline-logger'
 
 export interface UseTextChannelOptions {
   onMessageSent?: (message: ChatMessage) => void
@@ -96,6 +98,15 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
 
       try {
         logger.info(`[useTextChannel] Sending message, correlationId: ${correlationId}`)
+
+        // Set correlation ID for timeline tracking
+        timelineLogger.setCorrelationId(correlationId)
+
+        // Emit text_channel:sent event for timeline tracking
+        eventBus.emit('text_channel:sent', {
+          text: trimmedText,
+          timestamp: Date.now(),
+        })
 
         // Yield to browser to ensure placeholder renders before SSE events arrive
         // This prevents React batching from skipping the typing indicator
