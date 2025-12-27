@@ -1,0 +1,227 @@
+/**
+ * ToolCard styles
+ *
+ * Design: Dense, terminal-like aesthetic for power users
+ * - Monospace for args/results
+ * - Status colors (running=blue, success=green, error=red)
+ * - Subtle animations for running state
+ */
+
+.tool-card {
+  font-family: var(--font-mono, 'SF Mono', 'Monaco', 'Consolas', monospace);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  background: var(--surface-secondary, rgba(30, 30, 35, 0.8));
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  margin: 4px 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tool-card:hover {
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.2));
+}
+
+/* Running state - subtle pulse */
+.tool-card--running {
+  border-color: var(--color-primary, #3b82f6);
+  animation: tool-card-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tool-card-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(59, 130, 246, 0.3);
+  }
+}
+
+/* Completed state */
+.tool-card--completed {
+  border-color: var(--color-success, #22c55e);
+}
+
+/* Failed state */
+.tool-card--failed {
+  border-color: var(--color-error, #ef4444);
+}
+
+/* Header row */
+.tool-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.tool-card__icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.tool-card__name {
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+  white-space: nowrap;
+}
+
+.tool-card__args-preview {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  font-size: 0.75rem;
+}
+
+.tool-card__spacer {
+  flex: 1;
+}
+
+.tool-card__status {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-card__status--running {
+  color: var(--color-primary, #3b82f6);
+  animation: status-spin 1s linear infinite;
+}
+
+@keyframes status-spin {
+  from { opacity: 1; }
+  50% { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+.tool-card__status--completed {
+  color: var(--color-success, #22c55e);
+}
+
+.tool-card__status--failed {
+  color: var(--color-error, #ef4444);
+}
+
+.tool-card__duration {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  font-size: 0.75rem;
+  min-width: 50px;
+  text-align: right;
+}
+
+/* Expanded body */
+.tool-card__body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
+  cursor: default;
+}
+
+/* Section (args, result) */
+.tool-card__section {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.tool-card__section-label {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  flex-shrink: 0;
+}
+
+.tool-card__section-content {
+  color: var(--text-primary, #fff);
+  word-break: break-word;
+}
+
+.tool-card__section--error .tool-card__section-label,
+.tool-card__section--error .tool-card__section-content {
+  color: var(--color-error, #ef4444);
+}
+
+/* Logs */
+.tool-card__logs {
+  margin-top: 8px;
+  border-left: 2px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  padding-left: 8px;
+}
+
+.tool-card__log {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.tool-card__log-icon {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  flex-shrink: 0;
+}
+
+.tool-card__log-message {
+  color: var(--text-primary, #fff);
+}
+
+.tool-card__log--warn .tool-card__log-icon,
+.tool-card__log--warn .tool-card__log-message {
+  color: var(--color-warning, #f59e0b);
+}
+
+.tool-card__log--error .tool-card__log-icon,
+.tool-card__log--error .tool-card__log-message {
+  color: var(--color-error, #ef4444);
+}
+
+/* Raw toggle button */
+.tool-card__raw-toggle {
+  margin-top: 12px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tool-card__raw-toggle:hover {
+  color: var(--text-primary, #fff);
+  border-color: var(--border-hover, rgba(255, 255, 255, 0.2));
+}
+
+/* Raw JSON view */
+.tool-card__raw {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-card__raw-section {
+  background: var(--surface-tertiary, rgba(0, 0, 0, 0.3));
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tool-card__raw-label {
+  padding: 4px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  background: var(--surface-secondary, rgba(30, 30, 35, 0.8));
+}
+
+.tool-card__raw-json {
+  margin: 0;
+  padding: 8px;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-primary, #fff);
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
