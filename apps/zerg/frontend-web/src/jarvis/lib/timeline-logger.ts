@@ -34,13 +34,13 @@ export class TimelineLogger {
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
-    // Check URL param ?timeline=true
+    // Check URL param ?timeline=true or ?log=timeline
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      this.enabled = params.get('timeline') === 'true';
+      this.enabled = params.get('timeline') === 'true' || params.get('log') === 'timeline';
 
       if (this.enabled) {
-        logger.info('[TimelineLogger] Enabled via ?timeline=true');
+        console.log('[TimelineLogger] Timeline mode enabled');
         this.setupListeners();
       }
     }
