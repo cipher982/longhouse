@@ -3,6 +3,8 @@
 import json
 import logging
 from datetime import datetime
+from typing import Any
+from typing import Dict
 from typing import List
 from typing import Optional
 
@@ -16,6 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.crud import crud
 from zerg.database import get_db
+from zerg.models.agent_run_event import AgentRunEvent
 from zerg.models.enums import RunStatus
 from zerg.models.models import Agent
 from zerg.models.models import AgentRun
@@ -339,3 +342,145 @@ async def attach_to_run_stream(
             }
 
         return EventSourceResponse(completed_stream())
+
+
+class TimelineEvent(BaseModel):
+    """Single event in a timeline with timing information."""
+
+    phase: str
+    timestamp: str  # ISO 8601
+    offset_ms: int
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class TimelineSummary(BaseModel):
+    """Timing summary for a run."""
+
+    total_duration_ms: int
+    supervisor_thinking_ms: Optional[int] = None
+    worker_execution_ms: Optional[int] = None
+    tool_execution_ms: Optional[int] = None
+
+
+class TimelineResponse(BaseModel):
+    """Full timeline response for a run."""
+
+    correlation_id: Optional[str]
+    run_id: int
+    events: List[TimelineEvent]
+    summary: TimelineSummary
+
+
+@router.get("/runs/{run_id}/timeline", response_model=TimelineResponse)
+def get_run_timeline(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> TimelineResponse:
+    """Get timing timeline for a specific run.
+
+    Returns structured timing data with phase-based events and summary statistics.
+    This endpoint powers performance profiling and observability for Jarvis chat.
+
+    Args:
+        run_id: ID of the run to query
+        db: Database session
+        current_user: Authenticated user (multi-tenant filtered)
+
+    Returns:
+        Timeline with events and timing summary
+
+    Raises:
+        HTTPException: 404 if run not found or not owned by user
+    """
+    # Multi-tenant security: only return runs owned by the current user
+    run = (
+        db.query(AgentRun)
+        .join(Agent, Agent.id == AgentRun.agent_id)
+        .filter(AgentRun.id == run_id)
+        .filter(Agent.owner_id == current_user.id)
+        .first()
+    )
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Query all events for this run, ordered by created_at
+    events = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id).order_by(AgentRunEvent.created_at).all()
+
+    if not events:
+        # No events yet - return empty timeline
+        return TimelineResponse(
+            correlation_id=run.correlation_id,
+            run_id=run_id,
+            events=[],
+            summary=TimelineSummary(total_duration_ms=0),
+        )
+
+    # Calculate offsets from first event
+    first_timestamp = events[0].created_at
+    timeline_events = []
+
+    for event in events:
+        offset_ms = int((event.created_at - first_timestamp).total_seconds() * 1000)
+        timeline_events.append(
+            TimelineEvent(
+                phase=event.event_type,
+                timestamp=event.created_at.isoformat(),
+                offset_ms=offset_ms,
+                metadata=event.payload if event.payload else None,
+            )
+        )
+
+    # Calculate summary statistics
+    last_timestamp = events[-1].created_at
+    total_duration_ms = int((last_timestamp - first_timestamp).total_seconds() * 1000)
+
+    # Find key phase transitions for summary
+    supervisor_started_time: Optional[datetime] = None
+    supervisor_complete_time: Optional[datetime] = None
+    worker_spawned_time: Optional[datetime] = None
+    worker_complete_time: Optional[datetime] = None
+    first_tool_time: Optional[datetime] = None
+    last_tool_time: Optional[datetime] = None
+
+    for event in events:
+        if event.event_type == "supervisor_started" and not supervisor_started_time:
+            supervisor_started_time = event.created_at
+        elif event.event_type == "supervisor_complete" and not supervisor_complete_time:
+            supervisor_complete_time = event.created_at
+        elif event.event_type == "worker_spawned" and not worker_spawned_time:
+            worker_spawned_time = event.created_at
+        elif event.event_type == "worker_complete" and not worker_complete_time:
+            worker_complete_time = event.created_at
+        elif event.event_type == "tool_started" and not first_tool_time:
+            first_tool_time = event.created_at
+        elif event.event_type in ("tool_completed", "tool_failed"):
+            last_tool_time = event.created_at
+
+    # Calculate derived metrics
+    supervisor_thinking_ms = None
+    if supervisor_started_time and worker_spawned_time:
+        supervisor_thinking_ms = int((worker_spawned_time - supervisor_started_time).total_seconds() * 1000)
+
+    worker_execution_ms = None
+    if worker_spawned_time and worker_complete_time:
+        worker_execution_ms = int((worker_complete_time - worker_spawned_time).total_seconds() * 1000)
+
+    tool_execution_ms = None
+    if first_tool_time and last_tool_time:
+        tool_execution_ms = int((last_tool_time - first_tool_time).total_seconds() * 1000)
+
+    summary = TimelineSummary(
+        total_duration_ms=total_duration_ms,
+        supervisor_thinking_ms=supervisor_thinking_ms,
+        worker_execution_ms=worker_execution_ms,
+        tool_execution_ms=tool_execution_ms,
+    )
+
+    return TimelineResponse(
+        correlation_id=run.correlation_id,
+        run_id=run_id,
+        events=timeline_events,
+        summary=summary,
+    )
