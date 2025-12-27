@@ -2,8 +2,10 @@
  * ChatContainer component - Message display area
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { renderMarkdown } from '../../lib/markdown-renderer'
+import { supervisorToolStore } from '../../lib/supervisor-tool-store'
+import { ActivityStream } from './ActivityStream'
 import type { ChatMessage } from '../context/types'
 
 interface ChatContainerProps {
@@ -13,6 +15,12 @@ interface ChatContainerProps {
 
 export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Subscribe to supervisor tool store for activity stream
+  const toolState = useSyncExternalStore(
+    supervisorToolStore.subscribe.bind(supervisorToolStore),
+    () => supervisorToolStore.getState()
+  )
 
   const formatTokens = (n?: number | null) => {
     if (n === null || n === undefined) return null
@@ -107,6 +115,10 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
                 </div>
               );
             })}
+            {/* Show supervisor tool activity stream */}
+            {toolState.currentRunId && (
+              <ActivityStream runId={toolState.currentRunId} />
+            )}
             {/* Show live user voice transcript preview */}
             {userTranscriptPreview && (
               <div className="message user preview">
