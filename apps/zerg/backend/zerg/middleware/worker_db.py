@@ -1,5 +1,5 @@
 """FastAPI / Starlette middleware that routes requests coming from different
-*Playwright* workers to *isolated* SQLite database files.
+*Playwright* workers to *isolated* Postgres schemas (E2E test DB isolation).
 
 The Playwright side injects the current worker index via the HTTP header
 ``X-Test-Worker`` **and** appends the query parameter ``?worker=<id>`` to every
