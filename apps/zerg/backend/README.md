@@ -1,3 +1,27 @@
-# Zerg Backend
+# Zerg Backend (FastAPI)
 
-AI Agent Platform Backend - FastAPI server providing workflow execution, agent management, and real-time communication.
+This is the backend service for Swarmlet/Zerg (API, supervisor, workers, SSE/WS).
+
+## Start (repo root)
+
+```bash
+make dev
+```
+
+## Backend deps
+
+```bash
+cd apps/zerg/backend
+uv sync
+```
+
+## Tests
+
+```bash
+make test
+```
+
+## Docs
+
+- `AGENTS.md` (repo root) — current architecture + commands
+- `docs/DEVELOPMENT.md` — local dev guide

@@ -76,10 +76,9 @@ The two critical bugs you encountered would be **impossible** with proper integr
 ## Usage
 
 ```bash
-# Run new integration tests
-uv run pytest tests/test_basic_agent_workflow_e2e.py -v
-uv run pytest tests/test_conditional_workflows_integration.py -v
-
-# Full test suite
+# Full unit test suite (recommended)
 make test
+
+# Backend-only unit tests (supports passing extra pytest args)
+cd apps/zerg/backend && ./run_backend_tests.sh -k supervisor_tools
 ```

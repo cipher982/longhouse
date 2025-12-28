@@ -15,7 +15,7 @@ We use SQLAlchemy as our ORM with a factory pattern for creating engines and ses
 
 ### Database Factory Functions
 
-Located in `zerg/app/database.py`:
+Located in `apps/zerg/backend/zerg/database.py`:
 
 - `make_engine(db_url, **kwargs)`: Creates a SQLAlchemy engine with proper configuration
 - `make_sessionmaker(engine)`: Creates a sessionmaker bound to an engine
@@ -55,7 +55,7 @@ Use the dependency injection pattern:
 
 ```python
 from fastapi import Depends
-from zerg.app.database import get_db
+from zerg.database import get_db
 
 @router.get("/items")
 async def get_items(db: Session = Depends(get_db)):
@@ -89,7 +89,7 @@ class MyService:
 For WebSocket connections, we use a dedicated function to get fresh sessions:
 
 ```python
-from zerg.app.websocket.websocket import get_websocket_session
+from zerg.routers.websocket import get_websocket_session
 
 db = get_websocket_session()
 try:
@@ -111,7 +111,7 @@ The `Agent` table includes a `schedule` column (nullable string) that stores a C
 
 ## Database Reset
 
-For development purposes only, we provide an admin endpoint for resetting the database:
+For local development and E2E testing, we provide an admin endpoint for resetting the database:
 
 ```
 POST /admin/reset-database
@@ -122,7 +122,11 @@ This endpoint:
 1. Drops all tables
 2. Recreates them with empty data
 
-**IMPORTANT:** This endpoint is only accessible when the `ENVIRONMENT=development` environment variable is set. It will return a 403 Forbidden error in other environments.
+**IMPORTANT:** This endpoint is gated by environment checks. It is not intended for production use.
+
+## E2E DB Isolation
+
+Playwright E2E runs use per-worker SQLite DB routing (header-based) so parallel workers don’t share a single DB file. See `apps/zerg/backend/zerg/database.py` and `apps/zerg/backend/zerg/middleware/worker_db.py`.
 
 ## Testing
 
