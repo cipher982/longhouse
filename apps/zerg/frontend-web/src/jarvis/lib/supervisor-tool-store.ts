@@ -4,12 +4,12 @@
  * Tracks supervisor tool calls as first-class conversation artifacts.
  * These appear inline before the assistant response, providing:
  * - Real-time "productive theater" during execution
- * - Persistent record viewable when reloading thread
+ * - Session-scoped record for the active conversation (DB persistence is a future phase)
  * - Progressive disclosure (collapsed → expanded → raw)
  *
  * Design principles:
  * - Uniform treatment: all tools get same UI frame + lifecycle
- * - Permanent record: tool calls stored, not ephemeral
+ * - Clear UX: tool calls are visible, ordered, and expandable
  * - High density: power users see what's happening
  */
 
@@ -324,7 +324,7 @@ class SupervisorToolStore {
   }
 
   /**
-   * Load tools from persisted data (for thread reload)
+   * Future: load tools from persisted data (for thread reload)
    */
   loadTools(tools: SupervisorToolCall[]): void {
     const newTools = new Map<string, SupervisorToolCall>();
