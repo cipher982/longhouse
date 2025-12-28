@@ -1,8 +1,39 @@
 # E2E Test Database: Postgres Schema Isolation
 
-**Status**: Proposed
+**Status**: In Progress
 **Author**: Claude
 **Date**: 2025-12-28
+**Protocol**: SDP-1
+
+## Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 0 | Spec & Design | ✅ Complete |
+| 1 | Schema Manager | 🔄 In Progress |
+| 2 | Database Routing | ⏳ Pending |
+| 3 | E2E Infrastructure | ⏳ Pending |
+| 4 | Configuration & Cleanup | ⏳ Pending |
+
+## Decision Log
+
+### Decision: Use `search_path` over `schema_translate_map`
+**Context:** SQLAlchemy offers two approaches for schema routing
+**Choice:** Use PostgreSQL `search_path` set per connection
+**Rationale:** Works with raw SQL, no model changes needed, simpler to understand
+**Revisit if:** Need to support multiple schemas in single query
+
+### Decision: Separate engine per worker (not shared pool)
+**Context:** Could share one engine and set search_path per request
+**Choice:** Create separate engine/pool per worker ID
+**Rationale:** Better isolation, no risk of search_path leaking between requests, simpler cleanup
+**Revisit if:** Connection count becomes a problem (unlikely for 4-8 workers)
+
+### Decision: Always DROP+CREATE (not CREATE IF NOT EXISTS)
+**Context:** Schema may exist from crashed previous run
+**Choice:** Always drop and recreate schema on worker init
+**Rationale:** Guarantees fresh state, prevents dirty data from failed runs
+**Revisit if:** Schema creation becomes a performance bottleneck
 
 ## Problem Statement
 
@@ -160,6 +191,13 @@ These measures ensure test reliability in a multi-worker environment where Uvico
 
 ### Phase 1: Schema Manager (Backend)
 
+**Acceptance Criteria:**
+- [ ] `zerg/e2e_schema_manager.py` exists with all functions
+- [ ] `recreate_worker_schema()` uses advisory locks
+- [ ] `drop_all_e2e_schemas()` cleans up all `e2e_worker_*` schemas
+- [ ] Unit tests pass: `make test`
+- [ ] Manual verification: Can create/drop schemas via Python REPL
+
 Create `zerg/e2e_schema_manager.py`:
 
 ```python
@@ -258,6 +296,13 @@ def set_search_path(conn, worker_id: str) -> None:
 
 ### Phase 2: Database Routing (Backend)
 
+**Acceptance Criteria:**
+- [ ] `database.py` has `_get_postgres_schema_session()` function
+- [ ] `get_session_factory()` routes to schema when `E2E_USE_POSTGRES_SCHEMAS=1`
+- [ ] Connection event listener sets `search_path` correctly
+- [ ] Unit tests pass: `make test`
+- [ ] Config setting `e2e_use_postgres_schemas` added to `config.py`
+
 Modify `zerg/database.py` to use schemas instead of SQLite:
 
 ```python
@@ -320,6 +365,13 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
 
 ### Phase 3: E2E Test Infrastructure
 
+**Acceptance Criteria:**
+- [ ] `spawn-test-backend.js` sets `E2E_USE_POSTGRES_SCHEMAS=1`
+- [ ] `spawn-test-backend.js` does NOT clear `DATABASE_URL`
+- [ ] `test-teardown.js` calls `drop_all_e2e_schemas()`
+- [ ] E2E tests pass: `make test-e2e`
+- [ ] `worker_isolation.spec.ts` passes with schema isolation
+
 Update `e2e/spawn-test-backend.js`:
 
 ```javascript
@@ -362,6 +414,13 @@ print(f"✅ Dropped {dropped} E2E test schemas")
 ```
 
 ### Phase 4: Configuration & Cleanup
+
+**Acceptance Criteria:**
+- [ ] `cleanup_test_dbs.py` updated for schema cleanup
+- [ ] SQLite fallback code removed from `database.py`
+- [ ] `test_db_manager.py` deprecated or removed
+- [ ] Full test suite passes: `make test-all`
+- [ ] No SQLite files created during E2E tests
 
 Add to `zerg/core/config.py`:
 
