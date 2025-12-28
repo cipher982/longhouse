@@ -89,8 +89,8 @@ const { BACKEND_PORT } = getPortsFromEnv();
 
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
-// E2E tests use per-Playwright-worker SQLite DBs routed via X-Test-Worker header.
-// Multiple Uvicorn workers can share the same DB file since paths are deterministic.
+// E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
+// Multiple Uvicorn workers can share the same schema with proper connection pooling.
 // Default to CPU count for parallelism; override via UVICORN_WORKERS env var.
 const cpuCount = Math.max(1, os.cpus()?.length ?? 1);
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
