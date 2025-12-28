@@ -1,5 +1,6 @@
 """AgentRunEvent model for durable event streaming."""
 
+from sqlalchemy import JSON
 from sqlalchemy import BigInteger
 from sqlalchemy import Column
 from sqlalchemy import DateTime
@@ -31,7 +32,9 @@ class AgentRunEvent(Base):
 
     __tablename__ = "agent_run_events"
 
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    # SQLite only auto-increments reliably when the PK column is exactly INTEGER.
+    # Use a dialect variant so Postgres keeps BigInt/BigSerial semantics.
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, index=True, autoincrement=True)
 
     # Foreign keys -------------------------------------------------------
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
@@ -40,7 +43,7 @@ class AgentRunEvent(Base):
     event_type = Column(String(50), nullable=False, index=True)  # supervisor_started, worker_complete, etc.
 
     # Event payload ------------------------------------------------------
-    payload = Column(JSONB, nullable=False)  # Full event data (JSON-serializable)
+    payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False)  # Full event data (JSON-serializable)
 
     # Timestamps ---------------------------------------------------------
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

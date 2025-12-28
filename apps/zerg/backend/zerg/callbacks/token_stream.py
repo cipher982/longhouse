@@ -126,44 +126,33 @@ class WsTokenCallback(AsyncCallbackHandler):
         run_id = get_supervisor_run_id()
 
         # Publish to event bus for SSE consumers (Jarvis chat)
-        # Token events are now persisted via emit_run_event (Resumable SSE v1)
+        # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
+        # Persisting every token caused 3x slowdown (blocking commit per token).
+        # Lifecycle events (supervisor_started, supervisor_complete) are still persisted
+        # for resumability - clients can replay from last lifecycle event.
         if run_id is not None:
             try:
-                from zerg.services.event_store import emit_run_event
+                from zerg.events import EventType
+                from zerg.events import event_bus
 
-                db_session = current_db_session_var.get()
-                if db_session is not None:
-                    # Use durable event store (persists + publishes)
-                    await emit_run_event(
-                        db=db_session,
-                        run_id=run_id,
-                        event_type="supervisor_token",
-                        payload={
-                            "thread_id": thread_id,
-                            "token": token,
-                            "owner_id": user_id,
-                        },
-                    )
-                else:
-                    # Fallback to direct event bus publish if no db session available
-                    # This ensures tokens are still streamed even if persistence fails
-                    from zerg.events import EventType
-                    from zerg.events import event_bus
-
-                    await event_bus.publish(
-                        EventType.SUPERVISOR_TOKEN,
-                        {
-                            "event_type": EventType.SUPERVISOR_TOKEN,
-                            "run_id": run_id,
-                            "thread_id": thread_id,
-                            "token": token,
-                            "owner_id": user_id,
-                        },
-                    )
+                await event_bus.publish(
+                    EventType.SUPERVISOR_TOKEN,
+                    {
+                        "event_type": EventType.SUPERVISOR_TOKEN,
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "token": token,
+                        "owner_id": user_id,
+                    },
+                )
             except Exception:  # noqa: BLE001 – token streaming is best-effort
                 logger.exception("Error publishing token to event bus for run %s", run_id)
+            # For supervisor runs, SSE is the primary delivery path - skip WS broadcast
+            # to avoid redundant Pydantic serialization + lock contention overhead.
+            return
 
-        # Also broadcast to WebSocket topic for dashboard consumers
+        # WebSocket broadcast for non-supervisor contexts (dashboard thread view)
+        # Only runs when there's no supervisor run_id - keeps this path for legacy compat.
         topic = f"user:{user_id}"
 
         try:
