@@ -75,6 +75,11 @@ async def stream_run_events(
     event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    # Subscribe to supervisor tool events (inline tool cards in chat)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_PROGRESS, event_handler)
 
     try:
         # Send initial heartbeat to confirm connection immediately
@@ -169,3 +174,8 @@ async def stream_run_events(
         event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+        # Unsubscribe from supervisor tool events
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_PROGRESS, event_handler)
