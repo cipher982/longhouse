@@ -169,7 +169,7 @@ Jarvis: "You're at Central Park West, near 81st Street..."
 | Aspect | Worker Tools | Supervisor Tools |
 |--------|--------------|------------------|
 | Location | Floating toast (WorkerProgress) | Inline in chat (ActivityStream) |
-| Persistence | Ephemeral (clears after run) | Permanent artifact (stays in thread) |
+| Persistence | Ephemeral (clears after run) | Session-scoped today (clears on thread switch); DB persistence planned |
 | Nesting | Under worker task | Standalone |
 | Disclosure | Status + duration only | Collapsed → Expanded → Raw JSON |
 

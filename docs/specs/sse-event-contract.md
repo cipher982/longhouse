@@ -134,6 +134,10 @@ SSEEnvelope:
 | `worker_tool_started` | S→C | Worker tool call began |
 | `worker_tool_completed` | S→C | Worker tool call succeeded |
 | `worker_tool_failed` | S→C | Worker tool call failed |
+| `supervisor_tool_started` | S→C | Supervisor tool call began |
+| `supervisor_tool_progress` | S→C | Supervisor tool progress/log output |
+| `supervisor_tool_completed` | S→C | Supervisor tool call succeeded |
+| `supervisor_tool_failed` | S→C | Supervisor tool call failed |
 
 ---
 
@@ -145,12 +149,12 @@ SSEEnvelope:
 
 **Acceptance Criteria:**
 - [x] Schema file exists at `schemas/sse-events.asyncapi.yml`
-- [x] All 15 event types defined with full payload schemas
+- [x] All 19 event types defined with full payload schemas
 - [x] SSE envelope structure defined (event, id, data)
 - [x] Schema validates with AsyncAPI tooling
 - [x] Common types extracted (UsageData, WorkerRef, etc.)
 
-**Test:** `npx @asyncapi/cli validate schemas/sse-events.asyncapi.yml`
+**Test:** `make validate-sse` (or `make validate`)
 
 ---
 

@@ -184,7 +184,7 @@ Use `auth_request` to call backend `GET /api/auth/verify` for private routes.
 ### Files touched (expected)
 
 - `docker/nginx/nginx.prod.conf` (prod proxy behavior)
-- (If needed) `docker/nginx/docker-compose.prod.conf` or unified config, depending on deploy path
+- (If needed) `docker/nginx/nginx.prod.conf` or `docker/nginx/docker-compose.unified.conf`, depending on deploy path
 
 ---
 
