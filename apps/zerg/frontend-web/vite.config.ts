@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
 
   // Proxy target: use VITE_PROXY_TARGET for local dev outside Docker,
   // otherwise leverage Docker Compose DNS (backend:8000)
-  const proxyTarget = rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
+  const proxyTarget = process.env.VITE_PROXY_TARGET || rootEnv.VITE_PROXY_TARGET || "http://backend:8000";
 
   return {
     plugins: [react()],
