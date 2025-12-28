@@ -1,3 +1,4 @@
+import atexit
 import os
 from pathlib import Path
 
@@ -125,6 +126,17 @@ except Exception as _e:
 
 _pg_container = PostgresContainer("postgres:16-alpine")
 _pg_container.start()
+
+
+# Register cleanup at interpreter exit - handles Ctrl+C, crashes, etc.
+def _cleanup_pg_container():
+    try:
+        _pg_container.stop()
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_pg_container)
 
 # Prefer psycopg v3 driver in SQLAlchemy URL
 SQLALCHEMY_DATABASE_URL = _pg_container.get_connection_url().replace("psycopg2", "psycopg")
