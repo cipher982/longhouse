@@ -118,9 +118,11 @@ const backend = spawn('uv', [
         TEST_WORKER_ID: workerId || '0',
         NODE_ENV: 'test',
         TESTING: '1',  // Enable testing mode for database reset
+        AUTH_DISABLED: '1',  // Disable auth for E2E tests
         DEV_ADMIN: process.env.DEV_ADMIN || '1',
         ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
-        DATABASE_URL: '',  // Unset DATABASE_URL to force SQLite for E2E tests
+        E2E_USE_POSTGRES_SCHEMAS: '1',  // Enable Postgres schema isolation
+        // DATABASE_URL inherited from environment (Postgres)
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
     },
     cwd: join(__dirname, '..', 'backend'),

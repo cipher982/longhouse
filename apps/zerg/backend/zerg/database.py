@@ -318,7 +318,17 @@ def get_session_factory() -> sessionmaker:
                 if os.getenv("NODE_ENV") == "test":
                     from sqlalchemy import text
 
-                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                    # Engine-specific table query
+                    if "sqlite" in db_url:
+                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                    else:
+                        # Postgres
+                        result = conn.execute(
+                            text("""
+                            SELECT tablename FROM pg_tables
+                            WHERE schemaname = current_schema()
+                        """)
+                        )
                     tables = [row[0] for row in result]
                     logger.debug("Worker %s tables after creation: %s", worker_id, sorted(tables))
                     logger.debug("Worker %s database path: %s", worker_id, db_url)
@@ -490,7 +500,17 @@ def initialize_database(engine: Engine = None) -> None:
         from sqlalchemy import text
 
         with target_engine.connect() as conn:
-            # Check what tables actually exist (SQLite specific)
-            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-            tables = [row[0] for row in result]
+            # Check what tables actually exist (engine-specific query)
+            if target_engine.dialect.name == "postgresql":
+                result = conn.execute(
+                    text("""
+                    SELECT tablename FROM pg_tables
+                    WHERE schemaname = current_schema()
+                """)
+                )
+                tables = [row[0] for row in result]
+            else:
+                # SQLite
+                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                tables = [row[0] for row in result]
             logger.debug("Tables created in database: %s", sorted(tables))

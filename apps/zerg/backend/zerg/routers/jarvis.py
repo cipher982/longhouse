@@ -277,9 +277,10 @@ def jarvis_history(
         for msg in messages
     ]
 
-    logger.info(
+    logger.debug(
         f"Jarvis history: returned {len(chat_messages)} messages "
-        f"(offset={offset}, limit={limit}, total={total}) for user {current_user.id}"
+        f"(offset={offset}, limit={limit}, total={total}) for user {current_user.id}",
+        extra={"tag": "JARVIS"},
     )
 
     return JarvisHistoryResponse(
@@ -331,7 +332,10 @@ def jarvis_clear_history(
 
     db.commit()
 
-    logger.info(f"Jarvis history cleared: deleted {deleted_count} messages from thread {old_thread.id} for user {current_user.id}")
+    logger.info(
+        f"Jarvis history cleared: deleted {deleted_count} messages from thread {old_thread.id} " f"for user {current_user.id}",
+        extra={"tag": "JARVIS"},
+    )
 
 
 # ---------------------------------------------------------------------------

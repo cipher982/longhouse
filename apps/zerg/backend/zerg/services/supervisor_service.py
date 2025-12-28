@@ -421,6 +421,7 @@ class SupervisorService:
             raise ValueError(f"User {owner_id} not found")
         agent.system_instructions = build_supervisor_prompt(user)
         self.db.commit()
+        logger.debug(f"Refreshed supervisor prompt for agent {agent.id} (user {owner_id})")
         thread = self.get_or_create_supervisor_thread(owner_id, agent)
 
         # Use existing run or create new one
@@ -428,7 +429,7 @@ class SupervisorService:
             run = self.db.query(AgentRun).filter(AgentRun.id == run_id).first()
             if not run:
                 raise ValueError(f"Run {run_id} not found")
-            logger.info(f"Using existing supervisor run {run.id}")
+            logger.info(f"Using existing supervisor run {run.id}", extra={"tag": "AGENT"})
         else:
             # Create run record (fallback for direct calls)
             from zerg.models.enums import RunTrigger
@@ -442,9 +443,9 @@ class SupervisorService:
             self.db.add(run)
             self.db.commit()
             self.db.refresh(run)
-            logger.info(f"Created new supervisor run {run.id}")
+            logger.info(f"Created new supervisor run {run.id}", extra={"tag": "AGENT"})
 
-        logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...")
+        logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "AGENT"})
 
         # Emit supervisor started event
         from zerg.services.event_store import emit_run_event
@@ -651,7 +652,7 @@ class SupervisorService:
             reset_seq(run.id)
             clear_evidence_mount_warning(run.id)
 
-            logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms")
+            logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
             return SupervisorRunResult(
                 run_id=run.id,
