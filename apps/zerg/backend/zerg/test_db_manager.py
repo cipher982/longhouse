@@ -7,7 +7,6 @@ import atexit
 import logging
 import os
 import tempfile
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
@@ -24,21 +23,49 @@ class TestDatabaseManager:
     - Automatic cleanup on process exit
     - Temporary directory isolation
     - Optional in-memory databases for speed
+
+    IMPORTANT: Database paths are DETERMINISTIC based only on worker_id.
+    This allows multiple Uvicorn processes to share the same DB file for
+    a given Playwright worker, enabling parallel E2E tests with parallel
+    backend workers.
     """
+
+    # Deterministic temp directory - shared across all Uvicorn processes
+    # Uses /tmp/zerg-e2e-<pid> where pid is the process group leader (parent)
+    # so child Uvicorn workers inherit the same path.
+    _SHARED_TEMP_DIR: Path | None = None
 
     def __init__(self):
         self.active_databases = set()
-        self.temp_dir = None
         # Register cleanup on process exit
         atexit.register(self.cleanup_all)
 
+    @classmethod
+    def _get_shared_temp_dir(cls) -> Path:
+        """Get or create the shared temp directory for this process group."""
+        if cls._SHARED_TEMP_DIR is None:
+            # Use process group ID for stability across Uvicorn workers
+            # Or fall back to a simple /tmp/zerg-e2e directory
+            pgid = os.getenv("ZERG_E2E_TEMP_DIR")
+            if pgid:
+                cls._SHARED_TEMP_DIR = Path(pgid)
+            else:
+                # Default: /tmp/zerg-e2e (simple, predictable)
+                cls._SHARED_TEMP_DIR = Path(tempfile.gettempdir()) / "zerg-e2e"
+            cls._SHARED_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Using E2E test database directory: {cls._SHARED_TEMP_DIR}")
+        return cls._SHARED_TEMP_DIR
+
     def get_test_database_url(self, worker_id: str = "0", use_memory: bool = False) -> str:
         """
-        Get a unique database URL for this test session.
+        Get a DETERMINISTIC database URL for this Playwright worker.
+
+        The path is based ONLY on worker_id, so multiple Uvicorn processes
+        can share the same DB file. This enables parallel E2E tests.
 
         Args:
-            worker_id: Test worker identifier (from Playwright)
-            use_memory: If True, use in-memory SQLite for maximum speed
+            worker_id: Test worker identifier (from Playwright X-Test-Worker header)
+            use_memory: If True, use in-memory SQLite (can't share across processes)
 
         Returns:
             Database URL string
@@ -49,20 +76,15 @@ class TestDatabaseManager:
             logger.info(f"Using in-memory database for worker {worker_id}")
             return db_url
 
-        # File-based temporary database
-        if not self.temp_dir:
-            self.temp_dir = tempfile.mkdtemp(prefix="zerg_test_db_")
-            logger.info(f"Created test database directory: {self.temp_dir}")
-
-        # Generate unique database name
-        test_session_id = str(uuid.uuid4())[:8]
-        db_name = f"test_worker_{worker_id}_{test_session_id}.db"
-        db_path = Path(self.temp_dir) / db_name
+        # File-based database with DETERMINISTIC path (no random UUID!)
+        temp_dir = self._get_shared_temp_dir()
+        db_name = f"worker_{worker_id}.db"
+        db_path = temp_dir / db_name
 
         db_url = f"sqlite:///{db_path}"
         self.active_databases.add(str(db_path))
 
-        logger.info(f"Created test database: {db_path}")
+        logger.debug(f"Using test database: {db_path}")
         return db_url
 
     def cleanup_database(self, db_path: str) -> None:
@@ -91,15 +113,16 @@ class TestDatabaseManager:
         for db_path in list(self.active_databases):
             self.cleanup_database(db_path)
 
-        # Remove temporary directory
-        if self.temp_dir and Path(self.temp_dir).exists():
+        # Remove temporary directory (class-level)
+        if self._SHARED_TEMP_DIR and self._SHARED_TEMP_DIR.exists():
             try:
                 import shutil
 
-                shutil.rmtree(self.temp_dir)
-                logger.info(f"Removed test database directory: {self.temp_dir}")
+                shutil.rmtree(self._SHARED_TEMP_DIR)
+                logger.info(f"Removed test database directory: {self._SHARED_TEMP_DIR}")
+                TestDatabaseManager._SHARED_TEMP_DIR = None
             except Exception as e:
-                logger.warning(f"Failed to remove temp directory {self.temp_dir}: {e}")
+                logger.warning(f"Failed to remove temp directory {self._SHARED_TEMP_DIR}: {e}")
 
         logger.info("Test database cleanup completed")
 
