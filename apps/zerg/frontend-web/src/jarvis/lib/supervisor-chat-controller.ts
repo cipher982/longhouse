@@ -444,7 +444,8 @@ export class SupervisorChatController {
           this.currentRunId = payload.run_id;
         }
         if (correlationId) {
-          stateManager.updateAssistantStatus(correlationId, 'typing');
+          // Pass runId early so tools render inline with the pending message
+          stateManager.updateAssistantStatus(correlationId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
         }
         // Emit supervisor started event for progress UI
         if (this.currentRunId) {
@@ -522,7 +523,7 @@ export class SupervisorChatController {
           }
 
           if (correlationId) {
-            stateManager.updateAssistantStatus(correlationId, 'final', result, payload.usage);
+            stateManager.updateAssistantStatus(correlationId, 'final', result, payload.usage, this.currentRunId ?? undefined);
           }
         }
 

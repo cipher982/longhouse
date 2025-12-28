@@ -421,6 +421,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
               status: event.status as any,
               ...(event.content !== undefined ? { content: event.content } : {}),
               ...(event.usage !== undefined ? { usage: event.usage } : {}),
+              ...(event.runId !== undefined ? { runId: event.runId } : {}),
             },
           })
           break

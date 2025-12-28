@@ -42,6 +42,8 @@ export interface ChatMessage {
   /** New fields for Option C (Jarvis Typing Indicator) */
   status?: AssistantStatus
   correlationId?: string
+  /** Supervisor run ID for associating tool calls with this message */
+  runId?: number
   /** Token usage for debug mode */
   usage?: {
     prompt_tokens?: number | null
