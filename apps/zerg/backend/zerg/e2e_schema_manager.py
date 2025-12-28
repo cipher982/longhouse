@@ -1,0 +1,97 @@
+"""
+Postgres schema management for E2E test isolation.
+Each Playwright worker gets its own schema with full table isolation.
+"""
+
+import logging
+import zlib
+
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+
+logger = logging.getLogger(__name__)
+
+SCHEMA_PREFIX = "e2e_worker_"
+
+
+def get_schema_name(worker_id: str) -> str:
+    """Generate schema name for a worker."""
+    # Sanitize worker_id to prevent SQL injection
+    safe_id = "".join(c for c in str(worker_id) if c.isalnum() or c == "_")
+    return f"{SCHEMA_PREFIX}{safe_id}"
+
+
+def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
+    """
+    Force-recreate schema for a worker with fresh state.
+
+    Uses Postgres advisory locks to prevent race conditions when multiple
+    Uvicorn workers initialize schemas concurrently.
+
+    CRITICAL: Always DROP then CREATE to ensure clean state.
+    """
+    schema_name = get_schema_name(worker_id)
+
+    # Generate deterministic lock ID from schema name
+    lock_id = zlib.crc32(f"init_schema_{schema_name}".encode())
+
+    # Import Base first to ensure models are registered
+
+    from zerg.database import Base
+
+    with engine.begin() as conn:
+        # Advisory lock prevents race between Uvicorn workers
+        conn.execute(text(f"SELECT pg_advisory_xact_lock({lock_id})"))
+
+        # Force fresh state - always DROP then CREATE
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {schema_name}"))
+
+        # Set search_path for this connection
+        conn.execute(text(f"SET search_path TO {schema_name}, public"))
+
+        # Create all tables in the schema (checkfirst=False to force creation)
+        # Even though search_path is set, SQLAlchemy may skip tables if they exist
+        # in public schema, so we force creation
+        Base.metadata.create_all(bind=conn, checkfirst=False)
+
+    logger.info(f"Recreated schema with fresh state: {schema_name}")
+    return schema_name
+
+
+def drop_schema(engine: Engine, worker_id: str) -> None:
+    """Drop a worker's schema and all its contents."""
+    schema_name = get_schema_name(worker_id)
+
+    with engine.connect() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        conn.commit()
+
+    logger.info(f"Dropped schema: {schema_name}")
+
+
+def drop_all_e2e_schemas(engine: Engine) -> int:
+    """Drop all E2E test schemas. Returns count of schemas dropped."""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+            SELECT schema_name
+            FROM information_schema.schemata
+            WHERE schema_name LIKE 'e2e_worker_%'
+        """)
+        )
+        schemas = [row[0] for row in result]
+
+        for schema in schemas:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+
+        conn.commit()
+
+    logger.info(f"Dropped {len(schemas)} E2E schemas")
+    return len(schemas)
+
+
+def set_search_path(conn, worker_id: str) -> None:
+    """Set search_path for a connection to use worker's schema."""
+    schema_name = get_schema_name(worker_id)
+    conn.execute(text(f"SET search_path TO {schema_name}, public"))
