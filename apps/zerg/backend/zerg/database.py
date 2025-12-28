@@ -10,6 +10,7 @@ from typing import Iterator
 import dotenv
 from sqlalchemy import Engine
 from sqlalchemy import create_engine
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -168,6 +169,53 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
     )
 
 
+def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
+    """Get session factory that uses worker-specific Postgres schema.
+
+    Each worker gets its own Postgres schema (e.g., e2e_worker_0) for full isolation.
+    Uses connection event listeners to set search_path on every connection.
+
+    Args:
+        worker_id: Worker ID to use for schema naming
+
+    Returns:
+        A sessionmaker configured for the worker's schema
+    """
+    if worker_id in _WORKER_SESSIONMAKERS:
+        return _WORKER_SESSIONMAKERS[worker_id]
+
+    with _WORKER_LOCK:
+        if worker_id in _WORKER_SESSIONMAKERS:
+            return _WORKER_SESSIONMAKERS[worker_id]
+
+        # Use the main DATABASE_URL (Postgres)
+        db_url = _settings.database_url
+
+        # Create engine for this worker
+        engine = make_engine(db_url)
+
+        from zerg.e2e_schema_manager import get_schema_name
+        from zerg.e2e_schema_manager import recreate_worker_schema
+
+        # Force-recreate schema with fresh state (prevents dirty state issues)
+        recreate_worker_schema(engine, worker_id)
+        schema_name = get_schema_name(worker_id)
+
+        # Add event listener to set search_path on every connection
+        @event.listens_for(engine, "connect")
+        def set_search_path(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute(f"SET search_path TO {schema_name}, public")
+            cursor.close()
+
+        session_factory = make_sessionmaker(engine)
+
+        _WORKER_ENGINES[worker_id] = engine
+        _WORKER_SESSIONMAKERS[worker_id] = session_factory
+
+        return session_factory
+
+
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
@@ -223,6 +271,11 @@ def get_session_factory() -> sessionmaker:
     with _WORKER_LOCK:
         if worker_id in _WORKER_SESSIONMAKERS:
             return _WORKER_SESSIONMAKERS[worker_id]
+
+        # Route to Postgres schema isolation when enabled
+        if _settings.e2e_use_postgres_schemas:
+            # New: Postgres schema isolation
+            return _get_postgres_schema_session(worker_id)
 
         # Use modern test database manager for proper isolation and cleanup
         if _settings.testing or os.getenv("NODE_ENV") == "test":

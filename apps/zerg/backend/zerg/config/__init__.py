@@ -116,6 +116,10 @@ class Settings:  # noqa: D401 – simple data container
     roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
     roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
 
+    # E2E test database isolation --------------------------------------
+    e2e_use_postgres_schemas: bool  # Use Postgres schemas for E2E test isolation (vs SQLite files)
+    e2e_worker_id: str | None  # Override worker ID for E2E testing
+
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def data_dir(self) -> Path:
@@ -252,6 +256,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Roundabout settings
         roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
+        # E2E test database isolation
+        e2e_use_postgres_schemas=_truthy(os.getenv("E2E_USE_POSTGRES_SCHEMAS")),
+        e2e_worker_id=os.getenv("E2E_WORKER_ID"),
     )
 
 
