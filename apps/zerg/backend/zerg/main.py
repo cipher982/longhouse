@@ -104,14 +104,24 @@ class StructuredFormatter(logging.Formatter):
     """Formatter that renders structured fields for grep-able telemetry logs.
 
     For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO llm_call_complete worker_id=2025-12-15... phase=tool_decision duration_ms=19500
+        2025-12-15 03:19:33 INFO [AGENT] Starting run_thread thread_id=1
     """
 
     def format(self, record):
         # Start with timestamp and level
+        timestamp = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        level = f"{record.levelname:7}"
+
+        # Extract tag if present
+        tag = getattr(record, "tag", None)
+        if tag:
+            prefix = f"{level} [{tag:7}]"
+        else:
+            prefix = f"{level}          "  # 10 spaces to align with [TAG:7]
+
         parts = [
-            self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
-            record.levelname,
+            timestamp,
+            prefix,
             record.getMessage(),
         ]
 
@@ -138,7 +148,8 @@ class StructuredFormatter(logging.Formatter):
             "exc_info",
             "exc_text",
             "stack_info",
-            "event",  # 'event' is message content, not separate field
+            "event",
+            "tag",
         }
 
         # Collect extra fields for structured output
@@ -180,7 +191,14 @@ for _noisy_mod in (
     # Internal chatty modules
     "zerg.routers.websocket",
     "zerg.websocket.manager",
-    # Third-party libraries that can dump huge payloads (e.g., OpenAI request options incl. prompts)
+    "zerg.events.event_bus",  # Silence event-by-event publishing in DEBUG
+    "zerg.services.ops_events",  # Silence bridge event noise
+    "zerg.services.agent_state_recovery",  # Silence "No stuck agents found" on reload
+    "zerg.services.auto_seed",  # Silence seeding boilerplate after first run
+    "zerg.services.watch_renewal_service",  # Silence background watch renewals
+    "zerg.services.worker_job_processor",  # Silence polling loops
+    "zerg.services.scheduler_service",  # Silence scheduling noise
+    # Third-party libraries that can dump huge payloads
     "openai",
     "openai._base_client",
     "openai._utils",

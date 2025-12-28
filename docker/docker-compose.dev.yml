@@ -28,6 +28,8 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: "no"
+    ports:
+      - "5432:5432"  # Expose for E2E tests (spawned backend runs on host)
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -80,8 +82,8 @@ services:
       SWARMLET_DATA_PATH: /app/data/workers
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       RELOAD: "true"
-      DEBUG: "true"
-      LOG_LEVEL: DEBUG
+      DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # E2E test tool stubbing (optional - only set when running E2E tests)
       ZERG_TOOL_STUBS_PATH: ${ZERG_TOOL_STUBS_PATH:-}
     # Direct port exposure is optional in dev, usually handled via nginx (JARPXY_PORT)
