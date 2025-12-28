@@ -111,7 +111,13 @@ describe("ChatPage", () => {
       next_run_at: null,
       last_run_at: null,
     });
-    mockFetchThreads.mockImplementation(() => Promise.resolve([threadState]));
+    mockFetchThreads.mockImplementation((_agentId: number, threadType?: string) => {
+      // Only return the thread for matching thread_type to avoid duplicate keys
+      if (threadType === "chat" || threadType === undefined) {
+        return Promise.resolve([threadState]);
+      }
+      return Promise.resolve([]);
+    });
     mockFetchThreadMessages.mockResolvedValue([message]);
     mockPostThreadMessage.mockResolvedValue({ ...message, id: 100, content: "New human message" });
     mockRunThread.mockResolvedValue(undefined);
