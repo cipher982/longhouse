@@ -21,7 +21,8 @@ from zerg.config import get_settings
 
 _WORKER_ENGINES: Dict[str, Engine] = {}
 _WORKER_SESSIONMAKERS: Dict[str, sessionmaker] = {}
-_WORKER_LOCK = threading.Lock()
+# Use RLock (reentrant) since _get_postgres_schema_session is called while lock is held
+_WORKER_LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
 
 
@@ -175,15 +176,16 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     Each worker gets its own Postgres schema (e.g., e2e_worker_0) for full isolation.
     Uses connection event listeners to set search_path on every connection.
 
+    SECURITY: This is only enabled when E2E_USE_POSTGRES_SCHEMAS=1 (test environments).
+    The X-Test-Worker header allows schema churning, so never enable in production.
+
     Args:
         worker_id: Worker ID to use for schema naming
 
     Returns:
         A sessionmaker configured for the worker's schema
     """
-    if worker_id in _WORKER_SESSIONMAKERS:
-        return _WORKER_SESSIONMAKERS[worker_id]
-
+    # All cache access under lock for thread safety
     with _WORKER_LOCK:
         if worker_id in _WORKER_SESSIONMAKERS:
             return _WORKER_SESSIONMAKERS[worker_id]
