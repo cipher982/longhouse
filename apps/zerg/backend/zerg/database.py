@@ -10,6 +10,7 @@ import dotenv
 from sqlalchemy import Engine
 from sqlalchemy import create_engine
 from sqlalchemy import event
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -41,11 +42,11 @@ def clear_worker_caches():
 # Playwright worker-based DB isolation (E2E tests)
 # ---------------------------------------------------------------------------
 
-# We *dynamically* route each HTTP/WebSocket request to its own SQLite file
-# during Playwright runs.  The current worker id is injected by the middleware
-# and stored in a context variable.  Importing here avoids a circular
-# dependency (middleware imports *this* module).  The conditional import keeps
-# the overhead negligible for production usage.
+# We *dynamically* route each HTTP/WebSocket request to a worker-specific
+# Postgres schema during Playwright runs. The current worker id is injected by
+# middleware and stored in a context variable. Importing here avoids a
+# circular dependency (middleware imports *this* module). The conditional
+# import keeps the overhead negligible for production usage.
 
 try:
     from zerg.middleware.worker_db import current_worker_id
@@ -97,6 +98,30 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     Returns:
         A SQLAlchemy Engine instance
     """
+    db_url = (db_url or "").strip()
+    if not db_url:
+        raise ValueError("DATABASE_URL is not set (empty)")
+
+    # Common footgun: many platforms emit `postgres://...` but SQLAlchemy expects `postgresql://...`.
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql://" + db_url[len("postgres://") :]
+
+    try:
+        parsed = make_url(db_url)
+    except Exception as e:  # pragma: no cover - defensive, depends on SQLAlchemy parsing
+        raise ValueError(f"Invalid DATABASE_URL: {e}") from e
+
+    if parsed.drivername.startswith("sqlite"):
+        raise ValueError(
+            "SQLite DATABASE_URL is no longer supported. "
+            "Set DATABASE_URL to a Postgres URL (e.g. postgresql+psycopg://user:pass@host:5432/dbname)."
+        )
+
+    if not parsed.drivername.startswith("postgresql"):
+        raise ValueError(
+            f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only Postgres is supported (postgresql+psycopg://...)."
+        )
+
     # Connection pool health: pre_ping verifies connections before use,
     # pool_recycle closes connections after 5 minutes to handle DB restarts
     kwargs.setdefault("pool_pre_ping", True)
@@ -410,20 +435,8 @@ def initialize_database(engine: Engine = None) -> None:
 
     # Debug: Verify tables were created
     if os.getenv("NODE_ENV") == "test":
-        from sqlalchemy import text
+        from sqlalchemy import inspect
 
-        with target_engine.connect() as conn:
-            # Check what tables actually exist (engine-specific query)
-            if target_engine.dialect.name == "postgresql":
-                result = conn.execute(
-                    text("""
-                    SELECT tablename FROM pg_tables
-                    WHERE schemaname = current_schema()
-                """)
-                )
-                tables = [row[0] for row in result]
-            else:
-                # SQLite
-                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-                tables = [row[0] for row in result]
-            logger.debug("Tables created in database: %s", sorted(tables))
+        inspector = inspect(target_engine)
+        tables = inspector.get_table_names()
+        logger.debug("Tables created in database: %s", sorted(tables))
