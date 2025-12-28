@@ -181,7 +181,7 @@ export class TimelineLogger {
     if (!this.enabled || this.events.length === 0) return;
 
     const correlationId = this.currentCorrelationId || 'unknown';
-    const lines: string[] = [`[Timeline] correlationId=${correlationId}`];
+    const lines: string[] = [];
 
     for (const event of this.events) {
       const offsetMs = this.startTime !== null ? event.timestamp - this.startTime : 0;
@@ -208,10 +208,17 @@ export class TimelineLogger {
       lines.push(`  ${offsetStr} ${phaseStr} ${metadataStr}`);
     }
 
-    // Output as a single grouped console log
+    // Output as grouped console log for dev readability
     console.groupCollapsed(`[Timeline] ${correlationId} (${this.events.length} events)`);
     console.log(lines.join('\n'));
     console.groupEnd();
+
+    // Also output plain log lines for E2E test capture (console.groupCollapsed isn't
+    // reliably captured by Playwright's page.on('console'))
+    console.log(`[Timeline] correlationId=${correlationId}`);
+    for (const line of lines) {
+      console.log(line);
+    }
 
     // Reset for next message
     this.reset();
