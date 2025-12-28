@@ -164,14 +164,14 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
     async def run_thread(self, db: Session, thread: ThreadModel) -> Sequence[ThreadMessageModel]:
         """Process unprocessed messages and return created assistant message rows."""
 
-        logger.info(f"[AgentRunner] Starting run_thread for thread {thread.id}, agent {self.agent.id}")
+        logger.info(f"[AgentRunner] Starting run_thread for thread {thread.id}, agent {self.agent.id}", extra={"tag": "AGENT"})
 
         # Load conversation history from DB (excludes system messages - those are injected fresh)
         db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
 
         # Filter out any system messages from DB (they're stale - we inject fresh below)
         conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
-        logger.info(
+        logger.debug(
             f"[AgentRunner] Retrieved {len(conversation_msgs)} conversation messages from thread (filtered out stale system messages)"
         )
 
@@ -194,7 +194,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         # Start with system message
         original_msgs = [system_msg] + conversation_msgs
-        logger.info(
+        logger.debug(
             f"[AgentRunner] Injected fresh system prompt ({len(agent_row.system_instructions)} chars) + {len(conversation_msgs)} conversation messages"
         )
 
@@ -238,13 +238,14 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 "[AgentRunner] Failed to inject connector context: %s. Agent will run without status awareness.",
                 e,
                 exc_info=True,
+                extra={"tag": "AGENT"},
             )
 
         unprocessed_rows = crud.get_unprocessed_messages(db, thread.id)
-        logger.info(f"[AgentRunner] Found {len(unprocessed_rows)} unprocessed messages")
+        logger.debug(f"[AgentRunner] Found {len(unprocessed_rows)} unprocessed messages")
 
         if not unprocessed_rows:
-            logger.info("No unprocessed messages for thread %s", thread.id)
+            logger.info("No unprocessed messages for thread %s", thread.id, extra={"tag": "AGENT"})
             return []  # Return empty list if no work
 
         # Configuration for thread persistence
@@ -253,7 +254,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 "thread_id": str(thread.id),
             }
         }
-        logger.info(f"[AgentRunner] LangGraph config: {config}")
+        logger.debug(f"[AgentRunner] LangGraph config: {config}")
 
         # ------------------------------------------------------------------
         # Token-streaming context handling: set the *current* thread so the
@@ -264,7 +265,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         # Set the context var and keep the **token** so we can restore safely
         _ctx_token = set_current_thread_id(thread.id)
-        logger.info("[AgentRunner] Set current thread ID context token")
+        logger.debug("[AgentRunner] Set current thread ID context token")
 
         # ------------------------------------------------------------------
         # Credential resolver context: inject the resolver so connector tools
@@ -288,7 +289,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # TODO: Token streaming needs LangChain version compatibility investigation
             # Track count of messages sent to LLM (including injected context)
             messages_with_context = len(original_msgs)
-            logger.info(f"[AgentRunner] Calling runnable.ainvoke with {messages_with_context} messages")
+            logger.info(f"[AgentRunner] Calling LLM with {messages_with_context} messages (thread={thread.id})", extra={"tag": "LLM"})
 
             # Optional debug: dump full LLM input to file (set DEBUG_LLM_INPUT=1)
             import os
@@ -321,7 +322,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # For Functional API, we use .ainvoke method with the config
             # The entrypoint function will return the full message history
             updated_messages = await self._runnable.ainvoke(original_msgs, config)
-            logger.info(f"[AgentRunner] Runnable completed. Received {len(updated_messages)} total messages")
+            logger.info(f"[AgentRunner] Runnable completed. Received {len(updated_messages)} total messages", extra={"tag": "AGENT"})
         except Exception as e:
             logger.exception(f"[AgentRunner] Exception during runnable.ainvoke: {e}")
             raise
@@ -333,26 +334,24 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
             reset_current_thread_id(_ctx_token)
             reset_credential_resolver(_cred_ctx_token)
-            logger.info("[AgentRunner] Reset thread ID and credential resolver context")
+            logger.debug("[AgentRunner] Reset thread ID and credential resolver context")
 
         # Extract only the new messages since our last context
         # The zerg_react_agent returns ALL messages including the history
         # We use messages_with_context to slice correctly - this includes the
         # ephemeral context injection that should NOT be saved to the database.
         if len(updated_messages) <= messages_with_context:
-            logger.warning("No new messages generated by agent for thread %s", thread.id)
+            logger.warning("No new messages generated by agent for thread %s", thread.id, extra={"tag": "AGENT"})
             return []
 
         new_messages = updated_messages[messages_with_context:]
-        logger.info(f"[AgentRunner] Extracted {len(new_messages)} new messages")
+        logger.debug(f"[AgentRunner] Extracted {len(new_messages)} new messages")
 
         # Get accumulated usage from context variable (set during LLM calls)
-        # This is more reliable than extracting from messages since LangGraph streaming
-        # doesn't preserve response_metadata on AIMessage objects
         from zerg.agents_def.zerg_react_agent import get_llm_usage
 
         ctx_usage = get_llm_usage()
-        logger.info(f"[AgentRunner] Context variable usage: {ctx_usage}")
+        logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
 
         if ctx_usage:
             p_sum = ctx_usage.get("prompt_tokens", 0) or 0
@@ -366,8 +365,9 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 self.usage_total_tokens = t_sum if t_sum else None
                 self.usage_reasoning_tokens = r_sum if r_sum else None
                 logger.info(
-                    f"[AgentRunner] Usage set: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
-                    f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}"
+                    f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
+                    f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}",
+                    extra={"tag": "LLM"},
                 )
 
         # Log each new message for debugging
@@ -375,20 +375,19 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             msg_type = type(msg).__name__
             role = getattr(msg, "role", "unknown")
             content_len = len(getattr(msg, "content", ""))
-            logger.info(f"[AgentRunner] New message {i}: {msg_type}, role={role}, content_length={content_len}")
+            logger.debug(f"[AgentRunner] New message {i}: {msg_type}, role={role}, content_length={content_len}")
 
         # Persist the assistant & tool messages
-        logger.info(f"[AgentRunner] Saving {len(new_messages)} new messages to database")
+        logger.debug(f"[AgentRunner] Saving {len(new_messages)} new messages to database")
         created_rows = self.thread_service.save_new_messages(
             db,
             thread_id=thread.id,
             messages=new_messages,
             processed=True,
         )
-        logger.info(f"[AgentRunner] Saved {len(created_rows)} message rows to database")
+        logger.info(f"[AgentRunner] Saved {len(created_rows)} message rows to database", extra={"tag": "AGENT"})
 
-        # Persist per-response token usage onto the *final* assistant message row so it survives refresh/history loads.
-        # Note: usage_* values are accumulated across all LLM calls for this run (not just the visible assistant text).
+        # Persist per-response token usage onto the *final* assistant message row
         usage_payload = {
             "prompt_tokens": self.usage_prompt_tokens,
             "completion_tokens": self.usage_completion_tokens,
@@ -402,34 +401,28 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 existing_meta["usage"] = usage_payload
                 last_assistant_row.message_metadata = existing_meta
                 db.commit()
-                logger.info("[AgentRunner] Stored usage metadata on assistant message row id=%s", last_assistant_row.id)
+                logger.debug("[AgentRunner] Stored usage metadata on assistant message row id=%s", last_assistant_row.id)
 
         # Mark user messages processed
-        logger.info(f"[AgentRunner] Marking {len(unprocessed_rows)} user messages as processed")
+        logger.debug(f"[AgentRunner] Marking {len(unprocessed_rows)} user messages as processed")
         self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
 
         # Touch timestamp
         self.thread_service.touch_thread_timestamp(db, thread.id)
-        logger.info("[AgentRunner] Updated thread timestamp")
+        logger.debug("[AgentRunner] Updated thread timestamp")
 
         # ------------------------------------------------------------------
         # Safety net – if we *had* unprocessed user messages but the runnable
         # failed to generate **any** new assistant/tool message we treat this
-        # as an error.  Without this guard the request would appear to succeed
-        # (HTTP 202) yet the user sees no response in the UI and the bug can
-        # stay unnoticed.
+        # as an error.
         # ------------------------------------------------------------------
 
         if unprocessed_rows and not created_rows:
             error_msg = "Agent produced no messages despite pending user input."
-            logger.error(f"[AgentRunner] {error_msg}")
+            logger.error(f"[AgentRunner] {error_msg}", extra={"tag": "AGENT"})
             raise RuntimeError(error_msg)
 
-        # Return *all* created rows so callers can decide how to emit them
-        # over WebSocket (assistant **and** tool messages).  The caller can
-        # easily derive subsets by inspecting the ``role`` field.
-
-        logger.info(f"[AgentRunner] run_thread completed successfully. Returning {len(created_rows)} created rows")
+        logger.info(f"[AgentRunner] run_thread completed successfully for thread {thread.id}", extra={"tag": "AGENT"})
         return created_rows
 
     # No synchronous wrapper – all call-sites should be async going forward.

@@ -100,7 +100,7 @@ async def _chat_stream_generator(
     }
 
     # NOW start the background task - after subscriptions are ready and connected event sent
-    logger.info(f"Chat SSE: starting background supervisor for run {run_id}")
+    logger.info(f"Chat SSE: starting background supervisor for run {run_id}", extra={"tag": "JARVIS"})
     task_handle = asyncio.create_task(run_supervisor_background())
     await _register_supervisor_task(run_id, task_handle)
 
@@ -222,7 +222,8 @@ async def jarvis_chat(
 
     logger.info(
         f"Jarvis chat: created run {run.id} for user {current_user.id}, "
-        f"message: {request.message[:50]}..., model: {model_to_use}, reasoning: {reasoning_effort}"
+        f"message: {request.message[:50]}..., model: {model_to_use}, reasoning: {reasoning_effort}",
+        extra={"tag": "JARVIS"},
     )
 
     # Return SSE stream - background task is started inside the generator

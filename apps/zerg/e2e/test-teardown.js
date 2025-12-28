@@ -21,13 +21,22 @@ async function globalTeardown(config) {
       throw new Error("No Python interpreter found (python/python3)");
     }
 
-    // Call Python cleanup script to remove all test databases
+    // Call Python cleanup script to remove all test databases/schemas
     const cleanup = spawn(pythonCmd, ['-c', `
 import sys
+import os
 sys.path.insert(0, '${path.resolve('../backend')}')
-from zerg.test_db_manager import cleanup_test_databases
-cleanup_test_databases()
-print("✅ Test database cleanup completed")
+
+# Check if using Postgres schemas (new) or SQLite files (legacy)
+if os.getenv('E2E_USE_POSTGRES_SCHEMAS') == '1':
+    from zerg.e2e_schema_manager import drop_all_e2e_schemas
+    from zerg.database import default_engine
+    dropped = drop_all_e2e_schemas(default_engine)
+    print(f"✅ Dropped {dropped} E2E test schemas")
+else:
+    from zerg.test_db_manager import cleanup_test_databases
+    cleanup_test_databases()
+    print("✅ Test database cleanup completed")
     `], {
       cwd: path.resolve('../backend'),
       stdio: 'inherit'
