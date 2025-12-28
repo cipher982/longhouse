@@ -392,7 +392,7 @@ The new `/api/stream/` endpoint has been configured in nginx with proper SSE han
 
 **Configuration Files:**
 - `docker/nginx/docker-compose.unified.conf` (dev environment)
-- `docker/nginx/docker-compose.prod.conf` (production environment)
+- `docker/nginx/nginx.prod.conf` (production environment; baked into `docker/nginx.dockerfile`)
 
 **SSE Settings Applied:**
 - `proxy_buffering off` - Disables response buffering

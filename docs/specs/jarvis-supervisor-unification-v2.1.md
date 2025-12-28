@@ -2,7 +2,7 @@
 
 **Date:** December 19, 2025
 **Audience:** Implementation handoff (Jarvis web + Zerg backend)
-**Status:** Proposed (supersedes parts of `docs/archive/super-siri-architecture.md` v2.0)
+**Status:** Partially implemented (supersedes parts of `docs/archive/super-siri-architecture.md` v2.0)
 
 ## 0) Executive Summary
 
@@ -45,13 +45,16 @@ This spec removes the remaining “third layer” plumbing (`route_to_supervisor
 
 ### Remaining work
 
-- `route_to_supervisor` cleanup in backend prompts
-- Personal tools migration to Supervisor (get_current_location, get_whoop_data, search_notes)
+This spec’s core direction is implemented (single Supervisor brain, personal tools on Supervisor). Remaining work is mostly cleanup/consolidation:
+
+- Reduce/remove any remaining reliance on `/api/jarvis/supervisor/events` in the UI (keep it for debugging/integrations).
+- Continue simplifying Realtime plumbing so it stays I/O-only (if/when Realtime is enabled).
 
 ### Supervisor streaming
 
 - `/api/jarvis/chat`: fetch + manual SSE parsing (`apps/zerg/frontend-web/src/jarvis/lib/supervisor-chat-controller.ts`)
-- `/api/jarvis/supervisor/events`: EventSource streaming (Jarvis API client in `apps/zerg/frontend-web/src/jarvis/`)
+- `/api/jarvis/chat` SSE now includes worker lifecycle + worker tool events, plus supervisor tool monitoring events (ToolCards UI).
+- `/api/jarvis/supervisor/events`: EventSource streaming (legacy/programmatic; kept for debugging/integrations)
 
 ---
 
@@ -165,12 +168,13 @@ Required behavior:
   - `error`
   - `heartbeat`
 
-Recommended evolution:
+Implemented:
 
-- Add worker lifecycle + worker tool events to `POST /api/jarvis/chat` SSE stream (so Jarvis web can show the same progress UI without using `/supervisor/events`).
-  - Mirror the event set used by `/api/jarvis/supervisor/events`:
-    - `worker_spawned`, `worker_started`, `worker_complete`, `worker_summary_ready`
-    - `worker_tool_started`, `worker_tool_completed`, `worker_tool_failed`
+- Worker lifecycle + worker tool events are emitted on the `/chat` SSE stream:
+  - `worker_spawned`, `worker_started`, `worker_complete`, `worker_summary_ready`
+  - `worker_tool_started`, `worker_tool_completed`, `worker_tool_failed`
+- Supervisor tool monitoring events are emitted on the `/chat` SSE stream:
+  - `supervisor_tool_started`, `supervisor_tool_progress`, `supervisor_tool_completed`, `supervisor_tool_failed`
 
 ### 5.2 Keep `/api/jarvis/supervisor` + `/api/jarvis/supervisor/events` as “programmatic”
 
