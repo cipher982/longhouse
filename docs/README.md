@@ -21,9 +21,9 @@ Historical (superseded v2.0): [archive/super-siri-architecture.md](./archive/sup
 | Directory    | What's in it             | Lifecycle                        |
 | ------------ | ------------------------ | -------------------------------- |
 | `specs/`     | Architecture & design    | Permanent (evolves slowly)       |
-| `work/`      | Active PRDs & task docs  | **Temporary** - delete when done |
-| `completed/` | Implemented feature docs | Archive                          |
-| `archive/`   | Obsolete/superseded      | Archive                          |
+| `work/`      | Active PRDs & task docs  | Temporary - move/delete when done |
+| `completed/` | Implemented feature docs | Historical reference             |
+| `archive/`   | Obsolete/superseded      | Historical reference             |
 | `research/`  | Research notes           | Reference                        |
 
-> **Note:** `work/` should be empty when no features are in flight. PRDs are either moved to `completed/` for historical reference or deleted once implemented.
+> **Note:** `completed/` and `archive/` may contain outdated commands and architecture snapshots. For current “how to run this repo”, start at `../AGENTS.md` and `DEVELOPMENT.md`.
