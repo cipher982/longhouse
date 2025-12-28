@@ -76,7 +76,7 @@ const workers = Number.isFinite(envWorkers) && envWorkers > 0 ? envWorkers : (pr
 
 const frontendServer = {
   // React dev server for Playwright runs
-  command: `npm run dev -- --host 127.0.0.1 --port ${FRONTEND_PORT}`,
+  command: `bun run dev -- --host 127.0.0.1 --port ${FRONTEND_PORT}`,
   port: FRONTEND_PORT,
   reuseExistingServer: !process.env.CI,
   timeout: 180_000,

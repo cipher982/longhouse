@@ -1,223 +1,50 @@
-# End-to-End Tests
+# E2E Tests (Playwright)
 
-This directory contains the comprehensive E2E test suite for the Zerg Agent Platform using Playwright with advanced database isolation and real-time testing capabilities.
+Playwright E2E tests for the unified Swarmlet SPA (`/`, `/dashboard`, `/chat`) and the Zerg backend.
 
-## 🚀 Quick Start
+## Run (recommended)
 
-### From Root Directory (Recommended)
-
-```bash
-# Run basic E2E tests (fast validation)
-make e2e-basic
-
-# Run full E2E test suite
-make e2e-full
-```
-
-### Direct Commands
+From repo root:
 
 ```bash
-# From the e2e directory
-./run_e2e_tests.sh --mode=basic     # ~3 min - core functionality
-./run_e2e_tests.sh --mode=full      # ~15 min - comprehensive suite
-
-# Manual Playwright commands
-npm test                            # Run all tests
-npm run test:headed                 # Run with browser visible
-npm run test:debug                  # Interactive debugging
+make test-e2e
+make test-e2e-ui
+make test-e2e-single TEST=tests/unified-frontend.spec.ts
+make test-e2e-grep GREP="Jarvis"
 ```
 
-## 📁 Current Test Structure
+## How it works
 
-```
-e2e/
-├── tests/                              # Test specifications
-│   ├── agent_creation_full.spec.ts     # Agent lifecycle (basic mode)
-│   ├── comprehensive_debug.spec.ts     # System diagnostics (basic mode)
-│   ├── canvas_complete_workflow.spec.ts # Canvas workflow (basic mode)
-│   ├── workflow_execution_http.spec.ts # HTTP tool execution
-│   ├── tool_palette_node_connections.spec.ts # Node connections
-│   ├── error_handling_edge_cases.spec.ts     # Error scenarios
-│   ├── data_persistence_recovery.spec.ts     # Data integrity
-│   ├── performance_load_testing.spec.ts      # Performance tests
-│   ├── accessibility_ui_ux.spec.ts           # Accessibility compliance
-│   ├── multi_user_concurrency.spec.ts       # Multi-user scenarios
-│   ├── realtime_websocket_monitoring.spec.ts # WebSocket testing
-│   └── helpers/                             # Test utilities
-│       ├── api-client.ts                    # API interaction layer
-│       ├── agent-helpers.ts                 # Agent lifecycle helpers
-│       ├── database-helpers.ts              # Database management
-│       ├── canvas-helpers.ts                # Canvas interaction helpers
-│       ├── test-helpers.ts                  # Common test utilities
-│       ├── test-utils.ts                    # Utility functions
-│       ├── workflow-helpers.ts              # Workflow operations
-│       └── debug-helpers.ts                 # Debugging utilities
-├── fixtures.ts                             # Playwright fixtures with worker isolation
-├── playwright.config.js                    # Playwright configuration
-├── run_e2e_tests.sh                        # Unified test runner
-├── package.json                            # Dependencies and scripts
-└── README.md                               # This file
+- Playwright starts an isolated backend (`apps/zerg/e2e/spawn-test-backend.js`) and a frontend dev server.
+- Default ports are `BACKEND_PORT=8001` and `FRONTEND_PORT=8002` (override via env).
+- Database isolation is per-Playwright-worker (SQLite routed by the `X-Test-Worker` header).
+
+## Setup
+
+```bash
+# JS deps (repo root)
+bun install
+
+# Python deps (backend)
+cd apps/zerg/backend && uv sync
+
+# Playwright browser deps (from this folder)
+cd apps/zerg/e2e && bunx playwright install
 ```
 
-## 🔧 Architecture & Features
+## Useful files
 
-### Advanced Database Isolation
+- `apps/zerg/e2e/playwright.config.js` — ports, web servers, reporters
+- `apps/zerg/e2e/spawn-test-backend.js` — starts backend for tests (uv + uvicorn)
+- `apps/zerg/e2e/tests/unified-frontend.spec.ts` — quick smoke suite
+- `apps/zerg/e2e/tests/chat_*.spec.ts` — Jarvis chat-focused tests
 
-- **Per-worker SQLite databases** (`test_worker_{id}.db`)
-- **Automatic header injection** via fixtures (`X-Test-Worker: {workerId}`)
-- **WebSocket worker isolation** with query parameters
-- **Clean database state** between test runs
+## Reports
 
-### Automated Server Management
-
-- **Backend auto-start** on port 8001 (FastAPI + SQLite)
-- **Frontend auto-start** on port 8002 (WASM server)
-- **Parallel test execution** with 2 workers
-- **Automatic cleanup** of test databases
-
-### Real-time Testing
-
-- **WebSocket connection testing** with worker isolation
-- **Event monitoring** and validation
-- **UI synchronization** verification
-- **Cross-session communication** testing
-
-## 📊 Test Modes
-
-### Basic Mode (`--mode=basic`)
-
-**Duration**: ~3 minutes
-**Purpose**: Core functionality validation
-**Tests**:
-
-- `agent_creation_full.spec.ts` - Agent lifecycle with database isolation
-- `comprehensive_debug.spec.ts` - System connectivity and health
-- `canvas_complete_workflow.spec.ts` - Canvas navigation and workflow UI
-
-### Full Mode (`--mode=full`)
-
-**Duration**: ~15 minutes
-**Purpose**: Comprehensive validation
-**Tests**: All basic tests plus:
-
-- Performance and load testing
-- Accessibility compliance
-- Multi-user concurrency
-- Error handling edge cases
-- Data persistence validation
-- WebSocket real-time features
-
-## 🛠️ Helper Libraries
-
-### Database Helpers (`database-helpers.ts`)
-
-```typescript
-// Reset database for specific worker
-await resetDatabaseForWorker(workerId);
-
-// Ensure clean state before test
-await ensureCleanDatabase(page, workerId);
-
-// Verify database isolation
-const isEmpty = await verifyDatabaseEmpty(workerId);
+```bash
+cd apps/zerg/e2e
+bunx playwright show-report
 ```
-
-### Agent Helpers (`agent-helpers.ts`)
-
-```typescript
-// Create agent via API with defaults
-const agent = await createAgentViaAPI(workerId, { name: "Test Agent" });
-
-// Create multiple agents
-const agents = await createMultipleAgents(workerId, { count: 3 });
-
-// Create agent via UI
-const agentId = await createAgentViaUI(page);
-
-// Cleanup agents
-await cleanupAgents(workerId, agents);
-```
-
-### Test Utils (`test-utils.ts`)
-
-```typescript
-// Get worker ID from test context
-const workerId = getWorkerIdFromTest(testInfo);
-
-// Retry with backoff
-await retryWithBackoff(async () => {
-  /* operation */
-});
-
-// Wait for stable element
-await waitForStableElement(page, "#my-element");
-
-// Safe navigation
-await safeNavigate(page, "/dashboard");
-```
-
-## 🔍 Configuration Details
-
-### Playwright Configuration
-
-- **Base URL**: `http://localhost:8002` (frontend)
-- **Backend URL**: `http://localhost:8001` (auto-started)
-- **Workers**: 2 parallel workers
-- **Timeout**: 30s (basic), 60s (full)
-- **Retries**: 0 (dev), 2 (CI)
-
-### Environment Variables
-
-- `NODE_ENV=test` - Test environment
-- `TESTING=1` - Testing mode flag
-- `PW_TEST_WORKER_INDEX` - Worker identifier
-- `E2E_LOG_SUPPRESS=1` - Reduce log noise
-
-### Database Configuration
-
-- **File Pattern**: `test_worker_{workerId}.db`
-- **Location**: `/tmp/zerg_test_dbs/`
-- **Cleanup**: Automatic after test completion
-- **Isolation**: Per-worker via `X-Test-Worker` header
-
-## 📈 Test Quality Features
-
-### Comprehensive Logging
-
-```
-📊 [10:30:45] Agent creation test starting
-📊 Worker ID: 0
-📊 Initial agent count: 0
-✅ Agent created via API: Test Agent (ID: 1)
-📊 Updated agent count: 1
-✅ Agent successfully appears in UI
-```
-
-### Error Handling
-
-- **Automatic retries** for flaky operations
-- **Graceful degradation** for missing UI elements
-- **Detailed error context** in test reports
-- **Screenshot capture** on failures
-
-### Performance Monitoring
-
-- **Page load time** measurement
-- **API response time** tracking
-- **Memory usage** monitoring
-- **Network request** validation
-
-## 🚦 Adding New Tests
-
-### 1. Create Test File
-
-```typescript
-import { test, expect } from "./fixtures";
-import { getWorkerIdFromTest } from "./helpers/test-utils";
-import { createAgentViaAPI } from "./helpers/agent-helpers";
-
-test.describe("My New Feature", () => {
-  test("should work correctly", async ({ page }, testInfo) => {
     const workerId = getWorkerIdFromTest(testInfo);
 
     // Test implementation
