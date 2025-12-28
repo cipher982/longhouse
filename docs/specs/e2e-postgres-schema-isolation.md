@@ -10,12 +10,21 @@
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Spec & Design | ✅ Complete |
-| 1 | Schema Manager | 🔄 In Progress |
+| 1 | Schema Manager | ✅ Complete (2025-12-28) |
 | 2 | Database Routing | ⏳ Pending |
 | 3 | E2E Infrastructure | ⏳ Pending |
 | 4 | Configuration & Cleanup | ⏳ Pending |
 
+**Phase 1 Commit**: `ed811fb` - phase 1: create schema manager module
+
 ## Decision Log
+
+### Decision: Use `checkfirst=False` for table creation
+**Context:** Tables exist in `public` schema, SQLAlchemy skips creation in worker schema
+**Choice:** Pass `checkfirst=False` to `Base.metadata.create_all()`
+**Rationale:** Forces table creation in worker schema even if tables exist elsewhere
+**Revisit if:** This causes performance issues (unlikely, only runs once per worker init)
+**Made during:** Phase 1 implementation (2025-12-28)
 
 ### Decision: Use `search_path` over `schema_translate_map`
 **Context:** SQLAlchemy offers two approaches for schema routing
