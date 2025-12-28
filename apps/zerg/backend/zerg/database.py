@@ -203,6 +203,26 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         recreate_worker_schema(engine, worker_id)
         schema_name = get_schema_name(worker_id)
 
+        # Create test user for foreign key constraints (E2E tests need a user for agent creation)
+        from sqlalchemy import text
+
+        with engine.connect() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
+            user_count = result.scalar()
+            if user_count == 0:
+                logger.debug("Worker %s (Postgres schema) creating test user...", worker_id)
+                conn.execute(
+                    text("""
+                    INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
+                                      display_name, context, created_at, updated_at)
+                    VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
+                           'Test User', '{}', NOW(), NOW())
+                """)
+                )
+                conn.commit()
+                logger.debug("Worker %s (Postgres schema) test user created", worker_id)
+
         # Add event listener to set search_path on every connection
         @event.listens_for(engine, "connect")
         def set_search_path(dbapi_conn, connection_record):
