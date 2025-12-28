@@ -54,6 +54,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
+  /* Anchor scroll position to header when body expands */
+  overflow-anchor: auto;
 }
 
 .tool-card__icon {
@@ -116,6 +118,8 @@
   padding: 0 12px 12px;
   border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.05));
   cursor: default;
+  /* Prevent scroll anchoring from jumping when expanded */
+  overflow-anchor: none;
 }
 
 /* Section (args, result) */

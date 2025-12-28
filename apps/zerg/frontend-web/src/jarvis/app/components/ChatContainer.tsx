@@ -59,11 +59,21 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   }
 
   // Auto-scroll to bottom when new messages arrive or during streaming
+  // Note: Don't include toolState here - it updates frequently (ticker, status changes)
+  // and would cause scroll jumps when user is trying to interact with tool cards
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
     }
   }, [messages, userTranscriptPreview])
+
+  // Scroll when new tools are added (but not on every status update)
+  const toolCount = toolState.tools.size
+  useEffect(() => {
+    if (containerRef.current && toolCount > 0) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    }
+  }, [toolCount])
 
   const hasContent = messages.length > 0 || userTranscriptPreview
 
@@ -87,36 +97,46 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
               const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
               const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 
+              // For any assistant message with a runId, render tools inline before the message
+              // This works for both pending (streaming) and finalized messages
+              const hasRunId = isAssistant && message.runId;
+              const inlineTools = hasRunId ? supervisorToolStore.getToolsForRun(message.runId!) : [];
+
               return (
-                <div
-                  key={message.id}
-                  className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
-                >
-                  <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
-                    <div className="message-content">
-                      {showTypingDots ? (
-                        <div className="thinking-dots thinking-dots--in-chat">
-                          <span className="thinking-dot"></span>
-                          <span className="thinking-dot"></span>
-                          <span className="thinking-dot"></span>
+                <div key={message.id} className="message-group">
+                  {/* Render completed tools BEFORE the assistant response */}
+                  {inlineTools.length > 0 && (
+                    <ActivityStream runId={message.runId!} />
+                  )}
+                  <div
+                    className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
+                  >
+                    <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
+                      <div className="message-content">
+                        {showTypingDots ? (
+                          <div className="thinking-dots thinking-dots--in-chat">
+                            <span className="thinking-dot"></span>
+                            <span className="thinking-dot"></span>
+                            <span className="thinking-dot"></span>
+                          </div>
+                        ) : (
+                          <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+                        )}
+                      </div>
+                      {isAssistant && usageTitle && usageLine && (
+                        <div className="message-usage" aria-hidden="true">
+                          <span className="message-usage-text" title={usageTitle}>
+                            {usageLine}
+                          </span>
                         </div>
-                      ) : (
-                        <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
                       )}
                     </div>
-                    {isAssistant && usageTitle && usageLine && (
-                      <div className="message-usage" aria-hidden="true">
-                        <span className="message-usage-text" title={usageTitle}>
-                          {usageLine}
-                        </span>
-                      </div>
-                    )}
                   </div>
                 </div>
               );
             })}
-            {/* Show supervisor tool activity stream */}
-            {toolState.currentRunId && (
+            {/* Show supervisor tool activity stream only if no message is associated with this run yet */}
+            {toolState.currentRunId && toolState.isActive && !messages.some(m => m.runId === toolState.currentRunId) && (
               <ActivityStream runId={toolState.currentRunId} />
             )}
             {/* Show live user voice transcript preview */}
