@@ -57,7 +57,7 @@ Control console log verbosity via URL parameter `?log=<level>`:
 - Timeline logger: `apps/zerg/frontend-web/src/jarvis/lib/timeline-logger.ts`
 - Phase 5 reduced console noise by 70%+ for normal/timeline modes (chat-observability-eval spec)
 
-**If not running:** `make dev-bg` (background, non-blocking) — wait ~15s for init.
+**If not running:** `make dev-bg` (background, non-blocking) — wait for containers to become healthy.
 
 ## Architecture (Unified SPA)
 
@@ -101,10 +101,10 @@ make env-check     # Validate required env vars before starting
 make stop
 
 # Run tests (ALWAYS use Make targets, never direct pytest/bun commands)
-make test          # Unit tests only (backend + frontend) [~40s, parallel]
-make test-e2e      # Playwright E2E only [~2-3 min]
-make test-all      # Unit + Playwright E2E [~3-4 min]
-make test-chat-e2e # Chat page E2E (unified SPA) [~30s]
+make test          # Unit tests only (backend + frontend)
+make test-e2e      # Playwright E2E only
+make test-all      # Unit + Playwright E2E
+make test-chat-e2e # Chat page E2E (unified SPA)
 
 # Targeted E2E testing
 make test-e2e-single TEST=tests/unified-frontend.spec.ts # Or any Playwright args
@@ -185,30 +185,30 @@ Dev compose file (profiles live here): `docker/docker-compose.dev.yml`
 Other compose files:
 - Standalone production compose: `docker/docker-compose.prod.yml`
 
-| Profile | Services | Use Case |
-|---------|----------|----------|
-| `dev` | postgres, backend, frontend, reverse-proxy | Full platform via nginx at 30080 |
-| `prod` | postgres, zerg-backend-prod, zerg-frontend-prod | Production hardened |
+| Compose | Services | Use Case |
+|--------|----------|----------|
+| `docker/docker-compose.dev.yml` (profile `dev`) | postgres, backend, frontend, reverse-proxy, dev-runner | Local development via nginx at 30080 |
+| `docker/docker-compose.prod.yml` | postgres, backend, frontend, reverse-proxy | Production deployment (typically via Coolify) |
 
 ```bash
 # Direct compose usage (prefer make targets)
-docker compose -f docker/docker-compose.dev.yml --profile dev up
+docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml --profile dev up
 ```
 
 ## Testing Infrastructure
 
 **CRITICAL:** ALWAYS use Make targets for testing. Never run pytest/bun commands directly (they miss env vars, wrong CWD, no parallelism).
 
-### Test Commands (with expected duration)
+### Test Commands
 
-| Command | What It Runs | Duration | CPU Usage |
-|---------|--------------|----------|-----------|
-| `make test` | Unit tests (backend + frontend) | ~40s | Parallel (all cores) |
-| `make test-e2e` | Playwright E2E tests | ~2-3 min | Parallel (all cores) |
-| `make test-all` | Unit + E2E combined | ~3-4 min | Parallel |
-| `make test-e2e-single TEST=<spec>` | Single E2E test file | ~10-30s | Single worker |
-| `make test-e2e-grep GREP="name"` | E2E tests matching name | Varies | Parallel |
-| `make test-e2e-ui` | Interactive Playwright UI | N/A | Interactive |
+| Command | What It Runs | Notes |
+|---------|--------------|-------|
+| `make test` | Unit tests (backend + frontend) | Runs in parallel |
+| `make test-e2e` | Playwright E2E tests | Runs in parallel |
+| `make test-all` | Unit + E2E combined | Runs both suites |
+| `make test-e2e-single TEST=<spec>` | Single E2E test file | Most useful for iteration |
+| `make test-e2e-grep GREP="name"` | E2E tests matching name | Narrow by test name |
+| `make test-e2e-ui` | Interactive Playwright UI | Local debugging |
 
 **Backend tests use pytest-xdist (`-n auto`)** - parallel execution across all CPU cores
 **E2E tests use Playwright workers** - uses all CPU cores locally (4 workers in CI only)
@@ -243,7 +243,7 @@ cd apps/zerg/backend && uv run python -m pytest tests/live --live-token <YOUR_JW
 
 ### Backend (Python)
 - Location: `apps/zerg/backend/zerg/`
-- Tests: `apps/zerg/backend/tests/` — run with `make test` (parallel, ~40s)
+- Tests: `apps/zerg/backend/tests/` — run with `make test`
 - Debug scripts: `scripts/debug_*.py` — helpers for workflow/execution debugging
 - Uses FastAPI with Pydantic models
 - Agent logic uses LangGraph
@@ -295,7 +295,7 @@ Run `make regen-ws` if WebSocket schema changes. Run `make regen-sse` if SSE sch
 
 Pre-commit hooks run automatically on every commit. Agents should be aware of what will block commits.
 
-### What Runs (~5s total)
+### What Runs
 
 | Hook | Behavior | Blocks? |
 |------|----------|---------|
@@ -389,7 +389,7 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
    - Environment variables loaded from `.env`
    - Parallel execution enabled (pytest uses `-n auto`, Playwright uses 4 workers)
    - Proper test isolation (separate DB per worker)
-   - ~40s for unit tests (vs 3+ minutes without parallelism)
+   - Comparable results locally and in CI
 
 18. **UI effects toggle**: Dashboard/app pages use static backgrounds + glass panels by default. Use `?effects=off` URL param or `VITE_UI_EFFECTS=off` to disable ambient visuals entirely. Landing page has its own animated effects (hero, particles) controlled separately via `?fx=none`.
 
@@ -570,7 +570,6 @@ See `docs/COOLIFY_DEBUGGING.md` for full debugging workflow.
 - Must be present during `bun run build` (baked into JS bundle)
 - Changing env vars in Coolify requires REBUILD, not just restart
 - Use Coolify API `/deploy` endpoint, not `/restart` endpoint
-- Build takes ~2-3 minutes
 
 Example:
 ```bash
