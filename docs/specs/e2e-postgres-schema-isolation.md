@@ -11,11 +11,12 @@
 |-------|-------------|--------|
 | 0 | Spec & Design | ✅ Complete |
 | 1 | Schema Manager | ✅ Complete (2025-12-28) |
-| 2 | Database Routing | ⏳ Pending |
+| 2 | Database Routing | ✅ Complete (2025-12-28) |
 | 3 | E2E Infrastructure | ⏳ Pending |
 | 4 | Configuration & Cleanup | ⏳ Pending |
 
 **Phase 1 Commit**: `ed811fb` - phase 1: create schema manager module
+**Phase 2 Commit**: `2e6d121` - phase 2: add database routing for e2e schema isolation
 
 ## Decision Log
 
@@ -306,11 +307,11 @@ def set_search_path(conn, worker_id: str) -> None:
 ### Phase 2: Database Routing (Backend)
 
 **Acceptance Criteria:**
-- [ ] `database.py` has `_get_postgres_schema_session()` function
-- [ ] `get_session_factory()` routes to schema when `E2E_USE_POSTGRES_SCHEMAS=1`
-- [ ] Connection event listener sets `search_path` correctly
-- [ ] Unit tests pass: `make test`
-- [ ] Config setting `e2e_use_postgres_schemas` added to `config.py`
+- [x] `database.py` has `_get_postgres_schema_session()` function
+- [x] `get_session_factory()` routes to schema when `E2E_USE_POSTGRES_SCHEMAS=1`
+- [x] Connection event listener sets `search_path` correctly
+- [x] Unit tests pass: `make test`
+- [x] Config setting `e2e_use_postgres_schemas` added to `config.py`
 
 Modify `zerg/database.py` to use schemas instead of SQLite:
 
