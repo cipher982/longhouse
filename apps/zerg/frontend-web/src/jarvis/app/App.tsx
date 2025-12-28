@@ -11,6 +11,7 @@ import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
 import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, WorkerProgress } from './components'
+import { supervisorToolStore } from '../lib/supervisor-tool-store'
 
 console.info('[Jarvis] Starting React application')
 
@@ -64,6 +65,7 @@ export default function App({ embedded = false }: AppProps) {
 
   const handleNewConversation = useCallback(async () => {
     console.log('[App] Creating new conversation')
+    supervisorToolStore.clearTools()
     dispatch({ type: 'SET_MESSAGES', messages: [] })
     dispatch({ type: 'SET_CONVERSATION_ID', id: null })
     console.log('[App] New conversation ready')
@@ -72,6 +74,7 @@ export default function App({ embedded = false }: AppProps) {
   const handleClearAll = useCallback(async () => {
     console.log('[App] Clear all conversations - starting...')
     try {
+      supervisorToolStore.clearTools()
       await jarvisApp.clearHistory()
       console.log('[App] Clear all conversations - complete')
     } catch (error) {
@@ -82,6 +85,7 @@ export default function App({ embedded = false }: AppProps) {
   const handleSelectConversation = useCallback(
     async (id: string) => {
       console.log('[App] Switching to conversation:', id)
+      supervisorToolStore.clearTools()
       dispatch({ type: 'SET_CONVERSATION_ID', id })
       dispatch({ type: 'SET_MESSAGES', messages: [] })
       console.log('[App] Switched to conversation:', id)
