@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** December 2025
-**Status:** Implementation In Progress
+**Status:** Partially Implemented (SSE + UI). Persistence pending.
 **Parent Spec:** [supervisor-ui-spec.md](./supervisor-ui-spec.md)
 
 ---
@@ -32,14 +32,14 @@ User has no idea that `get_current_location` was called, what data was returned,
 
 ## Solution: Tool Calls as Conversation Artifacts
 
-**Core Principle:** Every tool call (supervisor or worker) is a **persistent transcript artifact** rendered inline before the assistant's response.
+**Core Principle:** Every tool call (supervisor or worker) is a **conversation artifact** rendered inline before the assistant's response.
 
 ### Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | **Placement** | Inline, before assistant response | Clear causality (user message → tool → response) |
-| **Persistence** | Stored in DB, rehydrated on load | "Viewable a week later" requirement |
+| **Persistence** | Session-scoped today; DB persistence planned | History rehydration is a separate phase |
 | **Treatment** | Uniform for all tools | No per-tool UI rules or categories |
 | **Disclosure** | Progressive (collapsed → expanded → raw) | Information density for power users |
 | **Live Updates** | Real-time streaming | "Productive theater" - keeps users engaged |
@@ -271,22 +271,9 @@ Three-level progressive disclosure:
    - Verify card shows error state (red, ✗)
    - Verify error message displayed in expanded view
 
-### E2E Tests (TODO)
+### E2E Tests
 
-```typescript
-test('supervisor tool visibility', async ({ page }) => {
-  // Send message that triggers tool
-  await page.fill('[data-testid="chat-input"]', 'where am I?');
-  await page.click('[data-testid="send-button"]');
-
-  // Verify tool card appears
-  await expect(page.locator('.tool-card')).toBeVisible();
-  await expect(page.locator('.tool-card__name')).toHaveText('get_current_location');
-
-  // Verify completion
-  await expect(page.locator('.tool-card__status--completed')).toBeVisible();
-});
-```
+E2E spec exists at `apps/zerg/e2e/tests/supervisor-tool-visibility.spec.ts`, but is currently skipped because it relies on dev-only event injection (`window.__jarvis.eventBus`). Unit tests cover the store and UI components.
 
 ---
 
