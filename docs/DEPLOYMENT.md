@@ -41,20 +41,20 @@ V2.2 introduces **Durable Runs**, allowing executions to survive client disconne
 
 ### Option 1: Docker Compose (Recommended)
 
-The simplest deployment uses the unified Docker Compose with the `prod` profile:
+The simplest deployment uses the production compose file (and in the standard setup, Coolify runs it):
 
 ```bash
-# Development (full platform with nginx at port 30080)
-docker compose -f docker/docker-compose.dev.yml --profile dev up
+# Local development (full platform with nginx at port 30080)
+make dev
 
-# Production (hardened, no debug tools)
+# Production (hardened)
 docker compose -f docker/docker-compose.prod.yml up -d
 ```
 
-| Profile | Services                                   | Use Case                         |
-| ------- | ------------------------------------------ | -------------------------------- |
-| `dev`   | postgres, backend, frontend, reverse-proxy | Full platform via nginx at 30080 |
-| `prod`  | postgres, backend, frontend, reverse-proxy | Production hardened              |
+| Compose file | Services | Use Case |
+|------------|----------|----------|
+| `docker/docker-compose.dev.yml` (profile `dev`) | postgres, backend, frontend, reverse-proxy, dev-runner | Local dev via nginx at 30080 |
+| `docker/docker-compose.prod.yml` | postgres, backend, frontend, reverse-proxy | Production deployment |
 
 Deploy to Coolify:
 
@@ -233,7 +233,7 @@ sudo systemctl status zerg-backend
 If you're deploying via Docker (recommended), use the repo-managed configs:
 
 - Dev: `docker/nginx/docker-compose.unified.conf` (reverse-proxy container)
-- Prod: `docker/nginx/docker-compose.prod.conf` (reverse-proxy container)
+- Prod: `docker/nginx/nginx.prod.conf` (reverse-proxy container; baked into `docker/nginx.dockerfile`)
 
 If you're running Nginx outside Docker, the rule is the same:
 
@@ -306,11 +306,17 @@ sudo journalctl -u postgresql -f
 
 ### Metrics
 
-The platform exposes Prometheus metrics at `/metrics`:
+The backend exposes Prometheus metrics at `/metrics`.
+
+In Docker production, `/metrics` is not proxied by default (it’s on the internal backend service). Options:
+
+- Run it from inside the compose network (recommended):
 
 ```bash
-curl http://localhost:47300/metrics
+docker compose -f docker/docker-compose.prod.yml exec -T backend curl -s http://127.0.0.1:8000/metrics | head
 ```
+
+If you want `/metrics` publicly reachable, add an explicit nginx route (and protect it).
 
 Key metrics:
 
@@ -398,8 +404,7 @@ sudo systemctl restart postgresql
 sudo chown swarm:swarm /opt/swarm/.env
 sudo chmod 600 /opt/swarm/.env
 
-# Never commit secrets to git
-echo ".env" >> .gitignore
+# Never commit secrets to git (ensure `.env` is ignored in your repo)
 ```
 
 ### 5. Rate Limiting
@@ -420,9 +425,9 @@ Run multiple backend instances behind a load balancer:
 
 ```nginx
 upstream zerg_backend {
-    server backend1:47300;
-    server backend2:47300;
-    server backend3:47300;
+    server backend1:8000;
+    server backend2:8000;
+    server backend3:8000;
 }
 
 server {

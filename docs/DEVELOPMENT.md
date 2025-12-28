@@ -30,7 +30,14 @@ With `make dev`, the intended entry point is nginx:
 | Chat                    | 30080 | http://localhost:30080/chat      |
 | Dashboard               | 30080 | http://localhost:30080/dashboard |
 
-Internal service ports exist, but are not exposed to the host in `make dev`.
+For debugging, the dev compose also publishes the direct service ports:
+
+| Service (direct) | Port  | URL                      |
+| ---------------- | ----- | ------------------------ |
+| Backend          | 47300 | http://localhost:47300   |
+| Frontend (Vite)  | 47200 | http://localhost:47200   |
+
+The supported “happy path” is still nginx at `http://localhost:30080` (same-origin API + streaming).
 
 ---
 
@@ -176,7 +183,7 @@ zerg/
 │   ├── docker-compose.dev.yml  # Dev profiles
 │   └── nginx/                  # Reverse proxy configs
 ├── scripts/
-│   └── dev-docker.sh          # Unified dev script (legacy)
+│   └── dev-docker.sh          # Unified dev script (used by `make dev`)
 ├── Makefile                   # Main commands
 └── docs/
     └── DEVELOPMENT.md         # This file
@@ -198,6 +205,9 @@ FRONTEND_PORT=47200         # Zerg frontend (internal)
 OPENAI_API_KEY=sk-...
 JWT_SECRET=...
 FERNET_SECRET=...
+
+# Optional (used by `web_search` tool)
+TAVILY_API_KEY=tvly-...
 
 # Database
 POSTGRES_USER=...
@@ -229,4 +239,4 @@ Copy from `.env.example` if missing.
 
 ---
 
-**Last Updated**: 2025-12-25
+**Last Updated**: 2025-12-28
