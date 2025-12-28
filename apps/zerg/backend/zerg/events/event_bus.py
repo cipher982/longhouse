@@ -65,6 +65,12 @@ class EventType(str, Enum):
     WORKER_TOOL_COMPLETED = "worker_tool_completed"
     WORKER_TOOL_FAILED = "worker_tool_failed"
 
+    # Supervisor tool events (inline display in conversation)
+    SUPERVISOR_TOOL_STARTED = "supervisor_tool_started"
+    SUPERVISOR_TOOL_PROGRESS = "supervisor_tool_progress"
+    SUPERVISOR_TOOL_COMPLETED = "supervisor_tool_completed"
+    SUPERVISOR_TOOL_FAILED = "supervisor_tool_failed"
+
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
     SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
     WORKER_HEARTBEAT = "worker_heartbeat"
