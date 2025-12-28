@@ -34,7 +34,7 @@ try:
     from googleapiclient.errors import HttpError
 except ImportError:
     print("Please install Google API libraries:")
-    print("pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
+    print("uv add google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client")
     sys.exit(1)
 
 # Gmail API scope
