@@ -29,7 +29,7 @@ The supervisor tools layer enables Zerg's supervisor/worker architecture by prov
 
 ## Tools
 
-### spawn_worker(task: str, model: str = "gpt-4o-mini") -> str
+### spawn_worker(task: str, model: str | None = None, wait: bool = False, timeout_seconds: float = 300.0, decision_mode: str = "heuristic") -> str
 
 Spawns a disposable worker agent to execute a task independently.
 
@@ -44,12 +44,15 @@ Spawns a disposable worker agent to execute a task independently.
 ```python
 result = spawn_worker(
     task="Check disk usage on cube server via SSH",
-    model="gpt-4o-mini"
+    wait=False
 )
-# Returns: "Worker 2024-12-03T14-32-00_disk-check completed successfully..."
+# Returns: "Worker job <id> queued successfully..."
 ```
 
-**Returns:** Natural language summary with worker_id and result
+**Returns:**
+
+- If `wait=False` (default): a queued summary containing the `job_id`
+- If `wait=True`: waits for completion (roundabout) and returns a formatted result
 
 ---
 
@@ -60,7 +63,7 @@ Lists recent worker executions with optional filters.
 **Parameters:**
 
 - `limit`: Maximum workers to return (default: 20)
-- `status`: Filter by "success", "failed", or None for all
+- `status`: Filter by "queued", "running", "success", "failed", or None for all
 - `since_hours`: Only show workers from last N hours
 
 **Example:**
@@ -77,20 +80,20 @@ list_workers(status="failed", since_hours=24)
 
 ---
 
-### read_worker_result(worker_id: str) -> str
+### read_worker_result(job_id: str) -> str
 
 Reads the final result from a completed worker.
 
 **Example:**
 
 ```python
-result = read_worker_result("2024-12-03T14-32-00_disk-check")
-# Returns the worker's natural language result
+result = read_worker_result("123")
+# Returns the worker's natural language result (includes duration if available)
 ```
 
 ---
 
-### read_worker_file(worker_id: str, file_path: str) -> str
+### read_worker_file(job_id: str, file_path: str) -> str
 
 Reads a specific file from a worker's artifact directory.
 
@@ -108,13 +111,13 @@ Reads a specific file from a worker's artifact directory.
 ```python
 # Read metadata
 metadata = read_worker_file(
-    "2024-12-03T14-32-00_disk-check",
+    "123",
     "metadata.json"
 )
 
 # Read a specific tool output
 output = read_worker_file(
-    "2024-12-03T14-32-00_disk-check",
+    "123",
     "tool_calls/001_ssh_exec.txt"
 )
 ```
@@ -143,7 +146,7 @@ matches = grep_workers("disk usage", since_hours=24)
 
 ---
 
-### get_worker_metadata(worker_id: str) -> str
+### get_worker_metadata(job_id: str) -> str
 
 Gets detailed metadata about a worker execution.
 
@@ -159,7 +162,7 @@ Gets detailed metadata about a worker execution.
 **Example:**
 
 ```python
-metadata = get_worker_metadata("2024-12-03T14-32-00_disk-check")
+metadata = get_worker_metadata("123")
 ```
 
 ## Implementation Details
@@ -181,12 +184,12 @@ This follows the same pattern as other Zerg tools (slack_tools, github_tools, et
 
 ### Async Handling
 
-`spawn_worker` is internally async because it calls `WorkerRunner.run_worker()`. The tool wraps the async call synchronously:
+`spawn_worker` is internally async. The tool wraps the async call synchronously:
 
 ```python
-result = asyncio.run(
-    runner.run_worker(db=db, task=task, agent=None, agent_config=config)
-)
+from zerg.utils.async_utils import run_async_safely
+
+result = run_async_safely(spawn_worker_async(...))
 ```
 
 This is necessary because LangChain tools must be synchronous functions.
@@ -285,7 +288,7 @@ To expose supervisor tools to agents via the API:
 
 ### Potential Enhancements
 
-1. **Worker cancellation** - Add `cancel_worker(worker_id)` tool
+1. **Worker cancellation** - Add `cancel_worker(job_id)` tool
 2. **Worker streaming** - Stream worker output in real-time
 3. **Worker pools** - Spawn multiple workers in parallel with `spawn_worker_pool()`
 4. **Result aggregation** - Tool to aggregate results from multiple workers
