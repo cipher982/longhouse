@@ -1,7 +1,10 @@
 import { test, expect } from './fixtures';
 
 test.describe('Animation System Integration', () => {
-  test.describe.configure({ mode: 'serial' }); // Run tests in sequence for stability
+  // Parallel by default. Set E2E_ANIMATION_SERIAL=1 for debugging.
+  if (process.env.E2E_ANIMATION_SERIAL === '1') {
+    test.describe.configure({ mode: 'serial' });
+  }
 
   test('Frontend loads with animation system available', async ({ page }) => {
     // Set up test mode and mock API endpoints

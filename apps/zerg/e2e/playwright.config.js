@@ -83,6 +83,8 @@ const frontendServer = {
   cwd: path.resolve(__dirname, '../frontend-web'),
   env: {
     VITE_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}`,
+    // E2E should bypass auth gating.
+    VITE_AUTH_ENABLED: 'false',
   },
 };
 

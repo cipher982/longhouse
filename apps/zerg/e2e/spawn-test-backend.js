@@ -89,12 +89,14 @@ const { BACKEND_PORT } = getPortsFromEnv();
 
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
-// If specific workerId is set, run single process. Otherwise (global backend mode), scale workers.
-  const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
-  const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
-  const uvicornWorkers = workerId
-    ? 1
-    : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : (process.env.CI ? 4 : cpuCount));
+// E2E tests use per-Playwright-worker SQLite DBs routed via X-Test-Worker header.
+// Multiple Uvicorn workers can share the same DB file since paths are deterministic.
+// Default to CPU count for parallelism; override via UVICORN_WORKERS env var.
+const cpuCount = Math.max(1, os.cpus()?.length ?? 1);
+const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
+const uvicornWorkers = workerId
+  ? 1  // Legacy per-worker backend mode (deprecated)
+  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : cpuCount);
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);

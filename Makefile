@@ -166,6 +166,13 @@ reset: ## Reset database (destroys all data)
 # Testing targets
 # ---------------------------------------------------------------------------
 
+# Playwright E2E should run against an isolated frontend/backend pair by default,
+# not whatever is currently running in Docker on the dev ports.
+# Override per-command if you intentionally want to target your dev stack:
+#   make test-e2e E2E_BACKEND_PORT=47300 E2E_FRONTEND_PORT=47200
+E2E_BACKEND_PORT ?= 8001
+E2E_FRONTEND_PORT ?= 8002
+
 test: ## Run fast unit tests (backend + frontend)
 	@echo "🧪 Running unit tests (no Playwright E2E)..."
 	$(MAKE) test-unit
@@ -183,22 +190,22 @@ test-all: ## Run unit + Playwright E2E
 
 test-chat-e2e: ## Run Jarvis chat E2E tests (inside unified SPA)
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
-	cd apps/zerg/e2e && bunx playwright test tests/unified-frontend.spec.ts
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test tests/unified-frontend.spec.ts
 
 test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
-	cd apps/zerg/e2e && bunx playwright test $(TEST)
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
 test-e2e-ui: ## Run Playwright E2E tests with interactive UI
-	cd apps/zerg/e2e && bunx playwright test --ui
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --ui
 
 test-e2e-grep: ## Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
-	cd apps/zerg/e2e && bunx playwright test --grep "$(GREP)"
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --grep "$(GREP)"
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."
-	cd apps/zerg/e2e && bunx playwright test tests/chat_performance_eval.spec.ts
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
 test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
@@ -208,7 +215,7 @@ test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
 
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
-	cd apps/zerg/e2e && bunx playwright test
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test
 
 # ---------------------------------------------------------------------------
 # SDK & Integration
