@@ -2,7 +2,6 @@ import logging
 import os
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import Iterator
@@ -98,24 +97,12 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     Returns:
         A SQLAlchemy Engine instance
     """
-    connect_args = kwargs.pop("connect_args", {})
-    if "sqlite" in db_url:
-        if "check_same_thread" not in connect_args:
-            connect_args["check_same_thread"] = False
-        # For file-based databases, use WAL mode for better concurrency
-        if ":memory:" not in db_url:
-            # Use WAL mode for better concurrency with file-based databases
-            connect_args["isolation_level"] = None
-        # Enable foreign keys and set timeout
-        connect_args["timeout"] = 30
-
     # Connection pool health: pre_ping verifies connections before use,
     # pool_recycle closes connections after 5 minutes to handle DB restarts
-    if "sqlite" not in db_url:
-        kwargs.setdefault("pool_pre_ping", True)
-        kwargs.setdefault("pool_recycle", 300)
+    kwargs.setdefault("pool_pre_ping", True)
+    kwargs.setdefault("pool_recycle", 300)
 
-    return create_engine(db_url, connect_args=connect_args, **kwargs)
+    return create_engine(db_url, **kwargs)
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker:
@@ -241,51 +228,34 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
-    Uses DATABASE_URL from environment or falls back to default SQLite path.
+    Uses DATABASE_URL from environment.
 
     Returns:
         A sessionmaker instance
     """
-    # ---------------------------------------------------------------------
-    # Tests often import the *zerg.database* module **before** they get the
-    # chance to patch environment variables or monkey-patch the session
-    # factory.  Raising at import time therefore breaks the entire test
-    # discovery phase.  Instead of hard-failing when the variable is missing
-    # we fall back to a local on-disk SQLite file.  When the test-runner sets
-    # ``TESTING=1`` (done in *backend/tests/conftest.py*) we create an
-    # *in-memory* SQLite engine because the file system location is
-    # irrelevant and the tests patch the session/engine anyway.
-    # ---------------------------------------------------------------------
     # ------------------------------------------------------------------
     # Playwright E2E tests: isolate database per worker ------------------
     # ------------------------------------------------------------------
-    # When the *WorkerDBMiddleware* sets `current_worker_id` we look up a
-    # dedicated engine / sessionmaker pair from an in-memory cache.  The very
-    # first request for a worker lazily creates `sqlite:///./test_worker_<id>.db`
-    # and initialises the schema.
+    # When the *WorkerDBMiddleware* sets `current_worker_id` we route to
+    # a worker-specific Postgres schema for full isolation.
     #
-    # Outside the Playwright context – i.e. when *current_worker_id* is None –
-    # we fall back to the original single-engine behaviour so that unit
-    # tests, dev server sessions, and production deployments remain
-    # unaffected.
+    # Outside the E2E test context (worker_id is None), we use the
+    # default engine for unit tests, dev server, and production.
     # ------------------------------------------------------------------
 
     worker_id = current_worker_id.get()
 
     if worker_id is None:
-        # --- Legacy/shared behaviour -----------------------------------
+        # --- Default behaviour for non-E2E contexts ---
         db_url = _settings.database_url
 
         if not db_url:
-            if _settings.testing:
-                db_url = "sqlite:///:memory:"
-            else:
-                db_url = "sqlite:///./app.db"
+            raise ValueError("DATABASE_URL not set in environment")
 
         engine = make_engine(db_url)
         return make_sessionmaker(engine)
 
-    # --- Per-worker engine/session --------------------------------------
+    # --- Per-worker Postgres schema isolation (E2E tests) ---
     if worker_id in _WORKER_SESSIONMAKERS:
         return _WORKER_SESSIONMAKERS[worker_id]
 
@@ -294,109 +264,32 @@ def get_session_factory() -> sessionmaker:
         if worker_id in _WORKER_SESSIONMAKERS:
             return _WORKER_SESSIONMAKERS[worker_id]
 
-        # Route to Postgres schema isolation when enabled
+        # Route to Postgres schema isolation
         if _settings.e2e_use_postgres_schemas:
-            # New: Postgres schema isolation
             return _get_postgres_schema_session(worker_id)
 
-        # Use modern test database manager for proper isolation and cleanup
-        if _settings.testing or os.getenv("NODE_ENV") == "test":
-            # Use the test database manager for automatic cleanup and isolation
-            from zerg.test_db_manager import test_db_manager
-
-            # Get isolated database with automatic cleanup
-            db_url = test_db_manager.get_test_database_url(
-                worker_id=str(worker_id),
-                use_memory=False,  # Use file-based for connection sharing
-            )
-        else:
-            # Fallback to file-based databases for non-test environments
-            db_path = Path(__file__).resolve().parents[1] / f"test_worker_{worker_id}.db"
-            db_url = f"sqlite:///{db_path}"
-
-        engine = make_engine(db_url)
-
-        # Create tables on first use - ensure all tables are created before proceeding
-        # Use a more robust approach for SQLite in-memory databases
-        initialize_database(engine)
-
-        # Force a sync checkpoint to ensure all tables are properly created
-        if "sqlite" in db_url:
-            with engine.connect() as conn:
-                # Enable WAL mode and foreign keys for better concurrency
-                if ":memory:" not in db_url:
-                    from sqlalchemy import text
-
-                    conn.execute(text("PRAGMA journal_mode=WAL"))
-                    conn.execute(text("PRAGMA foreign_keys=ON"))
-                    conn.execute(text("PRAGMA synchronous=NORMAL"))
-
-                # Ensure all pending writes are committed
-                conn.commit()
-
-                # Verify tables were actually created
-                if os.getenv("NODE_ENV") == "test":
-                    from sqlalchemy import text
-
-                    # Engine-specific table query
-                    if "sqlite" in db_url:
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-                    else:
-                        # Postgres
-                        result = conn.execute(
-                            text("""
-                            SELECT tablename FROM pg_tables
-                            WHERE schemaname = current_schema()
-                        """)
-                        )
-                    tables = [row[0] for row in result]
-                    logger.debug("Worker %s tables after creation: %s", worker_id, sorted(tables))
-                    logger.debug("Worker %s database path: %s", worker_id, db_url)
-
-                    # Specifically check for critical tables
-                    required_tables = ["agents", "workflows", "users"]
-                    missing_tables = [t for t in required_tables if t not in tables]
-                    if missing_tables:
-                        logger.error("Worker %s missing critical tables: %s", worker_id, missing_tables)
-                        # Try to recreate tables
-                        initialize_database(engine)
-
-                    # Ensure test user exists for foreign key constraints
-                    from sqlalchemy import text
-
-                    result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
-                    user_count = result.scalar()
-                    if user_count == 0:
-                        logger.debug("Worker %s creating test user...", worker_id)
-                        # Create a test user for foreign key references
-                        conn.execute(
-                            text("""
-                            INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                              display_name, context, created_at, updated_at)
-                            VALUES (1, 'test@example.com', 'ADMIN', 1, 'dev', 'test-user-1',
-                                   'Test User', '{}', datetime('now'), datetime('now'))
-                        """)
-                        )
-                        conn.commit()
-                        logger.debug("Worker %s test user created", worker_id)
-
-        session_factory = make_sessionmaker(engine)
-
-        _WORKER_ENGINES[worker_id] = engine
-        _WORKER_SESSIONMAKERS[worker_id] = session_factory
-
-        return session_factory
+        # If schema isolation is disabled, something is misconfigured
+        raise ValueError(
+            f"Worker ID '{worker_id}' detected but E2E_USE_POSTGRES_SCHEMAS is not enabled. "
+            "Enable Postgres schema isolation for E2E tests."
+        )
 
 
 # Default engine and sessionmaker instances for app usage
-# Reuse the same relaxed resolution logic from *get_session_factory* so that
-# importing this module never crashes – the returned engine is still safe for
-# overwriting in tests via ``zerg.database.default_engine = …``.
+# For unit tests using testcontainers, DATABASE_URL will be set by conftest.py
+# which also patches default_engine/default_session_factory after startup.
+# For dev/prod, DATABASE_URL must be set in .env file.
 
-_resolved_db_url = _settings.database_url or ("sqlite:///:memory:" if _settings.testing else "sqlite:///./app.db")
-
-default_engine = make_engine(_resolved_db_url)
-default_session_factory = make_sessionmaker(default_engine)
+# Create a placeholder engine that will be overridden by tests or used in production
+if _settings.database_url:
+    default_engine = make_engine(_settings.database_url)
+    default_session_factory = make_sessionmaker(default_engine)
+else:
+    # Unit tests will override these in conftest.py before any actual usage
+    # This allows the module to be imported during test discovery without crashing
+    logger.warning("DATABASE_URL not set - using placeholder (will be overridden by tests)")
+    default_engine = None  # type: ignore[assignment]
+    default_session_factory = None  # type: ignore[assignment]
 
 
 def get_db(session_factory: Any = None) -> Iterator[Session]:

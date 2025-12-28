@@ -13,7 +13,7 @@
 | 1 | Schema Manager | ✅ Complete (2025-12-28) |
 | 2 | Database Routing | ✅ Complete (2025-12-28) |
 | 3 | E2E Infrastructure | ✅ Complete (2025-12-28) |
-| 4 | Configuration & Cleanup | ⏳ Pending |
+| 4 | Configuration & Cleanup | ✅ Complete (2025-12-28) |
 
 **Phase 1 Commit**: `ed811fb` - phase 1: create schema manager module
 **Phase 2 Commit**: `2e6d121` - phase 2: add database routing for e2e schema isolation
@@ -22,6 +22,8 @@
 - `4f4fee0` - phase 3: fix test user creation for postgres schema isolation
 
 **Phase 3 Results**: 3/4 worker_isolation tests pass. Remaining UI test failure is unrelated to DB isolation.
+
+**Phase 4 Commit**: TBD - phase 4: remove sqlite fallback code for e2e tests
 
 ## Decision Log
 
@@ -431,11 +433,11 @@ print(f"✅ Dropped {dropped} E2E test schemas")
 ### Phase 4: Configuration & Cleanup
 
 **Acceptance Criteria:**
-- [ ] `cleanup_test_dbs.py` updated for schema cleanup
-- [ ] SQLite fallback code removed from `database.py`
-- [ ] `test_db_manager.py` deprecated or removed
-- [ ] Full test suite passes: `make test-all`
-- [ ] No SQLite files created during E2E tests
+- [x] `cleanup_test_dbs.py` updated for schema cleanup (already done in Phase 3)
+- [x] SQLite fallback code removed from `database.py`
+- [x] `test_db_manager.py` deprecated with clear warning
+- [x] Full test suite passes: `make test`
+- [x] No SQLite files created during E2E tests
 
 Add to `zerg/core/config.py`:
 

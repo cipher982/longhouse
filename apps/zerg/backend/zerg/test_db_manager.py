@@ -1,5 +1,11 @@
 """
-Modern test database manager with automatic cleanup and isolation.
+DEPRECATED: This module is no longer used for E2E tests.
+
+E2E tests now use Postgres schema isolation (see e2e_schema_manager.py).
+This file is kept for backwards compatibility with any legacy code,
+but should be removed in a future cleanup.
+
+Legacy test database manager with automatic cleanup and isolation.
 Best practices for 2025: Database-per-test with ephemeral environments.
 """
 
@@ -7,11 +13,20 @@ import atexit
 import logging
 import os
 import tempfile
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
 logger = logging.getLogger(__name__)
+
+# Emit deprecation warning when module is imported
+warnings.warn(
+    "test_db_manager is deprecated. E2E tests now use Postgres schema isolation "
+    "(see e2e_schema_manager.py). This module will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class TestDatabaseManager:
