@@ -164,7 +164,7 @@ export default function ChatPage() {
       await renameThreadMutation.mutateAsync({ threadId, title: trimmedTitle });
       setEditingThreadId(null);
       setEditingTitle("");
-    } catch (error) {
+    } catch {
       // Error handling is done in the mutation's onError callback
     }
   };
@@ -188,7 +188,7 @@ export default function ChatPage() {
     setDraft("");
     try {
       await sendMutation.mutateAsync({ threadId: effectiveThreadId, content: trimmed });
-    } catch (error) {
+    } catch {
       // Error handling is done in the mutation's onError callback
     }
   };
@@ -263,7 +263,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: ["threads", agentId, "chat"] });
       // Navigate to the new thread - strict URL state
       navigate(`/agent/${agentId}/thread/${thread.id}`, { replace: true });
-    } catch (error) {
+    } catch {
       toast.error("Failed to create thread", { duration: 6000 });
     }
   };

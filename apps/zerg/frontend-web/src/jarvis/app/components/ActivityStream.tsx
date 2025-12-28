@@ -10,7 +10,7 @@
  * Design: Stack of ToolCards, ordered by start time
  */
 
-import React, { useSyncExternalStore, useMemo } from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { supervisorToolStore } from '../../lib/supervisor-tool-store';
 import { ToolCard } from './ToolCard';
 import './ActivityStream.css';
@@ -21,17 +21,14 @@ interface ActivityStreamProps {
 }
 
 export function ActivityStream({ runId, className }: ActivityStreamProps): React.ReactElement | null {
-  // Subscribe to store updates
-  const state = useSyncExternalStore(
+  // Subscribe to store updates - triggers re-render when state changes
+  useSyncExternalStore(
     supervisorToolStore.subscribe.bind(supervisorToolStore),
     () => supervisorToolStore.getState()
   );
 
   // Filter and sort tools for this run
-  const tools = useMemo(() => {
-    if (!runId) return [];
-    return supervisorToolStore.getToolsForRun(runId);
-  }, [runId, state]);
+  const tools = runId ? supervisorToolStore.getToolsForRun(runId) : [];
 
   // Don't render if no tools
   if (tools.length === 0) {
@@ -48,20 +45,3 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
     </div>
   );
 }
-
-/**
- * Hook to check if there are any tools for a run
- */
-function useHasToolsForRunImpl(runId: number | null): boolean {
-  const state = useSyncExternalStore(
-    supervisorToolStore.subscribe.bind(supervisorToolStore),
-    () => supervisorToolStore.getState()
-  );
-
-  return useMemo(() => {
-    if (!runId) return false;
-    return supervisorToolStore.getToolsForRun(runId).length > 0;
-  }, [runId, state]);
-}
-
-export { useHasToolsForRunImpl as useHasToolsForRun };

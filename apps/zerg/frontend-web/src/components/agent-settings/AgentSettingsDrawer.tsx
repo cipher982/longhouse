@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import clsx from "clsx";
 import {
   useAddMcpServer,
   useAgentDetails,
-  useAvailableTools,
   useContainerPolicy,
   useMcpServers,
   useRemoveMcpServer,
