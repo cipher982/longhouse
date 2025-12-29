@@ -4,6 +4,8 @@ This module takes base templates (generic agent behavior) and injects user-speci
 context (servers, integrations, preferences) to create complete system prompts.
 """
 
+from zerg.crud import runner_crud
+from zerg.database import get_db
 from zerg.prompts.templates import BASE_JARVIS_PROMPT
 from zerg.prompts.templates import BASE_SUPERVISOR_PROMPT
 from zerg.prompts.templates import BASE_WORKER_PROMPT
@@ -112,6 +114,38 @@ def format_integrations(integrations: dict) -> str:
     return "\n".join(lines)
 
 
+def format_online_runners(owner_id: int) -> str:
+    """Format available runners for worker prompt.
+
+    Queries the database for online runners and formats them for the worker.
+
+    Args:
+        owner_id: User ID to get runners for
+
+    Returns:
+        Formatted instruction string for runner_exec vs ssh_exec
+    """
+    db = next(get_db())
+    try:
+        runners = runner_crud.get_runners(db, owner_id=owner_id)
+        runner_names = [r.name for r in runners if r.status == "online"]
+    finally:
+        db.close()
+
+    if runner_names:
+        names_str = ", ".join(f'"{n}"' for n in runner_names)
+        return f"""**Use runner_exec** for these targets (faster, more secure):
+- Online runners: {names_str}
+- Example: `runner_exec(target="{runner_names[0]}", command="df -h")`
+
+**Only use ssh_exec as fallback** if runner_exec fails or target has no runner."""
+    else:
+        return """**No runners currently online.** Use ssh_exec for command execution:
+- `ssh_exec(host="<server>", command="...")`
+
+Note: Runner daemons provide faster, more secure execution when available."""
+
+
 def build_supervisor_prompt(user) -> str:
     """Build complete supervisor prompt with user context.
 
@@ -144,6 +178,7 @@ def build_worker_prompt(user) -> str:
     return BASE_WORKER_PROMPT.format(
         servers=format_servers(ctx.get("servers", [])),
         user_context=format_user_context(ctx),
+        online_runners=format_online_runners(user.id),
     )
 
 

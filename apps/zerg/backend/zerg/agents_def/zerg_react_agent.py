@@ -147,7 +147,7 @@ def is_critical_tool_error(
 # ---------------------------------------------------------------------------
 
 
-def _make_llm(agent_row, tools):
+def _make_llm(agent_row, tools, *, tool_choice: dict | str | bool | None = None):
     """Factory that returns a *tool-bound* ``ChatOpenAI`` instance.
 
     If the :pydataattr:`zerg.config.LLM_TOKEN_STREAM` flag is enabled the LLM
@@ -171,13 +171,19 @@ def _make_llm(agent_row, tools):
             from zerg.testing.mock_llm import MockChatLLM
 
             llm = MockChatLLM()
-            return llm.bind_tools(tools)
+            try:
+                return llm.bind_tools(tools, tool_choice=tool_choice)
+            except TypeError:
+                return llm.bind_tools(tools)
 
         # gpt-scripted
         from zerg.testing.scripted_llm import ScriptedChatLLM
 
         llm = ScriptedChatLLM()
-        return llm.bind_tools(tools)
+        try:
+            return llm.bind_tools(tools, tool_choice=tool_choice)
+        except TypeError:
+            return llm.bind_tools(tools)
 
     # Create LLM with basic parameters
     kwargs: dict = {
@@ -186,42 +192,27 @@ def _make_llm(agent_row, tools):
         "api_key": get_settings().openai_api_key,
     }
 
-    # Add reasoning_effort if specified in agent config
-    # Values: "low", "medium", "high". "none" or absent = omit parameter.
+    # Add reasoning_effort - always pass explicitly, default to "none"
+    # Values: "none", "low", "medium", "high", "xhigh"
     agent_cfg = getattr(agent_row, "config", {}) or {}
-    reasoning_effort = agent_cfg.get("reasoning_effort")
-    if reasoning_effort and reasoning_effort.lower() not in ("none", ""):
-        kwargs["reasoning_effort"] = reasoning_effort.lower()
+    reasoning_effort = (agent_cfg.get("reasoning_effort") or "none").lower()
+    kwargs["reasoning_effort"] = reasoning_effort
 
     logger.info(f"[_make_llm] Creating LLM with model={agent_row.model}, reasoning_effort={reasoning_effort}")
 
-    # Enforce a maximum completion length if configured (>0)
-    # Note: Reasoning-capable models require max_completion_tokens instead of max_tokens
-    try:
-        max_toks = int(get_settings().max_output_tokens)
-    except Exception:  # noqa: BLE001 – defensive parsing
-        max_toks = 0
-    if max_toks and max_toks > 0:
-        # Reasoning-capable models (gpt-5.x, o1-*, etc.) require max_completion_tokens
-        is_reasoning_model = agent_row.model.startswith(("gpt-5", "o1-", "o3-"))
-        if is_reasoning_model:
-            kwargs["max_completion_tokens"] = max_toks
-        else:
-            kwargs["max_tokens"] = max_toks
-
-    # Be defensive against older stubs or versions that don't accept these params
-    try:
-        llm = ChatOpenAI(**kwargs)
-    except TypeError:
-        # Try removing token limit params if model doesn't support them
-        kwargs.pop("max_tokens", None)
-        kwargs.pop("max_completion_tokens", None)
-        llm = ChatOpenAI(**kwargs)
+    llm = ChatOpenAI(**kwargs)
 
     # Note: callbacks should be passed during invocation, not construction
     # The WsTokenCallback should be handled at the invocation level
 
-    return llm.bind_tools(tools)
+    if tool_choice is None:
+        return llm.bind_tools(tools)
+
+    try:
+        return llm.bind_tools(tools, tool_choice=tool_choice)
+    except TypeError:
+        # Some stubs / older LangChain implementations don't accept tool_choice.
+        return llm.bind_tools(tools)
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +275,12 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
     # Model invocation helpers
     # ------------------------------------------------------------------
 
-    def _call_model_sync(messages: List[BaseMessage], enable_token_stream: bool = False):
+    def _call_model_sync(
+        messages: List[BaseMessage],
+        enable_token_stream: bool = False,
+        *,
+        tool_choice: dict | str | bool | None = None,
+    ):
         """Blocking LLM call (executes in *current* thread).
 
         We keep this as a *plain* function rather than a LangGraph ``@task``
@@ -297,10 +293,19 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             "Called get_config outside of a runnable context"
         """
         # Create LLM dynamically to respect current enable_token_stream flag
-        llm_with_tools = _make_llm(agent_row, tools)
+        if tool_choice is None:
+            llm_with_tools = _make_llm(agent_row, tools)
+        else:
+            llm_with_tools = _make_llm(agent_row, tools, tool_choice=tool_choice)
         return llm_with_tools.invoke(messages)
 
-    async def _call_model_async(messages: List[BaseMessage], enable_token_stream: bool = False, phase: str = "reasoning"):
+    async def _call_model_async(
+        messages: List[BaseMessage],
+        enable_token_stream: bool = False,
+        phase: str = "reasoning",
+        *,
+        tool_choice: dict | str | bool | None = None,
+    ):
         """Run the LLM call with optional token streaming via callbacks.
 
         Parameters
@@ -377,7 +382,10 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         heartbeat_task = asyncio.create_task(emit_heartbeats())
 
         # Create LLM dynamically with current enable_token_stream flag
-        llm_with_tools = _make_llm(agent_row, tools)
+        if tool_choice is None:
+            llm_with_tools = _make_llm(agent_row, tools)
+        else:
+            llm_with_tools = _make_llm(agent_row, tools, tool_choice=tool_choice)
 
         # Phase 2: Evidence Mounting for Supervisor Runs
         # If we're in a supervisor context, wrap the LLM with evidence mounting
@@ -645,6 +653,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Get supervisor context (for supervisor tool events when not in worker)
         from zerg.services.supervisor_context import get_supervisor_context
+
         sup_ctx = get_supervisor_context() if not ctx else None
 
         # Redact sensitive fields from args for event emission
@@ -914,7 +923,38 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                         )
                     ],
                 )
-                llm_response = await _call_model_async(current_messages, enable_token_stream, phase="empty_retry")
+                # Force tool invocation on retry when tools exist. Some provider/model
+                # combinations can return empty content without tool calls; "required"
+                # makes the failure mode observable (tool error) instead of silent.
+                llm_response = await _call_model_async(
+                    current_messages,
+                    enable_token_stream,
+                    phase="empty_retry",
+                    tool_choice="required" if tools else None,
+                )
+
+                # If the provider still returns an empty assistant message, surface a
+                # concrete failure message so workers don't "succeed" with no output.
+                if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+                    retry_content = llm_response.content
+                    retry_text = ""
+                    if isinstance(retry_content, list):
+                        for part in retry_content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                retry_text += str(part.get("text") or "")
+                            elif isinstance(part, str):
+                                retry_text += part
+                    else:
+                        retry_text = str(retry_content or "")
+
+                    if not retry_text.strip():
+                        logger.error("Agent produced empty response even after tool_choice=required retry")
+                        llm_response = AIMessage(
+                            content=(
+                                "Error: LLM returned an empty response twice (no tool calls, no text). "
+                                "This is a provider/model issue; retry the worker or switch the worker model."
+                            )
+                        )
 
         # Until the model stops calling tools, continue the loop
         import asyncio

@@ -179,12 +179,28 @@ class TestPromptInstructions:
     """Test that worker prompts mention available tools."""
 
     def test_worker_prompt_mentions_exec_tools(self):
-        """Test that worker system prompt mentions runner_exec and ssh_exec."""
+        """Test that worker system prompt has placeholder for exec tools."""
         from zerg.prompts.templates import BASE_WORKER_PROMPT
 
-        # LLM should know both tools exist (it decides which to use)
-        assert "runner_exec" in BASE_WORKER_PROMPT.lower()
-        assert "ssh_exec" in BASE_WORKER_PROMPT.lower()
+        # Worker prompt uses {online_runners} placeholder which is dynamically filled
+        # with runner_exec and ssh_exec instructions based on available runners
+        assert "{online_runners}" in BASE_WORKER_PROMPT
+
+    def test_composed_worker_prompt_mentions_exec_tools(self):
+        """Test that composed worker prompt includes runner_exec and ssh_exec."""
+        from unittest.mock import patch
+
+        from zerg.prompts.composer import build_worker_prompt
+
+        class MockUser:
+            id = 1
+            context = {}
+
+        with patch("zerg.prompts.composer.format_online_runners") as mock_runners:
+            mock_runners.return_value = '**Use runner_exec** for targets.\n**ssh_exec as fallback**'
+            prompt = build_worker_prompt(MockUser())
+            assert "runner_exec" in prompt.lower()
+            assert "ssh_exec" in prompt.lower()
 
     def test_server_metadata_includes_ssh_details(self):
         """Test that server metadata includes both SSH alias and concrete details."""
