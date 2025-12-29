@@ -57,6 +57,7 @@ export interface SupervisorToolState {
   isActive: boolean;
   currentRunId: number | null;
   tools: Map<string, SupervisorToolCall>;  // keyed by toolCallId
+  deferredRuns: Set<number>;  // runIds that have gone DEFERRED
 }
 
 type Listener = () => void;
@@ -69,11 +70,17 @@ class SupervisorToolStore {
     isActive: false,
     currentRunId: null,
     tools: new Map(),
+    deferredRuns: new Set(),
   };
 
   private listeners = new Set<Listener>();
   private tickerInterval: number | null = null;
   private clearTimeout: number | null = null;
+
+  // Map jobId -> toolCallId for spawn_worker tools
+  private workerJobToToolCallId = new Map<number, string>();
+  // Map workerId -> toolCallId for spawn_worker tools
+  private workerIdToToolCallId = new Map<string, string>();
 
   constructor() {
     this.subscribeToEvents();
@@ -93,6 +100,13 @@ class SupervisorToolStore {
     return Array.from(this.state.tools.values())
       .filter(tool => tool.runId === runId)
       .sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  /**
+   * Check if a run has been deferred (workers continuing in background)
+   */
+  isDeferred(runId: number | null): boolean {
+    return runId !== null && this.state.deferredRuns.has(runId);
   }
 
   /**
@@ -127,11 +141,13 @@ class SupervisorToolStore {
     if (this.tickerInterval) return;
 
     this.tickerInterval = window.setInterval(() => {
-      const hasRunningTools = Array.from(this.state.tools.values())
-        .some(tool => tool.status === 'running');
+      const hasRunningTools = this.hasActiveWork();
 
       if (hasRunningTools) {
         this.notifyListeners(); // Trigger re-render for live duration
+      } else {
+        // Stop ticker if no active work remains (handles deferred runs)
+        this.stopTicker();
       }
     }, 500);
   }
@@ -186,6 +202,14 @@ class SupervisorToolStore {
         logs: [],
       };
 
+      // Initialize worker metadata for spawn_worker tools
+      if (data.toolName === 'spawn_worker') {
+        tool.result = {
+          workerStatus: 'spawned',
+          nestedTools: [],
+        };
+      }
+
       newTools.set(data.toolCallId, tool);
 
       this.setState({
@@ -228,17 +252,32 @@ class SupervisorToolStore {
       const tool = newTools.get(data.toolCallId);
 
       if (tool) {
+        // For spawn_worker, merge result with existing worker metadata (workerStatus, nestedTools)
+        // For other tools, just set result directly
+        const mergedResult = tool.toolName === 'spawn_worker'
+          ? { ...(tool.result as any), ...(data.result as any) }
+          : data.result;
+
         const updatedTool: SupervisorToolCall = {
           ...tool,
           status: 'completed',
           completedAt: data.timestamp,
           durationMs: data.durationMs,
           resultPreview: data.resultPreview,
-          result: data.result,
+          result: mergedResult,
         };
 
         newTools.set(data.toolCallId, updatedTool);
         this.setState({ tools: newTools });
+
+        // Extract job_id from spawn_worker result and update mapping
+        if (tool.toolName === 'spawn_worker' && data.result) {
+          const jobId = this.extractJobIdFromResult(data.result);
+          if (jobId) {
+            this.workerJobToToolCallId.set(jobId, data.toolCallId);
+            logger.debug(`[SupervisorToolStore] Mapped job_id ${jobId} to tool ${data.toolCallId}`);
+          }
+        }
       }
 
       this.checkAndStopTicker();
@@ -278,6 +317,14 @@ class SupervisorToolStore {
       logger.debug('[SupervisorToolStore] Supervisor complete');
     });
 
+    // Supervisor deferred - mark run as deferred (workers continue in background)
+    eventBus.on('supervisor:deferred', (data) => {
+      const newDeferredRuns = new Set(this.state.deferredRuns);
+      newDeferredRuns.add(data.runId);
+      this.setState({ deferredRuns: newDeferredRuns });
+      logger.debug(`[SupervisorToolStore] Run ${data.runId} deferred`);
+    });
+
     // Supervisor error
     eventBus.on('supervisor:error', () => {
       this.stopTicker();
@@ -295,17 +342,228 @@ class SupervisorToolStore {
       });
       logger.debug('[SupervisorToolStore] Supervisor cleared');
     });
+
+    // Worker lifecycle events - update spawn_worker tool metadata
+    eventBus.on('supervisor:worker_spawned', (data) => {
+      // Find the spawn_worker tool for this job
+      const toolCallId = this.findSpawnWorkerToolForJob(data.jobId);
+      if (toolCallId) {
+        this.workerJobToToolCallId.set(data.jobId, toolCallId);
+        this.updateWorkerMetadata(toolCallId, { workerStatus: 'spawned' });
+        logger.debug(`[SupervisorToolStore] Worker spawned for tool ${toolCallId}`);
+      }
+    });
+
+    eventBus.on('supervisor:worker_started', (data) => {
+      const toolCallId = this.workerJobToToolCallId.get(data.jobId);
+      if (toolCallId) {
+        if (data.workerId) {
+          this.workerIdToToolCallId.set(data.workerId, toolCallId);
+        } else {
+          logger.warn(`[SupervisorToolStore] worker_started for job ${data.jobId} missing workerId`);
+        }
+        this.updateWorkerMetadata(toolCallId, { workerStatus: 'running' });
+        logger.debug(`[SupervisorToolStore] Worker started for tool ${toolCallId}`);
+      }
+    });
+
+    eventBus.on('supervisor:worker_complete', (data) => {
+      const toolCallId = this.workerJobToToolCallId.get(data.jobId);
+      if (toolCallId) {
+        const status = data.status === 'success' ? 'complete' : 'failed';
+        this.updateWorkerMetadata(toolCallId, { workerStatus: status });
+        logger.debug(`[SupervisorToolStore] Worker ${status} for tool ${toolCallId}`);
+      }
+    });
+
+    eventBus.on('supervisor:worker_summary', (data) => {
+      const toolCallId = this.workerJobToToolCallId.get(data.jobId);
+      if (toolCallId) {
+        this.updateWorkerMetadata(toolCallId, { workerSummary: data.summary });
+        logger.debug(`[SupervisorToolStore] Worker summary for tool ${toolCallId}`);
+      }
+    });
+
+    // Worker tool events - add to nested tools list
+    eventBus.on('worker:tool_started', (data) => {
+      const toolCallId = this.workerIdToToolCallId.get(data.workerId);
+
+      if (toolCallId) {
+        this.addNestedTool(toolCallId, {
+          toolCallId: data.toolCallId,
+          toolName: data.toolName,
+          status: 'running',
+          argsPreview: data.argsPreview,
+          startedAt: data.timestamp,
+        });
+        logger.debug(`[SupervisorToolStore] Nested tool started: ${data.toolName}`);
+      } else {
+        // Worker tool events require workerId mapping from worker_started
+        logger.warn(`[SupervisorToolStore] Could not route nested tool ${data.toolName} (workerId=${data.workerId} not found)`);
+      }
+    });
+
+    eventBus.on('worker:tool_completed', (data) => {
+      const toolCallId = this.workerIdToToolCallId.get(data.workerId);
+
+      if (toolCallId) {
+        this.updateNestedTool(toolCallId, data.toolCallId, {
+          status: 'completed',
+          durationMs: data.durationMs,
+        });
+        logger.debug(`[SupervisorToolStore] Nested tool completed: ${data.toolName}`);
+      }
+    });
+
+    eventBus.on('worker:tool_failed', (data) => {
+      const toolCallId = this.workerIdToToolCallId.get(data.workerId);
+
+      if (toolCallId) {
+        this.updateNestedTool(toolCallId, data.toolCallId, {
+          status: 'failed',
+          error: data.error,
+          durationMs: data.durationMs,
+        });
+        logger.debug(`[SupervisorToolStore] Nested tool failed: ${data.toolName}`);
+      }
+    });
+  }
+
+  /**
+   * Check if there's any active work (running tools, active workers, or nested tools)
+   */
+  private hasActiveWork(): boolean {
+    return Array.from(this.state.tools.values()).some(tool => {
+      // Regular tool still running
+      if (tool.status === 'running') return true;
+
+      // spawn_worker with active worker or nested tools
+      if (tool.toolName === 'spawn_worker') {
+        const workerStatus = (tool.result as any)?.workerStatus;
+        const nestedTools = (tool.result as any)?.nestedTools || [];
+
+        // Worker is spawned or running
+        if (workerStatus === 'spawned' || workerStatus === 'running') return true;
+
+        // Has running nested tools
+        if (nestedTools.some((nt: any) => nt.status === 'running')) return true;
+      }
+
+      return false;
+    });
   }
 
   /**
    * Check if we should stop the ticker (no running tools)
    */
   private checkAndStopTicker(): void {
-    const hasRunningTools = Array.from(this.state.tools.values())
-      .some(tool => tool.status === 'running');
-
-    if (!hasRunningTools) {
+    if (!this.hasActiveWork()) {
       this.stopTicker();
+    }
+  }
+
+  /**
+   * Find the spawn_worker tool for a given job ID (by checking existing mapping)
+   */
+  private findSpawnWorkerToolForJob(jobId: number): string | null {
+    // First check if we already have a mapping
+    const existingMapping = this.workerJobToToolCallId.get(jobId);
+    if (existingMapping) {
+      return existingMapping;
+    }
+
+    // Fallback: search tools for job_id in result (set after tool_completed)
+    for (const [toolCallId, tool] of this.state.tools.entries()) {
+      if (tool.toolName === 'spawn_worker' && tool.result) {
+        const resultJobId = this.extractJobIdFromResult(tool.result);
+        if (resultJobId === jobId) {
+          return toolCallId;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract job_id from spawn_worker tool result
+   * Result format: "Worker job {jobId} queued successfully..."
+   */
+  private extractJobIdFromResult(result: any): number | null {
+    if (typeof result === 'string') {
+      // Parse "Worker job 123 queued successfully..."
+      const match = result.match(/Worker job (\d+)/);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
+    } else if (result && typeof result === 'object' && 'job_id' in result) {
+      // Handle structured result (if backend changes format)
+      return result.job_id;
+    }
+    return null;
+  }
+
+  /**
+   * Update worker metadata for a spawn_worker tool
+   */
+  private updateWorkerMetadata(toolCallId: string, metadata: Record<string, any>): void {
+    const newTools = new Map(this.state.tools);
+    const tool = newTools.get(toolCallId);
+
+    if (tool && tool.toolName === 'spawn_worker') {
+      const updatedTool: SupervisorToolCall = {
+        ...tool,
+        result: {
+          ...(tool.result as any),
+          ...metadata,
+        },
+      };
+      newTools.set(toolCallId, updatedTool);
+      this.setState({ tools: newTools });
+    }
+  }
+
+  /**
+   * Add a nested tool to a spawn_worker tool
+   */
+  private addNestedTool(toolCallId: string, nestedTool: any): void {
+    const newTools = new Map(this.state.tools);
+    const tool = newTools.get(toolCallId);
+
+    if (tool && tool.toolName === 'spawn_worker') {
+      const currentNested = ((tool.result as any)?.nestedTools || []) as any[];
+      const updatedTool: SupervisorToolCall = {
+        ...tool,
+        result: {
+          ...(tool.result as any),
+          nestedTools: [...currentNested, nestedTool],
+        },
+      };
+      newTools.set(toolCallId, updatedTool);
+      this.setState({ tools: newTools });
+    }
+  }
+
+  /**
+   * Update a nested tool within a spawn_worker tool
+   */
+  private updateNestedTool(toolCallId: string, nestedToolCallId: string, updates: Record<string, any>): void {
+    const newTools = new Map(this.state.tools);
+    const tool = newTools.get(toolCallId);
+
+    if (tool && tool.toolName === 'spawn_worker') {
+      const nestedTools = ((tool.result as any)?.nestedTools || []) as any[];
+      const updatedNested = nestedTools.map(nt =>
+        nt.toolCallId === nestedToolCallId ? { ...nt, ...updates } : nt
+      );
+      const updatedTool: SupervisorToolCall = {
+        ...tool,
+        result: {
+          ...(tool.result as any),
+          nestedTools: updatedNested,
+        },
+      };
+      newTools.set(toolCallId, updatedTool);
+      this.setState({ tools: newTools });
     }
   }
 
@@ -315,10 +573,13 @@ class SupervisorToolStore {
   clearTools(): void {
     this.stopTicker();
     this.cancelClearTimeout();
+    this.workerJobToToolCallId.clear();
+    this.workerIdToToolCallId.clear();
     this.setState({
       isActive: false,
       currentRunId: null,
       tools: new Map(),
+      deferredRuns: new Set(),
     });
     logger.debug('[SupervisorToolStore] Tools cleared');
   }
