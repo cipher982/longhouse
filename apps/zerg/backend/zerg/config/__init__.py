@@ -81,8 +81,6 @@ class Settings:  # noqa: D401 – simple data container
     # User/account limits ----------------------------------------------
     max_users: int
     admin_emails: str  # comma-separated list
-    # LLM limits --------------------------------------------------------
-    max_output_tokens: int
     # Model policy ------------------------------------------------------
     allowed_models_non_admin: str  # csv list
     # Quotas ------------------------------------------------------------
@@ -234,7 +232,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         pubsub_sa_email=os.getenv("PUBSUB_SA_EMAIL"),
         max_users=int(os.getenv("MAX_USERS", "20")),
         admin_emails=os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")),
-        max_output_tokens=int(os.getenv("MAX_OUTPUT_TOKENS", "1000")),
         allowed_models_non_admin=os.getenv("ALLOWED_MODELS_NON_ADMIN", ""),
         daily_runs_per_user=int(os.getenv("DAILY_RUNS_PER_USER", "0")),
         daily_cost_per_user_cents=int(os.getenv("DAILY_COST_PER_USER_CENTS", "0")),

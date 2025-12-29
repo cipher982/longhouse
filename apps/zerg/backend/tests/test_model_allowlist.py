@@ -53,7 +53,6 @@ def _mock_settings_with_allowlist(allowed_model: str):
         pubsub_sa_email=real_settings.pubsub_sa_email,
         max_users=real_settings.max_users,
         admin_emails=real_settings.admin_emails,
-        max_output_tokens=real_settings.max_output_tokens,
         allowed_models_non_admin=allowed_model,  # Override this
         daily_runs_per_user=real_settings.daily_runs_per_user,
         daily_cost_per_user_cents=real_settings.daily_cost_per_user_cents,

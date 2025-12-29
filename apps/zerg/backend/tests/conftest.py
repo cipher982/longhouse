@@ -636,12 +636,11 @@ def test_session_factory(db_session):
 # Model fixtures - centralized model constants for tests
 # ---------------------------------------------------------------------------
 from zerg.models_config import DEFAULT_MODEL_ID
-from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.models_config import TEST_MODEL_ID
 
 # Re-export as module-level constants for tests that need direct import
 TEST_MODEL = DEFAULT_MODEL_ID  # "gpt-5.2" - for tests needing best quality
-TEST_WORKER_MODEL = DEFAULT_WORKER_MODEL_ID  # "gpt-5-mini" - for worker tests
+TEST_WORKER_MODEL = TEST_MODEL_ID  # "gpt-5-nano" - distinct model for allowlist tests
 TEST_MODEL_CHEAP = TEST_MODEL_ID  # "gpt-5-nano" - for CI tests needing speed/cost
 
 

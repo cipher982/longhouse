@@ -275,13 +275,11 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
-        # Initialize agent state recovery system
+        # Initialize agent state recovery system (recovers orphaned agents, runs, jobs)
         if not _settings.testing:
             from zerg.services.agent_state_recovery import initialize_agent_state_system
 
-            recovery_result = await initialize_agent_state_system()
-            if recovery_result["recovered_agents"]:
-                logger.info(f"Recovered {len(recovery_result['recovered_agents'])} stuck agents during startup")
+            await initialize_agent_state_system()
 
         # Start shared async runner
         from zerg.utils.async_runner import get_shared_runner

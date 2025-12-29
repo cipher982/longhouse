@@ -136,7 +136,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         return None
 
     model = os.getenv("JARVIS_TITLE_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("JARVIS_TITLE_REASONING_EFFORT", "minimal")
+    reasoning_effort = os.getenv("JARVIS_TITLE_REASONING_EFFORT", "none")
 
     # Build transcript
     transcript = "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in normalized)

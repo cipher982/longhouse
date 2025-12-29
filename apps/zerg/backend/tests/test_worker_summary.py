@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import TEST_WORKER_MODEL
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
 
@@ -48,7 +48,7 @@ class TestUpdateSummary:
         summary = "Completed task successfully, 3 items processed"
         summary_meta = {
             "version": 1,
-            "model": TEST_WORKER_MODEL,
+            "model": DEFAULT_WORKER_MODEL_ID,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
         temp_store.update_summary(worker_id, summary, summary_meta)
@@ -57,7 +57,7 @@ class TestUpdateSummary:
         metadata = temp_store.get_worker_metadata(worker_id)
         assert metadata["summary"] == summary
         assert metadata["summary_meta"]["version"] == 1
-        assert metadata["summary_meta"]["model"] == TEST_WORKER_MODEL
+        assert metadata["summary_meta"]["model"] == DEFAULT_WORKER_MODEL_ID
 
         # Verify index has summary
         index = temp_store._read_index()
@@ -98,7 +98,7 @@ class TestExtractSummary:
 
         assert summary == "Task completed: 3 files processed"
         assert meta["version"] == 1
-        assert meta["model"] == TEST_WORKER_MODEL
+        assert meta["model"] == DEFAULT_WORKER_MODEL_ID
         assert "generated_at" in meta
         assert "error" not in meta
 
@@ -222,7 +222,7 @@ class TestListWorkersWithSummaries:
         temp_store.update_summary(
             worker_id,
             "Disk at 45% capacity (225GB used)",
-            {"version": 1, "model": TEST_WORKER_MODEL},
+            {"version": 1, "model": DEFAULT_WORKER_MODEL_ID},
         )
 
         # List workers and verify summary in index
