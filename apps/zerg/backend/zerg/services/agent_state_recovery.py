@@ -176,8 +176,11 @@ async def perform_startup_worker_job_recovery() -> List[int]:
     """
     Recover orphaned WorkerJob rows on application startup.
 
-    Finds worker jobs stuck in queued/running status and marks them
-    as failed with a clear error message indicating server restart.
+    Only recovers jobs in "running" status - these were mid-execution when
+    the server crashed and their state is lost.
+
+    Jobs in "queued" status are NOT recovered because WorkerJobProcessor
+    is designed to resume them after restart (they haven't started yet).
 
     Returns:
         List of job IDs that were recovered
@@ -189,7 +192,8 @@ async def perform_startup_worker_job_recovery() -> List[int]:
 
     with session_factory() as db:
         try:
-            stuck_jobs = db.query(WorkerJob).filter(WorkerJob.status.in_(["queued", "running"])).all()
+            # Only recover "running" jobs - queued jobs are resumable
+            stuck_jobs = db.query(WorkerJob).filter(WorkerJob.status == "running").all()
 
             if not stuck_jobs:
                 logger.info("✅ No stuck worker jobs found during startup recovery")
@@ -319,26 +323,31 @@ async def initialize_agent_state_system():
     Initialize the agent state management system.
 
     This should be called during application startup to:
-    1. Perform recovery of any stuck agents
-    2. Perform recovery of any orphaned runs
-    3. Perform recovery of any orphaned worker jobs
-    4. Perform recovery of any orphaned runner jobs
+    1. Perform recovery of any orphaned runs (MUST happen before agent recovery)
+    2. Perform recovery of any orphaned worker jobs
+    3. Perform recovery of any orphaned runner jobs
+    4. Perform recovery of any stuck agents (after runs are cleared)
     5. Initialize the proper locking system
+
+    IMPORTANT: Run/job recovery must happen BEFORE agent recovery because
+    agent recovery skips agents with active runs. If we recover agents first,
+    agents with stuck runs won't be reset. Then when run recovery marks those
+    runs as FAILED, the agent stays stuck in "running" forever.
     """
     logger.info("Initializing agent state management system...")
 
     try:
-        # Step 1: Perform startup recovery for agents
-        recovered_agents = await perform_startup_agent_recovery()
-
-        # Step 2: Perform startup recovery for runs
+        # Step 1: Recover runs FIRST (so agents no longer have "active runs")
         recovered_runs = await perform_startup_run_recovery()
 
-        # Step 3: Perform startup recovery for worker jobs
+        # Step 2: Recover worker jobs
         recovered_worker_jobs = await perform_startup_worker_job_recovery()
 
-        # Step 4: Perform startup recovery for runner jobs
+        # Step 3: Recover runner jobs
         recovered_runner_jobs = await perform_startup_runner_job_recovery()
+
+        # Step 4: Recover agents LAST (now will correctly see no active runs)
+        recovered_agents = await perform_startup_agent_recovery()
 
         # Step 5: Check advisory lock support for future enhancement
         advisory_locks_available = check_postgresql_advisory_lock_support()

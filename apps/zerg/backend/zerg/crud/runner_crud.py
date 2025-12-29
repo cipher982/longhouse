@@ -460,6 +460,10 @@ def update_job_completed(
     job.status = "success" if exit_code == 0 else "failed"
     job.exit_code = exit_code
     job.finished_at = utc_now_naive()
+    # Clear any stale error (e.g., from startup recovery marking job as orphaned
+    # before it actually completed on the runner)
+    if exit_code == 0:
+        job.error = None
 
     db.commit()
     db.refresh(job)
