@@ -409,6 +409,7 @@ class SupervisorService:
             SupervisorRunResult with run details and result
         """
         start_time = datetime.now(timezone.utc)
+        started_at_naive = start_time.replace(tzinfo=None)
 
         # Get or create supervisor components
         agent = self.get_or_create_supervisor_agent(owner_id)
@@ -439,11 +440,17 @@ class SupervisorService:
                 thread_id=thread.id,
                 status=RunStatus.RUNNING,
                 trigger=RunTrigger.API,
+                started_at=started_at_naive,
             )
             self.db.add(run)
             self.db.commit()
             self.db.refresh(run)
             logger.info(f"Created new supervisor run {run.id}", extra={"tag": "AGENT"})
+
+        # Ensure started_at is populated for existing runs as well.
+        if run.started_at is None:
+            run.started_at = started_at_naive
+            self.db.commit()
 
         logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "AGENT"})
 
@@ -533,6 +540,7 @@ class SupervisorService:
 
                 # Update run status to DEFERRED (not FAILED)
                 run.status = RunStatus.DEFERRED
+                run.duration_ms = duration_ms
                 self.db.commit()
 
                 # Emit deferred event (not error)
@@ -605,7 +613,8 @@ class SupervisorService:
 
             # Update run status
             run.status = RunStatus.SUCCESS
-            run.finished_at = end_time
+            run.finished_at = end_time.replace(tzinfo=None)
+            run.duration_ms = duration_ms
             if runner.usage_total_tokens:
                 run.total_tokens = runner.usage_total_tokens
             self.db.commit()
@@ -671,7 +680,8 @@ class SupervisorService:
             # Update run status to cancelled if not already terminal
             if run.status not in {RunStatus.CANCELLED, RunStatus.SUCCESS, RunStatus.FAILED}:
                 run.status = RunStatus.CANCELLED
-                run.finished_at = end_time
+                run.finished_at = end_time.replace(tzinfo=None)
+                run.duration_ms = duration_ms
                 self.db.commit()
 
             await emit_run_event(
@@ -709,7 +719,8 @@ class SupervisorService:
 
             # Update run status
             run.status = RunStatus.FAILED
-            run.finished_at = end_time
+            run.finished_at = end_time.replace(tzinfo=None)
+            run.duration_ms = duration_ms
             run.error = str(e)
             self.db.commit()
 
