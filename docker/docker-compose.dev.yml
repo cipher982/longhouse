@@ -17,9 +17,11 @@ x-logging: &default-logging
     max-file: "3"
 
 x-healthcheck-defaults: &healthcheck-defaults
-  interval: 3s
-  timeout: 3s
+  interval: 5s
+  timeout: 2s
   retries: 3
+  start_period: 2s
+  start_interval: 250ms  # Rapid polling during startup (Docker 25+)
 
 services:
   # ---------------------------------------------------------------------------
@@ -39,9 +41,11 @@ services:
       - ../logs/postgres:/var/log/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      interval: 10s
+      timeout: 2s
+      retries: 3
+      start_period: 2s
+      start_interval: 250ms
     networks:
       - swarm-network
     logging: *default-logging
@@ -102,7 +106,7 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       <<: *healthcheck-defaults
-      start_period: 10s
+      start_period: 2s
     networks:
       - swarm-network
     logging: *default-logging
@@ -119,7 +123,7 @@ services:
     restart: "no"
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started  # Don't block on backend health - Vite can start independently
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
       VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:${JARPXY_PORT:-30080}}
@@ -133,7 +137,7 @@ services:
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5173/"]
       <<: *healthcheck-defaults
-      start_period: 15s
+      start_period: 3s
     networks:
       - swarm-network
     logging: *default-logging
@@ -157,9 +161,9 @@ services:
       - ../logs/nginx:/var/log/nginx
     depends_on:
       frontend:
-        condition: service_healthy
+        condition: service_started  # nginx handles upstream failures gracefully
       backend:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
       <<: *healthcheck-defaults
@@ -178,7 +182,7 @@ services:
     restart: "no"
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started  # Runner reconnects automatically
     environment:
       SWARMLET_URL: ws://backend:8000
       RUNNER_NAME: ${DEV_RUNNER_NAME:-clifford}
