@@ -347,12 +347,15 @@ class SupervisorToolStore {
 
     // Worker lifecycle events - update spawn_worker tool metadata
     eventBus.on('supervisor:worker_spawned', (data) => {
-      // Find the spawn_worker tool for this job
-      const toolCallId = this.findSpawnWorkerToolForJob(data.jobId);
+      // Find the most recent spawn_worker tool that's running (just started)
+      // This works because worker_spawned fires immediately after spawn_worker starts
+      const toolCallId = this.findMostRecentSpawnWorkerTool();
       if (toolCallId) {
         this.workerJobToToolCallId.set(data.jobId, toolCallId);
         this.updateWorkerMetadata(toolCallId, { workerStatus: 'spawned' });
-        logger.debug(`[SupervisorToolStore] Worker spawned for tool ${toolCallId}`);
+        logger.debug(`[SupervisorToolStore] Worker spawned for tool ${toolCallId} (job ${data.jobId})`);
+      } else {
+        logger.warn(`[SupervisorToolStore] Could not find spawn_worker tool for job ${data.jobId}`);
       }
     });
 
@@ -462,6 +465,24 @@ class SupervisorToolStore {
     if (!this.hasActiveWork()) {
       this.stopTicker();
     }
+  }
+
+  /**
+   * Find the most recent spawn_worker tool that's still running
+   * Used when worker_spawned fires (before we have job_id in result)
+   */
+  private findMostRecentSpawnWorkerTool(): string | null {
+    let mostRecent: { toolCallId: string; startedAt: number } | null = null;
+
+    for (const [toolCallId, tool] of this.state.tools.entries()) {
+      if (tool.toolName === 'spawn_worker' && tool.status === 'running') {
+        if (!mostRecent || tool.startedAt > mostRecent.startedAt) {
+          mostRecent = { toolCallId, startedAt: tool.startedAt };
+        }
+      }
+    }
+
+    return mostRecent ? mostRecent.toolCallId : null;
   }
 
   /**
