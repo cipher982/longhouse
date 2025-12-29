@@ -195,8 +195,8 @@ class TestWorkerPromptIntegration:
         assert "developer" in worker_prompt
 
         # Verify base worker template is present
-        assert "Worker agent" in worker_prompt
-        assert "SSH" in worker_prompt or "ssh" in worker_prompt.lower()
+        assert "Worker" in worker_prompt
+        assert "ssh_exec" in worker_prompt
 
 
 # ---------------------------------------------------------------------------

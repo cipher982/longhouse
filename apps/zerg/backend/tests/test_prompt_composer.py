@@ -4,6 +4,8 @@ Tests the prompt composer module that builds complete system prompts
 from base templates and user context.
 """
 
+from unittest.mock import patch
+
 from zerg.prompts.composer import build_jarvis_prompt
 from zerg.prompts.composer import build_supervisor_prompt
 from zerg.prompts.composer import build_worker_prompt
@@ -20,8 +22,9 @@ from zerg.prompts.composer import format_user_context
 class MockUser:
     """Mock User object for testing prompt composition."""
 
-    def __init__(self, context=None):
+    def __init__(self, context=None, user_id=1):
         self.context = context or {}
+        self.id = user_id
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +408,11 @@ class TestBuildSupervisorPrompt:
 class TestBuildWorkerPrompt:
     """Test complete worker prompt building."""
 
-    def test_build_worker_prompt_with_servers(self):
+    @patch("zerg.prompts.composer.format_online_runners")
+    def test_build_worker_prompt_with_servers(self, mock_runners):
         """Test building prompt with servers configured."""
+        mock_runners.return_value = '**Use runner_exec** for targets: "clifford"\n**ssh_exec as fallback**'
+
         user = MockUser(
             context={
                 "display_name": "Charlie",
@@ -428,11 +434,14 @@ class TestBuildWorkerPrompt:
         assert "Charlie" in prompt
 
         # Check base template content
-        assert "Worker agent" in prompt
-        assert "ssh_exec" in prompt or "SSH" in prompt
+        assert "Worker" in prompt
+        assert "ssh_exec" in prompt
 
-    def test_build_worker_prompt_empty_context(self):
+    @patch("zerg.prompts.composer.format_online_runners")
+    def test_build_worker_prompt_empty_context(self, mock_runners):
         """Test building prompt with empty context uses defaults."""
+        mock_runners.return_value = "**No runners online.** Use ssh_exec."
+
         user = MockUser(context={})
 
         prompt = build_worker_prompt(user)
@@ -444,8 +453,11 @@ class TestBuildWorkerPrompt:
         # Base template should still be present
         assert "Worker" in prompt
 
-    def test_build_worker_prompt_contains_commands_section(self):
+    @patch("zerg.prompts.composer.format_online_runners")
+    def test_build_worker_prompt_contains_commands_section(self, mock_runners):
         """Test that worker prompt includes useful commands section."""
+        mock_runners.return_value = '`runner_exec(target="cube", command="df -h")`'
+
         user = MockUser(context={})
 
         prompt = build_worker_prompt(user)

@@ -77,8 +77,8 @@
       "agent_conversation": "TIER_1",
       "routing_decision": "TIER_1",
       "tool_selection": "TIER_1",
-      "worker_task": "TIER_2",
-      "summarization": "TIER_2",
+      "worker_task": "TIER_1",
+      "summarization": "TIER_1",
       "bulk_classification": "TIER_3",
       "ci_test": "TIER_3"
     },
@@ -91,7 +91,7 @@
   "defaults": {
     "text": {
       "agent": "TIER_1",
-      "worker": "TIER_2",
+      "worker": "TIER_1",
       "test": "TIER_3"
     },
     "realtime": {
