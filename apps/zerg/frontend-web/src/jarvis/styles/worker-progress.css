@@ -246,9 +246,9 @@
   position: sticky;
   top: 0;
   z-index: 100;
-  margin: 0 0 var(--space-3) 0;
+  margin: 0 auto var(--space-3) auto;
   width: 100%;
-  max-width: none;
+  max-width: 960px; /* Match transcript width */
 
   /* Enhanced visual presence */
   background: var(--color-void-light);
@@ -277,7 +277,7 @@
 /* Mobile adjustments for sticky */
 @media (width <= 768px) {
   .jarvis-container .worker-progress--sticky {
-    margin: 0 0 var(--space-2) 0;
+    margin: 0 var(--space-3) var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
   }
 }
