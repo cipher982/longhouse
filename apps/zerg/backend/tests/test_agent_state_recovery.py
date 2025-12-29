@@ -216,6 +216,62 @@ class TestAgentStateRecovery:
         assert "recovered_worker_jobs" in result
         assert "recovered_runner_jobs" in result
 
+    @pytest.mark.asyncio
+    async def test_ordering_agent_with_stuck_run_is_recovered(self, db_session: Session):
+        """Test that agents with stuck runs are properly recovered.
+
+        This tests the critical ordering requirement: run recovery must happen
+        BEFORE agent recovery, otherwise agents with stuck runs stay in "running"
+        forever.
+
+        Scenario:
+        1. Agent status = "running"
+        2. Agent has a run with status = "RUNNING"
+        3. After initialize_agent_state_system():
+           - Run should be FAILED
+           - Agent should be idle
+        """
+        # Create agent in running state
+        agent = create_agent(
+            db_session,
+            owner_id=1,
+            name="Agent With Stuck Run",
+            system_instructions="Test",
+            task_instructions="Test",
+            model="gpt-mock",
+        )
+        db_session.query(Agent).filter(Agent.id == agent.id).update({"status": "running"})
+
+        # Create a stuck run for this agent
+        thread = Thread(agent_id=agent.id, title="Test Thread", thread_type="manual")
+        db_session.add(thread)
+        db_session.flush()
+
+        stuck_run = AgentRun(agent_id=agent.id, thread_id=thread.id, status="RUNNING", trigger="manual")
+        db_session.add(stuck_run)
+        db_session.commit()
+
+        # Verify initial state
+        assert db_session.query(Agent).filter(Agent.id == agent.id).first().status == "running"
+        assert db_session.query(AgentRun).filter(AgentRun.id == stuck_run.id).first().status == "RUNNING"
+
+        # Run full initialization (the ordering is what we're testing)
+        with patch("zerg.services.agent_state_recovery.get_session_factory", return_value=lambda: db_session):
+            result = await initialize_agent_state_system()
+
+        # Verify results
+        db_session.expire_all()
+
+        # Run should be recovered to FAILED
+        recovered_run = db_session.query(AgentRun).filter(AgentRun.id == stuck_run.id).first()
+        assert recovered_run.status == RunStatus.FAILED.value
+        assert stuck_run.id in result["recovered_runs"]
+
+        # Agent should be recovered to idle (this only works if run recovery happened first!)
+        recovered_agent = db_session.query(Agent).filter(Agent.id == agent.id).first()
+        assert recovered_agent.status == "idle"
+        assert agent.id in result["recovered_agents"]
+
 
 class TestRunRecovery:
     """Test AgentRun recovery functionality."""
@@ -339,14 +395,18 @@ class TestWorkerJobRecovery:
 
     @pytest.mark.asyncio
     async def test_worker_job_recovery_with_stuck_jobs(self, db_session: Session, test_user):
-        """Test worker job recovery finds and fixes stuck jobs."""
-        # Create a stuck worker job
+        """Test worker job recovery finds and fixes stuck running jobs.
+
+        Note: Only "running" jobs are recovered. "Queued" jobs are NOT recovered
+        because WorkerJobProcessor is designed to resume them after restart.
+        """
+        # Create a stuck running job (should be recovered)
         stuck_job = WorkerJob(owner_id=test_user.id, task="Stuck task", status="running")
         db_session.add(stuck_job)
         db_session.flush()
         stuck_job_id = stuck_job.id
 
-        # Create a queued job (also stuck)
+        # Create a queued job (should NOT be recovered - it's resumable)
         queued_job = WorkerJob(owner_id=test_user.id, task="Queued task", status="queued")
         db_session.add(queued_job)
         db_session.flush()
@@ -361,20 +421,20 @@ class TestWorkerJobRecovery:
         with patch("zerg.services.agent_state_recovery.get_session_factory", return_value=lambda: db_session):
             recovered = await perform_startup_worker_job_recovery()
 
-        # Should have recovered both stuck jobs
+        # Should only recover running jobs, not queued
         assert stuck_job_id in recovered
-        assert queued_job_id in recovered
+        assert queued_job_id not in recovered  # Queued jobs are resumable
         assert completed_job.id not in recovered
 
-        # Verify stuck jobs were fixed
+        # Verify running job was failed
         db_session.expire_all()
         fixed_running = db_session.query(WorkerJob).filter(WorkerJob.id == stuck_job_id).first()
-        fixed_queued = db_session.query(WorkerJob).filter(WorkerJob.id == queued_job_id).first()
-
         assert fixed_running.status == "failed"
         assert "Orphaned after server restart" in fixed_running.error
-        assert fixed_queued.status == "failed"
-        assert "Orphaned after server restart" in fixed_queued.error
+
+        # Verify queued job was NOT changed
+        still_queued = db_session.query(WorkerJob).filter(WorkerJob.id == queued_job_id).first()
+        assert still_queued.status == "queued"
 
 
 class TestRunnerJobRecovery:
