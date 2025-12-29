@@ -124,7 +124,19 @@ except Exception as _e:
         "Docker is required to run tests against PostgreSQL. Please install and start Docker Desktop (or provide a running Docker daemon)."
     ) from _e
 
-_pg_container = PostgresContainer("postgres:16-alpine")
+# Configure Postgres for maximum test speed (unsafe for production!)
+# These settings reduce durability guarantees in exchange for speed.
+_pg_container = PostgresContainer(
+    "postgres:16-alpine",
+    driver="psycopg",
+).with_command(
+    "postgres "
+    "-c fsync=off "                    # Don't sync to disk (huge speedup)
+    "-c synchronous_commit=off "       # Don't wait for WAL write
+    "-c full_page_writes=off "         # Skip full page writes after checkpoint
+    "-c random_page_cost=1.1 "         # Assume fast storage (SSD/RAM)
+    "-c effective_io_concurrency=200 " # Allow more parallel I/O
+)
 _pg_container.start()
 
 
@@ -479,40 +491,70 @@ def cleanup_global_resources(request):
     print("Session cleanup complete.")
 
 
-@pytest.fixture
-def db_session():
-    """
-    Creates a fresh database for each test, then tears it down after the test is done.
-    """
-    # Create the tables
-    Base.metadata.create_all(bind=test_engine)
+# ---------------------------------------------------------------------------
+# Database schema management - create once per session, TRUNCATE per test
+# ---------------------------------------------------------------------------
+# This is dramatically faster than CREATE/DROP per test (2572 DDL ops → 1 + fast TRUNCATEs)
 
-    # Create a session
+@pytest.fixture(scope="session")
+def _db_schema():
+    """Create database schema once for the entire test session."""
+    Base.metadata.create_all(bind=test_engine)
+    yield
+    Base.metadata.drop_all(bind=test_engine)
+
+
+def _truncate_all_tables(connection):
+    """Truncate all tables efficiently using a single statement."""
+    from sqlalchemy import text
+
+    # Get all table names in dependency order (reverse for truncation)
+    table_names = [t.name for t in reversed(Base.metadata.sorted_tables)]
+    if not table_names:
+        return
+
+    # Use TRUNCATE ... CASCADE for speed (single statement, minimal WAL)
+    # RESTART IDENTITY resets sequences for predictable IDs
+    tables_str = ", ".join(table_names)
+    connection.execute(text(f"TRUNCATE TABLE {tables_str} RESTART IDENTITY CASCADE"))
+    connection.commit()
+
+
+@pytest.fixture
+def db_session(_db_schema):
+    """
+    Provide a clean database session for each test.
+
+    Uses TRUNCATE instead of DROP/CREATE for massive speedup.
+    Schema is created once per session, tables are truncated per test.
+    """
+    # TRUNCATE all tables BEFORE the test to ensure clean state
+    with test_engine.connect() as conn:
+        _truncate_all_tables(conn)
+
     db = TestingSessionLocal()
+
     # Seed a deterministic user with id=1 to satisfy FK constraints in tests
     try:
         from zerg.models.models import User
+        from sqlalchemy import text
 
-        if db.query(User).filter(User.id == 1).count() == 0:
-            dev = User(id=1, email="dev@local")
-            db.add(dev)
-            db.commit()
+        dev = User(id=1, email="dev@local")
+        db.add(dev)
+        db.commit()
 
-            # Reset the sequence so next auto-generated ID starts at 2
-            # This prevents conflicts when tests create users without specifying IDs
-            from sqlalchemy import text
-
-            db.execute(text("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users))"))
-            db.commit()
+        # Advance sequence past seeded user so auto-generated IDs don't conflict
+        # Uses MAX(id) so it self-heals if seed changes
+        db.execute(text("SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1))"))
+        db.commit()
     except Exception:
         # If seeding fails, continue; individual tests may create their own users
         db.rollback()
+
     try:
         yield db
     finally:
         db.close()
-        # Drop all tables after the test
-        Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture
