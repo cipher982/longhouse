@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWebSocket } from "../../lib/useWebSocket";
+import { logger } from "../../jarvis/core/logger";
 
 interface StreamingState {
   streamingMessages: Map<number, string>;
@@ -42,7 +43,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
 
     if (type === "stream_start") {
       const threadId = data.thread_id;
-      console.log('[CHAT] 🎬 STREAM_START for thread:', threadId);
+      logger.debug(`[Chat] Stream started for thread: ${threadId}`);
 
       // Initialize new stream state for this thread
       streamsByThread.current.set(threadId, {
@@ -62,7 +63,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       const stream = streamsByThread.current.get(threadId);
 
       if (!stream) {
-        console.warn(`[CHAT] ⚠️ Received chunk for unknown thread ${threadId}`);
+        logger.warn(`[Chat] Received chunk for unknown thread ${threadId}`);
         return;
       }
 
@@ -70,9 +71,9 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
         const token = data.content || "";
         stream.tokenCount++;
 
-        // Sample logging: first token + every 50th token
+        // Sample logging: first token + every 50th token (verbose mode only)
         if (stream.tokenCount === 1 || stream.tokenCount % 50 === 0) {
-          console.log(`[CHAT] 🔤 Thread ${threadId} token #${stream.tokenCount}`);
+          logger.debug(`[Chat] Thread ${threadId} token #${stream.tokenCount}`);
         }
 
         if (stream.streamingMessageId) {
@@ -93,11 +94,11 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
       const stream = streamsByThread.current.get(threadId);
 
       if (!stream) {
-        console.warn(`[CHAT] ⚠️ Received assistant_id for unknown thread ${threadId}`);
+        logger.warn(`[Chat] Received assistant_id for unknown thread ${threadId}`);
         return;
       }
 
-      console.log('[CHAT] 🆔 ASSISTANT_ID:', data.message_id, 'for thread:', threadId);
+      logger.debug(`[Chat] Assistant ID: ${data.message_id} for thread: ${threadId}`);
       stream.streamingMessageId = data.message_id;
       stream.streamingMessages.set(data.message_id, stream.pendingTokenBuffer);
 
@@ -110,7 +111,7 @@ export function useThreadStreaming({ agentId, effectiveThreadId }: UseThreadStre
 
       if (stream) {
         const duration = Date.now() - stream.startTime;
-        console.log(`[CHAT] 🏁 STREAM_END - thread ${threadId}: ${stream.tokenCount} tokens in ${duration}ms`);
+        logger.debug(`[Chat] Stream ended - thread ${threadId}: ${stream.tokenCount} tokens in ${duration}ms`);
       }
 
       // Refresh messages from API for this thread

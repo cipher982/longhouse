@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
+import { logger } from "../../jarvis/core/logger";
 import {
   postThreadMessage,
   runThread,
@@ -24,11 +25,11 @@ export function useChatActions({ agentId, effectiveThreadId }: UseChatActionsPar
     number
   >({
     mutationFn: async ({ threadId, content }) => {
-      console.log('[CHAT] 📤 Sending message to thread:', threadId);
+      logger.debug(`[Chat] Sending message to thread: ${threadId}`);
       const message = await postThreadMessage(threadId, content);
-      console.log('[CHAT] 🚀 Triggering thread run:', threadId, '(tokens will stream via WebSocket)');
+      logger.debug(`[Chat] Triggering thread run: ${threadId}`);
       await runThread(threadId);
-      console.log('[CHAT] ✅ Run completed');
+      logger.debug('[Chat] Run completed');
       return message;
     },
     onMutate: async ({ threadId, content }) => {

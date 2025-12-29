@@ -3,8 +3,8 @@ import { describe, beforeAll, afterAll, beforeEach, afterEach, test, expect, vi 
 import { render, screen, within, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
 import DashboardPage from "../DashboardPage";
+import { TestRouter } from "../../test/test-utils";
 import {
   fetchDashboardSnapshot,
   createAgent,
@@ -123,9 +123,9 @@ describe("DashboardPage", () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
+        <TestRouter>
           <DashboardPage />
-        </MemoryRouter>
+        </TestRouter>
       </QueryClientProvider>
     );
   }

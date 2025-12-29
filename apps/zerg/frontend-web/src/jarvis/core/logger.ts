@@ -39,7 +39,9 @@ class Logger {
       level: logLevel
     };
 
-    if (typeof console !== 'undefined' && !isTimeline) {
+    // Only log initialization in browser dev mode (not in tests or timeline mode)
+    const isTest = typeof process !== 'undefined' && process.env?.NODE_ENV === 'test';
+    if (typeof console !== 'undefined' && !isTimeline && !isTest) {
       console.log('📊 Logger initialized:', this.config);
     }
   }

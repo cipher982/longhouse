@@ -1,6 +1,34 @@
 import type { ReactNode } from "react";
 import "@testing-library/jest-dom/vitest";
-import { vi } from "vitest";
+import { vi, beforeAll, afterAll } from "vitest";
+
+// Suppress expected test output
+// These are warnings/errors that are deliberately triggered by tests verifying edge case handling
+const originalWarn = console.warn;
+const originalError = console.error;
+
+beforeAll(() => {
+  console.warn = (...args: unknown[]) => {
+    const msg = String(args[0] || '');
+    // WorkerProgress orphan/edge case warnings - tests deliberately trigger these
+    if (msg.includes('[WorkerProgress]')) return;
+    // SupervisorToolStore failure warnings - tests deliberately trigger these
+    if (msg.includes('[SupervisorToolStore]')) return;
+    originalWarn.apply(console, args);
+  };
+
+  console.error = (...args: unknown[]) => {
+    const msg = String(args[0] || '');
+    // API errors from tests that verify error handling (e.g., IntegrationsPage 500 test)
+    if (msg.includes('[API]') && msg.includes('failed with status')) return;
+    originalError.apply(console, args);
+  };
+});
+
+afterAll(() => {
+  console.warn = originalWarn;
+  console.error = originalError;
+});
 
 vi.mock("../lib/auth", () => {
   const noop = async () => {};
