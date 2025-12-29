@@ -32,6 +32,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         testing=real_settings.testing,
         auth_disabled=real_settings.auth_disabled,
         jwt_secret=real_settings.jwt_secret,
+        internal_api_secret=real_settings.internal_api_secret,
         google_client_id=real_settings.google_client_id,
         google_client_secret=real_settings.google_client_secret,
         github_client_id=real_settings.github_client_id,

@@ -5,6 +5,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
@@ -80,3 +81,16 @@ class AgentRun(Base):
     thread = relationship("Thread", backref="runs")
     # Durable runs v2.2: Self-referential relationship for continuation chains
     continued_from = relationship("AgentRun", remote_side=[id], backref="continuations")
+
+    # Table constraints --------------------------------------------------
+    __table_args__ = (
+        # Durable runs v2.2: Ensure only one continuation per original run (idempotency)
+        # Allows multiple rows with NULL continuation_of_run_id (non-continuation runs)
+        Index(
+            "ix_agent_runs_unique_continuation",
+            continuation_of_run_id,
+            unique=True,
+            postgresql_where=(continuation_of_run_id.isnot(None)),
+            sqlite_where=(continuation_of_run_id.isnot(None)),
+        ),
+    )
