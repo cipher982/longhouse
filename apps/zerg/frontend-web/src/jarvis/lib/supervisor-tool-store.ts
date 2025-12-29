@@ -254,8 +254,10 @@ class SupervisorToolStore {
       if (tool) {
         // For spawn_worker, merge result with existing worker metadata (workerStatus, nestedTools)
         // For other tools, just set result directly
-        const mergedResult = tool.toolName === 'spawn_worker'
-          ? { ...(tool.result as any), ...(data.result as any) }
+        const mergedResult = tool.toolName === 'spawn_worker' && typeof data.result === 'object' && data.result !== null
+          ? { ...(tool.result as any), ...data.result }
+          : tool.toolName === 'spawn_worker'
+          ? { ...(tool.result as any), rawResult: data.result }
           : data.result;
 
         const updatedTool: SupervisorToolCall = {
