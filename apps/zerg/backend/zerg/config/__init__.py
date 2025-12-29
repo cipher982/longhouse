@@ -49,6 +49,7 @@ class Settings:  # noqa: D401 – simple data container
 
     # Secrets & IDs -----------------------------------------------------
     jwt_secret: str
+    internal_api_secret: str
     google_client_id: Any
     google_client_secret: Any
     github_client_id: Any
@@ -211,6 +212,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         testing=testing,
         auth_disabled=_truthy(os.getenv("AUTH_DISABLED")) or testing,
         jwt_secret=os.getenv("JWT_SECRET", "dev-secret"),
+        internal_api_secret=os.getenv("INTERNAL_API_SECRET", "dev-internal-secret"),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         github_client_id=os.getenv("GITHUB_CLIENT_ID"),
@@ -306,6 +308,10 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
         weak = settings.jwt_secret.strip() in {"", "dev-secret"} or len(settings.jwt_secret) < 16
         if weak:
             missing_vars.append("JWT_SECRET (must be >=16 chars, not 'dev-secret')")
+
+        weak_internal = settings.internal_api_secret.strip() in {"", "dev-internal-secret"} or len(settings.internal_api_secret) < 16
+        if weak_internal:
+            missing_vars.append("INTERNAL_API_SECRET (must be >=16 chars, not 'dev-internal-secret')")
 
         if not settings.google_client_id:
             missing_vars.append("GOOGLE_CLIENT_ID (required when auth enabled)")
