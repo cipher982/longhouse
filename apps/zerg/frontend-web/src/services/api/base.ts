@@ -1,4 +1,5 @@
 import { config } from "../../lib/config";
+import { logger } from "../../jarvis/core/logger";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -17,12 +18,7 @@ export class ApiError extends Error {
     this.url = url;
     this.body = body;
 
-    console.error('[API Error]', {
-      url,
-      status,
-      body,
-      message: detailMessage,
-    });
+    logger.error(`[API] ${detailMessage}`, { url, status, body });
   }
 }
 
