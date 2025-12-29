@@ -144,7 +144,10 @@ class SupervisorToolStore {
       const hasRunningTools = this.hasActiveWork();
 
       if (hasRunningTools) {
-        this.notifyListeners(); // Trigger re-render for live duration
+        // Force new state reference so useSyncExternalStore detects the "change"
+        // Without this, getState() returns the same object and React won't re-render
+        this.state = { ...this.state };
+        this.notifyListeners();
       } else {
         // Stop ticker if no active work remains (handles deferred runs)
         this.stopTicker();
