@@ -7,7 +7,7 @@ by implementing startup recovery procedures based on distributed systems princip
 Handles recovery of:
 - Agents stuck in "running" state with no active runs
 - AgentRun rows stuck in RUNNING/QUEUED/DEFERRED status
-- WorkerJob rows stuck in queued/running status
+- WorkerJob rows stuck in "running" status (queued jobs are resumable)
 - RunnerJob rows stuck in queued/running status
 """
 
