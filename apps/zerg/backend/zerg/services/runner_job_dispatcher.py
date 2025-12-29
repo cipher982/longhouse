@@ -2,12 +2,20 @@
 
 Handles dispatching jobs to runners and tracking pending completions.
 Manages concurrency control to ensure runners don't get overloaded.
+
+IMPORTANT: The dispatcher uses thread-safe primitives (threading.Event)
+instead of asyncio.Future because dispatch_job may be called from a
+worker thread (via _run_coro_sync) while complete_job is called from
+the main event loop's WebSocket handler. Using asyncio.Future would
+cause the completion signal to be lost across event loop boundaries.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+from dataclasses import dataclass
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -20,18 +28,29 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class PendingJob:
+    """Thread-safe container for a pending job result."""
+
+    event: threading.Event
+    result: Optional[Dict[str, Any]] = None
+
+
 class RunnerJobDispatcher:
     """Dispatches jobs to runners and tracks pending completions.
 
     Implements concurrency control to ensure each runner only processes
     one job at a time (v1 limitation).
+
+    Uses thread-safe primitives for cross-event-loop signaling.
     """
 
     def __init__(self) -> None:
         """Initialize the dispatcher."""
-        # Track pending jobs waiting for completion
-        # Key: job_id (UUID string), Value: asyncio.Future
-        self._pending_jobs: Dict[str, asyncio.Future[Dict[str, Any]]] = {}
+        # Track pending jobs waiting for completion (thread-safe)
+        # Key: job_id (UUID string), Value: PendingJob
+        self._pending_jobs: Dict[str, PendingJob] = {}
+        self._pending_lock = threading.Lock()
 
         # Track active job per runner for concurrency control
         # Key: runner_id (int), Value: job_id (UUID string)
@@ -130,9 +149,11 @@ class RunnerJobDispatcher:
         # Mark runner as busy
         self.mark_job_active(runner_id, job.id)
 
-        # Create future for tracking completion
-        future: asyncio.Future[Dict[str, Any]] = asyncio.Future()
-        self._pending_jobs[job.id] = future
+        # Create thread-safe pending job for tracking completion
+        # This allows cross-event-loop signaling between worker thread and main loop
+        pending = PendingJob(event=threading.Event())
+        with self._pending_lock:
+            self._pending_jobs[job.id] = pending
 
         try:
             # Send exec_request to runner
@@ -151,7 +172,8 @@ class RunnerJobDispatcher:
 
             if not success:
                 # Failed to send message, clean up
-                self._pending_jobs.pop(job.id, None)
+                with self._pending_lock:
+                    self._pending_jobs.pop(job.id, None)
                 self.clear_active_job(runner_id)
                 runner_crud.update_job_error(db, job.id, "Failed to send command to runner")
                 return {
@@ -162,16 +184,18 @@ class RunnerJobDispatcher:
                     },
                 }
 
-            # Wait for completion with timeout
+            # Wait for completion with timeout (thread-safe)
             # Add extra buffer to timeout to account for network latency
             wait_timeout = timeout_secs + 5
 
-            try:
-                result = await asyncio.wait_for(future, timeout=wait_timeout)
-                return result
-            except asyncio.TimeoutError:
+            # Use run_in_executor to wait on threading.Event without blocking event loop
+            loop = asyncio.get_running_loop()
+            completed = await loop.run_in_executor(None, lambda: pending.event.wait(timeout=wait_timeout))
+
+            if not completed:
                 # Job timed out waiting for response
-                self._pending_jobs.pop(job.id, None)
+                with self._pending_lock:
+                    self._pending_jobs.pop(job.id, None)
                 self.clear_active_job(runner_id)
                 runner_crud.update_job_timeout(db, job.id)
                 return {
@@ -182,9 +206,18 @@ class RunnerJobDispatcher:
                     },
                 }
 
+            # Event was set - return the result
+            with self._pending_lock:
+                self._pending_jobs.pop(job.id, None)
+            return pending.result or {
+                "ok": False,
+                "error": {"type": "execution_error", "message": "No result received"},
+            }
+
         except Exception as e:
             # Unexpected error
-            self._pending_jobs.pop(job.id, None)
+            with self._pending_lock:
+                self._pending_jobs.pop(job.id, None)
             self.clear_active_job(runner_id)
             runner_crud.update_job_error(db, job.id, str(e))
             logger.exception(f"Error dispatching job {job.id}")
@@ -205,17 +238,22 @@ class RunnerJobDispatcher:
         """Complete a pending job with a result.
 
         Called when exec_done or exec_error is received from the runner.
+        Thread-safe - can be called from any thread or event loop.
 
         Args:
             job_id: UUID of the job
             result: Result dictionary to return from dispatch_job
             runner_id: Optional runner ID to clear active job tracking
         """
-        future = self._pending_jobs.pop(job_id, None)
+        with self._pending_lock:
+            pending = self._pending_jobs.get(job_id)
 
-        if future and not future.done():
-            future.set_result(result)
+        if pending:
+            pending.result = result
+            pending.event.set()  # Signal completion
             logger.debug(f"Completed job {job_id}")
+        else:
+            logger.warning(f"complete_job called for unknown job {job_id}")
 
         # Clear active job tracking
         if runner_id is not None:
