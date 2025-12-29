@@ -783,6 +783,11 @@ class SupervisorService:
         2. Creates a NEW run linked to the original via continuation_of_run_id
         3. Runs the supervisor to synthesize the final answer
 
+        This method is idempotent and race-safe:
+        - DB unique constraint on continuation_of_run_id prevents duplicate continuations
+        - IntegrityError is caught and existing continuation is returned
+        - Both concurrent callers get a valid response
+
         Args:
             original_run_id: The deferred run that spawned the worker
             job_id: The completed worker job ID
@@ -797,14 +802,49 @@ class SupervisorService:
         if not original_run:
             raise ValueError(f"Original run {original_run_id} not found")
 
+        # Idempotency fast-path: if a continuation already exists, return it without
+        # injecting duplicate tool messages or attempting to create another run.
+        existing_continuation = (
+            self.db.query(AgentRun)
+            .filter(
+                AgentRun.continuation_of_run_id == original_run_id,
+                AgentRun.trigger == RunTrigger.CONTINUATION,
+            )
+            .first()
+        )
+        if existing_continuation:
+            return SupervisorRunResult(
+                run_id=existing_continuation.id,
+                thread_id=existing_continuation.thread_id,
+                status=existing_continuation.status.value,
+                result=f"Continuation already exists (run {existing_continuation.id})",
+                duration_ms=existing_continuation.duration_ms or 0,
+                debug_url=f"/supervisor/{existing_continuation.id}",
+            )
+
+        if original_run.status != RunStatus.DEFERRED:
+            raise ValueError(f"Original run {original_run_id} is {original_run.status.value}, not DEFERRED")
+
         thread = original_run.thread
         agent = original_run.agent
         owner_id = agent.owner_id
 
         logger.info(f"Starting continuation for deferred run {original_run_id} " f"(thread={thread.id}, job={job_id}, worker={worker_id})")
 
-        # Inject worker result as tool message into thread
-        # This provides context for the supervisor to synthesize the final answer
+        # Create NEW run (not reusing original run_id)
+        # Race-safe: DB unique constraint on continuation_of_run_id prevents duplicates
+        continuation_run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.CONTINUATION,
+            continuation_of_run_id=original_run_id,  # Link to parent
+        )
+
+        # Inject worker result as tool message into thread in the same transaction as
+        # creating the continuation run. If a duplicate continuation is created
+        # concurrently, the transaction will roll back and we won't persist duplicate
+        # tool messages.
         tool_result_content = f"[Worker job {job_id} completed]\n\n" f"Worker ID: {worker_id}\n" f"Result:\n{result_summary}"
         crud.create_thread_message(
             db=self.db,
@@ -813,19 +853,38 @@ class SupervisorService:
             content=tool_result_content,
             processed=False,  # Supervisor will process this
         )
-        self.db.commit()
-
-        # Create NEW run (not reusing original run_id)
-        continuation_run = AgentRun(
-            agent_id=agent.id,
-            thread_id=thread.id,
-            status=RunStatus.RUNNING,
-            trigger=RunTrigger.CONTINUATION,
-            continuation_of_run_id=original_run_id,  # Link to parent
-        )
         self.db.add(continuation_run)
-        self.db.commit()
-        self.db.refresh(continuation_run)
+
+        try:
+            self.db.commit()
+            self.db.refresh(continuation_run)
+        except Exception as e:
+            from sqlalchemy.exc import IntegrityError
+
+            if isinstance(e, IntegrityError):
+                self.db.rollback()
+
+                existing_continuation = (
+                    self.db.query(AgentRun)
+                    .filter(
+                        AgentRun.continuation_of_run_id == original_run_id,
+                        AgentRun.trigger == RunTrigger.CONTINUATION,
+                    )
+                    .first()
+                )
+
+                if existing_continuation:
+                    return SupervisorRunResult(
+                        run_id=existing_continuation.id,
+                        thread_id=existing_continuation.thread_id,
+                        status=existing_continuation.status.value,
+                        result=f"Continuation already exists (run {existing_continuation.id})",
+                        duration_ms=existing_continuation.duration_ms or 0,
+                        debug_url=f"/supervisor/{existing_continuation.id}",
+                    )
+
+            # Not a duplicate continuation error - re-raise
+            raise
 
         logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
 

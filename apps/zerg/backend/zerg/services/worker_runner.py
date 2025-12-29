@@ -263,6 +263,16 @@ class WorkerRunner:
                         },
                     )
 
+                    # Phase A: Check if supervisor run is DEFERRED and trigger continuation
+                    await self._trigger_continuation_if_deferred(
+                        db=db,
+                        run_id=event_ctx["run_id"],
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        status="failed",
+                        error=worker_context.critical_error_message,
+                    )
+
                 logger.error(f"Worker {worker_id} failed due to critical error after {duration_ms}ms")
 
                 return WorkerResult(
@@ -316,6 +326,16 @@ class WorkerRunner:
                         },
                     )
 
+                # Phase A: Check if supervisor run is DEFERRED and trigger continuation
+                await self._trigger_continuation_if_deferred(
+                    db=db,
+                    run_id=event_ctx["run_id"],
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    status="success",
+                    result_summary=summary or result_text,
+                )
+
             # Clean up temporary agent if created
             if temp_agent:
                 # Cleanup is best-effort and should not flip a successful worker run into a failure.
@@ -364,6 +384,16 @@ class WorkerRunner:
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
                     },
+                )
+
+                # Phase A: Check if supervisor run is DEFERRED and trigger continuation
+                await self._trigger_continuation_if_deferred(
+                    db=db,
+                    run_id=event_ctx["run_id"],
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    status="failed",
+                    error=error_msg,
                 )
 
             return WorkerResult(
@@ -775,6 +805,93 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "error": str(e),
             }
+
+    async def _trigger_continuation_if_deferred(
+        self,
+        db: Session,
+        run_id: int,
+        job_id: int,
+        worker_id: str,
+        status: str,
+        result_summary: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Trigger continuation if supervisor run is DEFERRED (NON-BLOCKING).
+
+        Phase A: When a worker completes, check if the parent supervisor run is DEFERRED.
+        If so, schedule a continuation task in the background without blocking worker completion.
+
+        This is fire-and-forget to prevent worker "duration" from including supervisor synthesis time.
+
+        Parameters
+        ----------
+        db
+            SQLAlchemy session (NOTE: This session belongs to worker_runner - continuation
+            will need to create its own session)
+        run_id
+            Supervisor run ID
+        job_id
+            Worker job ID
+        worker_id
+            Worker artifact ID
+        status
+            Worker status: "success" or "failed"
+        result_summary
+            Brief summary of worker result
+        error
+            Error message if failed
+        """
+        try:
+            from zerg.models.enums import RunStatus
+            from zerg.models.models import AgentRun
+
+            # Check if supervisor run is DEFERRED
+            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+            if not run or run.status != RunStatus.DEFERRED:
+                # Not deferred - no need to continue
+                return
+
+            logger.info(f"Supervisor run {run_id} is DEFERRED, scheduling background continuation for worker {worker_id}")
+
+            # Fire-and-forget: schedule continuation in background task
+            # Create a new task that will get its own DB session
+            async def _run_continuation_async():
+                """Background task to run continuation with fresh DB session."""
+                from zerg.database import get_session_factory
+                from zerg.services.supervisor_service import SupervisorService
+
+                # Create fresh DB session for continuation (worker's session is about to close)
+                session_factory = get_session_factory()
+                fresh_db = session_factory()
+                try:
+                    summary_text = result_summary
+                    if not summary_text:
+                        if status == "failed":
+                            summary_text = f"Worker failed: {error or 'Unknown error'}"
+                        else:
+                            summary_text = "(No result summary)"
+
+                    # Call SupervisorService directly (not router handler)
+                    supervisor = SupervisorService(fresh_db)
+                    await supervisor.run_continuation(
+                        original_run_id=run_id,
+                        job_id=job_id,
+                        worker_id=worker_id,
+                        result_summary=summary_text,
+                    )
+                except Exception as e:
+                    logger.exception(f"Background continuation failed for run {run_id}: {e}")
+                finally:
+                    # Ensure session cleanup
+                    fresh_db.close()
+
+            # Schedule as background task (non-blocking)
+            asyncio.create_task(_run_continuation_async())
+            logger.debug(f"Continuation task scheduled for run {run_id}")
+
+        except Exception as e:
+            # Log error but don't fail worker completion
+            logger.exception(f"Failed to schedule continuation for run {run_id}: {e}")
 
 
 __all__ = ["WorkerRunner", "WorkerResult"]

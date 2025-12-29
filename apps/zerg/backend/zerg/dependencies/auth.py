@@ -9,6 +9,8 @@ easier to test.
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
@@ -125,6 +127,37 @@ def require_super_admin(current_user=Depends(get_current_user)):
     return current_user
 
 
+def require_internal_call(request: Request):
+    """FastAPI dependency that ensures the call is internal (backend-to-backend).
+
+    Internal endpoints should only be called from within the backend process,
+    not exposed to external clients. This uses a shared secret token approach:
+    1. In production, requires X-Internal-Token header matching INTERNAL_API_SECRET
+    2. In dev mode (auth disabled), allows all calls (trusted environment)
+
+    This is a security measure for endpoints like /internal/runs/{run_id}/continue
+    that are called by background tasks.
+    """
+    settings = get_settings()
+
+    # In dev mode with auth disabled, allow all internal calls (trusted environment)
+    if settings.auth_disabled:
+        return True
+
+    # In production, require shared secret token
+    internal_token = request.headers.get("X-Internal-Token")
+    expected_token = settings.internal_api_secret
+
+    if not expected_token:
+        # INTERNAL_API_SECRET not configured - fail secure
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured")
+
+    if internal_token and hmac.compare_digest(internal_token, expected_token):
+        return True
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Internal endpoint - external access forbidden")
+
+
 # ---------------------------------------------------------------------------
 # WebSocket authentication helper
 # ---------------------------------------------------------------------------
@@ -148,6 +181,7 @@ __all__ = [
     "get_current_user",
     "require_admin",
     "require_super_admin",
+    "require_internal_call",
     "validate_ws_jwt",
     "_strategy",  # exported for test monkey-patching
 ]

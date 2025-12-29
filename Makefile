@@ -58,7 +58,7 @@ env-check-prod: ## Validate production environment variables
 	echo "🔍 Checking production environment variables..."; \
 	\
 	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB \
-		   JWT_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
+		   JWT_SECRET INTERNAL_API_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
 		   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
 		   OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
 		if [ -z "$$$(printenv $$var)" ]; then \

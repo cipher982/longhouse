@@ -55,6 +55,7 @@ from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.jarvis import router as jarvis_router
+from zerg.routers.jarvis_internal import router as jarvis_internal_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
@@ -531,6 +532,7 @@ app.include_router(users_router, prefix=f"{API_PREFIX}")
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix
+app.include_router(jarvis_internal_router, prefix=f"{API_PREFIX}")  # Internal endpoints for run continuation
 app.include_router(sync_router)  # Conversation sync - includes /api/jarvis/sync prefix
 app.include_router(stream_router)  # Resumable SSE v1 - includes /api/stream prefix
 app.include_router(system_router, prefix=API_PREFIX)
