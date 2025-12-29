@@ -10,7 +10,7 @@ import { useCallback, useEffect } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, WorkerProgress } from './components'
+import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
 
 console.info('[Jarvis] Starting React application')
@@ -133,8 +133,6 @@ export default function App({ embedded = false }: AppProps) {
         <div className="chat-settings-bar">
           <ModelSelector />
         </div>
-
-        <WorkerProgress mode="sticky" />
 
         <ChatContainer
           messages={state.messages}

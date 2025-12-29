@@ -93,14 +93,25 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
               // Show typing dots for any pending assistant message without content
               // This handles React batching where status jumps from queued -> streaming instantly
               const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled';
-              const showTypingDots = isPending && !hasContent;
-              const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
-              const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 
               // For any assistant message with a runId, render tools inline before the message
               // This works for both pending (streaming) and finalized messages
               const hasRunId = isAssistant && message.runId;
               const inlineTools = hasRunId ? supervisorToolStore.getToolsForRun(message.runId!) : [];
+
+              // Check if there are active workers for this message
+              const hasActiveWorkers = inlineTools.some(tool => {
+                if (tool.toolName === 'spawn_worker') {
+                  const workerStatus = (tool.result as any)?.workerStatus;
+                  return workerStatus === 'running' || workerStatus === 'spawned';
+                }
+                return false;
+              });
+
+              // Hide thinking dots if workers are showing progress
+              const showTypingDots = isPending && !hasContent && !hasActiveWorkers;
+              const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
+              const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 
               return (
                 <div key={message.id} className="message-group">
