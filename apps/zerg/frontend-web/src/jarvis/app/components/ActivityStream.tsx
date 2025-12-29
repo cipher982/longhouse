@@ -13,6 +13,7 @@
 import React, { useSyncExternalStore } from 'react';
 import { supervisorToolStore } from '../../lib/supervisor-tool-store';
 import { ToolCard } from './ToolCard';
+import { WorkerToolCard } from './WorkerToolCard';
 import './ActivityStream.css';
 
 interface ActivityStreamProps {
@@ -28,7 +29,7 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
   );
 
   // Filter and sort tools for this run
-  const tools = runId ? supervisorToolStore.getToolsForRun(runId) : [];
+  const tools = runId != null ? supervisorToolStore.getToolsForRun(runId) : [];
 
   // Don't render if no tools
   if (tools.length === 0) {
@@ -37,11 +38,25 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
 
   const hasRunningTools = tools.some(t => t.status === 'running');
 
+  // Check if supervisor is deferred (workers continuing in background)
+  const isDeferred = supervisorToolStore.isDeferred(runId);
+
+  // Count detached workers before this one for stacking offset
+  let detachedWorkerIndex = 0;
+
   return (
     <div className={`activity-stream ${className || ''} ${hasRunningTools ? 'activity-stream--active' : ''}`}>
-      {tools.map(tool => (
-        <ToolCard key={tool.toolCallId} tool={tool} />
-      ))}
+      {tools.map(tool => {
+        // Use WorkerToolCard for spawn_worker, regular ToolCard for everything else
+        if (tool.toolName === 'spawn_worker') {
+          // Mark worker as detached if it's still running while supervisor is deferred
+          const workerStatus = (tool.result as any)?.workerStatus;
+          const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned');
+          const detachedIndex = isDetached ? detachedWorkerIndex++ : 0;
+          return <WorkerToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={detachedIndex} />;
+        }
+        return <ToolCard key={tool.toolCallId} tool={tool} />;
+      })}
     </div>
   );
 }
