@@ -43,8 +43,8 @@
 }
 
 .jarvis-container .main-content {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow: hidden;
   position: relative;
@@ -306,6 +306,7 @@
   padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--color-border-muted);
   background: rgb(0 0 0 / 20%);
+  flex-shrink: 0;
 }
 
 .jarvis-container .chat-settings-bar .model-selector {
@@ -351,6 +352,7 @@
   /* Isolate from parent animations to prevent GPU layer interference */
   isolation: isolate;
   contain: layout style;
+  flex-shrink: 0;
 }
 
 /* When TextInput is directly inside bottom-controls */
