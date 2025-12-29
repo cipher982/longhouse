@@ -36,7 +36,18 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
     return null;
   }
 
-  const hasRunningTools = tools.some(t => t.status === 'running');
+  const hasActiveWork = tools.some(t => {
+    if (t.status === 'running') return true;
+    if (t.toolName !== 'spawn_worker') return false;
+
+    const workerStatus = (t.result as any)?.workerStatus;
+    const nestedTools = (t.result as any)?.nestedTools || [];
+
+    if (workerStatus === 'spawned' || workerStatus === 'running') return true;
+    if (nestedTools.some((nt: any) => nt.status === 'running')) return true;
+
+    return false;
+  });
 
   // Check if supervisor is deferred (workers continuing in background)
   const isDeferred = supervisorToolStore.isDeferred(runId);
@@ -45,7 +56,7 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
   let detachedWorkerIndex = 0;
 
   return (
-    <div className={`activity-stream ${className || ''} ${hasRunningTools ? 'activity-stream--active' : ''}`}>
+    <div className={`activity-stream ${className || ''} ${hasActiveWork ? 'activity-stream--active' : ''}`}>
       {tools.map(tool => {
         // Use WorkerToolCard for spawn_worker, regular ToolCard for everything else
         if (tool.toolName === 'spawn_worker') {

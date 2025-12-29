@@ -273,9 +273,9 @@ class SupervisorToolStore {
         this.setState({ tools: newTools });
 
         // Extract job_id from spawn_worker result and update mapping
-        if (tool.toolName === 'spawn_worker' && data.result) {
+        if (tool.toolName === 'spawn_worker' && data.result != null) {
           const jobId = this.extractJobIdFromResult(data.result);
-          if (jobId) {
+          if (jobId != null) {
             this.workerJobToToolCallId.set(jobId, data.toolCallId);
             logger.debug(`[SupervisorToolStore] Mapped job_id ${jobId} to tool ${data.toolCallId}`);
           }
