@@ -224,8 +224,16 @@ test-prompts: ## Run live prompt quality tests (requires backend running + --liv
 		echo "❌ Missing TOKEN. Usage: make test-prompts TOKEN=<jwt-token>"; \
 		exit 1; \
 	fi
+	@echo "   Using http://localhost:30080 (dev nginx entry)"
 	@echo "   Setting LLM_REQUEST_LOG=1 for debugging..."
-	cd apps/zerg/backend && LLM_REQUEST_LOG=1 uv run pytest tests/live/test_prompt_quality.py --live-token $(TOKEN) -v
+	cd apps/zerg/backend && \
+		LLM_REQUEST_LOG=1 \
+		SWARMLET_DATA_PATH=$${SWARMLET_DATA_PATH:-/tmp/swarmlet} \
+		uv run pytest tests/live/test_prompt_quality.py \
+		--live-url http://localhost:30080 \
+		--live-token $(TOKEN) \
+		--timeout=120 \
+		-v
 
 # ---------------------------------------------------------------------------
 # SDK & Integration
