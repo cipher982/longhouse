@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-perf test-zerg-unit test-zerg-e2e generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 # ---------------------------------------------------------------------------
 # Help – `make` or `make help` (auto-generated from ## comments)
@@ -216,6 +216,16 @@ test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test
+
+test-prompts: ## Run live prompt quality tests (requires backend running + --live-token)
+	@echo "🧪 Running prompt quality tests (requires backend running)..."
+	@echo "   Example: make test-prompts TOKEN=your-jwt-token"
+	@if [ -z "$(TOKEN)" ]; then \
+		echo "❌ Missing TOKEN. Usage: make test-prompts TOKEN=<jwt-token>"; \
+		exit 1; \
+	fi
+	@echo "   Setting LLM_REQUEST_LOG=1 for debugging..."
+	cd apps/zerg/backend && LLM_REQUEST_LOG=1 uv run pytest tests/live/test_prompt_quality.py --live-token $(TOKEN) -v
 
 # ---------------------------------------------------------------------------
 # SDK & Integration
