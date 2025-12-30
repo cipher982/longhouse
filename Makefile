@@ -254,6 +254,19 @@ eval-compare: ## Compare two eval result files (usage: make eval-compare BASELIN
 	@echo "📊 Comparing eval results..."
 	cd apps/zerg/backend && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
 
+eval-critical: ## Run critical tests only (deployment gate - must pass 100%)
+	@echo "🔴 Running CRITICAL eval tests (deployment gate)..."
+	@echo "⚠️  These tests MUST pass 100% for deployment"
+	cd apps/zerg/backend && uv run pytest evals/ -v -n auto -m critical --variant=$(EVAL_VARIANT) --timeout=60
+
+eval-fast: ## Run fast tests only (quick sanity check)
+	@echo "⚡ Running FAST eval tests (quick sanity check)..."
+	cd apps/zerg/backend && uv run pytest evals/ -v -n auto -m fast --variant=$(EVAL_VARIANT) --timeout=30
+
+eval-all: ## Run all eval tests including slow ones
+	@echo "🔬 Running ALL eval tests (including slow tests)..."
+	cd apps/zerg/backend && uv run pytest evals/ -v -n auto --variant=$(EVAL_VARIANT) --timeout=120
+
 # ---------------------------------------------------------------------------
 # SDK & Integration
 # ---------------------------------------------------------------------------
