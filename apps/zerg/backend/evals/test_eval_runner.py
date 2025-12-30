@@ -92,6 +92,12 @@ async def test_eval_case(eval_case, eval_runner):
                 params["pattern"] = assertion.value
             elif assertion.type == "tool_called":
                 params["tool_name"] = assertion.value
+            elif assertion.type in ["worker_result_contains", "artifact_contains"]:
+                params["value"] = assertion.value
+            elif assertion.type == "worker_tool_called":
+                params["tool"] = assertion.value
+            elif assertion.type == "artifact_exists":
+                params["path"] = assertion.value
 
         if assertion.max is not None:
             if assertion.type == "latency_ms":
@@ -102,6 +108,8 @@ async def test_eval_case(eval_case, eval_runner):
         if assertion.min is not None:
             if assertion.type == "worker_spawned":
                 params["min_count"] = assertion.min
+            elif assertion.type == "worker_tool_called":
+                params["min_calls"] = assertion.min
 
         if assertion.max is not None:
             if assertion.type == "worker_spawned":
@@ -117,6 +125,14 @@ async def test_eval_case(eval_case, eval_runner):
         if assertion.type == "llm_graded":
             params["rubric"] = assertion.rubric
             params["min_score"] = assertion.min_score or 0.7
+
+        # Worker-specific params
+        if assertion.worker_id is not None:
+            params["worker_id"] = assertion.worker_id
+        if assertion.path is not None:
+            params["path"] = assertion.path
+        if assertion.tool is not None:
+            params["tool"] = assertion.tool
 
         # Run assertion (now async)
         try:
