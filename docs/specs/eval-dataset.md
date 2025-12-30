@@ -1,7 +1,8 @@
 # Eval Dataset System for Zerg AI Agents
 
-**Status:** Phase 1 Complete, Phase 2 Partial (Live mode + LLM grading working)
+**Status:** Phase 1-2 Complete (18 test cases, worker asserters, multi-turn support)
 **Created:** 2025-12-30
+**Updated:** 2025-12-30 (Phase 2 completion)
 **Protocol:** SDP-1
 **Authors:** Research + codebase exploration
 
@@ -1047,9 +1048,9 @@ make eval-live
 - `Makefile` - `eval` target (hermetic baseline)
 
 ### Phase 2: Advanced Assertions + Live Mode (Week 2)
-**Status:** Partially Complete
+**Status:** ✅ Complete (2025-12-30)
 
-**Goal:** LLM grading + worker artifact inspection + live mode support
+**Goal:** LLM grading + worker artifact inspection + live mode support + multi-turn tests
 
 **Completed:**
 - ✅ Live mode: Real OpenAI API (conditional stub bypass in `tests/conftest.py`)
@@ -1057,16 +1058,26 @@ make eval-live
 - ✅ Live mode toggle: `make eval-live` (requires OPENAI_API_KEY)
 - ✅ Test filtering by mode (hermetic runs basic.yml, live runs live.yml)
 - ✅ 2 LLM-graded test cases in `datasets/live.yml`
+- ✅ `worker_result_contains` asserter - checks WorkerArtifactStore result.txt
+- ✅ `worker_tool_called` asserter - queries AgentRunEvent for worker's tool calls
+- ✅ `artifact_exists` asserter - verifies worker artifact files exist
+- ✅ `artifact_contains` asserter - checks artifact file contents
+- ✅ Multi-turn conversation support - EvalCase.messages field + thread history injection
+- ✅ 18 test cases in basic.yml (up from 7) - multi-turn, multi-step, edge cases
 
-**Remaining:**
-- [ ] `worker_result_contains`, `worker_tool_called` asserters
-- [ ] `artifact_exists`, `artifact_contains` asserters
-- [ ] Multi-turn conversation tests
-- [ ] More test cases (multi-step, edge cases)
+**Key Implementation Details:**
+- Worker asserters use ordinal indexing (worker_id=0 is first worker, ordered by created_at)
+- DB session injected into EvalMetrics for worker queries
+- Multi-turn: Injects conversation history into thread, marks as processed, runs final user message
+- Test runner handles both single-turn (input) and multi-turn (messages) cases
 
-**Deliverables (done):**
-- `evals/asserters.py` - Added `llm_graded` + `SkipAssertion`
-- `evals/datasets/live.yml` - Live mode test cases
+**Deliverables:**
+- `evals/asserters.py` - Added 4 worker/artifact asserters + llm_graded + SkipAssertion
+- `evals/runner.py` - Multi-turn support + db_session injection
+- `evals/conftest.py` - Message model + EvalAssertion worker fields (worker_id, path, tool)
+- `evals/test_eval_runner.py` - Handles both single/multi-turn + worker assertion params
+- `evals/datasets/basic.yml` - 18 test cases (multi-turn, multi-step, edge cases)
+- `evals/datasets/live.yml` - 2 LLM-graded test cases
 - `Makefile` - `eval-live` target with 120s timeout
 
 ### Phase 3: Variant Comparison + Results Merging (Week 3)
