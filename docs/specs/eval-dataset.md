@@ -193,9 +193,12 @@ The system will support 50-100 diverse test cases covering conversational, infra
 
 ```python
 # Direct call to SupervisorService within pytest process
-result = await supervisor_service.arun(
-    user_id=test_user.id,
-    message=test_case.input,
+result = await supervisor_service.run_supervisor(
+    owner_id=test_user.id,
+    task=test_case.input,
+    timeout=test_case.timeout or 60,
+    model_override=test_case.model_override,
+    reasoning_effort=test_case.reasoning_effort,
 )
 ```
 
@@ -246,7 +249,7 @@ result = await supervisor_service.arun(
 
 **Tools blocked by default (hermetic mode):**
 - ❌ `runner_exec` - Stubbed with fake output
-- ❌ `ssh_command` - Stubbed with fake output
+- ❌ `ssh_exec` - Stubbed with fake output
 - ❌ `send_email` - Blocked (returns error)
 - ❌ `http_request` (POST/PUT/DELETE) - Blocked
 - ❌ Any tool with `destructive: true` in schemas/tools.yml
@@ -347,7 +350,7 @@ cases:
         max: 30000
       # Verify worker used correct execution method
       - type: worker_tool_called
-        worker_id: 0  # First worker
+        worker_id: 0  # Ordinal index (0-based): first worker spawned
         tool: runner_exec
         min_calls: 1
     tags: [infrastructure, worker]
@@ -462,7 +465,7 @@ metadata:
 | **tool_called** | `tool`, `count` (exact) OR `min_calls`/`max_calls` | Supervisor called specific tool | Verify spawn_worker used |
 | **worker_spawned** | `count` (exact) OR `min`/`max` | Number of workers spawned | Single vs parallel tasks |
 | **worker_result_contains** | `worker_id`, `value` | Worker result text contains substring | Verify disk check output |
-| **worker_tool_called** | `worker_id`, `tool`, `min_calls` | Worker used specific tool | Verify runner_exec used |
+| **worker_tool_called** | `worker_id` (ordinal), `tool`, `min_calls` | Worker used specific tool | Verify runner_exec used |
 | **status** | `value` | Run status (success, failed, deferred) | Timeout handling |
 | **error_contains** | `value`, `negate` | Error message contains text | Error handling validation |
 | **latency_ms** | `max`, `min` | Total execution time bounds | Performance regression |
@@ -474,10 +477,16 @@ metadata:
 | **artifact_contains** | `worker_id`, `path`, `value` | Artifact file contains text | Check tool_calls/*.txt |
 
 **Naming consistency:**
-- `total_tokens` = prompt + completion (replaces confusing `token_count` and `llm_tokens`)
-- `prompt_tokens` = input tokens only
-- `completion_tokens` = output tokens only
+- `total_tokens` = prompt + completion (matches `AgentRun.total_tokens` DB field)
+- `prompt_tokens` = input tokens only (matches `AgentRunner.usage_prompt_tokens`)
+- `completion_tokens` = output tokens only (matches `AgentRunner.usage_completion_tokens`)
 - All use `max` for upper bounds (not `budget`)
+- DO NOT use `token_count` or `llm_tokens` (deprecated names)
+
+**Worker ID semantics:**
+- `worker_id` in assertions uses **ordinal index** (0-based): `0` = first worker, `1` = second worker
+- NOT the database ID (which is auto-increment and non-deterministic)
+- Workers ordered by `created_at` timestamp for deterministic indexing
 
 **Pattern matching:**
 - `contains`: Literal substring match (use `case_insensitive: true` to ignore case)
@@ -489,46 +498,60 @@ metadata:
 **Where metrics come from** (in-process mode):
 
 ```python
-# After supervisor_service.arun() completes:
+# After supervisor_service.run_supervisor() completes:
+# SupervisorRunResult has: run_id, thread_id, status, result, error, duration_ms, debug_url
 
-# 1. Status - From SupervisorService result
+# 1. Status - From SupervisorRunResult
 status: str = result.status  # "success" | "failed" | "deferred"
 
-# 2. Latency - Measured in pytest
-latency_ms: float = (time.time() - start_time) * 1000
+# 2. Latency - From SupervisorRunResult.duration_ms
+latency_ms: int = result.duration_ms
 
-# 3. Total tokens - From LangChain usage metadata
-total_tokens: int = result.usage_metadata["total_tokens"]
-prompt_tokens: int = result.usage_metadata["input_tokens"]
-completion_tokens: int = result.usage_metadata["output_tokens"]
+# 3. Total tokens - From DB AgentRun record
+run = db_session.query(AgentRun).filter_by(id=result.run_id).first()
+total_tokens: int = run.total_tokens  # Stored by AgentRunner.usage_total_tokens
 
-# 4. Tool calls - From LangChain message history
-tool_calls: List[ToolCall] = [
-    {"tool": msg.name, "args": msg.tool_input}
-    for msg in result.messages
-    if isinstance(msg, ToolMessage)
+# 4. Tool calls - From DB ThreadMessage records (role='tool')
+messages = db_session.query(ThreadMessage).filter_by(
+    thread_id=result.thread_id
+).order_by(ThreadMessage.sent_at).all()
+tool_calls: List[str] = [
+    msg.content  # Contains tool name + args
+    for msg in messages
+    if msg.role == 'tool'
 ]
 
-# 5. Workers spawned - From DB query
-workers_spawned: int = db_session.query(Worker).filter_by(
-    run_id=result.run_id
+# 5. Workers spawned - From DB WorkerJob query
+workers_spawned: int = db_session.query(WorkerJob).filter_by(
+    supervisor_run_id=result.run_id
 ).count()
 
-# 6. Worker results - From DB Worker.result field
-worker_results: List[str] = [
-    w.result for w in db_session.query(Worker).filter_by(run_id=result.run_id)
-]
+# 6. Worker results - From WorkerArtifactStore
+from zerg.services.worker_artifact_store import WorkerArtifactStore
+artifact_store = WorkerArtifactStore()
+worker_results: List[str] = []
+for job in db_session.query(WorkerJob).filter_by(supervisor_run_id=result.run_id):
+    if job.worker_id:
+        metadata = artifact_store.get_worker_metadata(job.worker_id)
+        worker_results.append(metadata.get("summary", ""))
 
 # 7. Worker tool calls - From worker artifacts (metrics.jsonl)
 worker_tool_calls: Dict[int, List[ToolCall]] = {}
-for worker in workers:
-    metrics_path = worker.artifact_dir / "metrics.jsonl"
-    if metrics_path.exists():
-        # Parse tool_calls from JSONL
-        worker_tool_calls[worker.id] = parse_tool_calls(metrics_path)
+for job in db_session.query(WorkerJob).filter_by(supervisor_run_id=result.run_id):
+    if job.worker_id:
+        metrics_path = Path(artifact_store.base_dir) / job.worker_id / "metrics.jsonl"
+        if metrics_path.exists():
+            worker_tool_calls[job.id] = parse_tool_calls(metrics_path)
 ```
 
 **No SSE parsing needed** - Direct access to internal state.
+
+**Phase 1 Simplification:**
+For Phase 1, capture what's readily available:
+- ✅ `status`, `latency_ms` - From SupervisorRunResult
+- ✅ `total_tokens` - From AgentRun.total_tokens (if populated)
+- ✅ `workers_spawned` - Count WorkerJob records
+- ⚠️ Tool-level introspection deferred to Phase 2 (requires parsing ThreadMessage/artifacts)
 
 ### Variant Override Mechanics (xdist-safe)
 
@@ -558,25 +581,23 @@ class EvalRunner:
         }
         return runner
 
-    async def arun(self, user_id: int, message: str, timeout: int):
+    async def arun(self, owner_id: int, task: str, timeout: int):
         """Execute with overrides applied (isolated to this runner instance)."""
         # Apply overrides to this call only (not global state)
-        llm = ChatOpenAI(
-            model=self._overrides.get("model", "gpt-4o-mini"),
-            temperature=self._overrides.get("temperature", 0.0),
-        )
+        model_override = self._overrides.get("model", "gpt-4o-mini")
+        reasoning_effort = self._overrides.get("reasoning_effort", "none")
 
-        prompt = self._overrides.get("custom_prompt") or get_supervisor_prompt(
-            version=self._overrides.get("prompt_version", 1)
-        )
+        # Note: Custom prompts require modifying agent.system_instructions in DB
+        # For Phase 1, only model/reasoning_effort overrides are supported
+        # Full prompt override deferred to Phase 2
 
         # Run supervisor with overridden config
-        return await self.supervisor_service.arun(
-            user_id=user_id,
-            message=message,
-            llm=llm,
-            prompt=prompt,
+        return await self.supervisor_service.run_supervisor(
+            owner_id=owner_id,
+            task=task,
             timeout=timeout,
+            model_override=model_override,
+            reasoning_effort=reasoning_effort,
         )
 ```
 
@@ -588,19 +609,21 @@ class EvalRunner:
 
 ### Flake Controls and Gating
 
-**Required settings for determinism:**
+**Phase 1 Determinism (hermetic mode only):**
+- ✅ OpenAI calls return canned responses (no API variance)
+- ✅ Same input → same output (100% reproducible)
+- ✅ No `temperature`/`seed`/`top_p` controls needed (LLM is stubbed)
+
+**Phase 2 Live Mode Determinism:**
+When live mode is implemented, these settings will be applied via variant overrides:
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| `temperature` | 0.0 | Deterministic LLM outputs (hermetic mode) |
+| `temperature` | 0.0 | Deterministic LLM outputs |
 | `seed` | Fixed int | Additional determinism for OpenAI models |
 | `top_p` | 1.0 | Disable nucleus sampling |
 
-**Hermetic mode stubs:**
-- OpenAI calls return canned responses (no API variance)
-- Same input → same output (100% reproducible)
-
-**Live mode flake handling:**
+**Phase 2 Live mode flake handling:**
 - Retry flaky tests: `pytest --retries=2 --retry-delay=1` (pytest-rerunfailures)
 - Mark expected flakes: `@pytest.mark.flaky(reruns=2)`
 - Skip slow/flaky tests: `@pytest.mark.skip(reason="Live SSH required")`
@@ -652,8 +675,14 @@ save_result_temp(temp_file, test_case.id, variant, metrics)
 
 **Merge step (after all tests complete):**
 ```python
-# pytest hook: pytest_sessionfinish (runs once, after all workers done)
+# pytest hook: pytest_sessionfinish (runs in EACH xdist worker + master)
 def pytest_sessionfinish(session, exitstatus):
+    # CRITICAL: Only merge on master node, not on workers
+    # xdist sets PYTEST_XDIST_WORKER env var on worker processes
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return  # Skip merge on worker processes
+
+    # Master node: merge all per-worker temp files
     if session.config.getoption("--variant"):
         variant = session.config.getoption("--variant")
         run_id = generate_run_id()  # e.g., "eval-2025-12-30-baseline-7fd28ac"
@@ -667,6 +696,15 @@ def pytest_sessionfinish(session, exitstatus):
         # Cleanup temp files
         cleanup_temp_results()
 ```
+
+**Phase 1 Alternative (simpler):**
+For Phase 1, run single-process only (`pytest` without `-n auto`) to avoid merge complexity:
+```bash
+# Single-process mode (no xdist)
+pytest apps/zerg/backend/evals/ --variant=baseline
+```
+
+Results can be written directly to final file (no merge needed). Defer parallelism to Phase 2.
 
 **Run ID format:**
 ```
@@ -712,9 +750,9 @@ async def test_eval_case(
     # 3. Execute supervisor run
     start_time = time.time()
     result = await runner.arun(
-        user_id=test_user.id,
-        message=test_case.input,
-        timeout=test_case.timeout or 120000,
+        owner_id=test_user.id,
+        task=test_case.input,
+        timeout=test_case.timeout or 120,  # Seconds, not milliseconds
     )
     latency_ms = (time.time() - start_time) * 1000
 
@@ -758,7 +796,7 @@ async def test_eval_case(
       "id": "simple_greeting",
       "status": "passed",
       "latency_ms": 1200,
-      "token_count": 150,
+      "total_tokens": 150,
       "assertions": [
         {"type": "contains", "passed": true},
         {"type": "worker_spawned", "passed": true},
@@ -769,7 +807,7 @@ async def test_eval_case(
       "id": "check_disk_space",
       "status": "failed",
       "latency_ms": 35000,
-      "token_count": 5000,
+      "total_tokens": 5000,
       "assertions": [
         {"type": "worker_spawned", "passed": true},
         {"type": "latency_ms", "passed": false, "expected": 30000, "actual": 35000},
@@ -826,7 +864,7 @@ Below are 15 representative test cases across all categories:
   input: "Check disk space on cube"
   assert:
     - {type: worker_spawned, count: 1}
-    - {type: worker_tool_called, worker_id: 0, tool: runner_exec}
+    - {type: worker_tool_called, worker_id: 0, tool: runner_exec}  # worker_id=0 is ordinal (first worker)
     - {type: regex, pattern: "disk|df|usage"}  # Use regex type, not contains with regex flag
     - {type: latency_ms, max: 30000}
 
@@ -1038,11 +1076,12 @@ export EVAL_MODE=hermetic  # or 'live'
 **Goal:** Basic pytest plugin + YAML loading + simple assertions (hermetic mode only)
 
 **Scope:**
-- ✅ Hermetic mode: Stubbed OpenAI, stubbed runner_exec, deterministic
+- ✅ Hermetic mode ONLY: Stubbed OpenAI, stubbed runner_exec, deterministic
 - ❌ Live mode: Deferred to Phase 2
 - ✅ In-process SupervisorService calls (no HTTP/SSE)
-- ✅ Per-worker DB isolation (xdist-safe)
-- ✅ Immutable variant overrides
+- ✅ Single-process execution (no xdist parallelism for simplicity)
+- ✅ Immutable variant overrides (model_override, reasoning_effort only)
+- ❌ Custom prompt overrides: Deferred to Phase 2 (requires DB agent mutation)
 
 **Acceptance Criteria:**
 - [ ] `apps/zerg/backend/evals/` directory structure created
@@ -1205,29 +1244,69 @@ export EVAL_MODE=hermetic  # or 'live'
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "category", "input", "assert"],
-        "properties": {
-          "id": {"type": "string"},
-          "category": {
-            "type": "string",
-            "enum": ["conversational", "infrastructure", "multi_step", "tool_usage", "edge_case", "performance"]
-          },
-          "description": {"type": "string"},
-          "input": {"type": "string"},
-          "timeout": {"type": "integer"},
-          "context": {"type": "object"},
-          "assert": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["type"],
-              "properties": {
-                "type": {"type": "string"}
-              }
+        "required": ["id", "category", "assert"],
+        "oneOf": [
+          {
+            "required": ["input"],
+            "properties": {
+              "id": {"type": "string"},
+              "category": {
+                "type": "string",
+                "enum": ["conversational", "infrastructure", "multi_step", "tool_usage", "edge_case", "performance"]
+              },
+              "description": {"type": "string"},
+              "input": {"type": "string"},
+              "timeout": {"type": "integer"},
+              "context": {"type": "object"},
+              "assert": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type"],
+                  "properties": {
+                    "type": {"type": "string"}
+                  }
+                }
+              },
+              "tags": {"type": "array", "items": {"type": "string"}}
             }
           },
-          "tags": {"type": "array", "items": {"type": "string"}}
-        }
+          {
+            "required": ["messages"],
+            "properties": {
+              "id": {"type": "string"},
+              "category": {
+                "type": "string",
+                "enum": ["conversational", "infrastructure", "multi_step", "tool_usage", "edge_case", "performance"]
+              },
+              "description": {"type": "string"},
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["role", "content"],
+                  "properties": {
+                    "role": {"type": "string", "enum": ["user", "assistant", "system"]},
+                    "content": {"type": "string"}
+                  }
+                }
+              },
+              "timeout": {"type": "integer"},
+              "context": {"type": "object"},
+              "assert": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type"],
+                  "properties": {
+                    "type": {"type": "string"}
+                  }
+                }
+              },
+              "tags": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        ]
       }
     },
     "metadata": {"type": "object"}
