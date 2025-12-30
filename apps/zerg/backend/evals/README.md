@@ -186,6 +186,22 @@ make eval
 - **Cost:** Real API costs
 - **Use:** Pre-deploy validation, prompt quality testing
 
+### What Each Mode Actually Tests
+
+| Capability | Hermetic | Live |
+|------------|----------|------|
+| Supervisor doesn't crash | ✅ | ✅ |
+| Worker artifacts created correctly | ✅ | ✅ |
+| Latency within bounds | ✅ | ✅ |
+| Multi-turn message injection works | ✅ | ✅ |
+| xdist parallelism works | ✅ | ✅ |
+| Agent reasoning quality | ❌ | ✅ |
+| Tool selection decisions | ❌ | ✅ |
+| Response correctness | ❌ | ✅ |
+| Prompt optimization testing | ❌ | ✅ |
+
+**Bottom line:** Hermetic mode tests *infrastructure*. Live mode tests *behavior*.
+
 ## Deployment Gate
 
 Critical tests act as a **deployment gate**:
@@ -310,6 +326,28 @@ pytest evals/ --markers
 - Check `evals/results/.tmp/` for per-worker files
 - Ensure pytest-xdist is installed: `uv sync`
 - Try single-process mode: `pytest evals/` (without `-n auto`)
+
+## Known Limitations
+
+### Token Tracking in Hermetic Mode
+The stub LLM does not emit token usage metadata. All hermetic tests show `total_tokens: 0`.
+Token assertions (`total_tokens`) still pass but are only meaningful in live mode.
+
+### Variant Testing in Hermetic Mode
+Variants (`baseline`, `improved`) define different models/parameters, but in hermetic mode
+both use the same stub. Variant comparison is only meaningful when running live mode tests.
+
+### Critical Tests
+The current "critical" tests (deployment gate) run in hermetic mode, which means they verify
+*infrastructure* (system runs without crashing) rather than *behavior* (agent does the right thing).
+
+**Recommendation:** For production deployment gates, run `make eval-live` with critical live tests,
+or use the hermetic critical tests as a fast pre-check before live validation.
+
+### Tool Call Assertions in Hermetic Mode
+Tool call assertions (`tool_called`, `worker_tool_called`) verify that the stub's keyword-based
+routing works, not that the real LLM would make the same tool selection. These are useful for
+testing the tool infrastructure but don't validate agent reasoning.
 
 ## References
 
