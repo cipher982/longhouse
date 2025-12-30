@@ -8,10 +8,12 @@ This module provides assertion functions that validate eval results:
 - latency_ms: Execution time bounds
 - total_tokens: Token usage bounds
 - status: Run status check
+- llm_graded: LLM-as-judge evaluation
 """
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING
 
@@ -96,16 +98,11 @@ def assert_tool_called(
     Returns:
         (passed, message) tuple
     """
-    # Query tool calls from the database
-    # We need to check the agent_run's checkpoint for tool calls
-    # For now, we'll return a stub implementation that checks the result text
-    # TODO: Implement proper tool call tracking in Phase 2
-
-    # Stub implementation - check if tool name appears in result
-    if metrics.result_text and tool_name.lower() in metrics.result_text.lower():
+    if tool_name in metrics.tools_called:
         return True, f"Tool '{tool_name}' was called"
-    else:
-        return False, f"Tool '{tool_name}' was not called"
+
+    observed = ", ".join(metrics.tools_called) if metrics.tools_called else "(none)"
+    return False, f"Tool '{tool_name}' was not called (observed: {observed})"
 
 
 def assert_worker_spawned(
@@ -208,6 +205,86 @@ def assert_status(
         return False, f"Status is {metrics.status}, expected {expected}"
 
 
+class SkipAssertion(Exception):
+    """Raised when an assertion should be skipped (not failed)."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+async def assert_llm_graded(
+    metrics: EvalMetrics,
+    rubric: str,
+    min_score: float = 0.7,
+    model: str = "gpt-5-mini",
+) -> tuple[bool, str]:
+    """Use LLM to grade response against rubric.
+
+    Args:
+        metrics: EvalMetrics from run
+        rubric: Grading criteria
+        min_score: Minimum score to pass (0.0-1.0)
+        model: Model to use for grading
+
+    Returns:
+        (passed, message) tuple with score and reason
+
+    Raises:
+        SkipAssertion: When running in hermetic mode (live mode required)
+    """
+    import os
+
+    # Check if we're in live mode (required for LLM grading)
+    eval_mode = os.environ.get("EVAL_MODE", "hermetic")
+    if eval_mode != "live":
+        raise SkipAssertion(f"llm_graded requires EVAL_MODE=live (current: {eval_mode})")
+
+    if not metrics.result_text:
+        return False, f"No result text to grade (status={metrics.status})"
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI()
+
+    # Build grading prompt
+    system_prompt = (
+        "You are an eval grader. Score the response 0.0-1.0 based on the rubric. "
+        "Output valid JSON with score and reason fields."
+    )
+
+    user_prompt = f"Rubric:\n{rubric}\n\nResponse to grade:\n{metrics.result_text}"
+
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=500,
+        )
+
+        # Parse response (guaranteed JSON by response_format)
+        content = response.choices[0].message.content
+        if not content:
+            return False, f"LLM returned empty response (finish_reason={response.choices[0].finish_reason})"
+
+        result = json.loads(content)
+        score = float(result.get("score", 0.0))
+        reason = result.get("reason", "No reason provided")
+
+        passed = score >= min_score
+        status_icon = "✓" if passed else "✗"
+        return passed, f"{status_icon} Score: {score:.2f} (min: {min_score:.2f}) - {reason}"
+
+    except json.JSONDecodeError as e:
+        return False, f"Failed to parse LLM response as JSON: {e}"
+    except Exception as e:
+        return False, f"LLM grading error: {e}"
+
+
 # Registry of asserters
 ASSERTERS = {
     "contains": assert_contains,
@@ -217,10 +294,11 @@ ASSERTERS = {
     "latency_ms": assert_latency_ms,
     "total_tokens": assert_total_tokens,
     "status": assert_status,
+    "llm_graded": assert_llm_graded,
 }
 
 
-def run_assertion(
+async def run_assertion(
     metrics: EvalMetrics,
     assertion_type: str,
     **kwargs,
@@ -242,4 +320,11 @@ def run_assertion(
     if not asserter:
         raise ValueError(f"Unknown assertion type: {assertion_type}")
 
-    return asserter(metrics, **kwargs)
+    # Handle async asserters
+    import asyncio
+    import inspect
+
+    if inspect.iscoroutinefunction(asserter):
+        return await asserter(metrics, **kwargs)
+    else:
+        return asserter(metrics, **kwargs)
