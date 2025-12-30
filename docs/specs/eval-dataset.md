@@ -1,6 +1,6 @@
 # Eval Dataset System for Zerg AI Agents
 
-**Status:** Phase 0 - Design Spec
+**Status:** Phase 1 Complete, Phase 2 Partial (Live mode + LLM grading working)
 **Created:** 2025-12-30
 **Protocol:** SDP-1
 **Authors:** Research + codebase exploration
@@ -1000,75 +1000,19 @@ Below are 15 representative test cases across all categories:
 
 ## Make Targets (Primary Interface)
 
-All eval operations are invoked via Make targets (repo convention):
-
 ```bash
-# Run all evals (hermetic mode, baseline variant)
+# Hermetic mode (stub LLM, fast, CI-safe)
 make eval
+# → Runs basic.yml tests (7 cases), skips live.yml
 
-# Run with specific variant
-make eval-baseline       # Same as 'make eval'
-make eval-improved       # Run 'improved' variant from YAML
-
-# Run only critical tests (deployment gate)
-make eval-critical       # pytest -m critical
-
-# Run only fast tests (< 5s latency)
-make eval-fast           # pytest -m fast
-
-# Run live mode (requires OPENAI_API_KEY + real infra)
-make eval-live           # EVAL_MODE=live pytest apps/zerg/backend/evals/
-
-# Compare two variants
-make eval-compare BASELINE=baseline VARIANT=improved
-# Outputs delta report: pass rate, latency regression, token diff
-
-# Reset eval results
-make eval-clean          # Remove evals/results/*.json
+# Live mode (real OpenAI, tests actual prompt quality)
+make eval-live
+# → Runs live.yml tests (2 cases), skips basic.yml
 ```
 
-**Makefile implementation (example):**
+**Hermetic mode**: Tests infrastructure (DB writes, tool routing, event capture) using stubbed LLM. Fast (~2s), deterministic, no API costs.
 
-```makefile
-# Eval targets
-EVAL_DIR := apps/zerg/backend/evals
-EVAL_PYTEST := cd $(EVAL_DIR) && uv run pytest -n auto
-
-.PHONY: eval eval-baseline eval-improved eval-critical eval-fast eval-live eval-compare eval-clean
-
-eval: eval-baseline
-
-eval-baseline:
-	$(EVAL_PYTEST) --variant=baseline
-
-eval-improved:
-	$(EVAL_PYTEST) --variant=improved
-
-eval-critical:
-	$(EVAL_PYTEST) -m critical --variant=baseline
-
-eval-fast:
-	$(EVAL_PYTEST) -m fast --variant=baseline
-
-eval-live:
-	EVAL_MODE=live $(EVAL_PYTEST) --variant=baseline
-
-eval-compare:
-	@cd $(EVAL_DIR) && uv run python compare.py $(BASELINE) $(VARIANT)
-
-eval-clean:
-	rm -rf $(EVAL_DIR)/results/*.json
-	rm -rf $(EVAL_DIR)/results/.tmp/
-```
-
-**Environment setup:**
-
-```bash
-# .env loading (Make handles this automatically)
-# TESTING=1 is set to disable auth, use test DB
-export TESTING=1
-export EVAL_MODE=hermetic  # or 'live'
-```
+**Live mode**: Tests actual prompt quality using real OpenAI. Uses LLM-as-judge (`llm_graded` asserter) to semantically evaluate responses.
 
 ## Implementation Phases
 
@@ -1084,47 +1028,46 @@ export EVAL_MODE=hermetic  # or 'live'
 - ❌ Custom prompt overrides: Deferred to Phase 2 (requires DB agent mutation)
 
 **Acceptance Criteria:**
-- [ ] `apps/zerg/backend/evals/` directory structure created
-- [ ] YAML schema defined and validated with pydantic
-- [ ] pytest plugin loads YAML files and generates test cases
-- [ ] Basic asserters implemented: `contains`, `regex`, `tool_called`, `worker_spawned`, `latency_ms`, `total_tokens`
-- [ ] Hermetic mode stubs: OpenAI responses, runner_exec, get_current_time
-- [ ] Can run: `make eval` (runs hermetic baseline variant)
-- [ ] 5 test cases pass (1 conversational, 2 infrastructure, 1 tool usage, 1 performance)
-- [ ] Variant overrides work: `make eval-improved`
+- ✅ `apps/zerg/backend/evals/` directory structure created
+- ✅ YAML schema defined and validated with pydantic
+- ✅ pytest plugin loads YAML files and generates test cases
+- ✅ Basic asserters implemented: `contains`, `regex`, `tool_called`, `worker_spawned`, `latency_ms`, `total_tokens`, `status`
+- ✅ Hermetic mode stubs provided by the existing backend test harness (LLM is stubbed; no network calls)
+- ✅ Can run: `make eval` (runs hermetic baseline variant)
+- ✅ 7 test cases pass (conversational + tool usage + infra + performance)
+- ⚠️ `--variant` is accepted (Make passes `--variant=baseline`), but dataset-defined variants and prompt overrides are future work
 
 **Deliverables:**
-- `evals/conftest.py` - pytest plugin + fixtures + hermetic stubs
-- `evals/asserters.py` - Basic assertion implementations
-- `evals/runner.py` - EvalRunner class with variant override logic
-- `evals/stubs.py` - Hermetic mode stubs (OpenAI, runner_exec)
-- `evals/datasets/basic.yml` - 5 test cases + variants
-- `evals/README.md` - Usage documentation
-- `Makefile` - eval targets (`eval`, `eval-baseline`, `eval-improved`)
+- `apps/zerg/backend/evals/conftest.py` - pytest plugin + fixtures (loads YAML datasets)
+- `apps/zerg/backend/evals/asserters.py` - assertion implementations
+- `apps/zerg/backend/evals/runner.py` - EvalRunner wrapper (SupervisorService + metrics capture)
+- `apps/zerg/backend/evals/test_eval_runner.py` - pytest generation + per-case execution
+- `apps/zerg/backend/evals/datasets/basic.yml` - baseline dataset
+- `apps/zerg/backend/evals/README.md` - usage documentation
+- `Makefile` - `eval` target (hermetic baseline)
 
 ### Phase 2: Advanced Assertions + Live Mode (Week 2)
+**Status:** Partially Complete
+
 **Goal:** LLM grading + worker artifact inspection + live mode support
 
-**Scope:**
-- ✅ Live mode: Real OpenAI API, real runner_exec
-- ✅ LLM-as-judge assertions
-- ✅ Worker artifact inspection
-- ✅ Multi-turn conversation tests
+**Completed:**
+- ✅ Live mode: Real OpenAI API (conditional stub bypass in `tests/conftest.py`)
+- ✅ `llm_graded` asserter using gpt-5-mini with `response_format=json_object`
+- ✅ Live mode toggle: `make eval-live` (requires OPENAI_API_KEY)
+- ✅ Test filtering by mode (hermetic runs basic.yml, live runs live.yml)
+- ✅ 2 LLM-graded test cases in `datasets/live.yml`
 
-**Acceptance Criteria:**
-- [ ] `llm_graded` asserter using GPT-4o-mini (hermetic stub + live mode)
+**Remaining:**
 - [ ] `worker_result_contains`, `worker_tool_called` asserters
 - [ ] `artifact_exists`, `artifact_contains` asserters
-- [ ] Live mode toggle: `make eval-live` (requires OPENAI_API_KEY)
-- [ ] 10 more test cases (3 multi-step, 3 edge cases, 2 multi-turn, 2 LLM-graded)
-- [ ] Can assert on worker-level metrics (from `metrics.jsonl`)
+- [ ] Multi-turn conversation tests
+- [ ] More test cases (multi-step, edge cases)
 
-**Deliverables:**
-- `evals/asserters/llm_grader.py` - LLM-as-judge implementation
-- `evals/asserters/worker_asserters.py` - Worker artifact inspection
-- `evals/live_mode.py` - Live mode toggle logic
-- `evals/datasets/advanced.yml` - 10 test cases
-- `Makefile` - `eval-live` target
+**Deliverables (done):**
+- `evals/asserters.py` - Added `llm_graded` + `SkipAssertion`
+- `evals/datasets/live.yml` - Live mode test cases
+- `Makefile` - `eval-live` target with 120s timeout
 
 ### Phase 3: Variant Comparison + Results Merging (Week 3)
 **Goal:** A/B testing of prompt variations + results comparison + xdist-safe merging
