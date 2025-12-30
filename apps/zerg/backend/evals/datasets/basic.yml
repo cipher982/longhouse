@@ -1,8 +1,9 @@
 version: "1.0"
-description: Basic supervisor eval - hermetic mode (7 test cases)
+description: Basic supervisor eval - hermetic mode (18 test cases)
 
-# Phase 1: These cases run in hermetic mode with stubbed LLM responses
+# Phase 1-2: These cases run in hermetic mode with stubbed LLM responses
 # The stub LLM returns deterministic outputs, so assertions are predictable
+# Phase 2 adds multi-turn, multi-step, and edge case coverage
 
 cases:
   # 1. Conversational - Simple greeting
@@ -111,3 +112,179 @@ cases:
       - type: latency_ms
         max: 10000
     tags: [quick, performance]
+
+  # 8. Multi-turn - Context recall
+  - id: multi_turn_context
+    category: conversational
+    description: Should recall information from previous turn
+    messages:
+      - role: user
+        content: "My name is Alice"
+      - role: assistant
+        content: "Nice to meet you, Alice!"
+      - role: user
+        content: "What's my name?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: contains
+        value: "Alice"
+        case_insensitive: true
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [multi_turn, conversational]
+
+  # 9. Multi-turn - Task delegation after context
+  - id: multi_turn_delegation
+    category: infrastructure
+    description: Should delegate infrastructure task in multi-turn conversation
+    messages:
+      - role: user
+        content: "I need to check something on my servers"
+      - role: assistant
+        content: "I can help with that. Which server would you like to check?"
+      - role: user
+        content: "Check disk space on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: "spawn_worker"
+      - type: worker_spawned
+        min: 1
+      - type: latency_ms
+        max: 15000
+    tags: [multi_turn, infrastructure]
+
+  # 10. Edge case - Empty input
+  - id: edge_empty_input
+    category: edge_case
+    description: Handle empty or minimal input gracefully
+    input: ""
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [edge_case]
+
+  # 11. Multi-step - Sequential worker delegation
+  - id: multi_step_sequential
+    category: multi_step
+    description: Supervisor should handle multiple sequential tasks
+    input: "First list recent workers, then check time"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [multi_step]
+
+  # 12. Tool usage - Knowledge search
+  - id: knowledge_search_servers
+    category: tool_usage
+    description: Should use knowledge_search for server info
+    input: "What servers do I have?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [tool_usage, quick]
+
+  # 13. Infrastructure - Multiple server check
+  - id: check_multiple_servers
+    category: infrastructure
+    description: Should spawn multiple workers for parallel checks
+    input: "Check memory on cube and clifford"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        min: 1  # At least one worker (may be sequential or parallel)
+      - type: latency_ms
+        max: 20000
+    tags: [infrastructure, multi_step]
+
+  # 14. Performance - Quick clarification
+  - id: quick_clarification
+    category: performance
+    description: Clarification questions should be fast
+    input: "Can you help me?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [performance, conversational, quick]
+
+  # 15. Edge case - Very long input
+  - id: edge_long_input
+    category: edge_case
+    description: Handle long input without timeout
+    input: "This is a very long input string that contains a lot of information about what I want to do. I need to check disk space on multiple servers including cube, clifford, and zerg. I also want to know about the memory usage and CPU load on these servers. Additionally, I would like to understand the current Docker container status and see if there are any issues that need attention. Please provide a comprehensive summary of the infrastructure health across all these systems. This is a very long input string that contains a lot of information about what I want to do."
+    timeout: 120
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 30000
+    tags: [edge_case]
+
+  # 16. Tool usage - Time check (deterministic)
+  - id: time_check_tool
+    category: tool_usage
+    description: Simple tool call should complete quickly
+    input: "Tell me the current time"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [tool_usage, quick, performance]
+
+  # 17. Conversational - Polite rejection
+  - id: polite_out_of_scope
+    category: conversational
+    description: Should politely handle out-of-scope requests
+    input: "Can you make me a sandwich?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [conversational, edge_case]
+
+  # 18. Multi-step - Complex delegation
+  - id: complex_delegation
+    category: multi_step
+    description: Should handle complex multi-part requests
+    input: "Check disk and memory on cube, then tell me if I need to clean up"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 20000
+    tags: [multi_step, infrastructure]
