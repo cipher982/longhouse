@@ -246,6 +246,12 @@ eval-live: ## Run eval tests (LIVE mode - real OpenAI)
 	@echo "🔴 Running eval tests (LIVE mode - real OpenAI)..."
 	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=baseline --timeout=120
 
+eval-compare: ## Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
+	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
+	@test -n "$(VARIANT)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
+	@echo "📊 Comparing eval results..."
+	cd apps/zerg/backend && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
+
 # ---------------------------------------------------------------------------
 # SDK & Integration
 # ---------------------------------------------------------------------------
