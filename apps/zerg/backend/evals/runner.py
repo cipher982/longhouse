@@ -59,7 +59,7 @@ class EvalRunner:
 
         Args:
             variant_name: Name of variant to use
-            variants: Dict of variant configs from YAML
+            variants: Dict of variant configs from YAML (already converted to dicts)
 
         Returns:
             New EvalRunner instance with overrides
@@ -72,6 +72,8 @@ class EvalRunner:
             "model": variant_config.get("model"),
             "temperature": variant_config.get("temperature", 0.0),
             "reasoning_effort": variant_config.get("reasoning_effort", "none"),
+            "prompt_version": variant_config.get("prompt_version"),
+            "custom_prompt": variant_config.get("overrides", {}).get("supervisor_prompt"),
         }
         return runner
 

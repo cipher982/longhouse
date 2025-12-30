@@ -70,11 +70,22 @@ class EvalCase(BaseModel):
     tags: list[str] = []
 
 
+class VariantConfig(BaseModel):
+    """Variant configuration for A/B testing."""
+
+    model: str | None = None
+    temperature: float = 0.0
+    reasoning_effort: str = "none"
+    prompt_version: int | None = None
+    overrides: dict = {}
+
+
 class EvalDataset(BaseModel):
     """Complete eval dataset from YAML."""
 
     version: str
     description: str | None = None
+    variants: dict[str, VariantConfig] = {}
     cases: list[EvalCase]
 
 
@@ -160,13 +171,28 @@ def eval_datasets():
 
 
 @pytest.fixture
-def eval_runner(db_session, test_user):
-    """Create an EvalRunner instance for testing."""
+def eval_runner(db_session, test_user, request):
+    """Create an EvalRunner instance for testing.
+
+    If a variant is specified via --variant flag, it will be applied.
+    """
     from evals.runner import EvalRunner
     from zerg.services.supervisor_service import SupervisorService
 
     supervisor_service = SupervisorService(db_session)
-    return EvalRunner(supervisor_service, test_user.id)
+    runner = EvalRunner(supervisor_service, test_user.id)
+
+    # Check if variant was specified and apply it
+    variant_name = request.config.getoption("--variant", "baseline")
+    if variant_name and hasattr(request, "param") and isinstance(request.param, tuple):
+        # request.param contains (dataset_name, case) from parametrize
+        dataset_name, case = request.param
+        datasets = load_eval_datasets()
+        dataset = datasets.get(dataset_name)
+        if dataset and dataset.variants:
+            runner = runner.with_variant(variant_name, {k: v.model_dump() for k, v in dataset.variants.items()})
+
+    return runner
 
 
 @pytest.fixture(autouse=True)
@@ -209,6 +235,46 @@ def hermetic_mode():
     # Only cleanup if we set it (don't remove externally-set var)
     if not eval_mode_external:
         os.environ.pop("EVAL_MODE", None)
+
+
+# ---------------------------------------------------------------------------
+# Result merging (pytest hooks)
+# ---------------------------------------------------------------------------
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Merge per-worker temp files after all tests complete.
+
+    This runs in both master and worker processes, so we need to check
+    if we're the master before merging.
+    """
+    import os
+
+    # Only merge on master node (not on xdist workers)
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+
+    # Only merge if we have temp files (tests actually ran)
+    from evals.results_store import cleanup_temp_results, get_temp_results_dir, merge_results
+
+    temp_dir = get_temp_results_dir()
+    temp_files = list(temp_dir.glob("*.jsonl"))
+
+    if not temp_files:
+        return
+
+    # Get variant name from CLI
+    variant = session.config.getoption("--variant", "baseline")
+
+    # Merge results
+    try:
+        result_file = merge_results(variant=variant)
+        print(f"\n✅ Results saved to: {result_file}")
+
+        # Cleanup temp files
+        cleanup_temp_results()
+    except Exception as e:
+        print(f"\n⚠️  Failed to merge results: {e}")
 
 
 # ---------------------------------------------------------------------------

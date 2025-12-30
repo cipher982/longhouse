@@ -6,6 +6,7 @@ Each test case:
 2. Captures metrics
 3. Runs all assertions
 4. Reports pass/fail
+5. Saves results to per-worker temp files
 
 Run with: pytest apps/zerg/backend/evals/
 Or via Make: make eval
@@ -18,6 +19,7 @@ import asyncio
 import pytest
 
 from evals.asserters import SkipAssertion, run_assertion
+from evals.results_store import AssertionResult, CaseResult, get_worker_id, save_result_temp
 
 
 def pytest_generate_tests(metafunc):
@@ -95,6 +97,8 @@ async def test_eval_case(eval_case, eval_runner):
     # Run assertions
     print(f"\nAssertions:")
     all_passed = True
+    assertion_results: list[AssertionResult] = []
+
     for assertion in case.assert_:
         # Extract parameters for assertion
         params = {}
@@ -156,13 +160,44 @@ async def test_eval_case(eval_case, eval_runner):
             status_icon = "✓" if passed else "✗"
             print(f"  {status_icon} {assertion.type}: {message}")
 
+            # Capture assertion result
+            assertion_results.append(
+                AssertionResult(
+                    type=assertion.type,
+                    passed=passed,
+                    message=message,
+                    expected=params.get("max_ms") or params.get("max_tokens") or params.get("value"),
+                    actual=metrics.latency_ms if assertion.type == "latency_ms" else None,
+                )
+            )
+
             if not passed:
                 all_passed = False
         except SkipAssertion as e:
             print(f"  ⊘ {assertion.type}: SKIPPED - {e.reason}")
             # Skipped assertions don't fail the test
+            assertion_results.append(
+                AssertionResult(
+                    type=assertion.type,
+                    passed=True,  # Skipped = not failed
+                    message=f"SKIPPED: {e.reason}",
+                )
+            )
 
     print(f"{'='*60}\n")
+
+    # Save result to temp file
+    worker_id = get_worker_id()
+    case_result = CaseResult(
+        id=case.id,
+        status="passed" if all_passed else "failed",
+        latency_ms=metrics.latency_ms,
+        total_tokens=metrics.total_tokens,
+        workers_spawned=metrics.workers_spawned,
+        assertions=assertion_results,
+        failure_reason=None if all_passed else "One or more assertions failed",
+    )
+    save_result_temp(worker_id, case_result)
 
     # Fail test if any assertion failed
     assert all_passed, f"Test case {case.id} failed one or more assertions"
