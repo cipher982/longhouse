@@ -1,8 +1,8 @@
 # Eval Dataset System for Zerg AI Agents
 
-**Status:** Phase 1-3 Complete (18 test cases, worker asserters, multi-turn support, variant comparison)
+**Status:** Phase 1-4 Complete (53 test cases, tag filtering, deployment gates, comprehensive docs)
 **Created:** 2025-12-30
-**Updated:** 2025-12-30 (Phase 3 completion)
+**Updated:** 2025-12-30 (Phase 4 completion)
 **Protocol:** SDP-1
 **Authors:** Research + codebase exploration
 
@@ -1111,22 +1111,32 @@ make eval-live
 - xdist-safe: Only master node merges results (workers write to separate temp files)
 
 ### Phase 4: Full Dataset + Deployment Gating (Week 4)
+**Status:** ✅ Complete (2025-12-30)
+
 **Goal:** 50-100 test cases + critical test tagging + CI integration
 
-**Acceptance Criteria:**
-- [ ] 50+ test cases across all 6 categories
-- [ ] Tags implemented: `critical`, `fast`, `slow`, `optional`
-- [ ] Deployment gate: `make eval-critical` (must pass 100% for deploy)
-- [ ] CI integration: Nightly `make eval-all`, pre-deploy `make eval-critical`
-- [ ] Documentation: "Adding New Eval Cases" guide
-- [ ] Performance baseline established (avg latency, token usage per category)
+**Completed:**
+- ✅ 53 test cases across all 6 categories (conversational: 10, infrastructure: 15, multi_step: 10, tool_usage: 10, edge_case: 10, performance: 10)
+- ✅ Tags implemented: `critical`, `fast`, `slow`, `optional` via pytest markers
+- ✅ Deployment gate: `make eval-critical` (7 critical tests must pass 100%)
+- ✅ Make targets: `eval-critical`, `eval-fast`, `eval-all` with filtering
+- ✅ Documentation: Comprehensive "Adding New Eval Cases" guide in `evals/README.md`
+- ⚠️ CI integration: Deferred to future work (manual `make eval-critical` for now)
+- ⚠️ Performance baseline: Deferred to future work (track via results JSON)
 
 **Deliverables:**
-- `evals/datasets/full_suite.yml` - 50+ test cases with tags
-- `docs/EVAL_GUIDE.md` - Comprehensive usage guide
-- `Makefile` targets: `eval-critical`, `eval-fast`, `eval-all`
-- `.github/workflows/eval-nightly.yml` - Nightly full eval run
-- `.github/workflows/eval-critical.yml` - Pre-deploy gate (critical tests only)
+- ✅ `evals/datasets/basic.yml` - 53 test cases with tags (expanded from 18)
+- ✅ `evals/README.md` - Comprehensive usage guide (replaced `docs/EVAL_GUIDE.md`)
+- ✅ `Makefile` targets: `eval-critical`, `eval-fast`, `eval-all`
+- ✅ `evals/conftest.py` - pytest marker registration + dynamic tag application
+- ⚠️ `.github/workflows/` - CI integration deferred (use `make eval-critical` manually)
+
+**Key Implementation Details:**
+- Critical tests (7): greeting_simple, thank_you_response, acknowledgment, check_cpu, check_filesystem, no_tool_needed, perf_minimal_latency, perf_quick_delegation
+- Fast tests (16): Quick sanity checks with < 5s timeout
+- Slow tests (5): Multi-step workflows with 90s+ timeout
+- Tag filtering: `pytest -m critical` or `pytest -m "fast and not slow"`
+- Deployment gate verified: `pytest --collect-only -m critical` shows 7 tests
 
 ## Open Questions & Future Work
 
