@@ -204,3 +204,8 @@ apps/zerg/backend/scripts/runners.local.json
 
 # Environment backups
 .env-backups-*/
+data/llm_requests/
+
+# Eval results
+apps/zerg/backend/evals/results/*.json
+apps/zerg/backend/evals/results/.tmp/
