@@ -27,6 +27,7 @@ class EvalMetrics:
     error: str | None
     total_tokens: int
     workers_spawned: int
+    tools_called: list[str]
     run_id: int
     thread_id: int
 
@@ -118,6 +119,20 @@ class EvalRunner:
             self.supervisor_service.db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == result.run_id).count()
         )
 
+        # Collect tools called (from durable run events)
+        from zerg.models.agent_run_event import AgentRunEvent
+
+        events = self.supervisor_service.db.query(AgentRunEvent).filter(AgentRunEvent.run_id == result.run_id).all()
+        tools_called: list[str] = []
+        for event in events:
+            payload = event.payload or {}
+            tool_name = payload.get("tool_name")
+            if tool_name:
+                tools_called.append(tool_name)
+
+        # Deduplicate while preserving order
+        tools_called = list(dict.fromkeys(tools_called))
+
         return EvalMetrics(
             status=result.status,
             latency_ms=latency_ms,
@@ -125,6 +140,7 @@ class EvalRunner:
             error=result.error,
             total_tokens=total_tokens,
             workers_spawned=workers_spawned,
+            tools_called=tools_called,
             run_id=result.run_id,
             thread_id=result.thread_id,
         )
