@@ -94,6 +94,23 @@ class EvalDataset(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def pytest_configure(config):
+    """Register custom markers for eval tags."""
+    config.addinivalue_line("markers", "critical: Critical test that must pass for deployment")
+    config.addinivalue_line("markers", "fast: Fast test (< 5s execution time)")
+    config.addinivalue_line("markers", "slow: Slow test (> 30s execution time)")
+    config.addinivalue_line("markers", "optional: Optional test (informational, no block)")
+    config.addinivalue_line("markers", "quick: Quick sanity check test")
+    config.addinivalue_line("markers", "conversational: Conversational test category")
+    config.addinivalue_line("markers", "infrastructure: Infrastructure test category")
+    config.addinivalue_line("markers", "multi_step: Multi-step test category")
+    config.addinivalue_line("markers", "tool_usage: Tool usage test category")
+    config.addinivalue_line("markers", "edge_case: Edge case test category")
+    config.addinivalue_line("markers", "performance: Performance test category")
+    config.addinivalue_line("markers", "worker: Worker delegation test")
+    config.addinivalue_line("markers", "multi_turn: Multi-turn conversation test")
+
+
 def pytest_addoption(parser):
     """Add custom CLI options for evals."""
     parser.addoption(
@@ -102,6 +119,9 @@ def pytest_addoption(parser):
         default="baseline",
         help="Variant to run (baseline, improved, etc.)",
     )
+    # Note: Tag filtering uses pytest's built-in -m flag
+    # Example: pytest -m critical
+    # Example: pytest -m "fast and not slow"
 
 
 def pytest_collection_modifyitems(config, items):
@@ -109,6 +129,7 @@ def pytest_collection_modifyitems(config, items):
 
     - In hermetic mode: Only run tests from basic.yml (skip live.yml)
     - In live mode: Only run tests from live.yml (skip basic.yml)
+    - Apply pytest markers based on YAML tags (critical, fast, slow, optional)
     """
     import os
 
@@ -117,6 +138,9 @@ def pytest_collection_modifyitems(config, items):
     # Filter tests based on eval mode
     skip_hermetic = pytest.mark.skip(reason="Test requires hermetic mode (run without EVAL_MODE=live)")
     skip_live = pytest.mark.skip(reason="Test requires EVAL_MODE=live")
+
+    # Load datasets to access tags
+    datasets = load_eval_datasets()
 
     for item in items:
         # Check if test is from live.yml or basic.yml based on test ID
@@ -129,8 +153,23 @@ def pytest_collection_modifyitems(config, items):
             if eval_mode == "live":
                 item.add_marker(skip_hermetic)
 
-    # Variant flag is now fully implemented in Phase 3
-    # No warning needed
+        # Apply markers based on YAML tags
+        # Test ID format: "test_eval_case[dataset::case_id]"
+        if "test_eval_case[" in item.nodeid:
+            # Extract dataset and case_id from test node
+            # Format: test_eval_case[basic::greeting_simple]
+            test_param = item.nodeid.split("[")[1].rstrip("]")
+            if "::" in test_param:
+                dataset_name, case_id = test_param.split("::", 1)
+                dataset = datasets.get(dataset_name)
+                if dataset:
+                    # Find the case and apply its tags as markers
+                    for case in dataset.cases:
+                        if case.id == case_id:
+                            for tag in case.tags:
+                                # Apply marker (e.g., @pytest.mark.critical)
+                                item.add_marker(getattr(pytest.mark, tag))
+                            break
 
 
 # ---------------------------------------------------------------------------
