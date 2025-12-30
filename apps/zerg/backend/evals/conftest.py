@@ -109,6 +109,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "performance: Performance test category")
     config.addinivalue_line("markers", "worker: Worker delegation test")
     config.addinivalue_line("markers", "multi_turn: Multi-turn conversation test")
+    config.addinivalue_line("markers", "llm_graded: Test uses LLM-as-judge for evaluation")
+    config.addinivalue_line("markers", "live_only: Test requires live mode (real OpenAI API)")
 
 
 def pytest_addoption(parser):

@@ -36,12 +36,12 @@ The eval suite includes **53 test cases** across 6 categories:
 
 | Category | Count | Description |
 |----------|-------|-------------|
-| **Conversational** | 10 | Greetings, clarifications, status checks |
-| **Infrastructure** | 15 | Disk, CPU, memory, Docker, services |
-| **Multi-step** | 10 | Complex workflows, parallel tasks, dependencies |
-| **Tool usage** | 10 | Tool selection, multiple tools, knowledge base |
-| **Edge cases** | 10 | Unicode, special chars, malformed input |
-| **Performance** | 10 | Latency bounds, token efficiency |
+| **Conversational** | 9 | Greetings, clarifications, status checks |
+| **Infrastructure** | 14 | Disk, CPU, memory, Docker, services |
+| **Multi-step** | 7 | Complex workflows, parallel tasks, dependencies |
+| **Tool usage** | 9 | Tool selection, multiple tools, knowledge base |
+| **Edge cases** | 7 | Unicode, special chars, malformed input |
+| **Performance** | 7 | Latency bounds, token efficiency |
 
 ## Tag System
 
@@ -197,19 +197,16 @@ make eval-critical
 **Rules:**
 - All critical tests MUST pass 100%
 - Failures block deployment to production
-- Use critical tag sparingly (currently 8 tests)
+- Use critical tag sparingly (currently 7 tests)
 
 **Current critical tests:**
-1. `greeting_simple` - Basic conversational
-2. `list_workers` - Tool usage
-3. `spawn_worker` - Worker delegation
-4. `check_cpu` - Infrastructure monitoring
-5. `check_filesystem` - Disk checks
-6. `thank_you_response` - Polite responses
-7. `acknowledgment` - Minimal acknowledgments
-8. `no_tool_needed` - Avoid unnecessary tools
-9. `perf_minimal_latency` - Performance baseline
-10. `perf_quick_delegation` - Delegation speed
+1. `thank_you_response` - Polite responses
+2. `acknowledgment` - Minimal acknowledgments
+3. `check_cpu` - Infrastructure monitoring
+4. `check_filesystem` - Disk checks
+5. `no_tool_needed` - Avoid unnecessary tools
+6. `perf_minimal_latency` - Performance baseline
+7. `perf_quick_delegation` - Delegation speed
 
 ## Variant Comparison
 
