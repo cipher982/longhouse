@@ -51,6 +51,8 @@ class SupervisorClient:
         start_time = time.time()
         event_type = None
         events = []
+        completion_time = None
+        grace_period = 0.5  # Drain trailing events for 0.5s after completion
 
         with requests.get(
             f"{self.base_url}/api/jarvis/supervisor/events",
@@ -83,13 +85,18 @@ class SupervisorClient:
 
                     # Check for completion
                     if event_type == "supervisor_complete":
+                        completion_time = time.time()
+
+                    # Grace period: drain trailing events after completion
+                    if completion_time and (time.time() - completion_time > grace_period):
                         return events
 
                     if event_type == "error":
-                        # Extract error message from payload
+                        # Extract error message from payload (check both 'error' and 'message' fields)
                         error_msg = data
                         if isinstance(data, dict):
-                            error_msg = data.get("payload", {}).get("error") or data.get("error", str(data))
+                            payload = data.get("payload", {})
+                            error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
                         raise RuntimeError(f"Supervisor Error: {error_msg}")
 
         return events
@@ -133,9 +140,11 @@ class SupervisorClient:
 
                     if event_type == "error":
                         # Error might be in payload or at root level (legacy)
+                        # Check both 'error' and 'message' fields
                         error_msg = data
                         if isinstance(data, dict):
-                            error_msg = data.get("payload", {}).get("error") or data.get("error", str(data))
+                            payload = data.get("payload", {})
+                            error_msg = payload.get("error") or payload.get("message") or data.get("error", str(data))
                         raise RuntimeError(f"Supervisor Error: {error_msg}")
 
         return ""
