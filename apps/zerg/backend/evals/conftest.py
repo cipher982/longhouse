@@ -129,16 +129,8 @@ def pytest_collection_modifyitems(config, items):
             if eval_mode == "live":
                 item.add_marker(skip_hermetic)
 
-    # Handle variant flag
-    variant = config.getoption("--variant")
-    if variant and variant != "baseline":
-        import warnings
-
-        warnings.warn(
-            f"--variant={variant} flag is accepted but not implemented in Phase 1. "
-            "All tests run with baseline configuration. Variant support coming in Phase 2.",
-            UserWarning,
-        )
+    # Variant flag is now fully implemented in Phase 3
+    # No warning needed
 
 
 # ---------------------------------------------------------------------------

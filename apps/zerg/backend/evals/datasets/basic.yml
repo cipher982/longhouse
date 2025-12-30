@@ -5,6 +5,20 @@ description: Basic supervisor eval - hermetic mode (18 test cases)
 # The stub LLM returns deterministic outputs, so assertions are predictable
 # Phase 2 adds multi-turn, multi-step, and edge case coverage
 
+# Phase 3: Variant configurations for A/B testing
+variants:
+  baseline:
+    model: gpt-4o-mini
+    temperature: 0.0
+    reasoning_effort: none
+    prompt_version: 1
+
+  improved:
+    model: gpt-4o
+    temperature: 0.0
+    reasoning_effort: low
+    prompt_version: 2
+
 cases:
   # 1. Conversational - Simple greeting
   - id: greeting_simple
