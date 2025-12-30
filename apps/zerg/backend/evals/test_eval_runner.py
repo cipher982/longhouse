@@ -17,7 +17,7 @@ import asyncio
 
 import pytest
 
-from evals.asserters import run_assertion
+from evals.asserters import SkipAssertion, run_assertion
 
 
 def pytest_generate_tests(metafunc):
@@ -103,19 +103,32 @@ async def test_eval_case(eval_case, eval_runner):
             if assertion.type == "worker_spawned":
                 params["min_count"] = assertion.min
 
+        if assertion.max is not None:
+            if assertion.type == "worker_spawned":
+                params["max_count"] = assertion.max
+
         if assertion.count is not None:
             params["count"] = assertion.count
 
         if assertion.case_insensitive:
             params["case_insensitive"] = assertion.case_insensitive
 
-        # Run assertion
-        passed, message = run_assertion(metrics, assertion.type, **params)
-        status_icon = "✓" if passed else "✗"
-        print(f"  {status_icon} {assertion.type}: {message}")
+        # LLM graded specific params
+        if assertion.type == "llm_graded":
+            params["rubric"] = assertion.rubric
+            params["min_score"] = assertion.min_score or 0.7
 
-        if not passed:
-            all_passed = False
+        # Run assertion (now async)
+        try:
+            passed, message = await run_assertion(metrics, assertion.type, **params)
+            status_icon = "✓" if passed else "✗"
+            print(f"  {status_icon} {assertion.type}: {message}")
+
+            if not passed:
+                all_passed = False
+        except SkipAssertion as e:
+            print(f"  ⊘ {assertion.type}: SKIPPED - {e.reason}")
+            # Skipped assertions don't fail the test
 
     print(f"{'='*60}\n")
 

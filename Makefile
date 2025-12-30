@@ -240,7 +240,11 @@ test-prompts: ## Run live prompt quality tests (requires backend running + --liv
 # ---------------------------------------------------------------------------
 eval: ## Run eval tests (hermetic mode, baseline variant)
 	@echo "🧪 Running eval tests (hermetic mode)..."
-	cd apps/zerg/backend && uv run pytest evals/ -v --variant=baseline
+	cd apps/zerg/backend && uv run pytest evals/ -v --variant=baseline --timeout=60
+
+eval-live: ## Run eval tests (LIVE mode - real OpenAI)
+	@echo "🔴 Running eval tests (LIVE mode - real OpenAI)..."
+	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=baseline --timeout=120
 
 # ---------------------------------------------------------------------------
 # SDK & Integration

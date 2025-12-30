@@ -38,6 +38,8 @@ class EvalAssertion(BaseModel):
     min: int | None = None
     count: int | None = None
     case_insensitive: bool = False
+    rubric: str | None = None
+    min_score: float | None = None
 
 
 class EvalCase(BaseModel):
@@ -78,14 +80,33 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Filter tests by variant if specified.
+    """Filter tests by variant and eval mode.
 
-    NOTE: Phase 1 ignores --variant flag. Variant support deferred to Phase 2.
-    All tests run with baseline configuration regardless of flag value.
+    - In hermetic mode: Only run tests from basic.yml (skip live.yml)
+    - In live mode: Only run tests from live.yml (skip basic.yml)
     """
+    import os
+
+    eval_mode = os.environ.get("EVAL_MODE", "hermetic")
+
+    # Filter tests based on eval mode
+    skip_hermetic = pytest.mark.skip(reason="Test requires hermetic mode (run without EVAL_MODE=live)")
+    skip_live = pytest.mark.skip(reason="Test requires EVAL_MODE=live")
+
+    for item in items:
+        # Check if test is from live.yml or basic.yml based on test ID
+        if "live::" in item.nodeid:
+            # This is a live-mode test
+            if eval_mode != "live":
+                item.add_marker(skip_live)
+        elif "basic::" in item.nodeid:
+            # This is a hermetic-mode test
+            if eval_mode == "live":
+                item.add_marker(skip_hermetic)
+
+    # Handle variant flag
     variant = config.getoption("--variant")
     if variant and variant != "baseline":
-        # Warn user that variant is not implemented yet
         import warnings
 
         warnings.warn(
@@ -136,12 +157,44 @@ def eval_runner(db_session, test_user):
 
 @pytest.fixture(autouse=True)
 def hermetic_mode():
-    """Ensure hermetic mode is enabled for all eval tests."""
-    # Set environment variable to signal hermetic mode
-    os.environ["EVAL_MODE"] = "hermetic"
-    yield
-    # Cleanup
-    os.environ.pop("EVAL_MODE", None)
+    """Configure eval mode (hermetic or live) based on EVAL_MODE env var.
+
+    In hermetic mode: Uses stubbed LLM (default)
+    In live mode: Restores real ChatOpenAI and OpenAI for actual API calls
+    """
+    # Check if EVAL_MODE was set externally (e.g., via make eval-live)
+    eval_mode_external = "EVAL_MODE" in os.environ
+    eval_mode = os.environ.get("EVAL_MODE", "hermetic")
+
+    # Set it if not already set
+    if not eval_mode_external:
+        os.environ["EVAL_MODE"] = eval_mode
+
+    # In live mode, restore real OpenAI for llm_graded assertions
+    # Note: Supervisor still uses stub LLM (that's OK - we're testing the grader, not supervisor quality)
+    if eval_mode == "live":
+        import sys
+
+        # Save the stub reference
+        _openai_stub_backup = sys.modules.get("openai")
+
+        # Restore real OpenAI module by removing the stub
+        # This allows llm_graded asserter to import the real module
+        if "openai" in sys.modules:
+            del sys.modules["openai"]
+
+        yield
+
+        # Restore stub after test
+        if _openai_stub_backup is not None:
+            sys.modules["openai"] = _openai_stub_backup
+    else:
+        # Hermetic mode - stub is already applied by tests/conftest.py
+        yield
+
+    # Only cleanup if we set it (don't remove externally-set var)
+    if not eval_mode_external:
+        os.environ.pop("EVAL_MODE", None)
 
 
 # ---------------------------------------------------------------------------
