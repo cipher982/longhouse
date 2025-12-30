@@ -67,13 +67,26 @@ SCENARIOS = {
         "role": "worker",
         "worker_tool_calls": [
             {
-                "name": "ssh_exec",
-                "args": {"host": "cube", "command": "df -h"},
+                # Keep worker scenarios hermetic-safe: avoid real SSH/network.
+                "name": "get_current_time",
+                "args": {},
             }
         ],
         # Worker final response intentionally empty to test evidence mounting
         "final_response": "",
         "evidence_keyword": None,
+    },
+    "time_check_worker": {
+        "trigger": r"(current time|what time|get.*time|time).*",
+        "role": "worker",
+        "worker_tool_calls": [
+            {
+                "name": "get_current_time",
+                "args": {},
+            }
+        ],
+        "final_response": "Current time retrieved.",
+        "evidence_keyword": "Current time",
     },
     # Failure scenario: SSH timeout
     "disk_space_timeout": {
@@ -153,11 +166,16 @@ def detect_role_from_messages(messages: list[BaseMessage]) -> str:
                 if tc.get("name") == "spawn_worker":
                     return "supervisor"
 
-    # Check system prompt length (workers have shorter prompts)
+    # Prefer explicit prompt markers over heuristics. Worker prompts are often
+    # long due to injected context, so length-based detection is brittle.
     system_msgs = [m for m in messages if getattr(m, "type", None) == "system"]
     if system_msgs:
         system_content = str(system_msgs[0].content) if system_msgs else ""
-        # Workers have task-specific short prompts
+        if "You are a Worker" in system_content:
+            return "worker"
+        if "You are the Supervisor" in system_content:
+            return "supervisor"
+        # Legacy heuristic fallback
         if len(system_content) < 1000:
             return "worker"
 

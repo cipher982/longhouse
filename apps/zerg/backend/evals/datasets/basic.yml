@@ -54,6 +54,20 @@ cases:
         value: "spawn_worker"
       - type: worker_spawned
         min: 1
+      - type: worker_result_contains
+        worker_id: 0
+        value: "stub-response"
+        case_insensitive: true
+      - type: artifact_exists
+        worker_id: 0
+        value: "metadata.json"
+      - type: artifact_exists
+        worker_id: 0
+        value: "result.txt"
+      - type: artifact_contains
+        worker_id: 0
+        path: "metadata.json"
+        value: "\"status\""
       - type: latency_ms
         max: 15000
     tags: [infrastructure]
@@ -85,18 +99,37 @@ cases:
         max: 15000
     tags: [infrastructure]
 
-  # 6. Tool usage - Time check
-  - id: get_time
+  # 6. Worker tool usage - verify worker tool events + artifacts
+  - id: worker_tool_called_time
     category: tool_usage
-    description: Simple tool call (hermetic mode)
-    input: "What time is it?"
-    timeout: 30
+    description: Worker should call get_current_time (hermetic, scripted worker)
+    input: "Delegate [eval:scripted_worker] get current time"
+    timeout: 60
     assert:
       - type: status
         value: success
+      - type: tool_called
+        value: "spawn_worker"
+      - type: worker_spawned
+        min: 1
+      - type: worker_tool_called
+        worker_id: 0
+        value: "get_current_time"
+        min: 1
+      - type: artifact_exists
+        worker_id: 0
+        value: "tool_calls/001_get_current_time.txt"
+      - type: artifact_contains
+        worker_id: 0
+        path: "tool_calls/001_get_current_time.txt"
+        value: "T"
+      - type: worker_result_contains
+        worker_id: 0
+        value: "Current time"
+        case_insensitive: true
       - type: latency_ms
-        max: 10000
-    tags: [quick, tool_usage]
+        max: 15000
+    tags: [tool_usage, worker, quick]
 
   # 7. Performance - Token budget check
   - id: token_budget_simple

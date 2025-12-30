@@ -222,7 +222,6 @@ def assert_worker_result_contains(
     Returns:
         (passed, message) tuple
     """
-    from pathlib import Path
     from zerg.models.models import WorkerJob
     from zerg.services.worker_artifact_store import WorkerArtifactStore
 
@@ -250,7 +249,7 @@ def assert_worker_result_contains(
 
     # Read result from artifact store
     artifact_store = WorkerArtifactStore()
-    result_path = Path(artifact_store.base_dir) / job.worker_id / "result.txt"
+    result_path = artifact_store.base_path / job.worker_id / "result.txt"
 
     if not result_path.exists():
         return False, f"Worker {worker_id} result file not found: {result_path}"
@@ -286,8 +285,8 @@ def assert_worker_tool_called(
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.agent_run_event import AgentRunEvent
     from zerg.models.models import WorkerJob
+    from zerg.models.agent_run_event import AgentRunEvent
 
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
@@ -309,23 +308,23 @@ def assert_worker_tool_called(
     if not job.worker_id:
         return False, f"Worker {worker_id} has no worker_id (not started yet)"
 
-    # Find the AgentRun for this worker by querying for worker_id
-    from zerg.models.models import AgentRun
+    # Worker tool calls are emitted as AgentRunEvents on the *supervisor run*.
+    # See zerg_react_agent._call_tool_async: it uses ctx.run_id (supervisor run_id)
+    # and includes worker_id + tool_name in the payload.
+    events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == metrics.run_id).all()
 
-    worker_run = db_session.query(AgentRun).filter(AgentRun.run_id == job.worker_id).first()
-
-    if not worker_run:
-        return False, f"Worker {worker_id} has no agent run record"
-
-    # Query events for this worker's run
-    events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == worker_run.id).all()
-
-    # Count tool calls
-    tool_calls = 0
-    for event in events:
+    def _matches(event: AgentRunEvent) -> bool:
         payload = event.payload or {}
-        if payload.get("tool_name") == tool:
-            tool_calls += 1
+        return payload.get("worker_id") == job.worker_id and payload.get("tool_name") == tool
+
+    # Prefer counting "started" events (one per tool call), but fall back to any
+    # worker tool lifecycle event if started wasn't persisted for some reason.
+    started_calls = sum(1 for e in events if e.event_type == "worker_tool_started" and _matches(e))
+    tool_calls = started_calls or sum(
+        1
+        for e in events
+        if e.event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed") and _matches(e)
+    )
 
     if tool_calls >= min_calls:
         return True, f"Worker {worker_id} called '{tool}' {tool_calls} time(s) (min: {min_calls})"
@@ -348,7 +347,6 @@ def assert_artifact_exists(
     Returns:
         (passed, message) tuple
     """
-    from pathlib import Path
     from zerg.models.models import WorkerJob
     from zerg.services.worker_artifact_store import WorkerArtifactStore
 
@@ -374,7 +372,7 @@ def assert_artifact_exists(
 
     # Check if artifact exists
     artifact_store = WorkerArtifactStore()
-    artifact_path = Path(artifact_store.base_dir) / job.worker_id / path
+    artifact_path = artifact_store.base_path / job.worker_id / path
 
     if artifact_path.exists():
         return True, f"Worker {worker_id} artifact exists: {path}"
@@ -401,7 +399,6 @@ def assert_artifact_contains(
     Returns:
         (passed, message) tuple
     """
-    from pathlib import Path
     from zerg.models.models import WorkerJob
     from zerg.services.worker_artifact_store import WorkerArtifactStore
 
@@ -427,7 +424,7 @@ def assert_artifact_contains(
 
     # Read artifact
     artifact_store = WorkerArtifactStore()
-    artifact_path = Path(artifact_store.base_dir) / job.worker_id / path
+    artifact_path = artifact_store.base_path / job.worker_id / path
 
     if not artifact_path.exists():
         return False, f"Worker {worker_id} artifact not found: {path}"
