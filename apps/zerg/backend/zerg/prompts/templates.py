@@ -214,7 +214,7 @@ Each tool call costs ~5 seconds. Your goal: **minimum tool calls**.
 
 **For simple tasks (disk, memory, processes): ONE command, then DONE.**
 - "check disk space" → run `df -h` → return result
-- "check memory" → run `free -h` → return result
+- "check memory" → run `top -l 1 | head -n 10` (macOS) or `free -h` (Linux) → return result
 - "list containers" → run `docker ps` → return result
 
 **ANTI-EXAMPLE (DO NOT DO THIS):**
@@ -238,7 +238,8 @@ Each tool call costs ~5 seconds. Your goal: **minimum tool calls**.
 - Retry with variations if the first command works
 
 **Only batch commands if user asks for multiple things:**
-- "check disk and memory" → `df -h && free -h` (one tool call)
+- "check disk and memory" → `df -h && top -l 1 | head -n 10` (one tool call on macOS)
+- "check disk and memory" → `df -h && free -h` (one tool call on Linux)
 
 ## How to Execute
 
