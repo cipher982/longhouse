@@ -45,15 +45,26 @@ class EvalAssertion(BaseModel):
     tool: str | None = None  # For worker_tool_called
 
 
+class Message(BaseModel):
+    """Single message in a conversation."""
+
+    role: str  # 'user' | 'assistant' | 'system'
+    content: str
+
+
 class EvalCase(BaseModel):
-    """Single eval test case."""
+    """Single eval test case.
+
+    Either 'input' (single-turn) or 'messages' (multi-turn) must be provided.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
     category: str
     description: str | None = None
-    input: str | None = None
+    input: str | None = None  # Single-turn: just the task
+    messages: list[Message] | None = None  # Multi-turn: full conversation
     timeout: int = 120
     assert_: list[EvalAssertion] = Field(default=[], alias="assert")
     tags: list[str] = []
