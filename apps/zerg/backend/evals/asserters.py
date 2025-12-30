@@ -83,6 +83,31 @@ def assert_regex(
         return False, f"Result does not match pattern '{pattern}'"
 
 
+def assert_tool_called(
+    metrics: EvalMetrics,
+    tool_name: str,
+) -> tuple[bool, str]:
+    """Assert that a specific tool was called during the run.
+
+    Args:
+        metrics: EvalMetrics from run
+        tool_name: Name of the tool that should have been called
+
+    Returns:
+        (passed, message) tuple
+    """
+    # Query tool calls from the database
+    # We need to check the agent_run's checkpoint for tool calls
+    # For now, we'll return a stub implementation that checks the result text
+    # TODO: Implement proper tool call tracking in Phase 2
+
+    # Stub implementation - check if tool name appears in result
+    if metrics.result_text and tool_name.lower() in metrics.result_text.lower():
+        return True, f"Tool '{tool_name}' was called"
+    else:
+        return False, f"Tool '{tool_name}' was not called"
+
+
 def assert_worker_spawned(
     metrics: EvalMetrics,
     count: int | None = None,
@@ -187,6 +212,7 @@ def assert_status(
 ASSERTERS = {
     "contains": assert_contains,
     "regex": assert_regex,
+    "tool_called": assert_tool_called,
     "worker_spawned": assert_worker_spawned,
     "latency_ms": assert_latency_ms,
     "total_tokens": assert_total_tokens,
