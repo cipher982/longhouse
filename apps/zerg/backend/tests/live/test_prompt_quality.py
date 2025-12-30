@@ -15,18 +15,18 @@ import pytest
 
 
 def count_worker_tool_calls(events: list, run_id: int) -> int:
-    """Count worker tool calls from SSE events for a specific run_id.
+    """Count worker and supervisor tool calls from SSE events for a specific run_id.
 
     Args:
         events: List of SSE events from collect_events()
         run_id: Run ID to filter events by
 
     Returns:
-        Number of worker_tool_started events for this run
+        Number of worker_tool_started + supervisor_tool_started events for this run
     """
     count = 0
     for event in events:
-        if event["type"] == "worker_tool_started":
+        if event["type"] in ("worker_tool_started", "supervisor_tool_started"):
             # Access run_id from nested payload
             payload = event["data"].get("payload", {})
             event_run_id = payload.get("run_id")
