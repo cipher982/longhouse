@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 # Register custom CLI options for live integration tests
 # ---------------------------------------------------------------------------
 def pytest_addoption(parser):
-    parser.addoption("--live-url", action="store", default="http://localhost:8000", help="Base URL for live server")
+    parser.addoption("--live-url", action="store", default="http://localhost:30080", help="Base URL for live server")
     parser.addoption("--live-token", action="store", help="JWT Token for live server (optional)")
 
 
