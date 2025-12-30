@@ -37,8 +37,13 @@ class SupervisorClient:
 
     def wait_for_completion(self, run_id: int, timeout: int = 60) -> str:
         """Waits for completion and returns the final message."""
+        return self._stream_and_parse(run_id, timeout)
+
+    def collect_events(self, run_id: int, timeout: int = 60) -> list:
+        """Collects all SSE events for a run and returns them as a list."""
         start_time = time.time()
-        final_message = ""
+        event_type = None
+        events = []
 
         with requests.get(
             f"{self.base_url}/api/jarvis/supervisor/events",
@@ -49,27 +54,32 @@ class SupervisorClient:
         ) as response:
             for line in response.iter_lines(decode_unicode=True):
                 if time.time() - start_time > timeout:
-                    raise TimeoutError(f"Timed out waiting for run {run_id}")
+                    raise TimeoutError("Timeout")
 
-                if line.startswith("data:"):
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                elif line.startswith("data:"):
                     data_str = line[5:].strip()
                     try:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
-                        continue
+                        data = data_str
 
-                    # We rely on the event type being passed in the previous 'event:' line
-                    # But simpler logic here: standard SSE format is event\ndata\n\n
-                    # To keep this robust without a full parser state machine:
-                    # We assume Zerg sends 'event: x' then 'data: y'.
-                    # But `iter_lines` loses that context unless we track it.
-                    pass
+                    # Collect event
+                    if event_type and isinstance(data, dict):
+                        events.append({"type": event_type, "data": data})
 
-        # Since iter_lines makes state tracking hard for multi-line SSE, let's use a simpler generator
-        # that mimics the script logic, but cleaner.
-        return self._stream_and_parse(run_id, timeout)
+                    # Check for completion
+                    if event_type == "supervisor_complete":
+                        return events
+
+                    if event_type == "error":
+                        raise RuntimeError(f"Supervisor Error: {data}")
+
+        return events
 
     def _stream_and_parse(self, run_id: int, timeout: int) -> str:
+        """Streams SSE events and returns the final result message."""
         start_time = time.time()
         event_type = None
 
@@ -96,7 +106,7 @@ class SupervisorClient:
                     # Handle Events
                     if event_type == "supervisor_complete":
                         if isinstance(data, dict):
-                            return data.get("message") or data.get("payload", {}).get("message", "")
+                            return data.get("result", "")
                         return str(data)
 
                     if event_type == "error":
