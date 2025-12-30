@@ -209,3 +209,4 @@ data/llm_requests/
 # Eval results
 apps/zerg/backend/evals/results/*.json
 apps/zerg/backend/evals/results/.tmp/
+apps/zerg/backend/data/
