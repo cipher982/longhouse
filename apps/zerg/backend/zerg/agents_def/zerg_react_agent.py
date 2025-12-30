@@ -56,6 +56,146 @@ def reset_llm_usage() -> None:
     _llm_usage_var.set({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "reasoning_tokens": 0})
 
 
+# LLM request logging - captures full payloads for debugging
+_LLM_REQUEST_LOG_ENABLED = True  # Toggle for performance
+
+
+def _log_llm_request(messages: List, model: str, phase: str, worker_id: str | None = None) -> None:
+    """Log the full LLM request payload for debugging.
+
+    Writes to data/llm_requests/ directory with structured JSON.
+    """
+    if not _LLM_REQUEST_LOG_ENABLED:
+        return
+
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        # Create log directory
+        log_dir = Path("data/llm_requests")
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build structured log entry
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "model": model,
+            "phase": phase,
+            "worker_id": worker_id,
+            "message_count": len(messages),
+            "messages": [],
+        }
+
+        # Convert messages to serializable format
+        for i, msg in enumerate(messages):
+            msg_dict = {
+                "index": i,
+                "type": type(msg).__name__,
+                "role": getattr(msg, "type", "unknown"),
+            }
+
+            # Get content
+            content = getattr(msg, "content", None)
+            if isinstance(content, str):
+                msg_dict["content"] = content
+                msg_dict["content_length"] = len(content)
+            elif isinstance(content, list):
+                msg_dict["content"] = content
+                msg_dict["content_length"] = sum(len(str(c)) for c in content)
+            else:
+                msg_dict["content"] = str(content) if content else None
+
+            # Get tool calls if present
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                msg_dict["tool_calls"] = tool_calls
+
+            # Get tool_call_id if present (for ToolMessage)
+            tool_call_id = getattr(msg, "tool_call_id", None)
+            if tool_call_id:
+                msg_dict["tool_call_id"] = tool_call_id
+
+            # Get name if present (for ToolMessage)
+            name = getattr(msg, "name", None)
+            if name:
+                msg_dict["name"] = name
+
+            log_entry["messages"].append(msg_dict)
+
+        # Write to file
+        worker_suffix = f"_{worker_id[:30]}" if worker_id else ""
+        filename = f"{timestamp}_{phase}{worker_suffix}.json"
+        filepath = log_dir / filename
+
+        with open(filepath, "w") as f:
+            json.dump(log_entry, f, indent=2, default=str)
+
+        logger.debug(f"[LLM_REQUEST] Logged to {filepath}")
+
+    except Exception as e:
+        logger.warning(f"Failed to log LLM request: {e}")
+
+
+def _log_llm_response(result, model: str, phase: str, duration_ms: int, worker_id: str | None = None) -> None:
+    """Log the LLM response for debugging.
+
+    Writes to data/llm_requests/ directory with structured JSON.
+    """
+    if not _LLM_REQUEST_LOG_ENABLED:
+        return
+
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        log_dir = Path("data/llm_requests")
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": "response",
+            "model": model,
+            "phase": phase,
+            "worker_id": worker_id,
+            "duration_ms": duration_ms,
+            "response": {},
+        }
+
+        # Extract response details
+        if hasattr(result, "content"):
+            content = result.content
+            if isinstance(content, str):
+                log_entry["response"]["content"] = content
+                log_entry["response"]["content_length"] = len(content)
+            elif isinstance(content, list):
+                log_entry["response"]["content"] = content
+            else:
+                log_entry["response"]["content"] = str(content) if content else None
+
+        if hasattr(result, "tool_calls") and result.tool_calls:
+            log_entry["response"]["tool_calls"] = result.tool_calls
+
+        if hasattr(result, "usage_metadata"):
+            log_entry["response"]["usage_metadata"] = result.usage_metadata
+
+        # Write to file
+        worker_suffix = f"_{worker_id[:30]}" if worker_id else ""
+        filename = f"{timestamp}_{phase}_response{worker_suffix}.json"
+        filepath = log_dir / filename
+
+        with open(filepath, "w") as f:
+            json.dump(log_entry, f, indent=2, default=str)
+
+        logger.debug(f"[LLM_RESPONSE] Logged to {filepath}")
+
+    except Exception as e:
+        logger.warning(f"Failed to log LLM response: {e}")
+
+
 def get_llm_usage() -> Dict:
     """Get the accumulated LLM usage data from the current run."""
     return _llm_usage_var.get()
@@ -387,6 +527,14 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         else:
             llm_with_tools = _make_llm(agent_row, tools, tool_choice=tool_choice)
 
+        # Log the full request payload for debugging
+        # Import explicitly to avoid scoping issues with nested function
+        from zerg.context import get_worker_context as _get_ctx
+
+        _ctx = _get_ctx()
+        _worker_id = _ctx.worker_id if _ctx else None
+        _log_llm_request(messages, agent_row.model, phase, _worker_id)
+
         # Phase 2: Evidence Mounting for Supervisor Runs
         # If we're in a supervisor context, wrap the LLM with evidence mounting
         from zerg.services.supervisor_context import get_supervisor_run_id
@@ -465,6 +613,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         end_time = datetime.now(timezone.utc)
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+        # Log the response for debugging
+        _log_llm_response(result, agent_row.model, phase, duration_ms, _worker_id)
 
         # Extract and accumulate token usage (always, for AgentRunner)
         # With langchain-core 1.2.5+, usage_metadata is the canonical location for usage
