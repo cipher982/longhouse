@@ -238,13 +238,15 @@ test-prompts: ## Run live prompt quality tests (requires backend running + --liv
 # ---------------------------------------------------------------------------
 # Eval Tests (AI Agent Evaluation)
 # ---------------------------------------------------------------------------
+EVAL_VARIANT ?= baseline
+
 eval: ## Run eval tests (hermetic mode, baseline variant)
 	@echo "🧪 Running eval tests (hermetic mode)..."
-	cd apps/zerg/backend && uv run pytest evals/ -v --variant=baseline --timeout=60
+	cd apps/zerg/backend && uv run pytest evals/ -v -n auto --variant=$(EVAL_VARIANT) --timeout=60
 
 eval-live: ## Run eval tests (LIVE mode - real OpenAI)
 	@echo "🔴 Running eval tests (LIVE mode - real OpenAI)..."
-	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=baseline --timeout=120
+	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
 
 eval-compare: ## Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
 	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
