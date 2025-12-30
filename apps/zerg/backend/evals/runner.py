@@ -76,24 +76,86 @@ class EvalRunner:
 
     async def run_case(
         self,
-        task: str,
+        task: str | None = None,
+        messages: list[dict] | None = None,
         timeout: int = 120,
     ) -> EvalMetrics:
         """Execute a single eval case.
 
         Args:
-            task: The task/question to execute
+            task: The task/question to execute (single-turn)
+            messages: Full conversation history (multi-turn)
             timeout: Maximum execution time in seconds
 
         Returns:
             EvalMetrics with captured metrics
         """
+        # Validate input
+        if task is None and messages is None:
+            raise ValueError("Either 'task' or 'messages' must be provided")
+        if task is not None and messages is not None:
+            raise ValueError("Cannot provide both 'task' and 'messages'")
+
         # Apply overrides from variant
         model_override = self._overrides.get("model")
         reasoning_effort = self._overrides.get("reasoning_effort", "none")
 
         # Record start time
         start_time = time.time()
+
+        # Handle multi-turn conversation
+        if messages:
+            # Get supervisor thread (creates if doesn't exist)
+            from zerg.models.models import Agent
+            from zerg.models.thread import Thread, ThreadMessage
+
+            # Get supervisor agent
+            supervisor = self.supervisor_service.db.query(Agent).filter(Agent.owner_id == self.owner_id, Agent.agent_type == "supervisor").first()
+
+            if not supervisor:
+                raise ValueError(f"No supervisor agent found for user {self.owner_id}")
+
+            # Get or create thread
+            thread = (
+                self.supervisor_service.db.query(Thread)
+                .filter(Thread.owner_id == self.owner_id, Thread.agent_id == supervisor.id)
+                .first()
+            )
+
+            if not thread:
+                thread = Thread(
+                    owner_id=self.owner_id,
+                    agent_id=supervisor.id,
+                    title="Eval Multi-turn",
+                )
+                self.supervisor_service.db.add(thread)
+                self.supervisor_service.db.commit()
+                self.supervisor_service.db.refresh(thread)
+
+            # Clear existing messages (fresh conversation)
+            self.supervisor_service.db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread.id).delete()
+
+            # Inject conversation history (all but last message)
+            from datetime import datetime, timezone
+
+            for msg in messages[:-1]:
+                thread_msg = ThreadMessage(
+                    thread_id=thread.id,
+                    role=msg["role"],
+                    content=msg["content"],
+                    sent_at=datetime.now(timezone.utc),
+                    processed=True,  # Mark as processed (not new)
+                )
+                self.supervisor_service.db.add(thread_msg)
+
+            self.supervisor_service.db.commit()
+
+            # Last message is the actual task
+            final_message = messages[-1]
+            if final_message["role"] != "user":
+                raise ValueError("Last message in multi-turn conversation must be from 'user' role")
+
+            task = final_message["content"]
 
         # Run supervisor
         result: SupervisorRunResult = await self.supervisor_service.run_supervisor(

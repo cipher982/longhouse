@@ -58,14 +58,30 @@ async def test_eval_case(eval_case, eval_runner):
     print(f"Category: {case.category}")
     if case.description:
         print(f"Description: {case.description}")
-    print(f"Input: {case.input}")
+
+    # Determine if this is single-turn or multi-turn
+    if case.messages:
+        print(f"Multi-turn conversation ({len(case.messages)} messages):")
+        for i, msg in enumerate(case.messages):
+            print(f"  {i+1}. {msg.role}: {msg.content[:80]}...")
+    else:
+        print(f"Input: {case.input}")
+
     print(f"{'='*60}")
 
-    # Run the case
-    metrics = await eval_runner.run_case(
-        task=case.input,
-        timeout=case.timeout,
-    )
+    # Run the case (single-turn or multi-turn)
+    if case.messages:
+        # Convert Pydantic models to dicts
+        messages_dict = [{"role": msg.role, "content": msg.content} for msg in case.messages]
+        metrics = await eval_runner.run_case(
+            messages=messages_dict,
+            timeout=case.timeout,
+        )
+    else:
+        metrics = await eval_runner.run_case(
+            task=case.input,
+            timeout=case.timeout,
+        )
 
     print(f"\nResults:")
     print(f"  Status: {metrics.status}")
