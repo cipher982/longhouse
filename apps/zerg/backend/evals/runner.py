@@ -30,6 +30,7 @@ class EvalMetrics:
     tools_called: list[str]
     run_id: int
     thread_id: int
+    _db_session: object = None  # Injected for worker asserters
 
 
 class EvalRunner:
@@ -143,4 +144,5 @@ class EvalRunner:
             tools_called=tools_called,
             run_id=result.run_id,
             thread_id=result.thread_id,
+            _db_session=self.supervisor_service.db,
         )

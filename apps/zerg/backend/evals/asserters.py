@@ -205,6 +205,247 @@ def assert_status(
         return False, f"Status is {metrics.status}, expected {expected}"
 
 
+def assert_worker_result_contains(
+    metrics: EvalMetrics,
+    worker_id: int,
+    value: str,
+    case_insensitive: bool = False,
+) -> tuple[bool, str]:
+    """Assert that a worker's result contains specific text.
+
+    Args:
+        metrics: EvalMetrics from run
+        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        value: Substring to search for
+        case_insensitive: Whether to ignore case
+
+    Returns:
+        (passed, message) tuple
+    """
+    from pathlib import Path
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+    # Import db_session from runner (injected into metrics)
+    # We need to query WorkerJob to get worker_id (UUID), then read artifact
+    if not hasattr(metrics, "_db_session"):
+        return False, "DB session not available in metrics"
+
+    db_session = metrics._db_session
+
+    # Get workers ordered by created_at (ordinal indexing)
+    workers = (
+        db_session.query(WorkerJob)
+        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
+        .order_by(WorkerJob.created_at)
+        .all()
+    )
+
+    if worker_id >= len(workers):
+        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+
+    job = workers[worker_id]
+    if not job.worker_id:
+        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+
+    # Read result from artifact store
+    artifact_store = WorkerArtifactStore()
+    result_path = Path(artifact_store.base_dir) / job.worker_id / "result.txt"
+
+    if not result_path.exists():
+        return False, f"Worker {worker_id} result file not found: {result_path}"
+
+    result_text = result_path.read_text()
+    search_text = result_text
+    search_value = value
+
+    if case_insensitive:
+        search_text = search_text.lower()
+        search_value = search_value.lower()
+
+    if search_value in search_text:
+        return True, f"Worker {worker_id} result contains '{value}'"
+    else:
+        return False, f"Worker {worker_id} result does not contain '{value}'"
+
+
+def assert_worker_tool_called(
+    metrics: EvalMetrics,
+    worker_id: int,
+    tool: str,
+    min_calls: int = 1,
+) -> tuple[bool, str]:
+    """Assert that a worker called a specific tool.
+
+    Args:
+        metrics: EvalMetrics from run
+        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        tool: Tool name to check for
+        min_calls: Minimum number of times tool should be called
+
+    Returns:
+        (passed, message) tuple
+    """
+    from zerg.models.agent_run_event import AgentRunEvent
+    from zerg.models.models import WorkerJob
+
+    if not hasattr(metrics, "_db_session"):
+        return False, "DB session not available in metrics"
+
+    db_session = metrics._db_session
+
+    # Get workers ordered by created_at (ordinal indexing)
+    workers = (
+        db_session.query(WorkerJob)
+        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
+        .order_by(WorkerJob.created_at)
+        .all()
+    )
+
+    if worker_id >= len(workers):
+        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+
+    job = workers[worker_id]
+    if not job.worker_id:
+        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+
+    # Find the AgentRun for this worker by querying for worker_id
+    from zerg.models.models import AgentRun
+
+    worker_run = db_session.query(AgentRun).filter(AgentRun.run_id == job.worker_id).first()
+
+    if not worker_run:
+        return False, f"Worker {worker_id} has no agent run record"
+
+    # Query events for this worker's run
+    events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == worker_run.id).all()
+
+    # Count tool calls
+    tool_calls = 0
+    for event in events:
+        payload = event.payload or {}
+        if payload.get("tool_name") == tool:
+            tool_calls += 1
+
+    if tool_calls >= min_calls:
+        return True, f"Worker {worker_id} called '{tool}' {tool_calls} time(s) (min: {min_calls})"
+    else:
+        return False, f"Worker {worker_id} called '{tool}' {tool_calls} time(s), expected at least {min_calls}"
+
+
+def assert_artifact_exists(
+    metrics: EvalMetrics,
+    worker_id: int,
+    path: str,
+) -> tuple[bool, str]:
+    """Assert that a worker artifact file exists.
+
+    Args:
+        metrics: EvalMetrics from run
+        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        path: Relative path within worker's artifact directory (e.g., "metrics.jsonl")
+
+    Returns:
+        (passed, message) tuple
+    """
+    from pathlib import Path
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+    if not hasattr(metrics, "_db_session"):
+        return False, "DB session not available in metrics"
+
+    db_session = metrics._db_session
+
+    # Get workers ordered by created_at (ordinal indexing)
+    workers = (
+        db_session.query(WorkerJob)
+        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
+        .order_by(WorkerJob.created_at)
+        .all()
+    )
+
+    if worker_id >= len(workers):
+        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+
+    job = workers[worker_id]
+    if not job.worker_id:
+        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+
+    # Check if artifact exists
+    artifact_store = WorkerArtifactStore()
+    artifact_path = Path(artifact_store.base_dir) / job.worker_id / path
+
+    if artifact_path.exists():
+        return True, f"Worker {worker_id} artifact exists: {path}"
+    else:
+        return False, f"Worker {worker_id} artifact not found: {path}"
+
+
+def assert_artifact_contains(
+    metrics: EvalMetrics,
+    worker_id: int,
+    path: str,
+    value: str,
+    case_insensitive: bool = False,
+) -> tuple[bool, str]:
+    """Assert that a worker artifact file contains specific text.
+
+    Args:
+        metrics: EvalMetrics from run
+        worker_id: Ordinal index of worker (0-based, ordered by created_at)
+        path: Relative path within worker's artifact directory
+        value: Substring to search for
+        case_insensitive: Whether to ignore case
+
+    Returns:
+        (passed, message) tuple
+    """
+    from pathlib import Path
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+    if not hasattr(metrics, "_db_session"):
+        return False, "DB session not available in metrics"
+
+    db_session = metrics._db_session
+
+    # Get workers ordered by created_at (ordinal indexing)
+    workers = (
+        db_session.query(WorkerJob)
+        .filter(WorkerJob.supervisor_run_id == metrics.run_id)
+        .order_by(WorkerJob.created_at)
+        .all()
+    )
+
+    if worker_id >= len(workers):
+        return False, f"Worker index {worker_id} out of range (only {len(workers)} workers spawned)"
+
+    job = workers[worker_id]
+    if not job.worker_id:
+        return False, f"Worker {worker_id} has no worker_id (not started yet)"
+
+    # Read artifact
+    artifact_store = WorkerArtifactStore()
+    artifact_path = Path(artifact_store.base_dir) / job.worker_id / path
+
+    if not artifact_path.exists():
+        return False, f"Worker {worker_id} artifact not found: {path}"
+
+    content = artifact_path.read_text()
+    search_content = content
+    search_value = value
+
+    if case_insensitive:
+        search_content = search_content.lower()
+        search_value = search_value.lower()
+
+    if search_value in search_content:
+        return True, f"Worker {worker_id} artifact '{path}' contains '{value}'"
+    else:
+        return False, f"Worker {worker_id} artifact '{path}' does not contain '{value}'"
+
+
 class SkipAssertion(Exception):
     """Raised when an assertion should be skipped (not failed)."""
 
@@ -295,6 +536,10 @@ ASSERTERS = {
     "total_tokens": assert_total_tokens,
     "status": assert_status,
     "llm_graded": assert_llm_graded,
+    "worker_result_contains": assert_worker_result_contains,
+    "worker_tool_called": assert_worker_tool_called,
+    "artifact_exists": assert_artifact_exists,
+    "artifact_contains": assert_artifact_contains,
 }
 
 

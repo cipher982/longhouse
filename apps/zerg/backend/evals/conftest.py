@@ -40,6 +40,9 @@ class EvalAssertion(BaseModel):
     case_insensitive: bool = False
     rubric: str | None = None
     min_score: float | None = None
+    worker_id: int | None = None  # For worker-specific assertions
+    path: str | None = None  # For artifact assertions
+    tool: str | None = None  # For worker_tool_called
 
 
 class EvalCase(BaseModel):
