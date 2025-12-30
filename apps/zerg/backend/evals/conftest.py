@@ -66,8 +66,8 @@ class EvalCase(BaseModel):
     input: str | None = None  # Single-turn: just the task
     messages: list[Message] | None = None  # Multi-turn: full conversation
     timeout: int = 120
-    assert_: list[EvalAssertion] = Field(default=[], alias="assert")
-    tags: list[str] = []
+    assert_: list[EvalAssertion] = Field(default_factory=list, alias="assert")
+    tags: list[str] = Field(default_factory=list)
 
 
 class VariantConfig(BaseModel):
@@ -77,7 +77,7 @@ class VariantConfig(BaseModel):
     temperature: float = 0.0
     reasoning_effort: str = "none"
     prompt_version: int | None = None
-    overrides: dict = {}
+    overrides: dict = Field(default_factory=dict)
 
 
 class EvalDataset(BaseModel):
@@ -85,7 +85,7 @@ class EvalDataset(BaseModel):
 
     version: str
     description: str | None = None
-    variants: dict[str, VariantConfig] = {}
+    variants: dict[str, VariantConfig] = Field(default_factory=dict)
     cases: list[EvalCase]
 
 
@@ -100,7 +100,7 @@ def pytest_addoption(parser):
         "--variant",
         action="store",
         default="baseline",
-        help="[Phase 2] Variant to run (baseline, improved, etc.) - NOT YET IMPLEMENTED",
+        help="Variant to run (baseline, improved, etc.)",
     )
 
 
@@ -163,7 +163,7 @@ def eval_datasets():
 
 
 @pytest.fixture
-def eval_runner(db_session, test_user, request):
+def eval_runner(db_session, test_user, request, eval_case):
     """Create an EvalRunner instance for testing.
 
     If a variant is specified via --variant flag, it will be applied.
@@ -174,15 +174,14 @@ def eval_runner(db_session, test_user, request):
     supervisor_service = SupervisorService(db_session)
     runner = EvalRunner(supervisor_service, test_user.id)
 
-    # Check if variant was specified and apply it
+    # Apply variant overrides (if the dataset defines variants)
+    dataset_name, _case = eval_case
     variant_name = request.config.getoption("--variant", "baseline")
-    if variant_name and hasattr(request, "param") and isinstance(request.param, tuple):
-        # request.param contains (dataset_name, case) from parametrize
-        dataset_name, case = request.param
-        datasets = load_eval_datasets()
-        dataset = datasets.get(dataset_name)
-        if dataset and dataset.variants:
-            runner = runner.with_variant(variant_name, {k: v.model_dump() for k, v in dataset.variants.items()})
+
+    datasets = load_eval_datasets()
+    dataset = datasets.get(dataset_name)
+    if dataset and dataset.variants:
+        runner = runner.with_variant(variant_name, {k: v.model_dump() for k, v in dataset.variants.items()})
 
     return runner
 
