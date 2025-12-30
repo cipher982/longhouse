@@ -1,0 +1,49 @@
+version: "1.0"
+description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls)
+
+# These tests use real LLM calls for both supervisor AND grader.
+# Run with: make eval-live
+#
+# When EVAL_MODE=live:
+# - Supervisor uses real OpenAI (tests actual prompt quality)
+# - LLM grader uses real OpenAI (semantic evaluation)
+
+cases:
+  # Test LLM-graded asserter works
+  - id: response_completeness
+    category: conversational
+    description: Test LLM-graded assertion - verifies response has content
+    input: "Hello!"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          Does the response contain non-empty text?
+
+          Score 1.0 if response has any text content.
+          Score 0.0 if response is empty or null.
+        min_score: 0.9
+    tags: [conversational, llm_graded, live_only]
+
+  # Test actual supervisor response quality
+  - id: greeting_quality
+    category: conversational
+    description: Test that greeting response is friendly and helpful
+    input: "Hello, how are you?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          Is the response:
+          1. A friendly greeting or acknowledgment?
+          2. Offering to help or asking how to assist?
+
+          Score 1.0 if both criteria met.
+          Score 0.5 if only one criterion met.
+          Score 0.0 if neither criterion met.
+        min_score: 0.5
+    tags: [conversational, llm_graded, live_only]

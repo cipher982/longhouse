@@ -1,5 +1,5 @@
 version: "1.0"
-description: Basic supervisor eval - 5 core test cases (hermetic mode)
+description: Basic supervisor eval - hermetic mode (7 test cases)
 
 # Phase 1: These cases run in hermetic mode with stubbed LLM responses
 # The stub LLM returns deterministic outputs, so assertions are predictable
@@ -23,7 +23,41 @@ cases:
         value: success
     tags: [quick, conversational]
 
-  # 2. Infrastructure - Memory check
+  # 2. Supervisor tool usage - list workers
+  - id: list_workers
+    category: tool_usage
+    description: Supervisor should call list_workers tool (hermetic mode)
+    input: "List recent worker jobs"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: "list_workers"
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [quick, tool_usage]
+
+  # 3. Supervisor tool usage - spawn worker
+  - id: spawn_worker
+    category: infrastructure
+    description: Supervisor should delegate via spawn_worker (hermetic mode)
+    input: "Delegate checking disk space on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: "spawn_worker"
+      - type: worker_spawned
+        min: 1
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 4. Infrastructure - Memory check
   - id: check_memory
     category: infrastructure
     description: Infrastructure request for memory check (hermetic mode)
@@ -36,7 +70,7 @@ cases:
         max: 15000
     tags: [infrastructure]
 
-  # 3. Infrastructure - Disk check
+  # 5. Infrastructure - Disk check
   # In hermetic mode, stub LLM decides whether to call tools based on keywords
   - id: check_infrastructure
     category: infrastructure
@@ -50,7 +84,7 @@ cases:
         max: 15000
     tags: [infrastructure]
 
-  # 4. Tool usage - Time check
+  # 6. Tool usage - Time check
   - id: get_time
     category: tool_usage
     description: Simple tool call (hermetic mode)
@@ -63,7 +97,7 @@ cases:
         max: 10000
     tags: [quick, tool_usage]
 
-  # 5. Performance - Token budget check
+  # 7. Performance - Token budget check
   - id: token_budget_simple
     category: performance
     description: Simple task should use minimal tokens
