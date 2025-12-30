@@ -90,13 +90,18 @@ async def test_eval_case(eval_case, eval_runner):
                 params["expected"] = assertion.value
             elif assertion.type == "regex":
                 params["pattern"] = assertion.value
+            elif assertion.type == "tool_called":
+                params["tool_name"] = assertion.value
 
         if assertion.max is not None:
-            params["max_ms"] = assertion.max if assertion.type == "latency_ms" else None
-            params["max_tokens"] = assertion.max if assertion.type == "total_tokens" else None
+            if assertion.type == "latency_ms":
+                params["max_ms"] = assertion.max
+            elif assertion.type == "total_tokens":
+                params["max_tokens"] = assertion.max
 
         if assertion.min is not None:
-            params["min_count"] = assertion.min if assertion.type == "worker_spawned" else None
+            if assertion.type == "worker_spawned":
+                params["min_count"] = assertion.min
 
         if assertion.count is not None:
             params["count"] = assertion.count
