@@ -8,6 +8,7 @@ This module provides the EvalRunner class which:
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -148,17 +149,23 @@ class EvalRunner:
             reasoning_effort=reasoning_effort,
         )
 
+        # For hermetic evals, drain queued worker jobs in-process so worker/artifact
+        # assertions can inspect results deterministically (no background processor).
+        eval_mode = os.environ.get("EVAL_MODE", "hermetic")
+        if eval_mode != "live":
+            await self._process_queued_worker_jobs(supervisor_run_id=result.run_id)
+
         # Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
 
         # Get token count from database
-        from zerg.models.models import AgentRun
+        from zerg.models import AgentRun
 
         run = self.supervisor_service.db.query(AgentRun).filter(AgentRun.id == result.run_id).first()
         total_tokens = run.total_tokens if run and run.total_tokens else 0
 
         # Count workers spawned
-        from zerg.models.models import WorkerJob
+        from zerg.models import WorkerJob
 
         workers_spawned = (
             self.supervisor_service.db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == result.run_id).count()
@@ -190,3 +197,72 @@ class EvalRunner:
             thread_id=result.thread_id,
             _db_session=self.supervisor_service.db,
         )
+
+    async def _process_queued_worker_jobs(self, supervisor_run_id: int) -> None:
+        """Run queued worker jobs synchronously (eval-only).
+
+        In production, worker jobs are processed by the WorkerJobProcessor loop.
+        Eval tests run in-process without that loop, so we execute queued jobs
+        directly to make worker artifacts available for assertions.
+        """
+        from datetime import datetime, timezone
+
+        from zerg.models import WorkerJob
+        from zerg.services.worker_artifact_store import WorkerArtifactStore
+        from zerg.services.worker_runner import WorkerRunner
+
+        db = self.supervisor_service.db
+
+        jobs = (
+            db.query(WorkerJob)
+            .filter(WorkerJob.supervisor_run_id == supervisor_run_id, WorkerJob.status == "queued")
+            .order_by(WorkerJob.created_at)
+            .all()
+        )
+
+        if not jobs:
+            return
+
+        artifact_store = WorkerArtifactStore()
+        runner = WorkerRunner(artifact_store=artifact_store)
+
+        for job in jobs:
+            job.status = "running"
+            job.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+            # Opt-in: allow a test case to request a scripted worker run so we can
+            # deterministically generate worker tool events in hermetic mode.
+            use_scripted = "[eval:scripted_worker]" in (job.task or "")
+
+            agent_config: dict = {"model": job.model, "owner_id": job.owner_id}
+            if use_scripted:
+                agent_config["model"] = "gpt-scripted"
+                agent_config["allowed_tools"] = ["get_current_time"]
+
+            try:
+                result = await runner.run_worker(
+                    db=db,
+                    task=job.task,
+                    agent=None,
+                    agent_config=agent_config,
+                    timeout=60,
+                    event_context={"run_id": supervisor_run_id},
+                    job_id=job.id,
+                )
+
+                job.worker_id = result.worker_id
+                job.finished_at = datetime.now(timezone.utc)
+
+                if result.status == "success":
+                    job.status = "success"
+                else:
+                    job.status = "failed"
+                    job.error = result.error or "Unknown error"
+
+                db.commit()
+            except Exception as e:
+                job.status = "failed"
+                job.error = str(e)
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
