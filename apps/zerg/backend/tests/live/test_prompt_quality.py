@@ -5,7 +5,7 @@ They catch regressions like "8 tool calls for a simple disk check".
 
 Run with:
     cd apps/zerg/backend
-    uv run pytest tests/live/test_prompt_quality.py --live-token <JWT> --live-url http://localhost:30080
+    uv run pytest tests/live/test_prompt_quality.py --live-token <JWT> --live-url http://localhost:30080 --timeout=120
 
 Or use the Makefile target (requires backend running):
     make test-prompts TOKEN=<JWT>
@@ -27,8 +27,9 @@ def count_worker_tool_calls(events: list, run_id: int) -> int:
     count = 0
     for event in events:
         if event["type"] == "worker_tool_started":
-            # Verify this event belongs to our run
-            event_run_id = event["data"].get("run_id")
+            # Access run_id from nested payload
+            payload = event["data"].get("payload", {})
+            event_run_id = payload.get("run_id")
             if event_run_id == run_id:
                 count += 1
     return count
@@ -45,7 +46,9 @@ def get_supervisor_result(events: list) -> str:
     """
     for event in reversed(events):
         if event["type"] == "supervisor_complete":
-            return event["data"].get("result", "")
+            # Access result from nested payload
+            payload = event["data"].get("payload", {})
+            return payload.get("result", "")
     return ""
 
 
@@ -75,6 +78,9 @@ def test_simple_disk_check_efficiency(supervisor_client):
         f"Result doesn't appear to contain disk info. Got: {result[:200]}"
     )
 
+    # Ensure we actually measured something (prevents false pass if SSE parsing fails)
+    assert tool_calls >= 1, f"Expected at least 1 tool call but measured {tool_calls}. SSE parsing may be broken."
+
     # Assert efficiency
     assert tool_calls <= 2, (
         f"Simple disk check used {tool_calls} tool calls (expected ≤2). "
@@ -99,6 +105,9 @@ def test_simple_memory_check_efficiency(supervisor_client):
         f"Result doesn't appear to contain memory info. Got: {result[:200]}"
     )
 
+    # Ensure we actually measured something (prevents false pass if SSE parsing fails)
+    assert tool_calls >= 1, f"Expected at least 1 tool call but measured {tool_calls}. SSE parsing may be broken."
+
     assert tool_calls <= 2, (
         f"Simple memory check used {tool_calls} tool calls (expected ≤2). "
         f"Run ID: {run_id}"
@@ -121,6 +130,9 @@ def test_container_list_efficiency(supervisor_client):
     assert "docker" in result.lower() or "container" in result.lower(), (
         f"Result doesn't appear to contain container info. Got: {result[:200]}"
     )
+
+    # Ensure we actually measured something (prevents false pass if SSE parsing fails)
+    assert tool_calls >= 1, f"Expected at least 1 tool call but measured {tool_calls}. SSE parsing may be broken."
 
     assert tool_calls <= 2, (
         f"Container list used {tool_calls} tool calls (expected ≤2). "

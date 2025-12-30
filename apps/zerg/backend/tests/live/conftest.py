@@ -32,7 +32,10 @@ class SupervisorClient:
         resp = requests.post(
             f"{self.base_url}/api/jarvis/supervisor", json={"task": task}, headers=self.headers, timeout=10
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError:
+            raise RuntimeError(f"Failed to dispatch task: {resp.status_code} {resp.text}")
         return resp.json()["run_id"]
 
     def wait_for_completion(self, run_id: int, timeout: int = 60) -> str:
@@ -40,7 +43,11 @@ class SupervisorClient:
         return self._stream_and_parse(run_id, timeout)
 
     def collect_events(self, run_id: int, timeout: int = 60) -> list:
-        """Collects all SSE events for a run and returns them as a list."""
+        """Collects all SSE events for a run and returns them as a list.
+
+        Each event has the structure:
+        {"type": "event_type", "data": {"type": "...", "payload": {...}, "seq": N, "timestamp": "..."}}
+        """
         start_time = time.time()
         event_type = None
         events = []
@@ -52,6 +59,11 @@ class SupervisorClient:
             stream=True,
             timeout=timeout,
         ) as response:
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError:
+                raise RuntimeError(f"Failed to connect to SSE stream: {response.status_code} {response.text}")
+
             for line in response.iter_lines(decode_unicode=True):
                 if time.time() - start_time > timeout:
                     raise TimeoutError("Timeout")
@@ -65,7 +77,7 @@ class SupervisorClient:
                     except json.JSONDecodeError:
                         data = data_str
 
-                    # Collect event
+                    # Collect event - store the complete SSE event wrapper
                     if event_type and isinstance(data, dict):
                         events.append({"type": event_type, "data": data})
 
@@ -74,7 +86,11 @@ class SupervisorClient:
                         return events
 
                     if event_type == "error":
-                        raise RuntimeError(f"Supervisor Error: {data}")
+                        # Extract error message from payload
+                        error_msg = data
+                        if isinstance(data, dict):
+                            error_msg = data.get("payload", {}).get("error") or data.get("error", str(data))
+                        raise RuntimeError(f"Supervisor Error: {error_msg}")
 
         return events
 
@@ -90,6 +106,11 @@ class SupervisorClient:
             stream=True,
             timeout=timeout,
         ) as response:
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError:
+                raise RuntimeError(f"Failed to connect to SSE stream: {response.status_code} {response.text}")
+
             for line in response.iter_lines(decode_unicode=True):
                 if time.time() - start_time > timeout:
                     raise TimeoutError("Timeout")
@@ -103,14 +124,19 @@ class SupervisorClient:
                     except json.JSONDecodeError:
                         data = data_str
 
-                    # Handle Events
+                    # Handle Events - access nested payload
                     if event_type == "supervisor_complete":
                         if isinstance(data, dict):
-                            return data.get("result", "")
+                            # Result is nested in payload
+                            return data.get("payload", {}).get("result", "")
                         return str(data)
 
                     if event_type == "error":
-                        raise RuntimeError(f"Supervisor Error: {data}")
+                        # Error might be in payload or at root level (legacy)
+                        error_msg = data
+                        if isinstance(data, dict):
+                            error_msg = data.get("payload", {}).get("error") or data.get("error", str(data))
+                        raise RuntimeError(f"Supervisor Error: {error_msg}")
 
         return ""
 
