@@ -26,6 +26,7 @@ def pytest_generate_tests(metafunc):
     """Generate test cases from YAML datasets.
 
     This hook dynamically creates test cases from all .yml files in datasets/
+    Tags from YAML are converted to pytest markers.
     """
     if "eval_case" in metafunc.fixturenames:
         # Load datasets directly (not via fixture, which isn't available during generation)
