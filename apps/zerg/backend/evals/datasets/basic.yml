@@ -1,0 +1,81 @@
+version: "1.0"
+description: Basic supervisor eval - 5 core test cases (hermetic mode)
+
+# Phase 1: These cases run in hermetic mode with stubbed LLM responses
+# The stub LLM returns deterministic outputs, so assertions are predictable
+
+cases:
+  # 1. Conversational - Simple greeting
+  - id: greeting_simple
+    category: conversational
+    description: Basic greeting should respond without spawning worker
+    input: "Hello, how are you?"
+    timeout: 30
+    assert:
+      - type: contains
+        value: "stub-response"
+        case_insensitive: true
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+      - type: status
+        value: success
+    tags: [quick, conversational]
+
+  # 2. Conversational - Context recall
+  - id: context_basic
+    category: conversational
+    description: Should maintain conversation context
+    input: "What can you help me with?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [quick, conversational]
+
+  # 3. Infrastructure - Would spawn worker in live mode
+  # In hermetic mode, stub LLM decides whether to call tools based on keywords
+  - id: check_infrastructure
+    category: infrastructure
+    description: Infrastructure request (hermetic mode - no real worker)
+    input: "Check disk space on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 4. Tool usage - Time check
+  - id: get_time
+    category: tool_usage
+    description: Simple tool call (hermetic mode)
+    input: "What time is it?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 10000
+    tags: [quick, tool_usage]
+
+  # 5. Performance - Token budget check
+  - id: token_budget_simple
+    category: performance
+    description: Simple task should use minimal tokens
+    input: "Hi"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: total_tokens
+        max: 5000  # Generous for hermetic mode
+      - type: latency_ms
+        max: 10000
+    tags: [quick, performance]
