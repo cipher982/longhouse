@@ -1,5 +1,5 @@
 version: "1.0"
-description: Basic supervisor eval - hermetic mode (18 test cases)
+description: Basic supervisor eval - hermetic mode (53 test cases)
 
 # Phase 1-2: These cases run in hermetic mode with stubbed LLM responses
 # The stub LLM returns deterministic outputs, so assertions are predictable
