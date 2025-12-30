@@ -1,8 +1,8 @@
 # Eval Dataset System for Zerg AI Agents
 
-**Status:** Phase 1-2 Complete (18 test cases, worker asserters, multi-turn support)
+**Status:** Phase 1-3 Complete (18 test cases, worker asserters, multi-turn support, variant comparison)
 **Created:** 2025-12-30
-**Updated:** 2025-12-30 (Phase 2 completion)
+**Updated:** 2025-12-30 (Phase 3 completion)
 **Protocol:** SDP-1
 **Authors:** Research + codebase exploration
 
@@ -1081,21 +1081,34 @@ make eval-live
 - `Makefile` - `eval-live` target with 120s timeout
 
 ### Phase 3: Variant Comparison + Results Merging (Week 3)
+**Status:** ✅ Complete (2025-12-30)
+
 **Goal:** A/B testing of prompt variations + results comparison + xdist-safe merging
 
-**Acceptance Criteria:**
-- [ ] Variant overrides implemented (immutable, xdist-safe)
-- [ ] Results saved to JSON: `results/eval-{date}-{variant}-{commit}.json`
-- [ ] Per-worker temp files merged after pytest-xdist completes
-- [ ] Comparison CLI: `make eval-compare BASELINE=baseline VARIANT=improved`
-- [ ] Delta report shows: pass rate change, latency regression, token usage diff
-- [ ] Commit hash embedded in results JSON
+**Completed:**
+- ✅ Variant overrides implemented (immutable, xdist-safe)
+- ✅ Results saved to JSON: `results/eval-{date}-{variant}-{commit}.json`
+- ✅ Per-worker temp files merged after pytest-xdist completes
+- ✅ Comparison CLI: `make eval-compare BASELINE=baseline VARIANT=improved`
+- ✅ Delta report shows: pass rate change, latency regression, token usage diff
+- ✅ Commit hash embedded in results JSON
 
 **Deliverables:**
-- `evals/results_store.py` - JSON serialization + merge logic
-- `evals/compare.py` - Comparison CLI (delta tables)
-- `evals/datasets/variants.yml` - Test cases with multiple variants
-- `Makefile` - `eval-compare` target
+- ✅ `evals/results_store.py` - JSON serialization + merge logic (per-worker JSONL → merged JSON)
+- ✅ `evals/compare.py` - Comparison CLI with color-coded deltas
+- ✅ `evals/datasets/basic.yml` - Added baseline + improved variant configs
+- ✅ `Makefile` - `eval-compare` target
+- ✅ `conftest.py` - VariantConfig model + pytest_sessionfinish hook for merging
+- ✅ `runner.py` - with_variant() supports model/reasoning_effort/prompt_version
+- ✅ `test_eval_runner.py` - Saves AssertionResult + CaseResult to temp JSONL
+
+**Key Implementation Details:**
+- Results stored in `evals/results/eval-{date}-{variant}-{commit}.json`
+- Per-worker temp files (`.tmp/{worker_id}.jsonl`) merged on session finish
+- Variants defined in YAML `variants:` section (model, temperature, reasoning_effort, prompt_version)
+- Comparison CLI shows pass rate delta, latency regression, token usage diff, per-case status changes
+- Immutable variant overrides (with_variant returns new instance, no global state mutation)
+- xdist-safe: Only master node merges results (workers write to separate temp files)
 
 ### Phase 4: Full Dataset + Deployment Gating (Week 4)
 **Goal:** 50-100 test cases + critical test tagging + CI integration
