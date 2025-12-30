@@ -329,3 +329,518 @@ cases:
       - type: latency_ms
         max: 20000
     tags: [multi_step, infrastructure]
+
+  # ===========================================================================
+  # PHASE 4: EXPANDED TEST SUITE (19-50+)
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Conversational (5 more: total ~10)
+  # ---------------------------------------------------------------------------
+
+  # 19. Conversational - Thank you
+  - id: thank_you_response
+    category: conversational
+    description: Should respond politely to gratitude
+    input: "Thank you for your help!"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [conversational, fast, critical]
+
+  # 20. Conversational - Status check
+  - id: status_check
+    category: conversational
+    description: Should respond to status inquiries
+    input: "How are things going?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [conversational, fast]
+
+  # 21. Conversational - Follow-up question
+  - id: follow_up_question
+    category: conversational
+    description: Should handle follow-up clarifications
+    input: "What did you mean by that?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [conversational, fast]
+
+  # 22. Conversational - Acknowledgment
+  - id: acknowledgment
+    category: conversational
+    description: Should acknowledge simple confirmations
+    input: "OK"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [conversational, fast, critical]
+
+  # 23. Conversational - Capability inquiry
+  - id: capability_inquiry
+    category: conversational
+    description: Should explain capabilities when asked
+    input: "What can you do?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [conversational, fast]
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure (10 more: total ~15)
+  # ---------------------------------------------------------------------------
+
+  # 24. Infrastructure - CPU check
+  - id: check_cpu
+    category: infrastructure
+    description: CPU usage check on specific server
+    input: "Check CPU usage on clifford"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure, critical]
+
+  # 25. Infrastructure - Network check
+  - id: check_network
+    category: infrastructure
+    description: Network connectivity check
+    input: "Check network connectivity on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 26. Infrastructure - Service status
+  - id: check_service_status
+    category: infrastructure
+    description: Check running services
+    input: "What services are running on zerg?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 27. Infrastructure - Port check
+  - id: check_port
+    category: infrastructure
+    description: Check if port is listening
+    input: "Is port 8000 open on clifford?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 28. Infrastructure - Process check
+  - id: check_process
+    category: infrastructure
+    description: Check for running process
+    input: "Is nginx running on cube?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 29. Infrastructure - Uptime check
+  - id: check_uptime
+    category: infrastructure
+    description: Check server uptime
+    input: "How long has clifford been running?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure, fast]
+
+  # 30. Infrastructure - Load average
+  - id: check_load
+    category: infrastructure
+    description: Check system load average
+    input: "What's the load average on cube?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 31. Infrastructure - Docker images
+  - id: check_docker_images
+    category: infrastructure
+    description: List Docker images
+    input: "Show Docker images on zerg"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 32. Infrastructure - Docker volumes
+  - id: check_docker_volumes
+    category: infrastructure
+    description: List Docker volumes
+    input: "What Docker volumes exist on clifford?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure]
+
+  # 33. Infrastructure - File system check
+  - id: check_filesystem
+    category: infrastructure
+    description: Check file system usage
+    input: "Show filesystem usage on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [infrastructure, critical]
+
+  # ---------------------------------------------------------------------------
+  # Multi-step (5 more: total ~10)
+  # ---------------------------------------------------------------------------
+
+  # 34. Multi-step - Compare metrics
+  - id: compare_server_metrics
+    category: multi_step
+    description: Compare metrics across servers
+    input: "Compare memory usage between cube and clifford"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 20000
+    tags: [multi_step, infrastructure, slow]
+
+  # 35. Multi-step - Aggregate status
+  - id: aggregate_server_status
+    category: multi_step
+    description: Aggregate status from multiple servers
+    input: "Give me a status report for all servers"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 25000
+    tags: [multi_step, infrastructure, slow]
+
+  # 36. Multi-step - Research and act
+  - id: research_then_delegate
+    category: multi_step
+    description: Research information then delegate task
+    input: "Find the best way to check Docker disk usage, then do it on cube"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 25000
+    tags: [multi_step, slow]
+
+  # 37. Multi-step - Conditional workflow
+  - id: conditional_workflow
+    category: multi_step
+    description: Execute conditional logic across steps
+    input: "Check disk on cube, if it's over 80% then check what's using space"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 25000
+    tags: [multi_step, infrastructure, slow]
+
+  # 38. Multi-step - Chain of dependencies
+  - id: dependency_chain
+    category: multi_step
+    description: Execute tasks with dependencies
+    input: "First list Docker containers, then check logs for the first one"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 25000
+    tags: [multi_step, slow]
+
+  # ---------------------------------------------------------------------------
+  # Tool usage (5 more: total ~10)
+  # ---------------------------------------------------------------------------
+
+  # 39. Tool usage - Multiple tool calls
+  - id: multiple_tools
+    category: tool_usage
+    description: Should use multiple tools in sequence
+    input: "What time is it and what's my server list?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [tool_usage, fast]
+
+  # 40. Tool usage - Tool selection
+  - id: correct_tool_selection
+    category: tool_usage
+    description: Should select appropriate tool for task
+    input: "Tell me about my infrastructure"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [tool_usage, fast]
+
+  # 41. Tool usage - No tool needed
+  - id: no_tool_needed
+    category: tool_usage
+    description: Should not call tools unnecessarily
+    input: "That sounds good"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+    tags: [tool_usage, fast, critical]
+
+  # 42. Tool usage - Tool fallback
+  - id: tool_fallback
+    category: tool_usage
+    description: Should handle tool unavailability gracefully
+    input: "Search for information about quantum computing"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 10000
+    tags: [tool_usage]
+
+  # 43. Tool usage - Knowledge base query
+  - id: knowledge_query
+    category: tool_usage
+    description: Should query knowledge base for info
+    input: "Tell me about my cube server"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [tool_usage, fast]
+
+  # ---------------------------------------------------------------------------
+  # Edge cases (5 more: total ~10)
+  # ---------------------------------------------------------------------------
+
+  # 44. Edge case - Unicode input
+  - id: edge_unicode
+    category: edge_case
+    description: Handle unicode characters
+    input: "Hello 🌍 世界 مرحبا"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [edge_case, fast]
+
+  # 45. Edge case - Special characters
+  - id: edge_special_chars
+    category: edge_case
+    description: Handle special characters
+    input: "Check <>&\"' characters"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 10000
+    tags: [edge_case, fast]
+
+  # 46. Edge case - Malformed request
+  - id: edge_malformed
+    category: edge_case
+    description: Handle malformed requests gracefully
+    input: "check disk on on on cube cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [edge_case]
+
+  # 47. Edge case - Ambiguous server
+  - id: edge_ambiguous_server
+    category: edge_case
+    description: Handle ambiguous server references
+    input: "Check disk on the server"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 10000
+    tags: [edge_case, fast]
+
+  # 48. Edge case - Contradictory request
+  - id: edge_contradictory
+    category: edge_case
+    description: Handle contradictory instructions
+    input: "Start and stop the service on cube"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [edge_case]
+
+  # ---------------------------------------------------------------------------
+  # Performance (5 more: total ~10)
+  # ---------------------------------------------------------------------------
+
+  # 49. Performance - Minimal latency
+  - id: perf_minimal_latency
+    category: performance
+    description: Absolute minimal response time
+    input: "Hi"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 5000
+      - type: total_tokens
+        max: 3000
+    tags: [performance, fast, critical]
+
+  # 50. Performance - Token efficiency
+  - id: perf_token_efficiency
+    category: performance
+    description: Efficient token usage for simple task
+    input: "What is 2+2?"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 8000
+      - type: total_tokens
+        max: 3000
+    tags: [performance, fast]
+
+  # 51. Performance - No redundant workers
+  - id: perf_no_redundant_workers
+    category: performance
+    description: Should not spawn unnecessary workers
+    input: "Tell me about your capabilities"
+    timeout: 30
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: latency_ms
+        max: 10000
+    tags: [performance, fast]
+
+  # 52. Performance - Quick delegation
+  - id: perf_quick_delegation
+    category: performance
+    description: Fast worker spawning for simple tasks
+    input: "Delegate checking time to a worker"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 15000
+    tags: [performance, critical]
+
+  # 53. Performance - Moderate complexity
+  - id: perf_moderate_complexity
+    category: performance
+    description: Reasonable performance on moderate tasks
+    input: "Check disk on cube and summarize"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: latency_ms
+        max: 18000
+      - type: total_tokens
+        max: 8000
+    tags: [performance, infrastructure]
