@@ -105,35 +105,17 @@ class EvalRunner:
 
         # Handle multi-turn conversation
         if messages:
-            # Get supervisor thread (creates if doesn't exist)
-            from zerg.models.models import Agent
-            from zerg.models.thread import Thread, ThreadMessage
+            # Get supervisor agent and thread using service methods
+            supervisor = self.supervisor_service.get_or_create_supervisor_agent(self.owner_id)
+            thread = self.supervisor_service.get_or_create_supervisor_thread(self.owner_id, supervisor)
 
-            # Get supervisor agent
-            supervisor = self.supervisor_service.db.query(Agent).filter(Agent.owner_id == self.owner_id, Agent.agent_type == "supervisor").first()
+            # Clear existing messages (fresh conversation) - keep system message
+            from zerg.models.thread import ThreadMessage
 
-            if not supervisor:
-                raise ValueError(f"No supervisor agent found for user {self.owner_id}")
-
-            # Get or create thread
-            thread = (
-                self.supervisor_service.db.query(Thread)
-                .filter(Thread.owner_id == self.owner_id, Thread.agent_id == supervisor.id)
-                .first()
-            )
-
-            if not thread:
-                thread = Thread(
-                    owner_id=self.owner_id,
-                    agent_id=supervisor.id,
-                    title="Eval Multi-turn",
-                )
-                self.supervisor_service.db.add(thread)
-                self.supervisor_service.db.commit()
-                self.supervisor_service.db.refresh(thread)
-
-            # Clear existing messages (fresh conversation)
-            self.supervisor_service.db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread.id).delete()
+            self.supervisor_service.db.query(ThreadMessage).filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.role != "system",
+            ).delete()
 
             # Inject conversation history (all but last message)
             from datetime import datetime, timezone
