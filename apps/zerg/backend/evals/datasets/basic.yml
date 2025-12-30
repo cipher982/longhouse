@@ -23,22 +23,20 @@ cases:
         value: success
     tags: [quick, conversational]
 
-  # 2. Conversational - Context recall
-  - id: context_basic
-    category: conversational
-    description: Should maintain conversation context
-    input: "What can you help me with?"
-    timeout: 30
+  # 2. Infrastructure - Memory check
+  - id: check_memory
+    category: infrastructure
+    description: Infrastructure request for memory check (hermetic mode)
+    input: "Check memory usage on cube"
+    timeout: 60
     assert:
       - type: status
         value: success
-      - type: worker_spawned
-        count: 0
       - type: latency_ms
-        max: 10000
-    tags: [quick, conversational]
+        max: 15000
+    tags: [infrastructure]
 
-  # 3. Infrastructure - Would spawn worker in live mode
+  # 3. Infrastructure - Disk check
   # In hermetic mode, stub LLM decides whether to call tools based on keywords
   - id: check_infrastructure
     category: infrastructure

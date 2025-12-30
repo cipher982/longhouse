@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 # Import fixtures from the main conftest.py
@@ -43,18 +43,15 @@ class EvalAssertion(BaseModel):
 class EvalCase(BaseModel):
     """Single eval test case."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     category: str
     description: str | None = None
     input: str | None = None
     timeout: int = 120
-    assert_: list[EvalAssertion] = []
+    assert_: list[EvalAssertion] = Field(default=[], alias="assert")
     tags: list[str] = []
-
-    class Config:
-        """Pydantic config."""
-
-        fields = {"assert_": "assert"}
 
 
 class EvalDataset(BaseModel):
@@ -76,17 +73,26 @@ def pytest_addoption(parser):
         "--variant",
         action="store",
         default="baseline",
-        help="Variant to run (baseline, improved, etc.)",
+        help="[Phase 2] Variant to run (baseline, improved, etc.) - NOT YET IMPLEMENTED",
     )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Filter tests by variant if specified."""
+    """Filter tests by variant if specified.
+
+    NOTE: Phase 1 ignores --variant flag. Variant support deferred to Phase 2.
+    All tests run with baseline configuration regardless of flag value.
+    """
     variant = config.getoption("--variant")
-    if variant:
-        # For Phase 1, we just run all tests with the specified variant
-        # Variant filtering will be implemented in Phase 2
-        pass
+    if variant and variant != "baseline":
+        # Warn user that variant is not implemented yet
+        import warnings
+
+        warnings.warn(
+            f"--variant={variant} flag is accepted but not implemented in Phase 1. "
+            "All tests run with baseline configuration. Variant support coming in Phase 2.",
+            UserWarning,
+        )
 
 
 # ---------------------------------------------------------------------------
