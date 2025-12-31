@@ -80,7 +80,7 @@ pytest evals/ -m conversational
 ### 1. Choose the Right Dataset
 
 - **basic.yml** - Hermetic mode tests (53 cases)
-- **live.yml** - Live mode tests with LLM grading (2 cases)
+- **live.yml** - Live mode tests with LLM grading (9 cases)
 
 ### 2. Add a Test Case
 

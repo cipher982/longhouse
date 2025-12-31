@@ -501,7 +501,7 @@ async def assert_llm_graded(
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
-            max_completion_tokens=500,
+            max_completion_tokens=1000,  # Increased from 500 to avoid truncation
         )
 
         # Parse response (guaranteed JSON by response_format)
