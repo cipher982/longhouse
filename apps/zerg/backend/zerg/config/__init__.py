@@ -122,7 +122,17 @@ class Settings:  # noqa: D401 – simple data container
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
     def data_dir(self) -> Path:
-        """Return the absolute path to the persistent data directory."""
+        """Return the absolute path to the persistent data directory.
+
+        In Docker containers, uses /data (mounted volume).
+        In local dev, uses repo_root/data.
+        """
+        # Prefer /data if it exists (Docker volume mount)
+        docker_data = Path("/data")
+        if docker_data.exists():
+            return docker_data
+
+        # Fall back to repo-relative for local dev
         path = _REPO_ROOT / "data"
         path.mkdir(parents=True, exist_ok=True)
         return path
