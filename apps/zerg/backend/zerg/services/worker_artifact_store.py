@@ -37,6 +37,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from zerg.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,73 +54,29 @@ class WorkerArtifactStore:
             Root directory for worker artifacts. Resolution order:
             1. If base_path is provided, use it (fail if not writable)
             2. If SWARMLET_DATA_PATH env var is set, use it (fail if not writable)
-            3. Otherwise, try fallback paths: /data/swarmlet/workers,
-               /app/data/swarmlet/workers, /tmp/swarmlet/workers
-
-        Raises
-        ------
-        PermissionError
-            If an explicit path (base_path or SWARMLET_DATA_PATH) is configured
-            but not writable. This is intentional fail-fast behavior - silent
-            fallback would hide deployment bugs and risk data loss.
+            3. Otherwise, use get_settings().data_dir / "swarmlet" / "workers"
         """
-        explicit_path = base_path is not None
         env_path = os.getenv("SWARMLET_DATA_PATH")
 
-        # Build candidate paths (ordered by preference)
-        candidate_paths = []
         if base_path:
-            candidate_paths.append(Path(base_path))
+            self.base_path = Path(base_path)
         elif env_path:
-            candidate_paths.append(Path(env_path))
+            self.base_path = Path(env_path)
         else:
-            candidate_paths.extend(
-                [
-                    Path("/data/swarmlet/workers"),
-                    Path("/app/data/swarmlet/workers"),
-                    Path("/tmp/swarmlet/workers"),
-                ]
-            )
+            self.base_path = get_settings().data_dir / "workers"
 
-        last_error: Exception | None = None
-        selected_path: Path | None = None
+        try:
+            self.base_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error(f"WorkerArtifactStore: failed to init {self.base_path}: {e}")
+            # Fallback to /tmp only as a last resort in dev
+            if not base_path and not env_path:
+                self.base_path = Path("/tmp/swarmlet/workers")
+                self.base_path.mkdir(parents=True, exist_ok=True)
+                logger.warning(f"WorkerArtifactStore: using emergency fallback {self.base_path}")
+            else:
+                raise
 
-        for candidate in candidate_paths:
-            try:
-                candidate.mkdir(parents=True, exist_ok=True)
-                selected_path = candidate
-                break
-            except PermissionError as e:
-                last_error = e
-                logger.warning(
-                    "WorkerArtifactStore: permission denied for %s, trying fallback",
-                    candidate,
-                )
-            except OSError as e:
-                last_error = e
-                logger.warning(
-                    "WorkerArtifactStore: failed to init %s (%s), trying fallback",
-                    candidate,
-                    e,
-                )
-
-        if selected_path is None:
-            # Fail fast with actionable error messages for explicit paths
-            if explicit_path:
-                raise last_error or PermissionError(f"WorkerArtifactStore: base_path '{base_path}' is not writable")
-
-            if env_path:
-                raise PermissionError(
-                    f"WorkerArtifactStore: SWARMLET_DATA_PATH='{env_path}' is not writable. "
-                    "Check your volume mount or directory permissions."
-                ) from last_error
-
-            raise PermissionError(
-                "WorkerArtifactStore: no writable data path found. "
-                "Tried: /data/swarmlet/workers, /app/data/swarmlet/workers, /tmp/swarmlet/workers"
-            ) from last_error
-
-        self.base_path = selected_path
         self.index_path = self.base_path / "index.json"
 
         # Initialize index if it doesn't exist
