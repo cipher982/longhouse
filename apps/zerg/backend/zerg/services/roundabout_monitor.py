@@ -38,8 +38,13 @@ from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from enum import Enum
+from typing import TYPE_CHECKING
 from typing import Any
 
+if TYPE_CHECKING:
+    from zerg.models.models import WorkerJob
+
+from zerg.config import get_settings
 from zerg.services.llm_decider import DEFAULT_DECISION_MODE
 from zerg.services.llm_decider import DEFAULT_LLM_MAX_CALLS
 from zerg.services.llm_decider import DEFAULT_LLM_MODEL
@@ -424,6 +429,17 @@ class RoundaboutMonitor:
                     logger.error(f"Job {self.job_id} not found in roundabout")
                     return self._create_result("failed", error="Job not found")
 
+                # Evaluation Mode Helper:
+                # In testing/eval mode, the background worker processor is disabled.
+                # If we're waiting for a job that is still 'queued', we drain it
+                # synchronously here so the supervisor can proceed with findings.
+                if get_settings().testing and job.status == "queued" and self._check_count >= 3:
+                    logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout")
+                    await self._drain_job_synchronously(job)
+                    # Refresh job after draining
+                    self.db.expire_all()
+                    job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
+
                 # Cache task for decision context
                 self._task = job.task
 
@@ -475,6 +491,51 @@ class RoundaboutMonitor:
         finally:
             # Unsubscribe from events
             await self._unsubscribe_from_tool_events()
+
+    async def _drain_job_synchronously(self, job: "WorkerJob") -> None:
+        """Execute a queued worker job synchronously (eval-only)."""
+        from zerg.services.worker_runner import WorkerRunner
+        from zerg.utils.time import utc_now_naive
+
+        # Update status to running
+        job.status = "running"
+        job.started_at = utc_now_naive()
+        self.db.commit()
+
+        artifact_store = WorkerArtifactStore()
+        runner = WorkerRunner(artifact_store=artifact_store)
+
+        try:
+            result = await runner.run_worker(
+                db=self.db,
+                task=job.task,
+                agent=None,
+                agent_config={"model": job.model, "owner_id": job.owner_id},
+                timeout=60,
+                event_context={"run_id": self.supervisor_run_id},
+                job_id=job.id,
+            )
+
+            # Ensure job is still attached to session
+            self.db.refresh(job)
+
+            job.worker_id = result.worker_id
+            job.finished_at = utc_now_naive()
+
+            if result.status == "success":
+                job.status = "success"
+            else:
+                job.status = "failed"
+                job.error = result.error or "Unknown error"
+
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            self.db.refresh(job)
+            job.status = "failed"
+            job.error = str(e)
+            job.finished_at = utc_now_naive()
+            self.db.commit()
 
     async def _subscribe_to_tool_events(self) -> None:
         """Subscribe to tool events for this job."""

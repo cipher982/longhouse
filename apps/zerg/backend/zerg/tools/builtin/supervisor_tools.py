@@ -170,7 +170,11 @@ async def spawn_worker_fire_and_forget_async(
     is incompatible with the durable-runs model and can deadlock in TESTING/evals
     where the background worker processor is intentionally disabled.
     """
-    return await spawn_worker_async(task=task, model=model, wait=False)
+    # Opt-in: allow evals to request a 'waiting' spawn so the supervisor
+    # can actually see the result and synthesize it into its response.
+    # Requires [eval:wait] in the task description.
+    wait = "[eval:wait]" in task
+    return await spawn_worker_async(task=task, model=model, wait=wait)
 
 
 def spawn_worker_fire_and_forget(
