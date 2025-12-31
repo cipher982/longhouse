@@ -26,22 +26,21 @@ During reproduction, three significant bugs were uncovered:
 - **Datetime Comparison:** `get_worker_metadata_async` crashes when comparing offset-naive vs offset-aware datetimes.
 - **EvalRunner Persistence:** Workers processed in `EvalRunner` often remain in "running" status due to session handling/flushing issues in the synchronous drain loop.
 
-## Proposed Plan
+## Implementation Progress
 
-### Phase 1: Robustness Fixes (Infrastructure)
-- **Fix JSON Serialization:** Update `zerg_react_agent.py` to use a custom JSON encoder that handles `datetime` and `date`.
-- **Fix Datetime Mismatch:** Update `supervisor_tools.py` to ensure all comparisons use timezone-aware UTC.
-- **Fix EvalRunner Status:** Ensure `db.commit()` and `db.refresh()` are used correctly in `_process_queued_worker_jobs`.
+### Phase 1: Robustness Fixes (Infrastructure) ✅ COMPLETE
+- **JSON Serialization:** Fixed in `zerg_react_agent.py` using custom handler for `datetime`.
+- **Datetime Mismatch:** Fixed in `supervisor_tools.py` using `utc_now_naive()`.
+- **EvalRunner Persistence:** Fixed in `runner.py` with session refreshes and `utc_now_naive()`.
 
-### Phase 2: Prompt Evolution
-- **Relax Worker Prompt:** Soften the "ONE command" rule to "Minimal turns" and add a "Conditional Execution" section to `BASE_WORKER_PROMPT`.
-- **Supervisor "Wait" Mode for Evals:** Implement an `[eval:wait]` task marker. When present, `EvalRunner` will allow `spawn_worker(wait=True)`. This will trigger the "Roundabout" monitor which we will update to drain the worker synchronously ONLY in eval mode.
+### Phase 2: Prompt Evolution ✅ COMPLETE
+- **Relax Worker Prompt:** Softened "ONE command" rule to "Goal-Oriented Execution" in `templates.py`.
+- **Supervisor "Wait" Mode for Evals:** Implemented `[eval:wait]` logic in `supervisor_tools.py` and `RoundaboutMonitor.py`.
 
-### Phase 3: Evaluation Quality
-- **Update Live Eval Dataset:** Update the `delegation_task_clarity` task to include the `[eval:wait]` marker.
-- **Evidence Verification:** Verify that the supervisor correctly synthesizes the worker result into the final response using the Evidence Mounting system.
+### Phase 3: Evaluation Quality (In Progress)
+- **Update Live Eval Dataset:** Updated `delegation_task_clarity` and added `delegation_multi_step` with `[eval:wait]`.
+- **Evidence Verification:** Pending live test run.
 
 ## Next Steps
-1. Implement Phase 1 robustness fixes.
-2. Implement Phase 2 prompt and tool changes.
-3. Verify with `scripts/reproduce_delegation_failure.py`.
+1. Run live evaluations to verify the fix.
+2. Confirm supervisor synthesis of worker findings.

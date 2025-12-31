@@ -180,24 +180,42 @@ cases:
   # Test delegation description quality
   - id: delegation_task_clarity
     category: infrastructure
-    description: Delegated tasks should have clear descriptions
-    input: "Can you check if nginx is running on clifford and restart it if not?"
+    description: Delegated tasks should have clear descriptions and synthesis
+    input: "Can you check if nginx is running on clifford and restart it if not? [eval:wait]"
     timeout: 90
     assert:
-      # Note: status may be 'deferred' when workers are spawned (correct behavior)
-      # We rely on llm_graded to assess actual behavior quality
       - type: llm_graded
         rubric: |
-          This is a conditional task: check nginx status, restart if needed.
+          This is a conditional task with feedback loop.
 
           Score 1.0 if the agent:
-          - Understands the conditional nature (check THEN maybe restart)
-          - Spawns a worker or explains the plan clearly
-          - Doesn't just restart without checking
+          - Spawns a worker with the conditional task
+          - CORRECTLY reports whether nginx was found/restarted (synthesis of worker result)
+          - Shows evidence of having "seen" the worker's findings
 
-          Score 0.5 if the agent partially understands but misses the conditional.
-          Score 0.0 if the agent refuses, is confused, or just restarts without checking.
-        min_score: 0.5
+          Score 0.5 if the agent spawns the worker but gives a generic acknowledgment without findings.
+          Score 0.0 if the agent refuses, is confused, or ignores the worker result.
+        min_score: 0.7
+    tags: [infrastructure, llm_graded, live_only, worker]
+
+  # Test multi-turn worker coordination
+  - id: delegation_multi_step
+    category: infrastructure
+    description: Agent should be able to coordinate multiple steps
+    input: "Find out where the large files are on cube, then tell me the top 3 directories. [eval:wait]"
+    timeout: 120
+    assert:
+      - type: llm_graded
+        rubric: |
+          The agent needs to:
+          1. Spawn a worker to find large files/directories.
+          2. Receive and process findings.
+          3. Synthesize the top 3 directories for the user.
+
+          Score 1.0 if the response includes 3 specific directory names and their sizes.
+          Score 0.5 if the response is vague or only lists some info.
+          Score 0.0 if it doesn't spawn a worker or fails completely.
+        min_score: 0.7
     tags: [infrastructure, llm_graded, live_only, worker]
 
   # ---------------------------------------------------------------------------
