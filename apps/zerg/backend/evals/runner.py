@@ -8,7 +8,6 @@ This module provides the EvalRunner class which:
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -151,11 +150,11 @@ class EvalRunner:
             reasoning_effort=reasoning_effort,
         )
 
-        # For hermetic evals, drain queued worker jobs in-process so worker/artifact
-        # assertions can inspect results deterministically (no background processor).
-        eval_mode = os.environ.get("EVAL_MODE", "hermetic")
-        if eval_mode != "live":
-            await self._process_queued_worker_jobs(supervisor_run_id=result.run_id)
+        # Drain queued worker jobs in-process so worker/artifact assertions can
+        # inspect results deterministically (no background processor in evals).
+        # This runs for BOTH hermetic and live mode - live mode uses real LLM for
+        # supervisor decisions, but still needs workers to complete synchronously.
+        await self._process_queued_worker_jobs(supervisor_run_id=result.run_id)
 
         # Calculate latency
         latency_ms = int((time.time() - start_time) * 1000)
