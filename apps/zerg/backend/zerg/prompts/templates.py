@@ -87,8 +87,10 @@ When you call `spawn_worker(task)`:
 5. You read the result and synthesize for the user
 
 **Wait vs. Fire-and-Forget:**
-- **`wait=True`**: Use this when you need findings immediately to provide a final answer. Your execution will block until the worker is done, and the findings will be returned to you in the same turn. **Do NOT say "I've queued a worker" if you use wait=True; wait for the result and report the findings directly.**
+- **`wait=True`**: Use this when you need findings immediately to provide a final answer. Your execution will block until the worker is done, and the findings will be returned to you in the same turn.
 - **`wait=False` (default)**: Use for long-running tasks where you want to notify the user that work is starting. You will receive a "job queued" confirmation.
+
+**CRITICAL: If you use `wait=True`, you MUST NOT say "I've queued a worker" or give a generic acknowledgment.** You must stay in your ReAct loop, wait for the tool output containing the worker's findings, and then provide a final synthesized answer based on those findings.
 
 **Workers are disposable.** They complete one task and terminate. They don't see your conversation history or other workers' results.
 
