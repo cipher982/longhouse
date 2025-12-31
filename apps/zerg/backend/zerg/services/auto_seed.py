@@ -69,7 +69,7 @@ def _seed_user_context() -> bool:
     db = default_session_factory()
     try:
         # Find first user
-        result = db.execute(select(User).limit(1))
+        result = db.execute(select(User).order_by(User.id).limit(1))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -121,7 +121,7 @@ def _seed_personal_credentials() -> bool:
 
         db = default_session_factory()
         try:
-            result = db.execute(select(User).limit(1))
+            result = db.execute(select(User).order_by(User.id).limit(1))
             user = result.scalar_one_or_none()
 
             if not user:
@@ -196,7 +196,7 @@ def _seed_runners() -> bool:
     db = default_session_factory()
     try:
         # Find first user
-        result = db.execute(select(User).limit(1))
+        result = db.execute(select(User).order_by(User.id).limit(1))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -261,7 +261,7 @@ def _seed_server_knowledge() -> bool:
     db = default_session_factory()
     try:
         # Find first user with context
-        result = db.execute(select(User).limit(1))
+        result = db.execute(select(User).order_by(User.id).limit(1))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -357,7 +357,7 @@ def run_auto_seed() -> dict:
 
             db = default_session_factory()
             try:
-                result = db.execute(select(User).limit(1))
+                result = db.execute(select(User).order_by(User.id).limit(1))
                 user = result.scalar_one_or_none()
                 if not user:
                     desired_role = "ADMIN" if settings.dev_admin else "USER"
