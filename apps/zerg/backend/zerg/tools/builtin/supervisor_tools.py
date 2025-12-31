@@ -552,12 +552,14 @@ async def get_worker_metadata_async(job_id: str) -> str:
         ]
 
         # Calculate duration
+        from zerg.utils.time import utc_now_naive
+
         duration_str = "N/A"
         if job.started_at and job.finished_at:
             duration = (job.finished_at - job.started_at).total_seconds() * 1000
             duration_str = f"{int(duration)}ms"
         elif job.started_at and job.status == "running":
-            duration = (datetime.now(timezone.utc) - job.started_at).total_seconds() * 1000
+            duration = (utc_now_naive() - job.started_at).total_seconds() * 1000
             duration_str = f"{int(duration)}ms (running)"
 
         lines.append(f"  Duration: {duration_str}")
