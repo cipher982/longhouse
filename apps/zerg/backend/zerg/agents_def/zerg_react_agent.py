@@ -726,7 +726,15 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # Serialize observation to JSON if it's a dict (tool_success/tool_error envelope)
         # This ensures consistent JSON format for evidence parsing and artifact storage
         if isinstance(observation, dict):
-            content = json.dumps(observation)
+            from datetime import date
+            from datetime import datetime
+
+            def datetime_handler(obj):
+                if isinstance(obj, (datetime, date)):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+            content = json.dumps(observation, default=datetime_handler)
         else:
             content = str(observation)
 
