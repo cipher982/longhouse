@@ -94,8 +94,8 @@ def get_commit_hash() -> str:
 def generate_run_id(variant: str = "baseline") -> str:
     """Generate a unique run ID.
 
-    Format: eval-{date}-{variant}-{commit}
-    Example: eval-2025-12-30-baseline-7fd28ac
+    Format: eval-{timestamp}-{variant}-{commit}
+    Example: eval-2025-12-30T14-03-22-baseline-7fd28ac
 
     Args:
         variant: Variant name (default: 'baseline')
@@ -103,7 +103,9 @@ def generate_run_id(variant: str = "baseline") -> str:
     Returns:
         Unique run ID string
     """
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    # Include time to avoid clobbering results when running multiple times per day
+    # on the same commit/variant.
+    date_str = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     commit_hash = get_commit_hash()
     return f"eval-{date_str}-{variant}-{commit_hash}"
 
