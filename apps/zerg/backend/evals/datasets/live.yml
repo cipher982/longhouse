@@ -64,6 +64,8 @@ cases:
     assert:
       - type: status
         value: success
+      - type: worker_spawned
+        count: 0  # Should ask for clarification, not run commands
       - type: llm_graded
         rubric: |
           The input "Check the server" is ambiguous (which server? what to check?).
@@ -87,6 +89,10 @@ cases:
     assert:
       - type: status
         value: success
+      - type: tool_called
+        value: "knowledge_search"  # Should use KB tool for server lookup
+      - type: worker_spawned
+        count: 0  # This is a lookup, not an action
       - type: llm_graded
         rubric: |
           For "What servers do I have access to?", the agent should:
