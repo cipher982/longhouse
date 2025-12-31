@@ -116,6 +116,9 @@ make generate-sdk  # OpenAPI types
 make regen-ws      # WebSocket contract code
 make regen-sse     # SSE event contract code
 
+# Prompt Iteration & Debugging
+cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>  # Replay a "golden run" with mocked tools
+
 # Seeding (local dev data)
 make seed-agents       # Seed Jarvis agents
 make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidian)
