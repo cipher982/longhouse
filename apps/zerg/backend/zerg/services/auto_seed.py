@@ -246,6 +246,91 @@ def _seed_runners() -> bool:
         db.close()
 
 
+def _seed_server_knowledge() -> bool:
+    """Seed user's server info into the knowledge base for searchability.
+
+    This makes knowledge_search("What servers do I have?") work by indexing
+    the server info from user.context into a KnowledgeDocument.
+
+    Returns:
+        True if seeding succeeded or was skipped (idempotent), False on error.
+    """
+    from zerg.crud import knowledge_crud
+    from zerg.models.models import KnowledgeSource
+
+    db = default_session_factory()
+    try:
+        # Find first user with context
+        result = db.execute(select(User).limit(1))
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.debug("No users in database yet - skipping server knowledge seed")
+            return True
+
+        # Check if user has servers in context
+        context = user.context or {}
+        servers = context.get("servers", [])
+        if not servers:
+            logger.debug("No servers in user context - skipping knowledge seed")
+            return True
+
+        # Check if we already have this knowledge source (idempotent)
+        existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
+
+        if existing_source:
+            # Source exists, but update the document content in case servers changed
+            pass
+        else:
+            # Create the knowledge source
+            existing_source = knowledge_crud.create_knowledge_source(
+                db,
+                owner_id=user.id,
+                name="User Context - Servers",
+                source_type="user_context",
+                config={"auto_seeded": True},
+            )
+            logger.info(f"Created knowledge source 'User Context - Servers' for {user.email}")
+
+        # Format servers as searchable markdown
+        lines = ["# My Servers\n"]
+        for srv in servers:
+            name = srv.get("name", "Unknown")
+            ip = srv.get("ip", "")
+            purpose = srv.get("purpose", "")
+            ssh_user = srv.get("ssh_user", "")
+
+            lines.append(f"## {name}")
+            if ip:
+                lines.append(f"- **IP Address:** {ip}")
+            if purpose:
+                lines.append(f"- **Purpose:** {purpose}")
+            if ssh_user:
+                lines.append(f"- **SSH User:** {ssh_user}")
+            lines.append("")  # Blank line between servers
+
+        content = "\n".join(lines)
+
+        # Upsert the document (creates or updates)
+        knowledge_crud.upsert_knowledge_document(
+            db,
+            source_id=existing_source.id,
+            owner_id=user.id,
+            path="user_context/servers.md",
+            content_text=content,
+            title="My Servers",
+        )
+        logger.info(f"Seeded {len(servers)} servers into knowledge base for {user.email}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to seed server knowledge: {e}")
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
 def run_auto_seed() -> dict:
     """Run all auto-seeding tasks.
 
@@ -295,6 +380,7 @@ def run_auto_seed() -> dict:
         "user_context": "skipped",
         "credentials": "skipped",
         "runners": "skipped",
+        "server_knowledge": "skipped",
     }
 
     # Seed user context (servers, integrations, preferences)
@@ -320,5 +406,12 @@ def run_auto_seed() -> dict:
             results["runners"] = f"ok ({config_path.name})"
     else:
         results["runners"] = "failed"
+
+    # Seed server info into knowledge base (makes knowledge_search work for servers)
+    # This runs AFTER user_context seed, so servers are available
+    if _seed_server_knowledge():
+        results["server_knowledge"] = "ok"
+    else:
+        results["server_knowledge"] = "failed"
 
     return results
