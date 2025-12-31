@@ -596,12 +596,12 @@ def get_worker_metadata(job_id: str) -> str:
 # can use whichever invocation method is appropriate for the runtime.
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
-        func=spawn_worker_fire_and_forget,
-        coroutine=spawn_worker_fire_and_forget_async,
+        func=spawn_worker,
+        coroutine=spawn_worker_async,
         name="spawn_worker",
         description="Spawn a worker agent to execute a task. "
-        "Returns immediately (fire-and-forget). "
-        "The worker persists all outputs and returns a natural language result.",
+        "By default, returns immediately (fire-and-forget). "
+        "Set wait=True to wait for the worker to complete and return its results.",
     ),
     StructuredTool.from_function(
         func=list_workers,

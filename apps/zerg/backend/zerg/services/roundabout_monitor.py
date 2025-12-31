@@ -433,8 +433,8 @@ class RoundaboutMonitor:
                 # In testing/eval mode, the background worker processor is disabled.
                 # If we're waiting for a job that is still 'queued', we drain it
                 # synchronously here so the supervisor can proceed with findings.
-                if get_settings().testing and job.status == "queued" and self._check_count >= 3:
-                    logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout")
+                if get_settings().testing and job.status == "queued":
+                    logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout (immediate)")
                     await self._drain_job_synchronously(job)
                     # Refresh job after draining
                     self.db.expire_all()
