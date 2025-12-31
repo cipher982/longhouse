@@ -227,9 +227,11 @@ class EvalRunner:
         artifact_store = WorkerArtifactStore()
         runner = WorkerRunner(artifact_store=artifact_store)
 
+        from zerg.utils.time import utc_now_naive
+
         for job in jobs:
             job.status = "running"
-            job.started_at = datetime.now(timezone.utc)
+            job.started_at = utc_now_naive()
             db.commit()
 
             # Opt-in: allow a test case to request a scripted worker run so we can
@@ -252,8 +254,11 @@ class EvalRunner:
                     job_id=job.id,
                 )
 
+                # Ensure job is still attached to session after run_worker commits
+                db.refresh(job)
+
                 job.worker_id = result.worker_id
-                job.finished_at = datetime.now(timezone.utc)
+                job.finished_at = utc_now_naive()
 
                 if result.status == "success":
                     job.status = "success"
@@ -263,7 +268,10 @@ class EvalRunner:
 
                 db.commit()
             except Exception as e:
+                db.rollback()
+                # Re-fetch if needed
+                db.refresh(job)
                 job.status = "failed"
                 job.error = str(e)
-                job.finished_at = datetime.now(timezone.utc)
+                job.finished_at = utc_now_naive()
                 db.commit()
