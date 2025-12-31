@@ -1,5 +1,5 @@
 version: "1.0"
-description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls)
+description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls, 9 test cases)
 
 # These tests use real LLM calls for both supervisor AND grader.
 # Run with: make eval-live
@@ -7,8 +7,15 @@ description: Live mode eval tests - require EVAL_MODE=live (real OpenAI calls)
 # When EVAL_MODE=live:
 # - Supervisor uses real OpenAI (tests actual prompt quality)
 # - LLM grader uses real OpenAI (semantic evaluation)
+#
+# These tests validate AGENT BEHAVIOR, not just infrastructure.
+# They're slower and cost money, but catch actual quality regressions.
 
 cases:
+  # ---------------------------------------------------------------------------
+  # Conversational Quality (3 tests)
+  # ---------------------------------------------------------------------------
+
   # Test LLM-graded asserter works
   - id: response_completeness
     category: conversational
@@ -25,7 +32,7 @@ cases:
           Score 1.0 if response has any text content.
           Score 0.0 if response is empty or null.
         min_score: 0.9
-    tags: [conversational, llm_graded, live_only]
+    tags: [conversational, llm_graded, live_only, critical]
 
   # Test actual supervisor response quality
   - id: greeting_quality
@@ -47,3 +54,167 @@ cases:
           Score 0.0 if neither criterion met.
         min_score: 0.5
     tags: [conversational, llm_graded, live_only]
+
+  # Test clarification behavior
+  - id: clarification_request
+    category: conversational
+    description: Agent should ask for clarification on ambiguous requests
+    input: "Check the server"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          The input "Check the server" is ambiguous (which server? what to check?).
+
+          Score 1.0 if the response asks for clarification (which server, what metric).
+          Score 0.5 if the response mentions needing more information but doesn't ask directly.
+          Score 0.0 if the response assumes a server or acts without clarifying.
+        min_score: 0.5
+    tags: [conversational, llm_graded, live_only]
+
+  # ---------------------------------------------------------------------------
+  # Tool Selection Quality (3 tests)
+  # ---------------------------------------------------------------------------
+
+  # Test that agent uses knowledge base for info queries
+  - id: tool_knowledge_base
+    category: tool_usage
+    description: Agent should use knowledge_search for infrastructure info
+    input: "What servers do I have access to?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          For "What servers do I have access to?", the agent should:
+          1. Use knowledge_search or similar tool to retrieve server information
+          2. NOT spawn a worker (this is a lookup, not an action)
+
+          Score 1.0 if response mentions specific servers by name (indicating knowledge was retrieved).
+          Score 0.5 if response acknowledges server access but is vague.
+          Score 0.0 if response says "I don't know" or spawns a worker for this simple query.
+        min_score: 0.5
+    tags: [tool_usage, llm_graded, live_only]
+
+  # Test that time queries use the right tool
+  - id: tool_time_query
+    category: tool_usage
+    description: Agent should use get_current_time for time queries
+    input: "What time is it?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: "get_current_time"
+      - type: worker_spawned
+        count: 0
+      - type: llm_graded
+        rubric: |
+          The response should contain the current time.
+
+          Score 1.0 if response includes a specific time (e.g., "3:45 PM" or "15:45").
+          Score 0.5 if response mentions time but is vague.
+          Score 0.0 if response doesn't include time or says it can't tell time.
+        min_score: 0.7
+    tags: [tool_usage, llm_graded, live_only, critical]
+
+  # Test no unnecessary tool usage
+  - id: tool_unnecessary_avoidance
+    category: tool_usage
+    description: Agent should not use tools for simple conversational responses
+    input: "Thanks for your help!"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: llm_graded
+        rubric: |
+          For "Thanks for your help!", the agent should:
+          1. Respond politely without spawning workers or using tools
+          2. Keep the response brief and appropriate
+
+          Score 1.0 if response is a polite acknowledgment with no tool usage.
+          Score 0.5 if response is appropriate but uses unnecessary tools.
+          Score 0.0 if response is inappropriate or spawns workers.
+        min_score: 0.7
+    tags: [tool_usage, llm_graded, live_only]
+
+  # ---------------------------------------------------------------------------
+  # Delegation Quality (2 tests)
+  # ---------------------------------------------------------------------------
+
+  # Test that infrastructure tasks spawn workers
+  - id: delegation_infrastructure
+    category: infrastructure
+    description: Agent should delegate infrastructure checks to workers
+    input: "Check disk space on cube"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          For "Check disk space on cube", the agent should:
+          1. Recognize this requires SSH access to a server
+          2. Spawn a worker to perform the check
+          3. Report results (or say a worker was dispatched)
+
+          Score 1.0 if worker was spawned AND response acknowledges the disk check task.
+          Score 0.5 if response understands the task but worker handling is unclear.
+          Score 0.0 if response refuses or doesn't understand the infrastructure task.
+        min_score: 0.5
+    tags: [infrastructure, llm_graded, live_only, worker]
+
+  # Test delegation description quality
+  - id: delegation_task_clarity
+    category: infrastructure
+    description: Delegated tasks should have clear descriptions
+    input: "Can you check if nginx is running on clifford and restart it if not?"
+    timeout: 90
+    assert:
+      - type: status
+        value: success
+      - type: llm_graded
+        rubric: |
+          This is a conditional task: check nginx status, restart if needed.
+
+          Score 1.0 if the agent:
+          - Understands the conditional nature (check THEN maybe restart)
+          - Spawns a worker or explains the plan clearly
+          - Doesn't just restart without checking
+
+          Score 0.5 if the agent partially understands but misses the conditional.
+          Score 0.0 if the agent refuses, is confused, or just restarts without checking.
+        min_score: 0.5
+    tags: [infrastructure, llm_graded, live_only, worker]
+
+  # ---------------------------------------------------------------------------
+  # Edge Case Handling (1 test)
+  # ---------------------------------------------------------------------------
+
+  # Test graceful handling of unknown requests
+  - id: edge_unknown_capability
+    category: edge_case
+    description: Agent should gracefully handle requests beyond its capabilities
+    input: "Can you order me a pizza?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: worker_spawned
+        count: 0
+      - type: llm_graded
+        rubric: |
+          "Order me a pizza" is outside the agent's capabilities (infrastructure/server management).
+
+          Score 1.0 if response politely declines and explains its actual capabilities.
+          Score 0.5 if response declines but doesn't explain what it CAN do.
+          Score 0.0 if response tries to order pizza or crashes.
+        min_score: 0.5
+    tags: [edge_case, llm_graded, live_only]
