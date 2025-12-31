@@ -211,6 +211,17 @@ def eval_runner(db_session, test_user, request, eval_case):
     """
     from evals.runner import EvalRunner
     from zerg.services.supervisor_service import SupervisorService
+    from zerg.services.auto_seed import _seed_server_knowledge, _seed_user_context
+
+    # Evals should reflect a real "dev@local" environment. In tests we create the
+    # dev user deterministically, but user context (servers/integrations) is not
+    # present unless it's seeded from scripts/user_context.local.json.
+    #
+    # Live evals in particular assume servers exist; without this, the model can
+    # correctly answer "(No servers configured)" which fails the dataset rubric.
+    _seed_user_context()
+    _seed_server_knowledge()
+    db_session.expire_all()
 
     supervisor_service = SupervisorService(db_session)
     runner = EvalRunner(supervisor_service, test_user.id)
