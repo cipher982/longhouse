@@ -29,7 +29,7 @@ The supervisor tools layer enables Zerg's supervisor/worker architecture by prov
 
 ## Tools
 
-### spawn_worker(task: str, model: str | None = None, wait: bool = False, timeout_seconds: float = 300.0, decision_mode: str = "heuristic") -> str
+### spawn_worker(task: str, model: str | None = None) -> str
 
 Spawns a disposable worker agent to execute a task independently.
 
@@ -44,15 +44,16 @@ Spawns a disposable worker agent to execute a task independently.
 ```python
 result = spawn_worker(
     task="Check disk usage on cube server via SSH",
-    wait=False
 )
 # Returns: "Worker job <id> queued successfully..."
 ```
 
 **Returns:**
 
-- If `wait=False` (default): a queued summary containing the `job_id`
-- If `wait=True`: waits for completion (roundabout) and returns a formatted result
+- A queued summary containing the `job_id`
+
+**Note:** The supervisor-facing `spawn_worker` tool is intentionally fire-and-forget (durable-runs model).
+Roundabout-style waiting exists in the underlying implementation but is not exposed to the LLM tool schema.
 
 ---
 

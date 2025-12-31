@@ -159,6 +159,30 @@ def spawn_worker(
     return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds, decision_mode))
 
 
+async def spawn_worker_fire_and_forget_async(
+    task: str,
+    model: str | None = None,
+) -> str:
+    """Spawn a worker job (fire-and-forget).
+
+    This is the preferred Supervisor-facing entrypoint: it keeps the tool schema
+    minimal so the Supervisor doesn't block on "wait=True" (roundabout), which
+    is incompatible with the durable-runs model and can deadlock in TESTING/evals
+    where the background worker processor is intentionally disabled.
+    """
+    return await spawn_worker_async(task=task, model=model, wait=False)
+
+
+def spawn_worker_fire_and_forget(
+    task: str,
+    model: str | None = None,
+) -> str:
+    """Sync wrapper for spawn_worker_fire_and_forget_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(spawn_worker_fire_and_forget_async(task=task, model=model))
+
+
 async def list_workers_async(
     limit: int = 20,
     status: str | None = None,
@@ -566,13 +590,11 @@ def get_worker_metadata(job_id: str) -> str:
 # can use whichever invocation method is appropriate for the runtime.
 TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
-        func=spawn_worker,
-        coroutine=spawn_worker_async,
+        func=spawn_worker_fire_and_forget,
+        coroutine=spawn_worker_fire_and_forget_async,
         name="spawn_worker",
         description="Spawn a worker agent to execute a task. "
-        "Returns immediately by default (fire-and-forget). "
-        "Use wait=True to monitor until completion (roundabout). "
-        "Set decision_mode to 'hybrid' or 'llm' for LLM-assisted monitoring decisions. "
+        "Returns immediately (fire-and-forget). "
         "The worker persists all outputs and returns a natural language result.",
     ),
     StructuredTool.from_function(
