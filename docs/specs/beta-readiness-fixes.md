@@ -36,9 +36,9 @@ Live eval tests revealed 3 failing behavior tests. Phase 1-2 fixes (worker drain
 
 | # | Issue | Severity | Root Cause | Fix |
 |---|-------|----------|------------|-----|
-| 1 | Worker delegation timeouts in live evals | HIGH | Live mode skips `_process_queued_worker_jobs()` | Remove conditional |
-| 2 | knowledge_search returns empty for servers | MEDIUM | Server info in prompts, not knowledge DB | Auto-seed servers |
-| 3 | Prod API health check URL confusion | LOW | Docs say `api.swarmlet.com` but it's `swarmlet.com/api/` | Update docs |
+| 1 | Worker delegation timeouts in live evals | HIGH | Live mode skips `_process_queued_worker_jobs()` | Remove conditional ✅ |
+| 2 | knowledge_search returns empty for servers | MEDIUM | Server info in prompts, not knowledge DB | Auto-seed servers ✅ |
+| 3 | Prod API health check URL confusion | LOW | Docs say `api.swarmlet.com` but it's `swarmlet.com/api/` | Update docs ✅ |
 
 ## Implementation Phases
 

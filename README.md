@@ -45,8 +45,17 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ## Commands
 
 - `make dev` – brings up unified stack with nginx front.
-- Tests: `make test` (unit), `make test-e2e`, `make test-all`, `make test-chat-e2e`.
+- Tests: `make test` (unit), `make test-e2e`, `make test-all`, `make test-chat-e2e`, `make test-perf` (latency).
+- Prompt Iteration: `cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>`
 - Codegen: `make generate-sdk`, `make regen-ws`.
+
+---
+
+## Health Checks (Production)
+
+- Unified Health: `https://swarmlet.com/health`
+- Backend Readiness: `https://swarmlet.com/api/system/health`
+- Smoke Test: `./scripts/smoke-prod.sh`
 
 ---
 
