@@ -103,6 +103,11 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     if not db_url:
         raise ValueError("DATABASE_URL is not set (empty)")
 
+    # Some environments / Makefile exporters include surrounding quotes from `.env`
+    # (e.g. DATABASE_URL="postgresql://..."). Be forgiving here.
+    if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
+        db_url = db_url[1:-1].strip()
+
     # Common footgun: many platforms emit `postgres://...` but SQLAlchemy expects `postgresql://...`.
     if db_url.startswith("postgres://"):
         db_url = "postgresql://" + db_url[len("postgres://") :]

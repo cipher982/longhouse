@@ -503,8 +503,7 @@ if _settings.e2e_use_postgres_schemas:
         WorkerDBMiddleware = getattr(import_module("zerg.middleware.worker_db"), "WorkerDBMiddleware")
         app.add_middleware(WorkerDBMiddleware)
     except Exception:  # pragma: no cover – keep startup resilient
-        # Defer logging until *logger* is available (defined right below).
-        pass
+        logger.exception("Failed to register WorkerDBMiddleware while E2E_USE_POSTGRES_SCHEMAS=1")
 
 # ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
