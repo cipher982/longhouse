@@ -11,7 +11,6 @@ import { spawn } from 'child_process';
 import { join } from 'path';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -90,13 +89,12 @@ const { BACKEND_PORT } = getPortsFromEnv();
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
 // E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
-// Multiple Uvicorn workers can share the same schema with proper connection pooling.
-// Default to CPU count for parallelism; override via UVICORN_WORKERS env var.
-const cpuCount = Math.max(1, os.cpus()?.length ?? 1);
+// Use only 2 uvicorn workers for E2E to avoid exhausting Postgres connection pool
+// (dev backend already uses 16 workers, sharing the same Postgres instance).
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
 const uvicornWorkers = workerId
   ? 1  // Legacy per-worker backend mode (deprecated)
-  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : cpuCount);
+  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : 2);
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
@@ -126,7 +124,9 @@ const backend = spawn('uv', [
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
     },
     cwd: join(__dirname, '..', 'backend'),
-    stdio: process.env.VERBOSE_BACKEND ? 'inherit' : 'ignore'
+    // Always inherit stdio for Playwright webServer to detect readiness
+    // Playwright needs to see uvicorn's "Application startup complete" message
+    stdio: 'inherit'
 });
 
 // Handle backend process events
