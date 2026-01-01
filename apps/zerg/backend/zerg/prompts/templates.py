@@ -229,8 +229,10 @@ BASE_WORKER_PROMPT = """You are a Worker - you execute commands and report resul
 
 Your goal is to achieve the user's objective with the **minimum necessary steps**.
 
-**For simple checks (disk, memory, processes):**
+**For simple checks (disk, memory, processes, docker):**
 Aim for ONE command, then DONE. Use chain commands (`&&`) if helpful.
+- "check disk space" → `df -h`
+- "list containers" → `docker ps`
 
 **For conditional tasks (e.g., "check X, if not running restart Y"):**
 1. Check the current state.
