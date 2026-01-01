@@ -26,10 +26,13 @@ Historical (v2.0): `docs/archive/super-siri-architecture.md`
 When running, you have live access to:
 | URL | What |
 |-----|------|
-| http://localhost:30080 | Main entry (nginx) |
+| http://localhost:30080 | Main entry → redirects to /dashboard (dev mode) |
 | http://localhost:30080/dashboard | Dashboard UI |
 | http://localhost:30080/chat | Jarvis chat |
+| http://localhost:30080/landing | Landing page preview (dev only) |
 | http://localhost:30080/api/* | Backend API |
+
+**Note:** In dev mode (auth disabled), `/` redirects to `/dashboard`. To preview the landing page, use `/landing`.
 
 **Debug with:**
 - **Playwright MCP** — snapshot pages, click elements, check console errors
@@ -63,8 +66,9 @@ Control console log verbosity via URL parameter `?log=<level>`:
 
 ```
 User → http://localhost:30080 (nginx)
-  /            → Zerg dashboard (React SPA)
-  /dashboard   → Zerg dashboard (alias)
+  /            → Redirects to /dashboard (dev) or Landing page (prod)
+  /dashboard   → Zerg dashboard (React SPA)
+  /landing     → Landing page preview (dev only)
   /chat        → Jarvis chat UI (part of Zerg SPA)
   /api/*       → FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
   /ws/*        → SSE/WS
