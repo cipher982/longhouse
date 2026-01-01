@@ -59,7 +59,8 @@ except ModuleNotFoundError:
 
 _settings = get_settings()
 
-dotenv.load_dotenv()
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process
+dotenv.load_dotenv(override=True)
 
 
 # Create Base class
@@ -121,6 +122,14 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         raise ValueError(
             f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only Postgres is supported (postgresql+psycopg://...)."
         )
+
+    # E2E tests: reduce pool size to prevent connection exhaustion
+    # With N Playwright workers, each gets its own engine. Default pool (5+10=15)
+    # × N workers can exceed Postgres max_connections (100).
+    # See: docs/work/e2e-test-infrastructure-redesign.md
+    if os.getenv("E2E_USE_POSTGRES_SCHEMAS"):
+        kwargs.setdefault("pool_size", 2)
+        kwargs.setdefault("max_overflow", 3)  # Max 5 connections per engine
 
     # Connection pool health: pre_ping verifies connections before use,
     # pool_recycle closes connections after 5 minutes to handle DB restarts

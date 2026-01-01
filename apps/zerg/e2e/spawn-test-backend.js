@@ -89,12 +89,14 @@ const { BACKEND_PORT } = getPortsFromEnv();
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
 // E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
-// Use only 2 uvicorn workers for E2E to avoid exhausting Postgres connection pool
-// (dev backend already uses 16 workers, sharing the same Postgres instance).
+// Use single uvicorn worker to eliminate cache fragmentation across processes.
+// Each uvicorn process has its own _WORKER_ENGINES cache - with multiple workers,
+// both think they need to DROP+CREATE schemas, causing races.
+// See: docs/work/e2e-test-infrastructure-redesign.md
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
 const uvicornWorkers = workerId
   ? 1  // Legacy per-worker backend mode (deprecated)
-  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : 2);
+  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : 1);
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
