@@ -86,7 +86,23 @@ export default function ChatPage() {
     }
   }, [agentId, effectiveThreadId, navigate]);
 
-  // Auto-create and select a default thread on component mount if none exists
+  // Auto-select most recent thread if threads exist but none selected
+  // This handles the case when navigating to /agent/{id}/thread/ with existing threads
+  useEffect(() => {
+    if (
+      agentId != null &&
+      selectedThreadId == null &&
+      !chatThreadsQuery.isLoading &&
+      chatThreads.length > 0
+    ) {
+      // Auto-select the first (most recent) thread
+      const mostRecentThread = chatThreads[0];
+      setSelectedThreadId(mostRecentThread.id);
+      navigate(`/agent/${agentId}/thread/${mostRecentThread.id}`, { replace: true });
+    }
+  }, [agentId, selectedThreadId, chatThreads, chatThreadsQuery.isLoading, navigate]);
+
+  // Auto-create a default thread on component mount if none exists
   useEffect(() => {
     const initializeThread = async () => {
       if (agentId == null || selectedThreadId != null || chatThreads.length > 0 || creatingThreadRef.current) {
