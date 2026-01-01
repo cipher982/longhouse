@@ -6,6 +6,7 @@ import {
 } from "../hooks/useKnowledgeSources";
 import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
+import { AddContextModal } from "../components/AddContextModal";
 import { KnowledgeSearchPanel } from "../components/KnowledgeSearchPanel";
 import {
   Button,
@@ -14,9 +15,11 @@ import {
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import "../styles/knowledge-sources.css";
+import "../components/AddContextModal.css";
 
 export default function KnowledgeSourcesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isContextModalOpen, setIsContextModalOpen] = useState(false);
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set());
 
   const { data: sources, isLoading, error } = useKnowledgeSources();
@@ -40,6 +43,13 @@ export default function KnowledgeSourcesPage() {
     if (confirm("Are you sure you want to delete this knowledge source?")) {
       deleteMutation.mutate(id);
     }
+  };
+
+  // Phase 1: Mock handler - will wire up API in Phase 2
+  const handleContextSubmit = async (title: string, content: string) => {
+    console.log("AddContextModal submit:", { title, content });
+    // TODO: Call API to create knowledge source with source_type: "user_text"
+    await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate API delay
   };
 
   if (isLoading) {
@@ -72,9 +82,14 @@ export default function KnowledgeSourcesPage() {
         title="Knowledge Sources"
         description="Connect knowledge sources to give your agents context about your codebase, documentation, and more."
         actions={
-          <Button variant="primary" onClick={() => setIsModalOpen(true)} data-testid="add-knowledge-source-btn">
-            <PlusIcon /> Add Source
-          </Button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <Button variant="secondary" onClick={() => setIsContextModalOpen(true)} data-testid="add-context-btn">
+              <PlusIcon /> Add Context
+            </Button>
+            <Button variant="primary" onClick={() => setIsModalOpen(true)} data-testid="add-knowledge-source-btn">
+              <PlusIcon /> Add Source
+            </Button>
+          </div>
         }
       />
 
@@ -111,6 +126,13 @@ export default function KnowledgeSourcesPage() {
       <AddKnowledgeSourceModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
+      />
+
+      <AddContextModal
+        isOpen={isContextModalOpen}
+        onClose={() => setIsContextModalOpen(false)}
+        onSubmit={handleContextSubmit}
+        existingDocsCount={sources?.length ?? 0}
       />
     </div>
   );
