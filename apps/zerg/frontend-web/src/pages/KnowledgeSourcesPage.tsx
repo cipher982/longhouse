@@ -15,7 +15,6 @@ import {
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import "../styles/knowledge-sources.css";
-import "../components/AddContextModal.css";
 
 export default function KnowledgeSourcesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);

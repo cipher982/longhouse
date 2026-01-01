@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback } from "react";
+import "./AddContextModal.css";
 
 interface AddContextModalProps {
   isOpen: boolean;
@@ -52,8 +53,11 @@ export function AddContextModal({
 
     try {
       await onSubmit(title.trim(), content.trim());
-      setSuccessMessage(`"${title}" saved! Add another?`);
-      resetForm();
+      const savedTitle = title;
+      setTitle("");
+      setContent("");
+      setError(null);
+      setSuccessMessage(`"${savedTitle}" saved! Add another?`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save document");
     } finally {
@@ -239,11 +243,11 @@ export function AddContextModal({
           </div>
 
           {/* Existing docs count */}
-          {existingDocsCount > 0 && (
-            <div className="context-docs-count">
-              You have {existingDocsCount} context doc{existingDocsCount !== 1 ? "s" : ""}
-            </div>
-          )}
+          <div className="context-docs-count">
+            {existingDocsCount === 0
+              ? "No context docs yet"
+              : `You have ${existingDocsCount} context doc${existingDocsCount !== 1 ? "s" : ""}`}
+          </div>
         </div>
 
         <div className="modal-actions">
