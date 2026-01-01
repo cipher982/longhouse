@@ -739,6 +739,7 @@ export default function DashboardPage() {
               variant="primary"
               onClick={() => createAgentMutation.mutate()}
               disabled={createAgentMutation.isPending}
+              data-testid="create-agent-btn"
             >
               {createAgentMutation.isPending ? (
                 <span className="spinner" />
