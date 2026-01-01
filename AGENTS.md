@@ -100,7 +100,8 @@ make env-check     # Validate required env vars before starting
 # Stop everything
 make stop
 
-# Run tests (ALWAYS use Make targets, never direct pytest/bun commands)
+# ⚠️  CRITICAL: NEVER run pytest/bunx/playwright directly - ALWAYS use make targets
+# Direct commands miss env vars, wrong CWD, and cause false failures
 make test          # Unit tests only (backend + frontend)
 make test-e2e      # Playwright E2E only
 make test-all      # Unit + Playwright E2E
@@ -387,7 +388,7 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
 
 16. **Never use raw `docker compose` for dev**: Always use Make targets (`make dev`, `make stop`, `make logs`). Raw `docker compose` commands use wrong project names, miss env vars from `.env`, and create containers on isolated networks that can't communicate with the rest of the stack. If you must, use the pattern from Makefile line 17: `docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml ...`
 
-17. **Never run tests directly**: Always use `make test` / `make test-e2e` instead of direct `pytest` / `bun test` commands. Make targets ensure:
+17. **⚠️ NEVER run tests directly**: Always use `make test` / `make test-e2e` instead of direct `pytest` / `bunx playwright` / `bun test` commands. Running tests directly WILL cause false failures (missing env vars, wrong working directory, no test isolation). Make targets ensure:
    - Correct working directory
    - Environment variables loaded from `.env`
    - Parallel execution enabled (pytest uses `-n auto`, Playwright uses 4 workers)
