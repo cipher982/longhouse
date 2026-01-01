@@ -29,6 +29,9 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
     Uvicorn workers initialize schemas concurrently.
 
     CRITICAL: Always DROP then CREATE to ensure clean state.
+
+    NOTE: This function is DEPRECATED for runtime use. Use ensure_worker_schema()
+    instead to avoid DROP+CREATE races. This is only used for globalSetup cleanup.
     """
     schema_name = get_schema_name(worker_id)
 
@@ -56,6 +59,44 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
         Base.metadata.create_all(bind=conn, checkfirst=False)
 
     logger.info(f"Recreated schema with fresh state: {schema_name}")
+    return schema_name
+
+
+def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
+    """
+    Idempotent schema creation. Never DROP during test execution.
+
+    Safe for concurrent uvicorn workers and forward-compatible with migrations.
+    Uses CREATE SCHEMA IF NOT EXISTS + create_all(checkfirst=True) to be
+    idempotent across multiple processes.
+
+    This is the preferred function for runtime use. Unlike recreate_worker_schema(),
+    it won't DROP a schema that another process might be using.
+
+    See: docs/work/e2e-test-infrastructure-redesign.md
+    """
+    schema_name = get_schema_name(worker_id)
+
+    # Generate deterministic lock ID from schema name
+    lock_id = zlib.crc32(f"ensure_schema_{schema_name}".encode())
+
+    from zerg.database import Base
+
+    with engine.begin() as conn:
+        # Advisory lock prevents race conditions
+        conn.execute(text(f"SELECT pg_advisory_xact_lock({lock_id})"))
+
+        # Create schema if not exists (idempotent)
+        conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
+
+        # Set search_path for table creation
+        conn.execute(text(f"SET search_path TO {schema_name}, public"))
+
+        # Create all tables (checkfirst=True is idempotent and handles migrations)
+        # This won't fail if tables already exist
+        Base.metadata.create_all(bind=conn, checkfirst=True)
+
+    logger.info(f"Ensured schema exists: {schema_name}")
     return schema_name
 
 
