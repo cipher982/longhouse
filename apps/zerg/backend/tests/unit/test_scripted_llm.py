@@ -107,7 +107,7 @@ class TestScriptedChatLLM:
 
         assert isinstance(ai_msg, AIMessage)
         assert ai_msg.tool_calls
-        assert ai_msg.tool_calls[0]["name"] == "ssh_exec"
+        assert ai_msg.tool_calls[0]["name"] == "get_current_time"
 
     def test_final_response_after_tool_results(self):
         llm = ScriptedChatLLM()
