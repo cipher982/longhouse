@@ -7,7 +7,7 @@
  * - All SSE events include the correlation ID for tracing
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 
 test.describe('Chat Correlation ID Flow', () => {
   test('frontend generates UUID correlation ID and sends to backend', async ({ page }) => {

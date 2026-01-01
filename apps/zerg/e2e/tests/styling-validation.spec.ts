@@ -5,7 +5,7 @@
  * Catches unstyled elements that would appear visually broken.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 import { createTestAgent } from './helpers/agent-helpers';
 import { createTestThread } from './helpers/test-helpers';
 
