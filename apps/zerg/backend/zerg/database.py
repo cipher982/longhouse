@@ -217,10 +217,9 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
             return _WORKER_SESSIONMAKERS[worker_id]
 
         # Use the main DATABASE_URL (Postgres)
-        db_url = _settings.database_url
-
-        # Create engine for this worker
-        engine = make_engine(db_url)
+        db_url = (_settings.database_url or "").strip()
+        if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
+            db_url = db_url[1:-1].strip()
 
         from zerg.e2e_schema_manager import ensure_worker_schema
         from zerg.e2e_schema_manager import get_schema_name
@@ -229,8 +228,30 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         # Unlike recreate_worker_schema(), this won't DROP a schema that
         # another process might be using. Schemas are pre-created in globalSetup.
         # See: docs/work/e2e-test-infrastructure-redesign.md
-        ensure_worker_schema(engine, worker_id)
+        admin_engine = make_engine(db_url)
+        ensure_worker_schema(admin_engine, worker_id)
         schema_name = get_schema_name(worker_id)
+
+        # Dispose the admin engine so we don't keep extra connections around.
+        # The actual request engine below will carry schema routing settings.
+        try:
+            admin_engine.dispose()
+        except Exception:
+            pass
+
+        # Create schema-routed engine for this worker.
+        #
+        # NOTE: We prefer wiring schema routing into the *connection itself*
+        # (libpq `options=-csearch_path=...`) rather than relying solely on
+        # runtime `SET search_path` calls. This prevents subtle cases where a
+        # pooled connection might retain a default search_path and write to
+        # public instead of the worker schema.
+        url = make_url(db_url)
+        query = dict(url.query)
+        existing_options = (query.get("options") or "").strip()
+        schema_options = f"-csearch_path={schema_name},public"
+        query["options"] = f"{existing_options} {schema_options}".strip() if existing_options else schema_options
+        engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
 
         # Create test user for foreign key constraints (E2E tests need a user for agent creation)
         from sqlalchemy import text
