@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from "react";
-import { useRoutes, Outlet } from "react-router-dom";
+import { useRoutes, Outlet, Navigate } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import PricingPage from "../pages/PricingPage";
@@ -62,9 +62,21 @@ export default function App() {
   }, []);
 
   const routes = useRoutes([
-    // Landing page - NO AuthGuard (public)
+    // Root route: redirect to dashboard when auth disabled (dev/test mode)
+    // In production (auth enabled), show landing page (it handles its own auth redirect)
     {
       path: "/",
+      element: config.authEnabled ? (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      ) : (
+        <Navigate to="/dashboard" replace />
+      )
+    },
+    // Landing page accessible at /landing for dev preview when auth is disabled
+    {
+      path: "/landing",
       element: (
         <ErrorBoundary>
           <LandingPage />
@@ -212,14 +224,16 @@ export default function App() {
         },
       ]
     },
-    // Fallback for unknown SPA routes - show landing page
+    // Fallback for unknown SPA routes - redirect to dashboard (dev) or landing (prod)
     // NOTE: Static files (.html, .js, etc.) are served by Vite before reaching React Router
     {
       path: "*",
-      element: (
+      element: config.authEnabled ? (
         <ErrorBoundary>
           <LandingPage />
         </ErrorBoundary>
+      ) : (
+        <Navigate to="/dashboard" replace />
       )
     },
   ]);
