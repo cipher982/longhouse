@@ -11,7 +11,7 @@ INVARIANTS:
 - System decisions (status) never depend on LLM-generated summaries.
 
 Directory structure:
-    /data/swarmlet/workers/
+    /data/workers/
     ├── index.json                    # Master index of all workers
     └── {worker_id}/                  # e.g., "2024-12-03T14-32-00_disk-check"
         ├── metadata.json             # Status, timestamps, task, config
@@ -54,7 +54,7 @@ class WorkerArtifactStore:
             Root directory for worker artifacts. Resolution order:
             1. If base_path is provided, use it (fail if not writable)
             2. If SWARMLET_DATA_PATH env var is set, use it (fail if not writable)
-            3. Otherwise, use get_settings().data_dir / "swarmlet" / "workers"
+            3. Otherwise, use get_settings().data_dir / "workers"
         """
         env_path = os.getenv("SWARMLET_DATA_PATH")
 
@@ -69,8 +69,8 @@ class WorkerArtifactStore:
             self.base_path.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             logger.error(f"WorkerArtifactStore: failed to init {self.base_path}: {e}")
-            # Fallback to /tmp only as a last resort in dev
-            if not base_path and not env_path:
+            # Fallback to /tmp only as a last resort in dev/testing
+            if not base_path and not env_path and get_settings().testing:
                 self.base_path = Path("/tmp/swarmlet/workers")
                 self.base_path.mkdir(parents=True, exist_ok=True)
                 logger.warning(f"WorkerArtifactStore: using emergency fallback {self.base_path}")

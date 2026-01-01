@@ -60,6 +60,7 @@ async def spawn_worker_async(
         spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
         spawn_worker("Complex task", wait=True, decision_mode="hybrid")  # LLM-assisted decisions
     """
+    from zerg.config import get_settings
     from zerg.events import EventType
     from zerg.events import event_bus
     from zerg.models.models import WorkerJob
@@ -108,7 +109,15 @@ async def spawn_worker_async(
             },
         )
 
-        if not wait:
+        # Security/Architecture Gate:
+        # Only allow wait=True if we are in testing mode OR the task is explicitly
+        # marked for eval waiting. This prevents the Supervisor from blocking
+        # in production (where Durable Runs handle background continuations).
+        is_testing = get_settings().testing
+        is_eval_wait = "[eval:wait]" in task
+        effective_wait = wait and (is_testing or is_eval_wait)
+
+        if not effective_wait:
             # Fire and forget - return immediately
             return (
                 f"Worker job {worker_job.id} queued successfully.\n\n"

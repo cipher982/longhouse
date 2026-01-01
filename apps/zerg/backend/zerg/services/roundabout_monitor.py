@@ -435,7 +435,7 @@ class RoundaboutMonitor:
                 # synchronously here so the supervisor can proceed with findings.
                 if get_settings().testing and job.status == "queued":
                     logger.info(f"Eval Mode: Draining job {self.job_id} synchronously in roundabout (immediate)")
-                    await self._drain_job_synchronously(job)
+                    await self._drain_job_synchronously(job, timeout_seconds=self.timeout_seconds)
                     # Refresh job after draining
                     self.db.expire_all()
                     job = self.db.query(WorkerJob).filter(WorkerJob.id == self.job_id, WorkerJob.owner_id == self.owner_id).first()
@@ -492,7 +492,7 @@ class RoundaboutMonitor:
             # Unsubscribe from events
             await self._unsubscribe_from_tool_events()
 
-    async def _drain_job_synchronously(self, job: "WorkerJob") -> None:
+    async def _drain_job_synchronously(self, job: "WorkerJob", timeout_seconds: float = 60.0) -> None:
         """Execute a queued worker job synchronously (eval-only)."""
         from zerg.services.worker_runner import WorkerRunner
         from zerg.utils.time import utc_now_naive
@@ -511,7 +511,7 @@ class RoundaboutMonitor:
                 task=job.task,
                 agent=None,
                 agent_config={"model": job.model, "owner_id": job.owner_id},
-                timeout=60,
+                timeout=int(timeout_seconds),
                 event_context={"run_id": self.supervisor_run_id},
                 job_id=job.id,
             )

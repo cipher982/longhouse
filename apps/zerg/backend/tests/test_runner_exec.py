@@ -480,12 +480,14 @@ class TestJobDispatcher:
     @pytest.mark.asyncio
     async def test_complete_job(self):
         """Test completing a pending job."""
+        import threading
+        from zerg.services.runner_job_dispatcher import PendingJob
         dispatcher = get_runner_job_dispatcher()
 
-        # Create a pending job future
+        # Create a pending job
         job_id = "test-job-123"
-        future = asyncio.Future()
-        dispatcher._pending_jobs[job_id] = future
+        pending = PendingJob(event=threading.Event())
+        dispatcher._pending_jobs[job_id] = pending
 
         # Mark runner active
         runner_id = 1
@@ -495,15 +497,17 @@ class TestJobDispatcher:
         result = {"ok": True, "data": {"exit_code": 0}}
         dispatcher.complete_job(job_id, result, runner_id)
 
-        # Future should be resolved
-        assert future.done()
-        assert await future == result
+        # Event should be signaled
+        assert pending.event.is_set()
+        assert pending.result == result
 
         # Active job should be cleared
         assert dispatcher.can_accept_job(runner_id) is True
 
-        # Job should be removed from pending
-        assert job_id not in dispatcher._pending_jobs
+        # Clean up
+        with dispatcher._pending_lock:
+            if job_id in dispatcher._pending_jobs:
+                del dispatcher._pending_jobs[job_id]
 
 
 class TestCapabilityEnforcement:
