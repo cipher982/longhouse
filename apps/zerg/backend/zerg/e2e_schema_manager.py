@@ -112,7 +112,11 @@ def drop_schema(engine: Engine, worker_id: str) -> None:
 
 
 def drop_all_e2e_schemas(engine: Engine) -> int:
-    """Drop all E2E test schemas. Returns count of schemas dropped."""
+    """Drop all E2E test schemas. Returns count of schemas dropped.
+
+    Drops each schema in a separate transaction to avoid exceeding
+    max_locks_per_transaction when there are many schemas with many tables.
+    """
     with engine.connect() as conn:
         result = conn.execute(
             text("""
@@ -122,11 +126,13 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
         """)
         )
         schemas = [row[0] for row in result]
+        conn.commit()  # Commit the SELECT before starting drops
 
-        for schema in schemas:
+    # Drop each schema in a separate transaction to avoid lock exhaustion
+    for schema in schemas:
+        with engine.connect() as conn:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
-
-        conn.commit()
+            conn.commit()
 
     logger.info(f"Dropped {len(schemas)} E2E schemas")
     return len(schemas)
