@@ -125,6 +125,17 @@ export default function LandingPage() {
   const particlesEnabled = fxEnabled.has("particles");
   const heroAnimationsEnabled = fxEnabled.has("hero");
 
+  // The main app layout uses an internal scroll container (#app-container) and locks the root.
+  // The landing page should scroll like a normal document so `window.scrollTo()` works.
+  useEffect(() => {
+    document.documentElement.classList.add("landing-scroll");
+    document.body.classList.add("landing-scroll");
+    return () => {
+      document.documentElement.classList.remove("landing-scroll");
+      document.body.classList.remove("landing-scroll");
+    };
+  }, []);
+
   // Control global UI effects based on landing page effects
   useEffect(() => {
     const hasAnyEffect = particlesEnabled || heroAnimationsEnabled;
