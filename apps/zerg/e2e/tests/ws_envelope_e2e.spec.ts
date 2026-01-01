@@ -1,5 +1,5 @@
 // e2e/tests/ws_envelope_e2e.spec.ts
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test.describe('WebSocket Envelope Protocol E2E', () => {
   test('Envelope protocol compliance and connection lifecycle', async ({ page }) => {

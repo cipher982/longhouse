@@ -21,7 +21,7 @@
  */
 
 import { test, expect, type Page } from './fixtures';
-import { type APIRequestContext } from '@playwright/test';
+import type { APIRequestContext } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';

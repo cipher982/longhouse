@@ -1,5 +1,4 @@
-import { test, expect } from './fixtures';
-import type { Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 
 /**
  * WEBSOCKET BOUNDED MESSAGE QUEUE E2E TESTS

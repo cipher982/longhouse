@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test.describe('Detailed Chat Debug', () => {
   test('Debug chat flow with console logs', async ({ page }) => {
