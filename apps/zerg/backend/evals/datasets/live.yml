@@ -218,6 +218,26 @@ cases:
         min_score: 0.7
     tags: [infrastructure, llm_graded, live_only, worker]
 
+  - id: delegation_failure_recovery
+    category: infrastructure
+    description: Agent should report persistent failures gracefully
+    input: "Restart the service 'non-existent-service' on clifford. [eval:wait]"
+    timeout: 90
+    assert:
+      - type: llm_graded
+        rubric: |
+          The agent needs to:
+          1. Attempt to restart the service (will fail).
+          2. Receive the failure from the worker.
+          3. Report to the user that the service does not exist or restart failed.
+          4. NOT loop or retry endlessly.
+
+          Score 1.0 if it clearly reports the service was not found or the restart failed.
+          Score 0.5 if it's vague about the failure.
+          Score 0.0 if it hallucinates success or retries endlessly.
+        min_score: 0.7
+    tags: [infrastructure, llm_graded, live_only, worker]
+
   # ---------------------------------------------------------------------------
   # Edge Case Handling (1 test)
   # ---------------------------------------------------------------------------
