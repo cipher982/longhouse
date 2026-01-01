@@ -8,7 +8,7 @@
  * 4. Basic API calls work
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test.describe('Infrastructure Smoke Test', () => {
 

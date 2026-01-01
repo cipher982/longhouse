@@ -10,7 +10,7 @@
  * This test MUST pass - it's the core value proposition of the app.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test.describe('Core Agent Workflow', () => {
   test.beforeEach(async ({ page }) => {

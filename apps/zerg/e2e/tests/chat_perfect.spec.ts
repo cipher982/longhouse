@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test.describe('Perfect Chat E2E Test', () => {
   test('Complete user flow: blank slate → create agent → chat → send message', async ({ page }) => {

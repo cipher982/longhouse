@@ -20,7 +20,7 @@
  * Skipped when UNIFIED_BASE_URL is not set or the unified proxy is unavailable.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 // Use env var or default to unified proxy port
 const UNIFIED_URL = process.env.UNIFIED_BASE_URL || 'http://localhost:30080';

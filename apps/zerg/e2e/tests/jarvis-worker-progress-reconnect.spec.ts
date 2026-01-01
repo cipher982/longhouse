@@ -8,7 +8,7 @@
  * - clear the panel after supervisor_complete (no workers pending)
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 test('Jarvis worker progress reconciles orphan worker and clears on complete', async ({ page }) => {
   await page.goto('/chat', { waitUntil: 'domcontentloaded' });
