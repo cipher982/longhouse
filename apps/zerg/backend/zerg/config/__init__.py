@@ -296,6 +296,14 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
             f"Either unset ZERG_TOOL_STUBS_PATH or set TESTING=1."
         )
 
+    # SAFETY GATE: E2E Postgres schema isolation relies on request-controlled routing
+    # (via the X-Test-Worker header). It must never be enabled outside tests.
+    if settings.e2e_use_postgres_schemas and not settings.testing:
+        raise RuntimeError(
+            "CRITICAL: E2E_USE_POSTGRES_SCHEMAS=1 but TESTING is not enabled. "
+            "Per-worker schema routing is TEST-ONLY infrastructure; unset E2E_USE_POSTGRES_SCHEMAS or set TESTING=1."
+        )
+
     if settings.testing:  # Unit-/integration tests run with stubbed LLMs
         return
 

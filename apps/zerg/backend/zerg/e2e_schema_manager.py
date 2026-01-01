@@ -134,7 +134,8 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
             conn.commit()
 
-    logger.debug(f"Dropped {len(schemas)} E2E schemas")
+    # Keep at INFO - this is rare and useful for debugging E2E infra issues
+    logger.info(f"Dropped {len(schemas)} E2E schemas")
     return len(schemas)
 
 
