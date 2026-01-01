@@ -18,52 +18,13 @@ test.beforeEach(async ({ request }) => {
 });
 
 /**
- * Helper: Complete dev login flow
- */
-async function ensureLoggedIn(page: Page): Promise<void> {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(500);
-
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
-  if (await createBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    return; // Already authenticated
-  }
-
-  const devLoginBtn = page.locator('button:has-text("Dev Login")');
-  if (await devLoginBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await devLoginBtn.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-    return;
-  }
-
-  const startFreeBtn = page.locator('button:has-text("Start Free"), a:has-text("Start Free")').first();
-  if (await startFreeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await startFreeBtn.click();
-    const modalDevLogin = page.locator('button:has-text("Dev Login")');
-    await expect(modalDevLogin).toBeVisible({ timeout: 5000 });
-    await modalDevLogin.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-  }
-}
-
-/**
  * Helper: Navigate to knowledge sources page
+ * Note: Auth is disabled in E2E tests (VITE_AUTH_ENABLED=false), so we navigate directly
  */
 async function navigateToKnowledgeSources(page: Page): Promise<void> {
-  await ensureLoggedIn(page);
-  await page.goto('/settings/knowledge');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(500);
-
-  const devLoginBtn = page.locator('button:has-text("Dev Login")');
-  if (await devLoginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await devLoginBtn.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-  }
+  await page.goto('/settings/knowledge', { waitUntil: 'domcontentloaded' });
+  // Wait for the Add Context button to be visible (indicates page is ready)
+  await expect(page.locator('[data-testid="add-context-btn"]')).toBeVisible({ timeout: 15000 });
 }
 
 test.describe('AddContextModal - Modal Open/Close', () => {

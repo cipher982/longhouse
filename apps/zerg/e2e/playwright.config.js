@@ -76,12 +76,14 @@ const workers = Number.isFinite(envWorkers) && envWorkers > 0 ? envWorkers : (pr
 
 const frontendServer = {
   // React dev server for Playwright runs
-  command: `bun run dev -- --host 127.0.0.1 --port ${FRONTEND_PORT}`,
+  // Call vite directly via bunx instead of `bun run dev` to avoid output buffering
+  command: `bunx vite --host 127.0.0.1 --port ${FRONTEND_PORT}`,
   port: FRONTEND_PORT,
   reuseExistingServer: !process.env.CI,
   timeout: 180_000,
   cwd: path.resolve(__dirname, '../frontend-web'),
   env: {
+    ...process.env,
     VITE_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}`,
     // E2E should bypass auth gating.
     VITE_AUTH_ENABLED: 'false',
@@ -128,11 +130,15 @@ const config = {
     frontendServer,
     {
       // Start a single backend server; DB isolation happens via X-Test-Worker header
-      command: `BACKEND_PORT=${BACKEND_PORT} node spawn-test-backend.js`,
+      command: `node spawn-test-backend.js`,
       port: BACKEND_PORT,
       cwd: __dirname,
       reuseExistingServer: !process.env.CI, // Allow reusing in development
       timeout: 60_000,
+      env: {
+        ...process.env,
+        BACKEND_PORT: String(BACKEND_PORT),
+      },
     },
   ],
 };
