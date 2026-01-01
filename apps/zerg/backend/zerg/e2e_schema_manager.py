@@ -58,7 +58,7 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
         # in public schema, so we force creation
         Base.metadata.create_all(bind=conn, checkfirst=False)
 
-    logger.info(f"Recreated schema with fresh state: {schema_name}")
+    logger.debug(f"Recreated schema with fresh state: {schema_name}")
     return schema_name
 
 
@@ -96,7 +96,7 @@ def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
         # This won't fail if tables already exist
         Base.metadata.create_all(bind=conn, checkfirst=True)
 
-    logger.info(f"Ensured schema exists: {schema_name}")
+    logger.debug(f"Ensured schema exists: {schema_name}")
     return schema_name
 
 
@@ -108,7 +108,7 @@ def drop_schema(engine: Engine, worker_id: str) -> None:
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
         conn.commit()
 
-    logger.info(f"Dropped schema: {schema_name}")
+    logger.debug(f"Dropped schema: {schema_name}")
 
 
 def drop_all_e2e_schemas(engine: Engine) -> int:
@@ -134,7 +134,7 @@ def drop_all_e2e_schemas(engine: Engine) -> int:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
             conn.commit()
 
-    logger.info(f"Dropped {len(schemas)} E2E schemas")
+    logger.debug(f"Dropped {len(schemas)} E2E schemas")
     return len(schemas)
 
 
