@@ -62,14 +62,19 @@ export interface Thread {
 export class ApiClient {
   private baseUrl: string;
   private headers: Record<string, string>;
+  private workerId: string;
 
   constructor(workerId: string = '0', baseUrl?: string) {
     // Single backend port – per-worker DB isolation is via X-Test-Worker header
     const basePort = getBackendPort();
     this.baseUrl = baseUrl || `http://localhost:${basePort}`;
+    this.workerId = workerId;
     this.headers = {
       'Content-Type': 'application/json',
-      // No longer need X-Test-Worker header - isolation is at infrastructure level
+      // CRITICAL: X-Test-Worker header routes requests to worker-specific Postgres schema
+      // Without this, requests hit the default schema and can cross-contaminate workers
+      // See: docs/work/e2e-test-infrastructure-redesign.md
+      'X-Test-Worker': workerId,
     };
   }
 
