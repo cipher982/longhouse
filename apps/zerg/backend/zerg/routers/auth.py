@@ -22,7 +22,8 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.schemas.schemas import TokenOut
 
-load_dotenv()
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process
+load_dotenv(override=True)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

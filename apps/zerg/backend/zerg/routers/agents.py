@@ -39,7 +39,8 @@ from zerg.schemas.schemas import MessageCreate
 from zerg.schemas.schemas import MessageResponse
 from zerg.utils.time import utc_now_naive
 
-load_dotenv()
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process
+load_dotenv(override=True)
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------
