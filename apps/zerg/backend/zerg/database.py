@@ -217,11 +217,14 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         # Create engine for this worker
         engine = make_engine(db_url)
 
+        from zerg.e2e_schema_manager import ensure_worker_schema
         from zerg.e2e_schema_manager import get_schema_name
-        from zerg.e2e_schema_manager import recreate_worker_schema
 
-        # Force-recreate schema with fresh state (prevents dirty state issues)
-        recreate_worker_schema(engine, worker_id)
+        # Idempotent schema creation - safe for concurrent processes
+        # Unlike recreate_worker_schema(), this won't DROP a schema that
+        # another process might be using. Schemas are pre-created in globalSetup.
+        # See: docs/work/e2e-test-infrastructure-redesign.md
+        ensure_worker_schema(engine, worker_id)
         schema_name = get_schema_name(worker_id)
 
         # Create test user for foreign key constraints (E2E tests need a user for agent creation)
