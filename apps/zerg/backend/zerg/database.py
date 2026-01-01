@@ -127,7 +127,7 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     # With N Playwright workers, each gets its own engine. Default pool (5+10=15)
     # × N workers can exceed Postgres max_connections (100).
     # See: docs/work/e2e-test-infrastructure-redesign.md
-    if os.getenv("E2E_USE_POSTGRES_SCHEMAS"):
+    if _settings.e2e_use_postgres_schemas:
         kwargs.setdefault("pool_size", 2)
         kwargs.setdefault("max_overflow", 3)  # Max 5 connections per engine
 

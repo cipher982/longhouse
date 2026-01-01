@@ -46,23 +46,16 @@ async function globalTeardown(config) {
   console.log('🧹 Starting test environment cleanup...');
 
   try {
-    // Resolve a Python interpreter ('python' or 'python3')
-    const pythonCmd = (() => {
-      try { execSync('python --version', { stdio: 'ignore' }); return 'python'; } catch {}
-      try { execSync('python3 --version', { stdio: 'ignore' }); return 'python3'; } catch {}
-      return null;
-    })();
-
-    if (!pythonCmd) {
-      throw new Error("No Python interpreter found (python/python3)");
-    }
+    // Use uv run python to ensure correct venv with all deps
+    // (system python may not have SQLAlchemy, psycopg, etc.)
+    const backendDir = path.resolve(__dirname, '../backend');
 
     // Call Python cleanup script to remove all test databases/schemas
     // E2E tests use Postgres schema isolation (set in spawn-test-backend.js)
-    const cleanup = spawn(pythonCmd, ['-c', `
-import sys
+    const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
-sys.path.insert(0, '${path.resolve('../backend')}')
+# TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
+os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
 
 # Use Postgres schema cleanup for E2E tests
@@ -71,11 +64,10 @@ from zerg.database import default_engine
 dropped = drop_all_e2e_schemas(default_engine)
 print(f"✅ Dropped {dropped} E2E test schemas")
     `], {
-      cwd: path.resolve('../backend'),
+      cwd: backendDir,
       stdio: 'inherit',
-      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1' }
+      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
     });
-    // If this fails, the environment must expose 'python' on PATH.
 
     await new Promise((resolve, reject) => {
       cleanup.on('close', (code) => {

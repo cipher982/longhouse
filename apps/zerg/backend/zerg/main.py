@@ -1,5 +1,11 @@
 # E2E log suppression: only active when E2E_LOG_SUPPRESS=1 for test runs
 
+# CRITICAL: Load environment variables FIRST - before ANY other imports that might use os.getenv()
+# Use override=True to ensure proper quote stripping even if vars are inherited from parent process (Node spawn)
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 from zerg.config import get_settings
 
 _settings = get_settings()
@@ -13,11 +19,6 @@ if _settings.e2e_log_suppress:
 import logging
 
 # ---------------------------------------------------------------------
-from dotenv import load_dotenv
-
-# Load environment variables FIRST - before any other imports
-load_dotenv()
-
 # fmt: off
 # ruff: noqa: E402
 # Standard library
@@ -487,18 +488,23 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # Playwright worker database isolation – attach middleware early so every
 # request, including those made during router setup, carries the correct
 # context.
+#
+# SECURITY: Only enable when E2E_USE_POSTGRES_SCHEMAS=1. In prod/dev, a request
+# with X-Test-Worker header would otherwise try to access worker schemas that
+# don't exist, causing 500 errors (potential DoS vector).
 # ---------------------------------------------------------------------------
 
-# We import lazily so local *unit-tests* that do not include the middleware
-# file in their truncated import tree continue to work.
-from importlib import import_module
+if _settings.e2e_use_postgres_schemas:
+    # We import lazily so local *unit-tests* that do not include the middleware
+    # file in their truncated import tree continue to work.
+    from importlib import import_module
 
-try:
-    WorkerDBMiddleware = getattr(import_module("zerg.middleware.worker_db"), "WorkerDBMiddleware")
-    app.add_middleware(WorkerDBMiddleware)
-except Exception:  # pragma: no cover – keep startup resilient
-    # Defer logging until *logger* is available (defined right below).
-    pass
+    try:
+        WorkerDBMiddleware = getattr(import_module("zerg.middleware.worker_db"), "WorkerDBMiddleware")
+        app.add_middleware(WorkerDBMiddleware)
+    except Exception:  # pragma: no cover – keep startup resilient
+        # Defer logging until *logger* is available (defined right below).
+        pass
 
 # ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.

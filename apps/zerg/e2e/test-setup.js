@@ -65,23 +65,16 @@ async function globalSetup(config) {
   console.log(`📦 Pre-creating schemas for ${workers} Playwright workers...`);
 
   try {
-    // Resolve a Python interpreter ('python' or 'python3')
-    const pythonCmd = (() => {
-      try { execSync('python --version', { stdio: 'ignore' }); return 'python'; } catch {}
-      try { execSync('python3 --version', { stdio: 'ignore' }); return 'python3'; } catch {}
-      return null;
-    })();
-
-    if (!pythonCmd) {
-      throw new Error("No Python interpreter found (python/python3)");
-    }
+    // Use uv run python to ensure correct venv with all deps
+    // (system python may not have SQLAlchemy, psycopg, etc.)
+    const backendDir = path.resolve(__dirname, '../backend');
 
     // Call Python to drop stale schemas and pre-create fresh ones
     // This ensures all schemas exist before any tests run
-    const cleanup = spawn(pythonCmd, ['-c', `
-import sys
+    const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
-sys.path.insert(0, '${path.resolve(__dirname, '../backend')}')
+# TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
+os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
 
 from zerg.database import default_engine
@@ -99,9 +92,9 @@ for i in range(${workers}):
 
 print(f"📦 All {${workers}} schemas ready")
     `], {
-      cwd: path.resolve(__dirname, '../backend'),
+      cwd: backendDir,
       stdio: 'inherit',
-      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1' }
+      env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
     });
 
     await new Promise((resolve, reject) => {
