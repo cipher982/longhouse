@@ -1,0 +1,170 @@
+/* AddContextModal Styles
+   Extends base modal styles from styles/modal.css
+   ==================================================================== */
+
+@layer components {
+  .add-context-modal {
+    max-width: 600px;
+  }
+
+  /* Tabs */
+  .context-tabs {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--color-border-primary);
+    padding-bottom: var(--space-3);
+  }
+
+  .context-tab {
+    padding: var(--space-2) var(--space-4);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast);
+  }
+
+  .context-tab:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-elevated);
+  }
+
+  .context-tab.active {
+    color: var(--color-text-primary);
+    background: var(--color-surface-elevated);
+  }
+
+  /* Success/Error Messages */
+  .context-success {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid var(--color-intent-success);
+    color: var(--color-intent-success);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+    font-size: var(--font-size-sm);
+  }
+
+  .context-error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--color-intent-error);
+    color: var(--color-intent-error);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+    font-size: var(--font-size-sm);
+  }
+
+  /* Drop Zone */
+  .drop-zone {
+    border: 2px dashed var(--color-border-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-8);
+    text-align: center;
+    cursor: pointer;
+    transition: all var(--motion-duration-fast);
+    margin-bottom: var(--space-4);
+  }
+
+  .drop-zone:hover {
+    border-color: var(--color-text-secondary);
+    background: var(--color-surface-elevated);
+  }
+
+  .drop-zone.dragging {
+    border-color: var(--color-intent-success);
+    background: rgba(16, 185, 129, 0.05);
+  }
+
+  .drop-zone.has-content {
+    border-color: var(--color-intent-success);
+    border-style: solid;
+  }
+
+  .drop-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .drop-zone-icon {
+    font-size: 2rem;
+    color: var(--color-text-secondary);
+  }
+
+  .drop-zone.has-content .drop-zone-icon {
+    color: var(--color-intent-success);
+  }
+
+  .drop-zone p {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .drop-zone small {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  /* Form */
+  .context-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .context-textarea {
+    resize: vertical;
+    min-height: 200px;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .context-preview {
+    background: var(--color-surface-secondary);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    line-height: var(--font-line-height-relaxed);
+    color: var(--color-text-secondary);
+    max-height: 150px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin: 0;
+  }
+
+  /* Docs Count */
+  .context-docs-count {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border-primary);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    text-align: center;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .add-context-modal {
+      max-width: 95%;
+    }
+
+    .context-textarea {
+      min-height: 150px;
+    }
+
+    .drop-zone {
+      padding: var(--space-6);
+    }
+  }
+}
