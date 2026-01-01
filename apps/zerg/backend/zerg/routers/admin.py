@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi import APIRouter as _AR
 from fastapi import Depends
 from fastapi import FastAPI as _FastAPI
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi.responses import JSONResponse
@@ -616,6 +617,38 @@ class ConfigureTestModelRequest(BaseModel):
     """Request model for configuring test model."""
 
     model: str = "gpt-scripted"
+
+
+@router.get("/debug/db-schema")
+async def debug_db_schema(
+    db: Session = Depends(get_db),
+    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+):
+    """Debug endpoint: returns current_schema + search_path for this request.
+
+    TESTING-only. Useful to validate Postgres schema routing (X-Test-Worker).
+    """
+    settings = get_settings()
+    if not settings.testing:
+        raise HTTPException(status_code=403, detail="This endpoint is only available when TESTING=1.")
+
+    from sqlalchemy import text
+
+    current_schema = db.execute(text("SELECT current_schema()")).scalar()
+    search_path = db.execute(text("SHOW search_path")).scalar()
+    agents_unqualified = db.execute(text("SELECT to_regclass('agents')")).scalar()
+    agents_public = db.execute(text("SELECT to_regclass('public.agents')")).scalar()
+    agents_count = db.execute(text("SELECT COUNT(*) FROM agents")).scalar()
+    agents_public_count = db.execute(text("SELECT COUNT(*) FROM public.agents")).scalar()
+    return {
+        "current_schema": current_schema,
+        "search_path": search_path,
+        "agents_unqualified": agents_unqualified,
+        "agents_public": agents_public,
+        "agents_count": agents_count,
+        "agents_public_count": agents_public_count,
+        "x_test_worker": x_test_worker,
+    }
 
 
 @router.post("/configure-test-model")
