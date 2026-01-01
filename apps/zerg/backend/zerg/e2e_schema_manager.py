@@ -50,13 +50,13 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
         conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
         conn.execute(text(f"CREATE SCHEMA {schema_name}"))
 
-        # Set search_path for this connection
-        conn.execute(text(f"SET search_path TO {schema_name}, public"))
-
-        # Create all tables in the schema (checkfirst=False to force creation)
-        # Even though search_path is set, SQLAlchemy may skip tables if they exist
-        # in public schema, so we force creation
-        Base.metadata.create_all(bind=conn, checkfirst=False)
+        # Create all tables in the worker schema.
+        #
+        # IMPORTANT: We use schema_translate_map so SQLAlchemy performs both the
+        # "does this table exist?" checks and the CREATE TABLE statements in the
+        # *target* schema, not the database's default schema (usually public).
+        ddl_conn = conn.execution_options(schema_translate_map={None: schema_name})
+        Base.metadata.create_all(bind=ddl_conn, checkfirst=False)
 
     logger.debug(f"Recreated schema with fresh state: {schema_name}")
     return schema_name
@@ -89,12 +89,13 @@ def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
         # Create schema if not exists (idempotent)
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))
 
-        # Set search_path for table creation
-        conn.execute(text(f"SET search_path TO {schema_name}, public"))
-
-        # Create all tables (checkfirst=True is idempotent and handles migrations)
-        # This won't fail if tables already exist
-        Base.metadata.create_all(bind=conn, checkfirst=True)
+        # Create all tables (checkfirst=True is idempotent and handles migrations).
+        #
+        # IMPORTANT: schema_translate_map ensures SQLAlchemy checks/creates tables
+        # in *this schema* rather than accidentally treating "public" as the
+        # default schema and skipping creation because tables exist there.
+        ddl_conn = conn.execution_options(schema_translate_map={None: schema_name})
+        Base.metadata.create_all(bind=ddl_conn, checkfirst=True)
 
     logger.debug(f"Ensured schema exists: {schema_name}")
     return schema_name
