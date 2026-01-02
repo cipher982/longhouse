@@ -35,9 +35,28 @@ When running, you have live access to:
 **Note:** In dev mode (auth disabled), `/` redirects to `/dashboard`. To preview the landing page, use `/landing`.
 
 **Debug with:**
-- **Playwright MCP** — snapshot pages, click elements, check console errors
+- **Playwright MCP** — take screenshots, click elements, run browser code
 - **API calls** — `curl localhost:30080/api/health` or WebFetch tool
 - **Logs** — `make logs` to tail all services
+
+**Playwright MCP Best Practices (Token-Optimized):**
+
+The Playwright MCP plugin is configured with `--snapshot-mode none --console-level error` to prevent context blowups. This means:
+
+| Tool | Use Case | Notes |
+|------|----------|-------|
+| `browser_navigate` | Go to a URL | Returns minimal info |
+| `browser_take_screenshot` | Visual verification | Preferred over snapshots |
+| `browser_run_code` | Multi-step interactions | **Best for complex ops** - one round trip |
+| `browser_click` | Single clicks | Use sparingly on complex pages |
+| `browser_snapshot` | Accessibility tree | **Disabled by default** - use screenshot instead |
+
+**For complex pages (React Flow canvas, dashboards):**
+- Prefer `browser_run_code` to batch operations
+- Use `browser_take_screenshot` for verification instead of `browser_snapshot`
+- Console warnings are suppressed; only errors show
+
+**Config backup:** `docs/playwright-mcp-config.json` (restore to `~/.claude/plugins/cache/claude-plugins-official/playwright/*/` if plugin updates overwrite)
 
 **Frontend Logging Modes:**
 

@@ -1,0 +1,11 @@
+{
+  "playwright": {
+    "command": "npx",
+    "args": [
+      "@playwright/mcp@latest",
+      "--snapshot-mode", "none",
+      "--console-level", "error",
+      "--output-dir", "/Users/davidrose/git/zerg/.playwright-mcp"
+    ]
+  }
+}

@@ -1,13 +1,15 @@
 import { getNodeIcon } from "../../lib/iconUtils";
-import { useStore } from "@xyflow/react";
+import { Handle, Position, useStore } from "@xyflow/react";
 import type { NodeTypes } from "@xyflow/react";
 
 // Custom node component for agents
 export function AgentNode({ data }: { data: { label: string; agentId?: number } }) {
   return (
     <div className="agent-node">
+      <Handle type="target" position={Position.Left} />
       <div className="agent-icon">{getNodeIcon("agent")}</div>
       <div className="agent-name">{data.label}</div>
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
@@ -16,18 +18,49 @@ export function AgentNode({ data }: { data: { label: string; agentId?: number } 
 export function ToolNode({ data }: { data: { label: string; toolType?: string } }) {
   return (
     <div className="tool-node">
+      <Handle type="target" position={Position.Left} />
       <div className="tool-icon">{getNodeIcon("tool", data.toolType)}</div>
       <div className="tool-name">{data.label}</div>
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
 
-// Custom node component for triggers
+// Custom node component for triggers (source only - triggers start workflows)
 export function TriggerNode({ data }: { data: { label: string } }) {
   return (
     <div className="trigger-node">
       <div className="trigger-icon">{getNodeIcon("trigger")}</div>
       <div className="trigger-name">{data.label}</div>
+      <Handle type="source" position={Position.Right} />
+    </div>
+  );
+}
+
+// Simplified node renderers for MiniMap (no handles - avoids React Flow warnings)
+function MiniMapAgentNode({ label }: { label: string }) {
+  return (
+    <div className="agent-node">
+      <div className="agent-icon">{getNodeIcon("agent")}</div>
+      <div className="agent-name">{label}</div>
+    </div>
+  );
+}
+
+function MiniMapToolNode({ label }: { label: string }) {
+  return (
+    <div className="tool-node">
+      <div className="tool-icon">{getNodeIcon("tool")}</div>
+      <div className="tool-name">{label}</div>
+    </div>
+  );
+}
+
+function MiniMapTriggerNode({ label }: { label: string }) {
+  return (
+    <div className="trigger-node">
+      <div className="trigger-icon">{getNodeIcon("trigger")}</div>
+      <div className="trigger-name">{label}</div>
     </div>
   );
 }
@@ -45,14 +78,15 @@ export function MiniMapNode(props: { x: number; y: number; width: number; height
   if (!node) return null;
 
   const { type, data } = node;
+  const nodeData = data as { label: string };
 
   return (
     <foreignObject x={x} y={y} width={width} height={height}>
       {/* We use a div with 100% size to contain the node component */}
       <div className="minimap-node-content" style={{ width: '100%', height: '100%' }}>
-        {type === 'agent' && <AgentNode data={data as { label: string; agentId?: number }} />}
-        {type === 'tool' && <ToolNode data={data as { label: string; toolType?: string }} />}
-        {type === 'trigger' && <TriggerNode data={data as { label: string }} />}
+        {type === 'agent' && <MiniMapAgentNode label={nodeData.label} />}
+        {type === 'tool' && <MiniMapToolNode label={nodeData.label} />}
+        {type === 'trigger' && <MiniMapTriggerNode label={nodeData.label} />}
       </div>
     </foreignObject>
   );
