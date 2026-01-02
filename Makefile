@@ -297,6 +297,15 @@ seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
 	@echo "✅ Credentials seeded"
 
+screenshot-marketing: ## Capture marketing screenshot of canvas workflow
+	@echo "📸 Capturing marketing screenshot..."
+	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+		echo "❌ Dev stack not running. Start with 'make dev'"; \
+		exit 1; \
+	fi
+	@cd apps/zerg/e2e && bunx playwright install chromium --with-deps >/dev/null 2>&1 || true
+	@uv run --with playwright python scripts/capture_marketing_screenshots.py
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
