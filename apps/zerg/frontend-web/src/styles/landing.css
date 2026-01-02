@@ -7,20 +7,20 @@
 
 @layer pages {
   /* --------------------------------------------------------
-     Root Scroll Mode (landing page only)
+     Root Scroll Mode (public pages)
 
      The app shell uses a grid root with an internal scroll container (#app-container).
-     Public pages like the landing page should use normal document scrolling so
-     `window.scrollTo()` and anchor links behave as expected.
+     Public pages (landing, pricing, docs, etc.) should use normal document scrolling
+     so `window.scrollTo()` and anchor links behave as expected.
      -------------------------------------------------------- */
 
-  html.landing-scroll,
-  body.landing-scroll {
+  html.public-page-scroll,
+  body.public-page-scroll {
     height: auto;
     overflow: visible;
   }
 
-  body.landing-scroll #react-root {
+  body.public-page-scroll #react-root {
     display: block;
     height: auto;
     min-height: 100vh;

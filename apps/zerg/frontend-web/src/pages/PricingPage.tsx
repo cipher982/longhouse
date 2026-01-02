@@ -1,11 +1,14 @@
 import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
 export default function PricingPage() {
   const navigate = useNavigate();
   const currentYear = new Date().getFullYear();
+
+  usePublicPageScroll();
 
   useEffect(() => {
     document.title = "Pricing - Swarmlet";

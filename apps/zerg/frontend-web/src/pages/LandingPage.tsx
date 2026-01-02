@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/landing.css";
 
 // Section components
@@ -125,16 +126,8 @@ export default function LandingPage() {
   const particlesEnabled = fxEnabled.has("particles");
   const heroAnimationsEnabled = fxEnabled.has("hero");
 
-  // The main app layout uses an internal scroll container (#app-container) and locks the root.
-  // The landing page should scroll like a normal document so `window.scrollTo()` works.
-  useEffect(() => {
-    document.documentElement.classList.add("landing-scroll");
-    document.body.classList.add("landing-scroll");
-    return () => {
-      document.documentElement.classList.remove("landing-scroll");
-      document.body.classList.remove("landing-scroll");
-    };
-  }, []);
+  // Enable normal document scrolling (app shell locks root by default)
+  usePublicPageScroll();
 
   // Control global UI effects based on landing page effects
   useEffect(() => {

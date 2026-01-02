@@ -2,10 +2,13 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { ShieldIcon, LockIcon, TrashIcon, KeyIcon } from "../components/icons";
+import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
 export default function SecurityPage() {
   const currentYear = new Date().getFullYear();
+
+  usePublicPageScroll();
 
   useEffect(() => {
     document.title = "Security - Swarmlet";

@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
+import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
 export default function PrivacyPage() {
   const currentYear = new Date().getFullYear();
+
+  usePublicPageScroll();
 
   useEffect(() => {
     document.title = "Privacy Policy - Swarmlet";

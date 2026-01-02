@@ -2,10 +2,13 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { ZapIcon, PuzzleIcon, SettingsIcon, MessageCircleIcon } from "../components/icons";
+import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import "../styles/info-pages.css";
 
 export default function DocsPage() {
   const currentYear = new Date().getFullYear();
+
+  usePublicPageScroll();
 
   useEffect(() => {
     document.title = "Documentation - Swarmlet";
