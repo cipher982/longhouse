@@ -18,7 +18,7 @@ Validated the landing page at `/landing` against the comprehensive checklist in 
 |----------|---------|--------|-----------|
 | Screenshot resolution | Need consistent capture | 1440x900 viewport | Desktop viewport, shows full sections |
 | Full-page vs sections | Could do one big screenshot | Section-by-section | Better for detailed validation |
-| Scroll snapping fix | Scroll was locked | Fixed via `landing-scroll` class | Codex identified root cause in app-shell CSS |
+| Scroll lock fix | Root scroll was locked by app-shell CSS | Fixed via `landing-scroll` class | Codex identified `#react-root` overflow:hidden as cause |
 
 ---
 
@@ -196,7 +196,7 @@ Validated the landing page at `/landing` against the comprehensive checklist in 
 ## Issues Found
 
 ### Fixed During Validation
-1. **Scroll snapping issue** - Page wouldn't scroll with `window.scrollTo()`. Codex identified root cause: app-shell CSS was locking scrolling. Fixed by adding `landing-scroll` class to html/body when landing page mounts. Committed as `ddb8430`.
+1. **Scroll lock issue** - Page wouldn't scroll with `window.scrollTo()`. Codex identified root cause: app-shell CSS (`#react-root { overflow: hidden }`) was preventing document scrolling. Fixed by adding `landing-scroll` class to html/body when landing page mounts, which overrides the root container to `display: block` + `overflow: visible`. Committed as `ddb8430`.
 
 ### No Outstanding Issues
 All visual elements render correctly. No placeholders, broken images, or incorrect text detected.
