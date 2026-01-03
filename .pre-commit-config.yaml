@@ -21,7 +21,7 @@ repos:
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-added-large-files
-        args: [--maxkb=500]
+        args: [--maxkb=1500]
       - id: check-merge-conflict
 
   # =========================================================================
