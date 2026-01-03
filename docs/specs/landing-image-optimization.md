@@ -1,11 +1,13 @@
-# Landing Page Image Optimization
+# Web Quality & Performance Guardrails
 
-**Status**: Phase 1 Complete (Implemented)
+**Status**: Phase 1 Complete, Phase 2 In Progress
 **Date**: 2025-01-02
 
 ## Executive Summary
 
-The three "How It Works" scenario images on the landing page load slowly (4-5s on cold load) due to massive 4.5-5MB PNG files in production, when optimized 220-264KB versions already exist locally but haven't been deployed.
+Initial issue: Landing page scenario images were 4.5-5MB each, causing 4-5s cold loads. Fixed with 95% size reduction.
+
+Broader goal: Implement CI guardrails to catch web performance issues before they hit production.
 
 ## Problem Analysis
 
@@ -66,12 +68,47 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 - [x] All three scenario images < 300KB in production (verified: 225KB, 270KB, 240KB)
 - [x] Cold load time improved (verified via Playwright)
 
-### Phase 2: Clean Up Unused Images (Optional)
+### Phase 2: Web Quality CI Stack
+**Goal**: Comprehensive guardrails against web performance issues
+
+**Recommended 3-Tool Stack** (low-maintenance, ~1.5 hrs/year upkeep):
+
+| Tool | What It Catches | Setup | Maintenance |
+|------|-----------------|-------|-------------|
+| **Lighthouse CI** | Performance, accessibility, SEO, best practices, Core Web Vitals | 30 min | ~1 hr/year |
+| **Size Limit** | Bloated JS bundles, unused dependencies | 15 min | ~30 min/year |
+| **ImgBot** | Oversized images (auto-compresses on PR) | 5 min | Zero |
+
+**Would have caught 5MB image issue?**
+- Lighthouse CI: Yes (performance score drops 90 → 40)
+- ImgBot: Yes (auto-compresses, creates PR with optimized version)
+- Size Limit: No (only tracks JS/CSS bundles, not images)
+
+**Why this stack:**
+- Free & OSS
+- "Set and forget" - minimal config drift
+- Catches 80% of web quality issues
+- No external services (except ImgBot GitHub App)
+
+**Implementation Steps**:
+
+1. Create `.github/workflows/quality.yml` with Lighthouse CI
+2. Create `lighthouserc.json` with performance thresholds
+3. Create `.size-limit.js` for bundle budgets
+4. Install ImgBot from GitHub Marketplace
+
+**Acceptance Criteria**:
+- [ ] Lighthouse CI runs on every PR
+- [ ] Performance score threshold: 85 (error), Accessibility: 90 (warn)
+- [ ] Bundle size limit: 200KB JS, 50KB CSS
+- [ ] ImgBot auto-compresses images on PRs
+
+### Phase 3: Clean Up Unused Images (Optional)
 **Goal**: Remove dead weight from repo
 
 **Steps**:
 1. Verify hero-orb.png, trust-shield.png, integrations-grid.png are unused
-2. Delete from git
+2. Delete from git (saves ~18MB in repo)
 3. Update og-image.png if used (social sharing)
 
 **Acceptance Criteria**:
