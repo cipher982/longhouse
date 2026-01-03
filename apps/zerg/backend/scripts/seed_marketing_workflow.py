@@ -251,18 +251,19 @@ def cleanup_marketing_data(db, dev_user):
             print(f"  - Deleted agent: {agent.name}")
 
     # Also clean up orphaned marketing thread - SCOPED TO DEV USER via agent ownership
+    # IMPORTANT: Only clean up MANUAL threads to avoid deleting the real SUPER supervisor thread
     db.execute(text("""
         DELETE FROM thread_messages WHERE thread_id IN (
             SELECT t.id FROM agent_threads t
             JOIN agents a ON t.agent_id = a.id
-            WHERE t.title = 'marketing' AND a.owner_id = :owner_id
+            WHERE t.title = 'marketing' AND t.thread_type = 'manual' AND a.owner_id = :owner_id
         )
     """), {"owner_id": dev_user.id})
     db.execute(text("""
         DELETE FROM agent_threads WHERE id IN (
             SELECT t.id FROM agent_threads t
             JOIN agents a ON t.agent_id = a.id
-            WHERE t.title = 'marketing' AND a.owner_id = :owner_id
+            WHERE t.title = 'marketing' AND t.thread_type = 'manual' AND a.owner_id = :owner_id
         )
     """), {"owner_id": dev_user.id})
 
@@ -402,13 +403,16 @@ def seed_chat_thread(db, supervisor: Agent):
 
     Uses ThreadService.save_new_messages() to ensure messages are stored
     in the exact same format as the real agent runner produces.
+
+    IMPORTANT: Uses MANUAL thread type to avoid collision with the real
+    supervisor thread (which uses SUPER type and has "one per user" constraint).
     """
     print("  💬 Creating chat conversation...")
 
     thread = Thread(
         agent_id=supervisor.id,
         title="marketing",  # Short name for URL addressability: /chat?thread=marketing
-        thread_type=ThreadType.SUPER,
+        thread_type=ThreadType.MANUAL,  # MANUAL to avoid collision with real supervisor
         active=True,
     )
     db.add(thread)
