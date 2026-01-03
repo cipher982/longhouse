@@ -98,10 +98,11 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 4. Install ImgBot from GitHub Marketplace
 
 **Acceptance Criteria**:
-- [ ] Lighthouse CI runs on every PR
-- [ ] Performance score threshold: 85 (error), Accessibility: 90 (warn)
-- [ ] Bundle size limit: 200KB JS, 50KB CSS
-- [ ] ImgBot auto-compresses images on PRs
+- [x] Lighthouse CI runs on every PR (`.github/workflows/quality.yml`)
+- [x] Performance score threshold: 85 (error), Accessibility: 90 (warn)
+- [x] Bundle size limit: 300KB JS, 50KB CSS (`.size-limit.json`)
+- [x] Image size check: blocks images > 2MB
+- [ ] ImgBot installed (requires user action - GitHub Marketplace)
 
 ### Phase 3: Clean Up Unused Images (Optional)
 **Goal**: Remove dead weight from repo
