@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { usePointerDrag } from "../hooks/usePointerDrag";
 import {
   ReactFlow,
@@ -24,6 +25,7 @@ import toast from "react-hot-toast";
 import type { LogEntry } from "../components/ExecutionLogStream";
 import {
   fetchCurrentWorkflow,
+  fetchWorkflowById,
   updateWorkflowCanvas,
   startWorkflowExecution,
   getExecutionStatus,
@@ -54,6 +56,8 @@ import { XIcon } from "../components/icons";
 function CanvasPageContent() {
   const queryClient = useQueryClient();
   const reactFlowInstance = useReactFlow();
+  const [searchParams] = useSearchParams();
+  const workflowIdParam = searchParams.get("workflow");
   const zoom = useStore((state) => state.transform[2]);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -400,10 +404,11 @@ const handleToolPointerDown = useCallback(
     updatePreviewPositionFromClientPoint,
   ]);
 
-  // Fetch current workflow
+  // Fetch workflow by ID from URL param, or current workflow
+  const workflowId = workflowIdParam ? parseInt(workflowIdParam, 10) : null;
   const { data: workflow } = useQuery<Workflow>({
-    queryKey: ["workflow", "current"],
-    queryFn: fetchCurrentWorkflow,
+    queryKey: workflowId ? ["workflow", workflowId] : ["workflow", "current"],
+    queryFn: () => (workflowId ? fetchWorkflowById(workflowId) : fetchCurrentWorkflow()),
     staleTime: 30000,
   });
 

@@ -19,6 +19,10 @@ export async function fetchCurrentWorkflow(): Promise<Workflow> {
   return request<Workflow>(`/workflows/current`);
 }
 
+export async function fetchWorkflowById(id: number): Promise<Workflow> {
+  return request<Workflow>(`/workflows/${id}`);
+}
+
 export async function createWorkflow(name: string, description?: string, canvas?: WorkflowDataInput): Promise<Workflow> {
   const payload: WorkflowCreate = {
     name,

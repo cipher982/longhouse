@@ -6,59 +6,116 @@
 # 1. Start the dev stack
 make dev
 
-# 2. Capture marketing screenshots (in another terminal)
+# 2. Capture all marketing screenshots (in another terminal)
 make screenshot-marketing
 ```
 
+That's it! One command seeds all data and captures all screenshots.
+
 ## What It Does
 
-1. **Seeds the marketing workflow** - Creates a visually appealing "Email Automation Pipeline" workflow with 6 agents and a trigger
-2. **Opens the canvas page** - Navigates to http://localhost:30080/canvas
-3. **Applies vivid mode CSS** - Injects marketing-ready styling:
-   - Hide UI chrome (shelf, minimap, controls)
-   - Vibrant gradient background
-   - Purple glowing agent nodes
-   - Amber glowing trigger node
-   - Blue glowing connection edges
-   - Enhanced text with shadows
-4. **Takes high-quality screenshot** - Captures at 1400x900 viewport
-5. **Saves to landing page assets** - Output: `apps/zerg/frontend-web/public/images/landing/canvas-preview.png`
+### 1. Seeds Marketing Data
+Creates realistic data for professional screenshots:
 
-## Output
+**Three distinct workflows:**
+- **Morning Health Check** - WHOOP → Analyzer → Notifier (health scenario)
+- **Email Automation Pipeline** - 6-node email triage workflow (inbox scenario)
+- **Smart Home Automation** - Location → Presence → Lights/Thermostat (home scenario)
 
-The screenshot showcases the Email Automation Pipeline workflow:
-- **Trigger**: "New Email" (amber glow)
-- **Agents**: Email Watcher → Content Analyzer → Priority Router → Slack Notifier / Task Creator → Calendar Checker (purple glows)
-- **Background**: Dark gradient (professional, modern look)
-- **Edges**: Blue glowing connections showing data flow
+**Agents with varied statuses:**
+- Some running, some idle, some recently completed
+- Realistic timestamps and token counts
 
-## Requirements
+**Chat conversation:**
+- Marketing Demo Chat thread with Jarvis
+- Shows tool use (WHOOP data, location check)
+- Multi-turn conversation about health + activities
 
-- Dev stack running at localhost:30080
-- UV (Python package manager)
-- Playwright (auto-installed if missing)
+### 2. Captures Screenshots
 
-## Script Details
+| Screenshot | Content | Dimensions |
+|------------|---------|------------|
+| `scenario-health.png` | Morning Health Check workflow | 800×500 |
+| `scenario-inbox.png` | Email Automation Pipeline | 800×500 |
+| `scenario-home.png` | Smart Home Automation | 800×500 |
+| `canvas-preview.png` | Full canvas view | 1400×900 |
+| `chat-preview.png` | Real Jarvis conversation | 1400×900 |
+| `dashboard-preview.png` | Dashboard with agents | 1400×900 |
 
-- **Location**: `scripts/capture_marketing_screenshots.py`
-- **Language**: Python with async Playwright
-- **Dependencies**: Automatically installed via `uv run --with playwright`
-- **Make Target**: `make screenshot-marketing`
+### 3. Applies "Vivid Mode" CSS
+Marketing-ready styling injected via Playwright:
+- Purple glowing agent nodes
+- Amber glowing trigger nodes
+- Blue glowing connection edges
+- Dark gradient backgrounds
+- Hidden UI chrome (minimap, controls, sidebar)
 
-## Customization
+## Output Location
 
-To modify the screenshot:
+```
+apps/zerg/frontend-web/public/images/landing/
+├── scenario-health.png   # Health workflow (800×500)
+├── scenario-inbox.png    # Inbox workflow (800×500)
+├── scenario-home.png     # Home workflow (800×500)
+├── canvas-preview.png    # Full canvas (1400×900)
+├── chat-preview.png      # Chat interface (1400×900)
+└── dashboard-preview.png # Dashboard (1400×900)
+```
 
-1. **Change workflow layout**: Edit `apps/zerg/backend/scripts/seed_marketing_workflow.py`
-2. **Adjust styling**: Modify `VIVID_MODE_CSS` in `scripts/capture_marketing_screenshots.py`
-3. **Change viewport size**: Update `viewport={"width": 1400, "height": 900}` in the script
+## How It Works
+
+```
+make screenshot-marketing
+         │
+         ├─→ Check dev stack is running
+         │
+         ├─→ Run seed_marketing_workflow.py
+         │   └─→ Creates 3 workflows, 13 agents, runs, chat thread
+         │
+         └─→ Run capture_marketing_screenshots.py
+             ├─→ For each workflow: set as current, capture
+             ├─→ Navigate to chat with seeded thread
+             ├─→ Navigate to dashboard
+             └─→ Apply vivid CSS + take screenshots
+```
 
 ## Idempotency
 
-The system is designed to be run multiple times safely:
-- Workflow seeding updates existing workflow (doesn't create duplicates)
-- Screenshot file is overwritten each time
+Safe to run repeatedly:
+- Seed script cleans up old marketing data before creating new
+- Screenshots overwrite previous files
 - No manual cleanup required
+
+## Customization
+
+### Modify Workflow Layouts
+Edit `apps/zerg/backend/scripts/seed_marketing_workflow.py`:
+- `HEALTH_WORKFLOW`, `INBOX_WORKFLOW`, `HOME_WORKFLOW` dicts
+- Adjust `layout` coordinates for node positions
+- Modify `edges` for different connections
+
+### Adjust Styling
+Edit `scripts/capture_marketing_screenshots.py`:
+- `CANVAS_VIVID_CSS` - Canvas node/edge styling
+- `CHAT_VIVID_CSS` - Chat message styling
+- `DASHBOARD_VIVID_CSS` - Dashboard card styling
+
+### Change Viewport Size
+In `capture_marketing_screenshots.py`:
+```python
+page = await browser.new_page(viewport={"width": 1400, "height": 900})
+```
+
+### Change Crop Dimensions
+```python
+scenario_crop = {"x": 100, "y": 100, "width": 800, "height": 500}
+```
+
+## Requirements
+
+- Dev stack running at localhost:30080 (`make dev`)
+- UV (Python package manager)
+- Playwright (auto-installed if missing)
 
 ## Troubleshooting
 
@@ -68,13 +125,32 @@ make dev-bg  # Start in background
 ```
 
 **Playwright not found:**
-The script auto-installs Playwright via UV. If issues persist:
 ```bash
-uv tool install playwright
-uv tool run playwright install chromium
+bunx playwright install chromium
 ```
 
 **Canvas not loading:**
 - Check backend logs: `make logs`
 - Verify health: `curl http://localhost:30080/health`
 - Wait a few seconds after `make dev` for services to initialize
+
+**Screenshots look wrong:**
+- Check browser viewport: 1400×900 is optimal
+- Verify CSS selectors match current UI (may need updates after refactors)
+
+## Scripts
+
+| File | Purpose |
+|------|---------|
+| `scripts/capture_marketing_screenshots.py` | Main capture script |
+| `apps/zerg/backend/scripts/seed_marketing_workflow.py` | Data seeding |
+| `scripts/README_SCREENSHOTS.md` | This documentation |
+
+## Make Target
+
+```makefile
+screenshot-marketing: ## Capture all marketing screenshots
+    @# 1. Check dev stack
+    @# 2. Seed marketing data
+    @# 3. Capture screenshots via Playwright
+```
