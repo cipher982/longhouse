@@ -174,17 +174,17 @@ reset: ## Reset database (destroys all data)
 E2E_BACKEND_PORT ?= 8001
 E2E_FRONTEND_PORT ?= 8002
 
-test: ## Run fast unit tests (backend + frontend)
-	@echo "🧪 Running unit tests (no Playwright E2E)..."
+test: ## Backend + frontend tests (no Playwright)
+	@echo "🧪 Running tests (no Playwright E2E)..."
 	$(MAKE) test-unit
 
-test-unit: ## Alias: unit tests only
+test-unit: ## Alias for test-zerg-unit
 	$(MAKE) test-zerg-unit
 
-test-e2e: ## Alias: Playwright E2E only
+test-e2e: ## Alias for test-zerg-e2e
 	$(MAKE) test-zerg-e2e
 
-test-all: ## Run unit + Playwright E2E
+test-all: ## Full suite including Playwright E2E
 	@echo "🧪 Running full suite (unit + Playwright E2E)..."
 	$(MAKE) test-unit
 	$(MAKE) test-e2e
@@ -297,8 +297,8 @@ seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
 	@echo "✅ Credentials seeded"
 
-screenshot-marketing: ## Capture marketing screenshot of canvas workflow
-	@echo "📸 Capturing marketing screenshot..."
+screenshot-marketing: ## Capture all marketing screenshots (canvas, chat, dashboard, scenarios)
+	@echo "📸 Capturing marketing screenshots..."
 	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
