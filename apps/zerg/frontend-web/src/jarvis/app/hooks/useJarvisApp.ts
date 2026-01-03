@@ -108,10 +108,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   const lastSupervisorTurnsRef = useRef<ConversationTurn[]>([])
   const initStartedRef = useRef(false)
   // Track if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread= param)
-  // Pre-hydrated messages have runId set, indicating tool_calls data was included
-  const messagesPreHydratedRef = useRef(
-    appState.messages.length > 0 && appState.messages.some(m => m.runId !== undefined)
-  )
+  // If pre-hydrated, we should skip loading supervisor thread to avoid state clobbering
+  const messagesPreHydratedRef = useRef(appState.messages.length > 0)
 
   // Helper to update internal state
   const updateState = useCallback((updates: Partial<JarvisAppState>) => {
@@ -186,12 +184,53 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       const currentContext = await contextLoader.loadContext(contextName)
       updateState({ currentContext })
 
-      // Set initial conversation state
-      dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-      dispatch({
-        type: 'SET_CONVERSATIONS',
-        conversations: [{ id: 'server', name: 'Current', meta: 'Server', active: true }],
-      })
+      // Skip loading supervisor thread if messages were pre-hydrated (e.g., ?thread= param)
+      // This prevents state clobbering where we'd show messages from one thread
+      // but set conversation state to the supervisor thread
+      if (messagesPreHydratedRef.current) {
+        logger.info('[useJarvisApp] Skipping supervisor thread load - messages pre-hydrated')
+        dispatch({ type: 'SET_CONVERSATION_ID', id: null })
+        dispatch({
+          type: 'SET_CONVERSATIONS',
+          conversations: [{ id: 'prehydrated', name: 'Loaded Thread', meta: 'Pre-hydrated', active: true }],
+        })
+      } else {
+        // Fetch actual supervisor thread info
+        try {
+          const threadResponse = await fetch(toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/supervisor/thread`), {
+            credentials: 'include',
+          })
+
+          if (threadResponse.ok) {
+            const threadInfo = await threadResponse.json()
+            dispatch({ type: 'SET_CONVERSATION_ID', id: threadInfo.thread_id.toString() })
+            dispatch({
+              type: 'SET_CONVERSATIONS',
+              conversations: [{
+                id: threadInfo.thread_id.toString(),
+                name: threadInfo.title,
+                meta: `${threadInfo.message_count} messages`,
+                active: true
+              }],
+            })
+            logger.info(`[useJarvisApp] Supervisor thread loaded: ${threadInfo.title} (${threadInfo.message_count} messages)`)
+          } else {
+            // Fallback to default if endpoint fails
+            dispatch({ type: 'SET_CONVERSATION_ID', id: null })
+            dispatch({
+              type: 'SET_CONVERSATIONS',
+              conversations: [{ id: 'server', name: 'Supervisor', meta: 'Thread', active: true }],
+            })
+          }
+        } catch (threadError) {
+          logger.warn('[useJarvisApp] Failed to load thread info, using fallback:', threadError)
+          dispatch({ type: 'SET_CONVERSATION_ID', id: null })
+          dispatch({
+            type: 'SET_CONVERSATIONS',
+            conversations: [{ id: 'server', name: 'Supervisor', meta: 'Thread', active: true }],
+          })
+        }
+      }
 
       logger.info(`[useJarvisApp] Context initialized: ${contextName}`)
       return currentContext
@@ -205,9 +244,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     if (!supervisorChatRef.current) return []
 
     // Skip loading if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread=)
-    // Pre-hydrated messages have runId set, indicating they came with tool_calls data
     if (messagesPreHydratedRef.current) {
-      logger.info('[useJarvisApp] Skipping history load - messages were pre-hydrated with tool data')
+      logger.info('[useJarvisApp] Skipping history load - messages were pre-hydrated')
       return []
     }
 
