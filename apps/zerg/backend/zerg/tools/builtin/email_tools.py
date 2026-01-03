@@ -1,4 +1,4 @@
-"""Email-related tools for sending emails via Resend API."""
+"""Email-related tools for sending emails via AWS SES."""
 
 import logging
 import re
@@ -8,7 +8,8 @@ from typing import List
 from typing import Optional
 from typing import Union
 
-import httpx
+import boto3
+from botocore.exceptions import ClientError
 from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
@@ -21,8 +22,8 @@ from zerg.tools.error_envelope import tool_success
 
 logger = logging.getLogger(__name__)
 
-# Resend API constants
-RESEND_API_URL = "https://api.resend.com/emails"
+# Default AWS region for SES
+DEFAULT_AWS_REGION = "us-east-1"
 
 
 def _validate_email(email: str) -> bool:
@@ -68,40 +69,42 @@ def send_email(
     subject: str,
     text: Optional[str] = None,
     html: Optional[str] = None,
-    api_key: Optional[str] = None,
+    access_key_id: Optional[str] = None,
+    secret_access_key: Optional[str] = None,
+    region: Optional[str] = None,
     from_email: Optional[str] = None,
     reply_to: Optional[str] = None,
     cc: Optional[Union[str, List[str]]] = None,
     bcc: Optional[Union[str, List[str]]] = None,
-    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Send an email using the Resend API.
+    """Send an email using AWS Simple Email Service (SES).
 
-    This tool allows agents to send emails via the Resend email service.
+    This tool allows agents to send emails via AWS SES.
     Credentials can be configured in Agent Settings -> Connectors or provided directly.
 
     Important notes:
-    - Domain verification required before sending (see resend.com/domains)
-    - Free tier: 100 emails/day, 3,000/month
-    - Rate limit: 2 requests/second (can be increased)
-    - Must maintain <4% bounce rate and <0.08% spam rate
+    - Email addresses must be verified in SES (or domain must be verified)
+    - New SES accounts are in sandbox mode (can only send to verified addresses)
+    - Production access requires leaving sandbox mode
+    - Rate limits depend on your SES account configuration
 
     Args:
         to: Recipient email address(es) - string or list
         subject: Email subject line
         text: Plain text email content (optional if html provided)
         html: HTML email content (optional if text provided)
-        api_key: Resend API key (starts with 're_') - optional if configured in Agent Settings
-        from_email: Sender email address (must be from verified domain) - optional if configured in Agent Settings
+        access_key_id: AWS Access Key ID - optional if configured in Agent Settings
+        secret_access_key: AWS Secret Access Key - optional if configured in Agent Settings
+        region: AWS region (defaults to us-east-1) - optional if configured in Agent Settings
+        from_email: Sender email address (must be verified in SES) - optional if configured in Agent Settings
         reply_to: Reply-to email address (optional)
         cc: CC recipient email address(es) - string or list (optional)
         bcc: BCC recipient email address(es) - string or list (optional)
-        attachments: List of attachment dicts with 'filename' and 'content' or 'path' (optional)
 
     Returns:
         Dictionary containing:
         - success: Boolean indicating if email was sent
-        - message_id: Unique message ID from Resend (if successful)
+        - message_id: Unique message ID from SES (if successful)
         - error: Error message (if failed)
 
     Example:
@@ -115,34 +118,33 @@ def send_email(
     """
     try:
         # Try to get credentials from context if not provided
-        resolved_api_key = api_key
+        resolved_access_key = access_key_id
+        resolved_secret_key = secret_access_key
+        resolved_region = region
         resolved_from_email = from_email
-        if not resolved_api_key or not resolved_from_email:
+
+        if not resolved_access_key or not resolved_secret_key or not resolved_from_email:
             resolver = get_credential_resolver()
             if resolver:
                 creds = resolver.get(ConnectorType.EMAIL)
                 if creds:
-                    resolved_api_key = resolved_api_key or creds.get("api_key")
+                    resolved_access_key = resolved_access_key or creds.get("access_key_id")
+                    resolved_secret_key = resolved_secret_key or creds.get("secret_access_key")
+                    resolved_region = resolved_region or creds.get("region")
                     resolved_from_email = resolved_from_email or creds.get("from_email")
 
+        # Use default region if not specified
+        resolved_region = resolved_region or DEFAULT_AWS_REGION
+
         # Validate required credentials
-        if not resolved_api_key:
-            return connector_not_configured_error("email", "Email (Resend)")
+        if not resolved_access_key or not resolved_secret_key:
+            return connector_not_configured_error("email", "Email (AWS SES)")
         if not resolved_from_email:
             return tool_error(
                 error_type=ErrorType.CONNECTOR_NOT_CONFIGURED,
                 user_message="From email not configured. Set it up in Settings → Integrations → Email.",
                 connector="email",
                 setup_url="/settings/integrations",
-            )
-
-        # Validate API key format
-        if not resolved_api_key.startswith("re_"):
-            logger.error("Invalid API key format")
-            return tool_error(
-                error_type=ErrorType.VALIDATION_ERROR,
-                user_message="Invalid API key format. Resend API keys start with 're_'",
-                connector="email",
             )
 
         if not to:
@@ -186,33 +188,12 @@ def send_email(
                 connector="email",
             )
 
-        # Build request payload
-        payload = {
-            "from": resolved_from_email,
-            "to": to_list,
-            "subject": subject,
-        }
-
-        # Add optional fields
-        if text:
-            payload["text"] = text
-
-        if html:
-            payload["html"] = html
-
-        if reply_to:
-            if not _validate_email(reply_to):
-                logger.error(f"Invalid reply_to: {reply_to}")
-                return tool_error(
-                    error_type=ErrorType.VALIDATION_ERROR,
-                    user_message=f"Invalid reply_to: {reply_to}",
-                    connector="email",
-                )
-            payload["reply_to"] = reply_to
+        # Build destination
+        destination: Dict[str, Any] = {"ToAddresses": to_list}
 
         if cc:
             try:
-                payload["cc"] = _validate_email_list(cc)
+                destination["CcAddresses"] = _validate_email_list(cc)
             except ValueError as e:
                 logger.error(f"Invalid CC addresses: {e}")
                 return tool_error(
@@ -223,7 +204,7 @@ def send_email(
 
         if bcc:
             try:
-                payload["bcc"] = _validate_email_list(bcc)
+                destination["BccAddresses"] = _validate_email_list(bcc)
             except ValueError as e:
                 logger.error(f"Invalid BCC addresses: {e}")
                 return tool_error(
@@ -232,90 +213,84 @@ def send_email(
                     connector="email",
                 )
 
-        if attachments:
-            if not isinstance(attachments, list):
-                return tool_error(
-                    error_type=ErrorType.VALIDATION_ERROR,
-                    user_message="attachments must be a list of dicts",
-                    connector="email",
-                )
-            payload["attachments"] = attachments
+        # Build message body
+        body: Dict[str, Any] = {}
+        if text:
+            body["Text"] = {"Data": text, "Charset": "UTF-8"}
+        if html:
+            body["Html"] = {"Data": html, "Charset": "UTF-8"}
 
-        # Prepare headers
-        headers = {
-            "Authorization": f"Bearer {resolved_api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "Zerg-Agent/1.0",
+        # Build message
+        message = {
+            "Subject": {"Data": subject, "Charset": "UTF-8"},
+            "Body": body,
         }
 
-        # Make API request
-        logger.info(f"Sending email from {resolved_from_email} to {to_list}")
-        with httpx.Client() as client:
-            response = client.post(
-                RESEND_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=30.0,
-            )
+        # Create SES client
+        client = boto3.client(
+            "ses",
+            region_name=resolved_region,
+            aws_access_key_id=resolved_access_key,
+            aws_secret_access_key=resolved_secret_key,
+        )
 
-        # Handle response
-        if response.status_code == 200:
-            response_data = response.json()
-            message_id = response_data.get("id", "unknown")
-            logger.info(f"Email sent successfully: {message_id}")
-            return tool_success({"message_id": message_id})
-        else:
-            # Parse error response
-            try:
-                error_data = response.json()
-                error_message = error_data.get("message", response.text)
-            except Exception:
-                error_message = response.text
+        # Build send_email kwargs
+        send_kwargs: Dict[str, Any] = {
+            "Source": resolved_from_email,
+            "Destination": destination,
+            "Message": message,
+        }
 
-            logger.error(f"Resend API error ({response.status_code}): {error_message}")
-
-            # Map status codes to error types
-            if response.status_code == 401:
-                return invalid_credentials_error("email", "Email (Resend)")
-            elif response.status_code == 403:
-                return tool_error(
-                    error_type=ErrorType.PERMISSION_DENIED,
-                    user_message="Access forbidden. Verify your domain is verified in Resend.",
-                    connector="email",
-                )
-            elif response.status_code == 422:
+        if reply_to:
+            if not _validate_email(reply_to):
+                logger.error(f"Invalid reply_to: {reply_to}")
                 return tool_error(
                     error_type=ErrorType.VALIDATION_ERROR,
-                    user_message=f"Validation error: {error_message}",
+                    user_message=f"Invalid reply_to: {reply_to}",
                     connector="email",
                 )
-            elif response.status_code == 429:
-                return tool_error(
-                    error_type=ErrorType.RATE_LIMITED,
-                    user_message="Rate limit exceeded. Slow down requests or upgrade plan.",
-                    connector="email",
-                )
-            else:
-                return tool_error(
-                    error_type=ErrorType.EXECUTION_ERROR,
-                    user_message=f"Resend API error ({response.status_code}): {error_message}",
-                    connector="email",
-                )
+            send_kwargs["ReplyToAddresses"] = [reply_to]
 
-    except httpx.TimeoutException:
-        logger.error(f"Timeout sending email to {to}")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message="Request timed out after 30 seconds",
-            connector="email",
-        )
-    except httpx.RequestError as e:
-        logger.error(f"Request error sending email: {e}")
-        return tool_error(
-            error_type=ErrorType.EXECUTION_ERROR,
-            user_message=f"Request failed: {str(e)}",
-            connector="email",
-        )
+        # Send email
+        logger.info(f"Sending email from {resolved_from_email} to {to_list}")
+        response = client.send_email(**send_kwargs)
+        message_id = response.get("MessageId", "unknown")
+        logger.info(f"Email sent successfully: {message_id}")
+        return tool_success({"message_id": message_id})
+
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        error_message = e.response.get("Error", {}).get("Message", str(e))
+        logger.error(f"SES API error ({error_code}): {error_message}")
+
+        # Map error codes to error types
+        if error_code in ("InvalidClientTokenId", "SignatureDoesNotMatch"):
+            return invalid_credentials_error("email", "Email (AWS SES)")
+        elif error_code == "AccessDenied":
+            return tool_error(
+                error_type=ErrorType.PERMISSION_DENIED,
+                user_message="Access denied. Check IAM permissions for SES.",
+                connector="email",
+            )
+        elif error_code == "MessageRejected":
+            return tool_error(
+                error_type=ErrorType.VALIDATION_ERROR,
+                user_message=f"Email rejected: {error_message}",
+                connector="email",
+            )
+        elif error_code == "Throttling":
+            return tool_error(
+                error_type=ErrorType.RATE_LIMITED,
+                user_message="Rate limit exceeded. SES sending quota reached.",
+                connector="email",
+            )
+        else:
+            return tool_error(
+                error_type=ErrorType.EXECUTION_ERROR,
+                user_message=f"SES error ({error_code}): {error_message}",
+                connector="email",
+            )
+
     except Exception as e:
         logger.exception("Unexpected error sending email")
         return tool_error(
@@ -330,10 +305,10 @@ TOOLS: List[StructuredTool] = [
         func=send_email,
         name="send_email",
         description=(
-            "Send an email using the Resend API. "
-            "Supports text/HTML content, CC/BCC, reply-to, and attachments. "
+            "Send an email using AWS SES. "
+            "Supports text/HTML content, CC/BCC, and reply-to. "
             "Credentials can be configured in Agent Settings -> Connectors or provided as parameters. "
-            "Requires verified domain in Resend account."
+            "Requires verified email/domain in SES."
         ),
     ),
 ]

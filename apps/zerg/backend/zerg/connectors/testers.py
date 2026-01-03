@@ -118,41 +118,64 @@ def _test_discord(creds: dict[str, Any]) -> dict[str, Any]:
 
 
 def _test_email(creds: dict[str, Any]) -> dict[str, Any]:
-    """Validate Resend API key by listing domains.
+    """Validate AWS SES credentials by getting send quota.
 
-    We don't send an actual email during test - just verify the API key
-    is valid and discover available domains.
+    We don't send an actual email during test - just verify the credentials
+    are valid and discover account info (send quota, verified identities).
     """
-    api_key = creds.get("api_key")
+    import boto3
+    from botocore.exceptions import ClientError
+
+    access_key_id = creds.get("access_key_id")
+    secret_access_key = creds.get("secret_access_key")
+    region = creds.get("region", "us-east-1")
     from_email = creds.get("from_email")
 
-    if not api_key:
-        return {"success": False, "message": "Missing api_key"}
+    if not access_key_id:
+        return {"success": False, "message": "Missing access_key_id"}
+    if not secret_access_key:
+        return {"success": False, "message": "Missing secret_access_key"}
     if not from_email:
         return {"success": False, "message": "Missing from_email"}
 
-    response = httpx.get(
-        "https://api.resend.com/domains",
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=TEST_TIMEOUT,
-    )
+    try:
+        client = boto3.client(
+            "ses",
+            region_name=region,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+        )
 
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            domains = data.get("data", [])
-            domain_names = [d.get("name") for d in domains if d.get("name")]
-            return {
-                "success": True,
-                "message": f"API key valid. Domains: {', '.join(domain_names) if domain_names else 'none'}",
-                "metadata": {"domains": domain_names, "from_email": from_email},
-            }
-        except Exception:
-            return {"success": True, "message": "API key valid"}
+        # Get send quota to verify credentials
+        quota = client.get_send_quota()
+        max_24hr = quota.get("Max24HourSend", 0)
+        sent_24hr = quota.get("SentLast24Hours", 0)
 
-    if response.status_code == 401:
-        return {"success": False, "message": "Invalid API key"}
-    return {"success": False, "message": f"Resend returned {response.status_code}"}
+        # Get verified identities to show available senders
+        identities = client.list_identities(IdentityType="EmailAddress", MaxItems=10)
+        verified_emails = identities.get("Identities", [])
+
+        return {
+            "success": True,
+            "message": f"SES connected. Quota: {int(sent_24hr)}/{int(max_24hr)} emails/24h",
+            "metadata": {
+                "max_24hr_send": max_24hr,
+                "sent_24hr": sent_24hr,
+                "verified_emails": verified_emails,
+                "region": region,
+                "from_email": from_email,
+            },
+        }
+
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "Unknown")
+        error_message = e.response.get("Error", {}).get("Message", str(e))
+
+        if error_code in ("InvalidClientTokenId", "SignatureDoesNotMatch"):
+            return {"success": False, "message": "Invalid AWS credentials"}
+        elif error_code == "AccessDenied":
+            return {"success": False, "message": "Access denied - check IAM permissions for SES"}
+        return {"success": False, "message": f"SES error: {error_message}"}
 
 
 def _test_sms(creds: dict[str, Any]) -> dict[str, Any]:
