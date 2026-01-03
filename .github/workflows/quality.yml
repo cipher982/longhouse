@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   lighthouse:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: ubuntu-latest
     name: "🔦 Lighthouse CI"
 
     steps:
@@ -44,7 +44,7 @@ jobs:
         working-directory: apps/zerg/frontend-web
 
   bundle-size:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: ubuntu-latest
     name: "📦 Bundle Size"
 
     steps:
@@ -67,33 +67,37 @@ jobs:
         run: cd apps/zerg/frontend-web && bun run build
 
       - name: Check bundle size
-        run: |
-          cd apps/zerg/frontend-web
-          npx size-limit
+        run: cd apps/zerg/frontend-web && bunx size-limit
 
   image-size:
-    runs-on: [self-hosted, Linux, X64, cube]
+    runs-on: ubuntu-latest
     name: "🖼️ Image Size Check"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for oversized images
+      - name: Check for oversized images (>2MB)
         run: |
-          echo "Checking for images > 2MB..."
-          oversized=""
-          while IFS= read -r file; do
-            size_bytes=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
-            size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
-            if [ $(echo "$size_mb > 2" | bc -l) -eq 1 ]; then
-              echo "❌ $file: ${size_mb}MB (max: 2MB)"
-              oversized="$oversized $file"
-            fi
-          done < <(find apps/zerg/frontend-web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \))
+          MAX_BYTES=2097152  # 2MB in bytes
+          FOUND_OVERSIZED=0
 
-          if [ -n "$oversized" ]; then
+          echo "Checking images in apps/zerg/frontend-web/public..."
+
+          while IFS= read -r -d '' file; do
+            size_bytes=$(stat -c%s "$file")
+            size_kb=$((size_bytes / 1024))
+
+            if [ "$size_bytes" -gt "$MAX_BYTES" ]; then
+              size_mb=$(awk "BEGIN {printf \"%.2f\", $size_bytes/1048576}")
+              echo "❌ $file: ${size_mb}MB (max: 2MB)"
+              FOUND_OVERSIZED=1
+            fi
+          done < <(find apps/zerg/frontend-web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \) -print0)
+
+          if [ "$FOUND_OVERSIZED" -eq 1 ]; then
             echo ""
             echo "🚨 Found oversized images! Compress them before merging."
             exit 1
           fi
+
           echo "✅ All images under 2MB"
