@@ -52,9 +52,10 @@ def get_workflows(
     skip: int = 0,
     limit: int = 100,
 ):
-    """Return active workflows owned by *owner_id*."""
-
-    return db.query(Workflow).filter_by(owner_id=owner_id, is_active=True).offset(skip).limit(limit).all()
+    """Return active workflows owned by *owner_id*, ordered by most recently updated first."""
+    return (
+        db.query(Workflow).filter_by(owner_id=owner_id, is_active=True).order_by(Workflow.updated_at.desc()).offset(skip).limit(limit).all()
+    )
 
 
 def get_workflow(db: Session, workflow_id: int):

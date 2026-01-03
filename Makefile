@@ -303,8 +303,16 @@ screenshot-marketing: ## Capture all marketing screenshots (canvas, chat, dashbo
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
+	@echo "🌱 Seeding marketing data..."
+	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
+	if [ -z "$$BACKEND" ]; then \
+		echo "❌ Backend not running"; \
+		exit 1; \
+	fi; \
+	docker exec $$BACKEND uv run python scripts/seed_marketing_workflow.py
+	@echo ""
 	@cd apps/zerg/e2e && bunx playwright install chromium --with-deps >/dev/null 2>&1 || true
-	@uv run --with playwright python scripts/capture_marketing_screenshots.py
+	@uv run --with playwright python scripts/capture_marketing_screenshots.py --skip-seed
 
 # ---------------------------------------------------------------------------
 # Validation

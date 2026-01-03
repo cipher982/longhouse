@@ -223,6 +223,21 @@ def read_workflows(
     return crud.get_workflows(db, owner_id=current_user.id, skip=skip, limit=limit)
 
 
+# Get single workflow by ID
+@router.get("/{workflow_id}", response_model=Workflow)
+def get_workflow_by_id(
+    *,
+    db: Session = Depends(get_db),
+    workflow_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Get a specific workflow by ID."""
+    wf = crud.get_workflow(db, workflow_id)
+    if wf is None or wf.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return wf
+
+
 # Rename workflow
 @router.patch("/{workflow_id}", response_model=Workflow)
 def rename_workflow(
