@@ -176,10 +176,11 @@ test.beforeEach(async ({ request }, testInfo) => {
     if (!response.ok()) {
       // Avoid failing the entire suite if Jarvis endpoints are temporarily
       // unavailable; individual chat specs should still assert correctness.
-      console.warn(`[fixtures] Failed to clear Jarvis history (worker=${testInfo.workerIndex}): HTTP ${response.status()}`);
+      // Note: Suppress this warning by default - it's noisy during parallel tests
     }
-  } catch (error) {
-    console.warn(`[fixtures] Failed to clear Jarvis history (worker=${testInfo.workerIndex}):`, error);
+  } catch {
+    // Silently ignore - Jarvis history cleanup is best-effort, not critical
+    // Individual chat specs should still assert correctness
   }
 });
 

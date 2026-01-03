@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +199,23 @@ test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=test
 
 test-e2e-ui: ## Run Playwright E2E tests with interactive UI
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --ui
+
+test-e2e-verbose: ## Run E2E tests with full verbose output (for debugging)
+	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test
+
+test-e2e-errors: ## Show detailed errors from last E2E run
+	@if [ -f apps/zerg/e2e/test-results/errors.txt ]; then \
+		cat apps/zerg/e2e/test-results/errors.txt; \
+	else \
+		echo "No errors.txt found. Run 'make test-e2e' first."; \
+	fi
+
+test-e2e-query: ## Query last E2E results (usage: make test-e2e-query Q='.failed[]')
+	@if [ -f apps/zerg/e2e/test-results/summary.json ]; then \
+		jq '$(Q)' apps/zerg/e2e/test-results/summary.json; \
+	else \
+		echo "No summary.json found. Run 'make test-e2e' first."; \
+	fi
 
 test-e2e-grep: ## Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)

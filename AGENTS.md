@@ -230,41 +230,54 @@ docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.
 
 | Command | What It Runs | Notes |
 |---------|--------------|-------|
-| `make test` | Unit tests (backend + frontend) | Runs in parallel |
-| `make test-e2e` | Playwright E2E tests | Runs in parallel |
+| `make test` | Unit tests (backend + frontend) | ~50 lines output |
+| `make test-e2e` | Playwright E2E tests | **Minimal output** (~10 lines pass, ~30 lines fail) |
 | `make test-all` | Unit + E2E combined | Runs both suites |
 | `make test-e2e-single TEST=<spec>` | Single E2E test file | Most useful for iteration |
-| `make test-e2e-grep GREP="name"` | E2E tests matching name | Narrow by test name |
-| `make test-e2e-ui` | Interactive Playwright UI | Local debugging |
+| `make test-e2e-verbose` | E2E with full output | For debugging |
+| `make test-e2e-errors` | Show last run's errors | `cat test-results/errors.txt` |
+| `make test-e2e-query Q='...'` | Query results JSON | e.g., `Q='.counts'` or `Q='.failed[]'` |
 
-**Backend tests use pytest-xdist (`-n auto`)** - parallel execution across all CPU cores
-**E2E tests use Playwright workers** - uses all CPU cores locally (4 workers in CI only)
+### E2E Output: Progressive Disclosure
 
-### E2E Test Isolation
-- The backend uses a per-worker SQLite DB file (so Playwright workers don't share a single DB).
-- Playwright artifacts (screenshots, traces, reports) are written under `apps/zerg/e2e/test-results/` and `apps/zerg/e2e/playwright-report/`.
+E2E tests use a **minimal reporter** designed for AI agents. Output is ~10 lines for pass, ~30 for fail:
 
-### Database Initialization
-- The backend automatically detects missing tables and initializes the schema on startup via `scripts/init_db.py`.
-- No manual migration steps are required for fresh test environments.
+```
+Setting up 16 workers... done
+Running 332 tests...
 
-### Debugging E2E Failures (Quick Checklist)
-1. Re-run just the failing spec: `make test-e2e-single TEST=<spec-or-grep>`
-2. Open the Playwright report: `cd apps/zerg/e2e && bunx playwright show-report`
-3. If you suspect missing parallelism, use `apps/zerg/e2e/scripts/run_parallelism_probe.sh` and `apps/zerg/e2e/scripts/run_timeline.sh`
-
-### Live Integration Testing (Backend Tools)
-To verify core supervisor tools (KV memory, Tasks, Web Search) against a running backend:
-
-```bash
-# 1. Start backend
-make dev
-
-# 2. Run live tests (requires running backend + auth token)
-cd apps/zerg/backend && uv run python -m pytest tests/live --live-token <YOUR_JWT>
+✓ E2E: 332 passed (8m 32s)
 ```
 
-**Note**: No Make target for live tests (requires manual JWT token). These dispatch real tasks to the Supervisor and verify the SSE stream results.
+On failure, shows first 10 failed tests with guidance:
+```
+✗ E2E: 45 passed, 245 failed (10m 49s)
+
+  tests/chat.spec.ts:45 "sends message"
+  tests/workflow.spec.ts:123 "executes workflow"
+  ... and 243 more
+
+→ Errors: cat test-results/errors.txt
+→ Query:  jq '.failed[]' test-results/summary.json
+```
+
+**Files generated** (in `apps/zerg/e2e/test-results/`):
+- `summary.json` — Machine-readable results, query with `jq`
+- `errors.txt` — Human-readable error details
+- `full-output.log` — All suppressed console.logs (debugging)
+
+**For verbose output**: `make test-e2e-verbose` or `VERBOSE=1 make test-e2e`
+
+### E2E Test Isolation
+- Per-worker Postgres schemas (not SQLite) for true isolation
+- Playwright artifacts in `apps/zerg/e2e/test-results/` and `playwright-report/`
+
+### Debugging E2E Failures
+1. Check summary: `make test-e2e-query Q='.failed[] | .file'`
+2. Read errors: `make test-e2e-errors`
+3. Re-run single spec: `make test-e2e-single TEST=tests/chat.spec.ts`
+4. Full verbose: `make test-e2e-verbose`
+5. Interactive UI: `make test-e2e-ui`
 
 ## Conventions
 

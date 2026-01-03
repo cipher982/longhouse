@@ -110,7 +110,7 @@ const backend = spawn('uv', [
     `--host=127.0.0.1`,
     `--port=${port}`,
     `--workers=${uvicornWorkers}`,
-    '--log-level=warning'
+    '--log-level=error'  // Only show errors, not INFO logs (reduces output from 26K to ~100 lines)
 ], {
     env: {
         ...process.env,
@@ -124,10 +124,11 @@ const backend = spawn('uv', [
         E2E_USE_POSTGRES_SCHEMAS: '1',  // Enable Postgres schema isolation
         // DATABASE_URL inherited from environment (Postgres)
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
+        // Suppress Python logging noise for E2E tests
+        LOG_LEVEL: 'ERROR',
     },
     cwd: join(__dirname, '..', 'backend'),
-    // Always inherit stdio for Playwright webServer to detect readiness
-    // Playwright needs to see uvicorn's "Application startup complete" message
+    // Inherit stdio so Playwright can detect startup and we can see errors
     stdio: 'inherit'
 });
 

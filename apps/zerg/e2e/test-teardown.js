@@ -43,29 +43,22 @@ for (let i = 0; i < 8; i++) {
 }
 
 async function globalTeardown(config) {
-  console.log('🧹 Starting test environment cleanup...');
-
+  // Quiet cleanup - suppress output by default
   try {
-    // Use uv run python to ensure correct venv with all deps
-    // (system python may not have SQLAlchemy, psycopg, etc.)
     const backendDir = path.resolve(__dirname, '../backend');
 
     // Call Python cleanup script to remove all test databases/schemas
-    // E2E tests use Postgres schema isolation (set in spawn-test-backend.js)
     const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
-# TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
 os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
 
-# Use Postgres schema cleanup for E2E tests
 from zerg.e2e_schema_manager import drop_all_e2e_schemas
 from zerg.database import default_engine
-dropped = drop_all_e2e_schemas(default_engine)
-print(f"✅ Dropped {dropped} E2E test schemas")
+drop_all_e2e_schemas(default_engine)
     `], {
       cwd: backendDir,
-      stdio: 'inherit',
+      stdio: 'pipe',  // Suppress output
       env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
     });
 
@@ -79,11 +72,9 @@ print(f"✅ Dropped {dropped} E2E test schemas")
       });
     });
 
-    console.log('✅ Test environment cleanup completed');
-
   } catch (error) {
-    console.error('❌ Test cleanup failed:', error.message);
-    // Continue anyway - don't fail the entire test run due to cleanup issues
+    // Log cleanup failures to stderr but don't fail the test run
+    console.error('Test cleanup failed:', error.message);
   }
 }
 

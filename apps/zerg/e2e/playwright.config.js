@@ -113,8 +113,15 @@ const config = {
   workers: workers,
   retries: process.env.CI ? 2 : 1,
 
-  reporter: [
-    ['dot'],  // Concise output for make test - use 'list' for verbose debugging
+  // Reporter configuration: minimal by default, verbose with VERBOSE=1
+  // Minimal mode: 3-4 lines stdout, full details in test-results/summary.json
+  // Verbose mode: Full Playwright output for debugging
+  reporter: process.env.VERBOSE ? [
+    ['list'],  // Full test-by-test output
+    ['html', { open: 'never' }],
+    ['junit', { outputFile: 'test-results/junit.xml' }]
+  ] : [
+    ['./reporters/minimal-reporter.ts', { outputDir: 'test-results' }],
     ['html', { open: 'never' }],
     ['junit', { outputFile: 'test-results/junit.xml' }]
   ],
