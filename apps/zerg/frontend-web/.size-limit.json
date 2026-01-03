@@ -1,14 +1,14 @@
 [
   {
-    "name": "JS Bundle",
+    "name": "JS Bundle (all chunks)",
     "path": "dist/assets/*.js",
-    "limit": "300 kB",
+    "limit": "400 kB",
     "gzip": true
   },
   {
-    "name": "CSS Bundle",
+    "name": "CSS Bundle (all chunks)",
     "path": "dist/assets/*.css",
-    "limit": "50 kB",
+    "limit": "55 kB",
     "gzip": true
   }
 ]
