@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -314,22 +314,37 @@ seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
 	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
 	@echo "✅ Credentials seeded"
 
-screenshot-marketing: ## Capture all marketing screenshots (canvas, chat, dashboard, scenarios)
+seed-marketing: ## Seed marketing data (workflows, agents, chat thread)
+	@echo "🌱 Seeding marketing data..."
+	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
+	if [ -z "$$BACKEND" ]; then \
+		echo "❌ Backend not running. Start with 'make dev'"; \
+		exit 1; \
+	fi; \
+	docker exec $$BACKEND uv run python scripts/seed_marketing_workflow.py
+
+marketing-capture: ## Capture all marketing screenshots (manifest-driven)
 	@echo "📸 Capturing marketing screenshots..."
 	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
 		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
 	fi
-	@echo "🌱 Seeding marketing data..."
-	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
-	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running"; \
+	$(MAKE) seed-marketing
+	@uv run --with playwright --with pyyaml scripts/capture_marketing.py
+
+marketing-single: ## Capture specific screenshot (usage: make marketing-single NAME=chat-preview)
+	@test -n "$(NAME)" || (echo "❌ Usage: make marketing-single NAME=<screenshot-name>" && exit 1)
+	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+		echo "❌ Dev stack not running. Start with 'make dev'"; \
 		exit 1; \
-	fi; \
-	docker exec $$BACKEND uv run python scripts/seed_marketing_workflow.py
-	@echo ""
-	@cd apps/zerg/e2e && bunx playwright install chromium --with-deps >/dev/null 2>&1 || true
-	@uv run --with playwright python scripts/capture_marketing_screenshots.py --skip-seed
+	fi
+	@uv run --with playwright --with pyyaml scripts/capture_marketing.py --name $(NAME)
+
+marketing-validate: ## Validate all marketing screenshots exist and have reasonable size
+	@uv run --with pyyaml scripts/capture_marketing.py --validate
+
+marketing-list: ## List available marketing screenshots
+	@uv run --with pyyaml scripts/capture_marketing.py --list
 
 # ---------------------------------------------------------------------------
 # Validation

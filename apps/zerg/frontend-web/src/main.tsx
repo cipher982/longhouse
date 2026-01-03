@@ -22,6 +22,7 @@ import "./styles/chat.css";
 import "./styles/profile-admin.css";
 import "./styles/settings.css";
 import "./styles/css/agent-settings.css";
+import "./styles/marketing-mode.css";
 import App from "./routes/App";
 
 // Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)
@@ -89,6 +90,13 @@ const queryUiEffects = parseUiEffects(params.get("uieffects") ?? params.get("eff
 // Default: "on" (full visual mode). Use env/query to force "off".
 const uiEffects: "on" | "off" = queryUiEffects ?? envUiEffects ?? "on";
 container.setAttribute("data-ui-effects", uiEffects);
+
+// Marketing mode toggle - enables vivid styling for screenshots
+// Activated via ?marketing=true
+const isMarketingMode = params.get("marketing") === "true";
+if (isMarketingMode) {
+  document.body.classList.add("marketing-mode");
+}
 
 const queryClient = new QueryClient();
 

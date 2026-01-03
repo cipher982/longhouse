@@ -134,8 +134,16 @@ const AppContext = createContext<AppContextValue | null>(null)
 /**
  * Provider component
  */
-export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(appReducer, initialState)
+interface AppProviderProps {
+  children: ReactNode;
+  initialMessages?: AppState['messages'];
+}
+
+export function AppProvider({ children, initialMessages }: AppProviderProps) {
+  const initState = initialMessages
+    ? { ...initialState, messages: initialMessages }
+    : initialState;
+  const [state, dispatch] = useReducer(appReducer, initState)
 
   return <AppContext.Provider value={{ state, dispatch }}>{children}</AppContext.Provider>
 }

@@ -114,6 +114,14 @@ export default function App({ embedded = false }: AppProps) {
   // Map voice status for mic button
   const micStatus = state.voiceStatus as 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
+  // Marketing ready signal - indicates chat is ready for screenshot capture
+  useEffect(() => {
+    if (state.messages.length > 0) {
+      document.body.setAttribute('data-ready', 'true')
+    }
+    return () => document.body.removeAttribute('data-ready')
+  }, [state.messages.length])
+
   return (
     <>
       <OfflineBanner />

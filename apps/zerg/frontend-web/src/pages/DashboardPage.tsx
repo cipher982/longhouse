@@ -414,6 +414,14 @@ export default function DashboardPage() {
 
   const runsDataLoading = isLoading && !dashboardData;
 
+  // Marketing ready signal - indicates page is ready for screenshot capture
+  useEffect(() => {
+    if (!isLoading && agents.length > 0) {
+      document.body.setAttribute('data-ready', 'true');
+    }
+    return () => document.body.removeAttribute('data-ready');
+  }, [isLoading, agents.length]);
+
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
     sendMessageRef.current = sendMessage;
