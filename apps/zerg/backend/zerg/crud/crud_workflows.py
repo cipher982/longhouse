@@ -49,13 +49,18 @@ def get_workflows(
     db: Session,
     *,
     owner_id: int,
+    name: str | None = None,
     skip: int = 0,
     limit: int = 100,
 ):
-    """Return active workflows owned by *owner_id*, ordered by most recently updated first."""
-    return (
-        db.query(Workflow).filter_by(owner_id=owner_id, is_active=True).order_by(Workflow.updated_at.desc()).offset(skip).limit(limit).all()
-    )
+    """Return active workflows owned by *owner_id*, ordered by most recently updated first.
+
+    If `name` is provided, filters to workflows matching that name.
+    """
+    query = db.query(Workflow).filter_by(owner_id=owner_id, is_active=True)
+    if name:
+        query = query.filter(Workflow.name == name)
+    return query.order_by(Workflow.updated_at.desc()).offset(skip).limit(limit).all()
 
 
 def get_workflow(db: Session, workflow_id: int):

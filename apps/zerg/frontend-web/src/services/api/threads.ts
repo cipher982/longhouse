@@ -22,6 +22,12 @@ export async function fetchThreads(agentId: number, threadType?: string): Promis
   return request<Thread[]>(`/threads?${params.toString()}`);
 }
 
+export async function fetchThreadByTitle(title: string): Promise<Thread | null> {
+  const params = new URLSearchParams({ title });
+  const threads = await request<Thread[]>(`/threads?${params.toString()}`);
+  return threads.length > 0 ? threads[0] : null;
+}
+
 export async function fetchThreadMessages(threadId: number): Promise<ThreadMessage[]> {
   return request<ThreadMessage[]>(`/threads/${threadId}/messages`);
 }

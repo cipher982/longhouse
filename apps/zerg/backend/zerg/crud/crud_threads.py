@@ -11,13 +11,22 @@ from zerg.models import Thread
 from zerg.utils.time import utc_now_naive
 
 
-def get_threads(db: Session, agent_id: Optional[int] = None, thread_type: Optional[str] = None, skip: int = 0, limit: int = 100):
-    """Get threads, optionally filtered by agent_id and/or thread_type"""
+def get_threads(
+    db: Session,
+    agent_id: Optional[int] = None,
+    thread_type: Optional[str] = None,
+    title: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    """Get threads, optionally filtered by agent_id, thread_type, and/or title"""
     query = db.query(Thread).options(selectinload(Thread.messages))
     if agent_id is not None:
         query = query.filter(Thread.agent_id == agent_id)
     if thread_type is not None:
         query = query.filter(Thread.thread_type == thread_type)
+    if title is not None:
+        query = query.filter(Thread.title == title)
     return query.order_by(Thread.created_at.desc()).offset(skip).limit(limit).all()
 
 

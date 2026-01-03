@@ -214,13 +214,19 @@ def update_current_workflow_canvas(
 @router.get("/", response_model=List[Workflow])
 def read_workflows(
     db: Session = Depends(get_db),
+    name: str | None = None,
     skip: int = 0,
     limit: int = 100,
     current_user: User = Depends(get_current_user),
 ):
-    """Return all workflows owned by current user."""
+    """Return all workflows owned by current user.
 
-    return crud.get_workflows(db, owner_id=current_user.id, skip=skip, limit=limit)
+    If `name` is provided, filters to workflows matching that name.
+    """
+    workflows = crud.get_workflows(db, owner_id=current_user.id, name=name, skip=skip, limit=limit)
+    if name and not workflows:
+        raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
+    return workflows
 
 
 # Get single workflow by ID

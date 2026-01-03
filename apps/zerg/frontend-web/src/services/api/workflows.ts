@@ -23,6 +23,14 @@ export async function fetchWorkflowById(id: number): Promise<Workflow> {
   return request<Workflow>(`/workflows/${id}`);
 }
 
+export async function fetchWorkflowByName(name: string): Promise<Workflow> {
+  const workflows = await request<Workflow[]>(`/workflows?name=${encodeURIComponent(name)}`);
+  if (!workflows.length) {
+    throw new Error(`Workflow "${name}" not found`);
+  }
+  return workflows[0];
+}
+
 export async function createWorkflow(name: string, description?: string, canvas?: WorkflowDataInput): Promise<Workflow> {
   const payload: WorkflowCreate = {
     name,

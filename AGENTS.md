@@ -146,6 +146,13 @@ cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>  # Replay a
 # Seeding (local dev data)
 make seed-agents       # Seed Jarvis agents
 make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidian)
+make seed-marketing    # Seed marketing demo data (workflows, agents, chat)
+
+# Marketing Screenshots (manifest-driven, URL-addressable)
+make marketing-capture            # Capture all 6 screenshots
+make marketing-single NAME=chat-preview  # Capture one screenshot
+make marketing-list               # List available screenshots
+make marketing-validate           # Check outputs exist
 
 # Validation (CI checks these)
 make validate      # All validation
@@ -432,6 +439,8 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
    - Comparable results locally and in CI
 
 18. **UI effects toggle**: Dashboard/app pages use static backgrounds + glass panels by default. Use `?effects=off` URL param or `VITE_UI_EFFECTS=off` to disable ambient visuals entirely. Landing page has its own animated effects (hero, particles) controlled separately via `?fx=none`.
+
+19. **Marketing mode**: Use `?marketing=true` URL param to enable vivid styling for screenshots. Works with URL-addressable pages: `/canvas?workflow=health&marketing=true`, `/chat?thread=marketing&marketing=true`, `/dashboard?marketing=true`. Pages emit `data-ready="true"` on body when loaded for automation.
 
 ## Environment Setup
 

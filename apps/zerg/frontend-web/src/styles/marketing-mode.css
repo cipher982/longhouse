@@ -1,0 +1,187 @@
+/**
+ * Marketing Mode CSS - Vivid styling for marketing screenshots
+ *
+ * Enabled via URL param: ?marketing=true
+ * All rules scoped under body.marketing-mode to prevent accidental application.
+ */
+
+@layer pages {
+  /* ============================================================================
+   * CANVAS VIVID STYLES
+   * ============================================================================ */
+
+  /* Hide chrome for clean screenshots */
+  body.marketing-mode #agent-shelf,
+  body.marketing-mode .react-flow__minimap,
+  body.marketing-mode .react-flow__controls,
+  body.marketing-mode .execution-controls,
+  body.marketing-mode .status-footer,
+  body.marketing-mode .canvas-controls-panel {
+    display: none !important;
+  }
+
+  /* Vibrant background */
+  body.marketing-mode .react-flow {
+    background: linear-gradient(
+      145deg,
+      #070b14 0%,
+      #0c1222 50%,
+      #111827 100%
+    ) !important;
+  }
+
+  /* Agent nodes - purple glow */
+  body.marketing-mode .agent-node {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
+    border: 2px solid #818cf8 !important;
+    border-left: 5px solid #a78bfa !important;
+    box-shadow:
+      0 0 20px rgba(139, 92, 246, 0.5),
+      0 0 40px rgba(139, 92, 246, 0.3),
+      0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  }
+
+  /* Trigger node - amber glow */
+  body.marketing-mode .trigger-node {
+    background: linear-gradient(135deg, #451a03 0%, #78350f 100%) !important;
+    border: 2px solid #fbbf24 !important;
+    border-left: 5px solid #fcd34d !important;
+    box-shadow:
+      0 0 20px rgba(251, 191, 36, 0.5),
+      0 0 40px rgba(251, 191, 36, 0.3),
+      0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  }
+
+  /* Glowing edges */
+  body.marketing-mode .react-flow__edge-path {
+    stroke: #60a5fa !important;
+    stroke-width: 2.5px !important;
+    filter: drop-shadow(0 0 4px rgba(96, 165, 250, 0.6)) !important;
+  }
+
+  /* Bright text */
+  body.marketing-mode .agent-name,
+  body.marketing-mode .trigger-name,
+  body.marketing-mode .tool-name {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.3) !important;
+  }
+
+  /* Glowing handles */
+  body.marketing-mode .react-flow__handle {
+    background: #a78bfa !important;
+    border: 2px solid #fff !important;
+    box-shadow: 0 0 8px rgba(167, 139, 250, 0.8) !important;
+  }
+
+  /* ============================================================================
+   * CHAT VIVID STYLES
+   * ============================================================================ */
+
+  /* Hide thread sidebar for cleaner look */
+  body.marketing-mode .threads-panel,
+  body.marketing-mode .thread-sidebar {
+    width: 0 !important;
+    min-width: 0 !important;
+    opacity: 0 !important;
+  }
+
+  body.marketing-mode .chat-main {
+    flex: 1 !important;
+  }
+
+  /* Boost background gradient */
+  body.marketing-mode .chat-view-container,
+  body.marketing-mode .chat-main,
+  body.marketing-mode .jarvis-chat-view {
+    background: linear-gradient(
+      145deg,
+      #0a0f1e 0%,
+      #0f1729 50%,
+      #111827 100%
+    ) !important;
+  }
+
+  /* Enhance message styling */
+  body.marketing-mode .message-container {
+    max-width: 900px !important;
+    margin: 0 auto !important;
+  }
+
+  /* User messages - blue glow */
+  body.marketing-mode .user-message .message-content,
+  body.marketing-mode .message-bubble.user {
+    background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%) !important;
+    border: 1px solid #3b82f6 !important;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
+  }
+
+  /* Assistant messages - purple glow */
+  body.marketing-mode .assistant-message .message-content,
+  body.marketing-mode .message-bubble.assistant {
+    background: linear-gradient(135deg, #4c1d95 0%, #5b21b6 100%) !important;
+    border: 1px solid #8b5cf6 !important;
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3) !important;
+  }
+
+  /* Tool use indicators */
+  body.marketing-mode .tool-use,
+  body.marketing-mode .tool-result,
+  body.marketing-mode .tool-indicator {
+    background: linear-gradient(135deg, #064e3b 0%, #065f46 100%) !important;
+    border: 1px solid #10b981 !important;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.4) !important;
+  }
+
+  /* Text clarity */
+  body.marketing-mode .message-text,
+  body.marketing-mode .message-content {
+    color: #f3f4f6 !important;
+  }
+
+  /* ============================================================================
+   * DASHBOARD VIVID STYLES
+   * ============================================================================ */
+
+  /* Enhance agent cards */
+  body.marketing-mode .agent-card,
+  body.marketing-mode .dashboard-card {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
+    border: 2px solid #818cf8 !important;
+    box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4) !important;
+  }
+
+  /* Status indicators */
+  body.marketing-mode .status-active,
+  body.marketing-mode .status-badge.active,
+  body.marketing-mode .badge-running {
+    background: #10b981 !important;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.6) !important;
+  }
+
+  body.marketing-mode .status-idle,
+  body.marketing-mode .status-badge.idle,
+  body.marketing-mode .badge-idle {
+    background: #6b7280 !important;
+  }
+
+  /* Boost dashboard background */
+  body.marketing-mode .dashboard-container,
+  body.marketing-mode .dashboard-page {
+    background: linear-gradient(
+      145deg,
+      #070b14 0%,
+      #0c1222 50%,
+      #111827 100%
+    ) !important;
+  }
+
+  /* Card titles pop */
+  body.marketing-mode .card-title,
+  body.marketing-mode .agent-name,
+  body.marketing-mode .dashboard-agent-name {
+    color: #f3f4f6 !important;
+    text-shadow: 0 0 8px rgba(255, 255, 255, 0.2) !important;
+  }
+}
