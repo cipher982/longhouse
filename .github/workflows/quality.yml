@@ -1,0 +1,99 @@
+name: Web Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Cancel previous runs for the same PR
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    runs-on: [self-hosted, Linux, X64, cube]
+    name: "🔦 Lighthouse CI"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.20"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: cd apps/zerg/frontend-web && bun run build
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli
+
+      - name: Run Lighthouse CI
+        run: lhci autorun
+        working-directory: apps/zerg/frontend-web
+
+  bundle-size:
+    runs-on: [self-hosted, Linux, X64, cube]
+    name: "📦 Bundle Size"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.20"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        run: cd apps/zerg/frontend-web && bun run build
+
+      - name: Check bundle size
+        run: |
+          cd apps/zerg/frontend-web
+          npx size-limit
+
+  image-size:
+    runs-on: [self-hosted, Linux, X64, cube]
+    name: "🖼️ Image Size Check"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for oversized images
+        run: |
+          echo "Checking for images > 2MB..."
+          oversized=""
+          while IFS= read -r file; do
+            size_bytes=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")
+            size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
+            if [ $(echo "$size_mb > 2" | bc -l) -eq 1 ]; then
+              echo "❌ $file: ${size_mb}MB (max: 2MB)"
+              oversized="$oversized $file"
+            fi
+          done < <(find apps/zerg/frontend-web/public -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.webp" -o -name "*.gif" \))
+
+          if [ -n "$oversized" ]; then
+            echo ""
+            echo "🚨 Found oversized images! Compress them before merging."
+            exit 1
+          fi
+          echo "✅ All images under 2MB"
