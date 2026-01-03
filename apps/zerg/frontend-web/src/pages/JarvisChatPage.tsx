@@ -42,8 +42,9 @@ export default function JarvisChatPage() {
         const messages = await fetchThreadMessages(thread.id);
 
         // Convert backend ThreadMessages to Jarvis ChatMessages
+        // Filter to only user/assistant roles (skip system and tool messages)
         const chatMessages: ChatMessage[] = messages
-          .filter((m) => m.role !== 'system') // Skip system messages
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
           .map((m) => ({
             id: String(m.id),
             role: m.role as 'user' | 'assistant',

@@ -153,7 +153,7 @@ export class SessionManager {
   /**
    * Get conversation history for context loading
    */
-  async getConversationHistory(conversationId?: string): Promise<ConversationTurn[]> {
+  async getConversationHistory(_conversationId?: string): Promise<ConversationTurn[]> {
     if (!this.sessionActive) {
       throw new Error('Session not active');
     }

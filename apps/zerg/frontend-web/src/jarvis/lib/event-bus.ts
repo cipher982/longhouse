@@ -149,11 +149,6 @@ export type InteractionState = VoiceInteractionState | TextInteractionState;
 // Event handler type
 type EventHandler<K extends keyof EventMap> = (data: EventMap[K]) => void;
 
-// Subscription management
-interface Subscription {
-  unsubscribe: () => void;
-}
-
 export class EventBus {
   private handlers: Map<keyof EventMap, Set<EventHandler<any>>> = new Map();
   private debugMode: boolean = false;

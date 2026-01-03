@@ -24,7 +24,6 @@ import {
   type SSEEventType,
   type SSEEventWrapper,
   type ConnectedPayload,
-  type HeartbeatPayload,
   type SupervisorStartedPayload,
   type SupervisorThinkingPayload,
   type SupervisorTokenPayload,
@@ -117,9 +116,9 @@ export class SupervisorChatController {
 
       logger.debug(`[SupervisorChat] Loaded ${messages.length} messages from history`);
       return messages;
-    } catch (error) {
-      logger.error('[SupervisorChat] Failed to load history:', error);
-      throw error;
+    } catch (_error) {
+      logger.error('[SupervisorChat] Failed to load history:', _error);
+      throw _error;
     }
   }
 
@@ -157,14 +156,14 @@ export class SupervisorChatController {
       await this.streamChatResponse(trimmedText, this.currentAbortController.signal, clientCorrelationId, options);
 
       logger.debug('[SupervisorChat] Message sent and stream completed');
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+    } catch (_error) {
+      if (_error instanceof Error && _error.name === 'AbortError') {
         logger.debug('[SupervisorChat] Message stream aborted');
         return;
       }
 
-      logger.error('[SupervisorChat] Failed to send message:', error);
-      throw error;
+      logger.error('[SupervisorChat] Failed to send message:', _error);
+      throw _error;
     } finally {
       this.clearWatchdog();
       this.currentAbortController = null;
@@ -365,8 +364,8 @@ export class SupervisorChatController {
             } else {
               logger.warn(`[SupervisorChat] Unknown SSE event type: ${eventType}`);
             }
-          } catch (error) {
-            logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error });
+          } catch (_error) {
+            logger.warn('[SupervisorChat] Failed to parse SSE data:', { data, error: _error });
           }
         }
       }
@@ -789,9 +788,9 @@ export class SupervisorChatController {
       }
 
       logger.debug('[SupervisorChat] Server-side history cleared');
-    } catch (error) {
-      logger.error('[SupervisorChat] Failed to clear history:', error);
-      throw error;
+    } catch (_error) {
+      logger.error('[SupervisorChat] Failed to clear history:', _error);
+      throw _error;
     }
   }
 
@@ -878,14 +877,14 @@ export class SupervisorChatController {
 
       // Wait until the stream is actually live (first event/heartbeat), but don't block forever.
       await Promise.race([ready, new Promise<void>((resolve) => setTimeout(resolve, 1500))]);
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+    } catch (_error) {
+      if (_error instanceof Error && _error.name === 'AbortError') {
         logger.debug(`[SupervisorChat] Attach to run ${runId} aborted`);
         return;
       }
 
-      logger.error(`[SupervisorChat] Failed to attach to run ${runId}:`, error);
-      throw error;
+      logger.error(`[SupervisorChat] Failed to attach to run ${runId}:`, _error);
+      throw _error;
     }
   }
 

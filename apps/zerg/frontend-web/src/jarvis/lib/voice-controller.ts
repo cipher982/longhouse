@@ -338,7 +338,7 @@ export class VoiceController {
 export const voiceController = new VoiceController({});
 
 // Keep initializeVoiceController for backwards compatibility with main.ts (legacy entry point)
-export function initializeVoiceController(config: VoiceConfig): VoiceController {
+export function initializeVoiceController(_config: VoiceConfig): VoiceController {
   // Re-initialize with custom config if needed (rare case)
   // Note: this returns the existing instance since we can't reassign a const
   // If custom config is truly needed, caller should create new VoiceController directly

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToolCard } from '../ToolCard';
 import type { SupervisorToolCall } from '../../../lib/supervisor-tool-store';

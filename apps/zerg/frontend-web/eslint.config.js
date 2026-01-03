@@ -10,7 +10,7 @@ const isProduction = process.env.NODE_ENV === "production";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "public/**"],
+    ignores: ["dist/**", "node_modules/**", "public/**", "src/generated/**"],
   },
   {
     ...js.configs.recommended,
