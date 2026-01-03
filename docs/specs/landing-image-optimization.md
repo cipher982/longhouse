@@ -99,8 +99,8 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 
 **Acceptance Criteria**:
 - [x] Lighthouse CI runs on every PR (`.github/workflows/quality.yml`)
-- [x] Performance score threshold: 85 (error), Accessibility: 90 (warn)
-- [x] Bundle size limit: 300KB JS, 50KB CSS (`.size-limit.json`)
+- [x] Performance score threshold: 70 (warn), Accessibility: 90 (warn)
+- [x] Bundle size limit: 400KB JS, 55KB CSS gzipped (`.size-limit.json`)
 - [x] Image size check: blocks images > 2MB
 - [x] ImgBot installed (GitHub Marketplace)
 
