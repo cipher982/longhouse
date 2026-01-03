@@ -37,7 +37,7 @@ MARKETING_TAG = "marketing_demo"
 # ============================================================================
 
 HEALTH_WORKFLOW = {
-    "name": "Morning Health Check",
+    "name": "health",  # Short name for URL addressability: /canvas?workflow=health
     "description": "Automated health monitoring and daily wellness summary",
     "agents": [
         {"name": "WHOOP Monitor", "instructions": "Pull recovery and sleep metrics from WHOOP API."},
@@ -60,7 +60,7 @@ HEALTH_WORKFLOW = {
 }
 
 INBOX_WORKFLOW = {
-    "name": "Email Automation Pipeline",
+    "name": "inbox",  # Short name for URL addressability: /canvas?workflow=inbox
     "description": "Intelligent email triage and task management",
     "agents": [
         {"name": "Email Watcher", "instructions": "Monitor incoming emails and classify by priority."},
@@ -91,7 +91,7 @@ INBOX_WORKFLOW = {
 }
 
 HOME_WORKFLOW = {
-    "name": "Smart Home Automation",
+    "name": "home",  # Short name for URL addressability: /canvas?workflow=home
     "description": "Location-aware home automation and presence detection",
     "agents": [
         {"name": "Location Tracker", "instructions": "Monitor GPS location from Traccar."},
@@ -189,7 +189,9 @@ CHAT_CONVERSATION = [
 
 
 def cleanup_marketing_data(db):
-    """Remove all existing marketing demo data."""
+    """Remove all existing marketing demo data using raw SQL for proper cascading."""
+    from sqlalchemy import text
+
     print("🧹 Cleaning up existing marketing data...")
 
     # Find marketing workflows by name
@@ -203,28 +205,48 @@ def cleanup_marketing_data(db):
     agent_names.append("Jarvis")  # Supervisor for chat
 
     agents = db.query(Agent).filter(Agent.name.in_(agent_names)).all()
+    agent_ids = [a.id for a in agents]
 
-    # Delete workflows
+    # Delete workflows first (no FK deps)
     for wf in workflows:
         db.delete(wf)
         print(f"  - Deleted workflow: {wf.name}")
 
-    # Delete agent runs, threads, then agents
-    for agent in agents:
-        # Delete runs
-        for run in agent.runs:
-            db.delete(run)
-        # Delete threads (cascades to messages)
-        for thread in agent.threads:
-            db.delete(thread)
-        db.delete(agent)
-        print(f"  - Deleted agent: {agent.name}")
+    if agent_ids:
+        # Use raw SQL with proper order to handle FK constraints
+        # 1. Delete run events (references agent_runs)
+        db.execute(text("""
+            DELETE FROM agent_run_events
+            WHERE run_id IN (SELECT id FROM agent_runs WHERE agent_id = ANY(:ids))
+        """), {"ids": agent_ids})
+
+        # 2. Delete runs (references agent_threads)
+        db.execute(text("""
+            DELETE FROM agent_runs WHERE agent_id = ANY(:ids)
+        """), {"ids": agent_ids})
+
+        # 3. Delete messages (self-referential parent_id + references threads)
+        db.execute(text("""
+            DELETE FROM thread_messages
+            WHERE thread_id IN (SELECT id FROM agent_threads WHERE agent_id = ANY(:ids))
+        """), {"ids": agent_ids})
+
+        # 4. Delete threads
+        db.execute(text("""
+            DELETE FROM agent_threads WHERE agent_id = ANY(:ids)
+        """), {"ids": agent_ids})
+
+        # 5. Delete agents
+        db.execute(text("""
+            DELETE FROM agents WHERE id = ANY(:ids)
+        """), {"ids": agent_ids})
+
+        for agent in agents:
+            print(f"  - Deleted agent: {agent.name}")
 
     # Also clean up orphaned marketing thread
-    marketing_threads = db.query(Thread).filter(Thread.title == "Marketing Demo Chat").all()
-    for thread in marketing_threads:
-        db.delete(thread)
-        print(f"  - Deleted thread: {thread.title}")
+    db.execute(text("DELETE FROM thread_messages WHERE thread_id IN (SELECT id FROM agent_threads WHERE title = 'marketing')"))
+    db.execute(text("DELETE FROM agent_threads WHERE title = 'marketing'"))
 
     db.commit()
     print("  ✓ Cleanup complete\n")
@@ -363,7 +385,7 @@ def seed_chat_thread(db, supervisor: Agent):
 
     thread = Thread(
         agent_id=supervisor.id,
-        title="Marketing Demo Chat",
+        title="marketing",  # Short name for URL addressability: /chat?thread=marketing
         thread_type=ThreadType.SUPER,
         active=True,
     )
@@ -469,9 +491,9 @@ def seed_marketing_data():
         print(f"   Agents: {len(all_agents) + 1}")  # +1 for Supervisor
         print(f"   Chat thread ID: {thread.id}")
         print("\n📸 Ready for screenshots!")
-        print("   - Canvas: /canvas (select workflow from dropdown)")
-        print("   - Chat: /chat (select 'Marketing Demo Chat' thread)")
-        print("   - Dashboard: /dashboard")
+        print("   - Canvas: /canvas?workflow=health&marketing=true")
+        print("   - Chat: /chat?thread=marketing&marketing=true")
+        print("   - Dashboard: /dashboard?marketing=true")
 
 
 if __name__ == "__main__":

@@ -58,12 +58,16 @@ router = APIRouter(
 def read_threads(
     agent_id: Optional[int] = None,
     thread_type: Optional[str] = None,
+    title: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
-    """Get all threads, optionally filtered by agent_id and/or thread_type"""
-    threads = crud.get_threads(db, agent_id=agent_id, thread_type=thread_type, skip=skip, limit=limit)
+    """Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+
+    If `title` is provided, returns threads matching that title.
+    """
+    threads = crud.get_threads(db, agent_id=agent_id, thread_type=thread_type, title=title, skip=skip, limit=limit)
     if not threads:
         return []
     return threads

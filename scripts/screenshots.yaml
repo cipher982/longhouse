@@ -1,0 +1,44 @@
+# Marketing Screenshot Manifest
+# All paths relative to apps/zerg/frontend-web/
+
+base_url: http://localhost:30080
+
+screenshots:
+  scenario-health:
+    description: Health workflow for scenario card
+    url: /canvas?workflow=health&marketing=true
+    viewport: { width: 1000, height: 700 }
+    crop: { x: 100, y: 100, width: 800, height: 500 }
+    output: public/images/landing/scenario-health.png
+
+  scenario-inbox:
+    description: Email workflow for scenario card
+    url: /canvas?workflow=inbox&marketing=true
+    viewport: { width: 1000, height: 700 }
+    crop: { x: 100, y: 100, width: 800, height: 500 }
+    output: public/images/landing/scenario-inbox.png
+
+  scenario-home:
+    description: Home automation workflow for scenario card
+    url: /canvas?workflow=home&marketing=true
+    viewport: { width: 1000, height: 700 }
+    crop: { x: 100, y: 100, width: 800, height: 500 }
+    output: public/images/landing/scenario-home.png
+
+  canvas-preview:
+    description: Full canvas view for nerd section
+    url: /canvas?workflow=inbox&marketing=true
+    viewport: { width: 1400, height: 900 }
+    output: public/images/landing/canvas-preview.png
+
+  chat-preview:
+    description: Jarvis chat conversation
+    url: /chat?thread=marketing&marketing=true
+    viewport: { width: 1400, height: 900 }
+    output: public/images/landing/chat-preview.png
+
+  dashboard-preview:
+    description: Dashboard with agents
+    url: /dashboard?marketing=true
+    viewport: { width: 1400, height: 900 }
+    output: public/images/landing/dashboard-preview.png
