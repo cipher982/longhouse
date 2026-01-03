@@ -1250,6 +1250,61 @@
   }
 
   /* --------------------------------------------------------
+   PRODUCT SHOWCASE (Tabbed Screenshots)
+   -------------------------------------------------------- */
+
+  .landing-page .product-showcase {
+    margin-top: var(--space-10);
+  }
+
+  .landing-page .product-showcase-tabs {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-6);
+  }
+
+  .landing-page .product-showcase-tab {
+    padding: var(--space-3) var(--space-6);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .landing-page .product-showcase-tab:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-border-default);
+    background: var(--color-surface-card);
+  }
+
+  .landing-page .product-showcase-tab.active {
+    color: white;
+    background: var(--color-brand-primary);
+    border-color: var(--color-brand-primary);
+  }
+
+  .landing-page .product-showcase-content {
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+
+  .landing-page .product-showcase-description {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-lg);
+    margin-bottom: var(--space-8);
+    min-height: 3em;
+  }
+
+  .landing-page .product-showcase-frame {
+    /* Container for screenshot */
+  }
+
+  /* --------------------------------------------------------
    APP SCREENSHOT FRAME
    -------------------------------------------------------- */
 
