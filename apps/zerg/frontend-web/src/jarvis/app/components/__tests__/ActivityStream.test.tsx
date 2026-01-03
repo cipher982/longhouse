@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { ActivityStream } from '../ActivityStream';
 import { supervisorToolStore } from '../../../lib/supervisor-tool-store';
 import { eventBus } from '../../../lib/event-bus';

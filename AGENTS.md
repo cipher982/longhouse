@@ -149,7 +149,7 @@ make seed-credentials  # Seed personal tool credentials (Traccar, WHOOP, Obsidia
 make seed-marketing    # Seed marketing demo data (workflows, agents, chat)
 
 # Marketing Screenshots (manifest-driven, URL-addressable)
-make marketing-capture            # Capture all 6 screenshots
+make marketing-capture            # Capture 3 product screenshots (chat, dashboard, canvas)
 make marketing-single NAME=chat-preview  # Capture one screenshot
 make marketing-list               # List available screenshots
 make marketing-validate           # Check outputs exist

@@ -5,9 +5,6 @@
 
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 import { logger, getRealtimeModel } from '../core';
-import type { ConversationTurn } from '../data';
-import { VoiceButtonState, CONFIG } from './config';
-import { mapConversationToRealtimeItems, trimForRealtime } from './history-mapper';
 import type { VoiceAgentConfig } from '../contexts/types';
 
 /**
@@ -164,10 +161,10 @@ export class SessionHandler {
 
       return { session, agent };
 
-    } catch (error) {
-      logger.error('❌ Failed to connect session:', error);
-      this.config.onSessionError?.(error as Error);
-      throw error;
+    } catch (_error) {
+      logger.error('❌ Failed to connect session:', _error);
+      this.config.onSessionError?.(_error as Error);
+      throw _error;
     }
   }
 
@@ -208,8 +205,8 @@ export class SessionHandler {
       this.config.onSessionEnded?.();
 
       logger.info('✅ Session disconnected');
-    } catch (error) {
-      logger.error('❌ Error during disconnect:', error);
+    } catch (_error) {
+      logger.error('❌ Error during disconnect:', _error);
     }
   }
 

@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { useAppState, useAppDispatch } from '../context'
-import { getJarvisClient, type SessionManager } from '../../core'
+import { getJarvisClient } from '../../core'
 
 // Get API URL from environment or default
 function getZergApiUrl(): string {
