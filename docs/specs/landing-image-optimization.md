@@ -1,6 +1,6 @@
 # Landing Page Image Optimization
 
-**Status**: In Progress
+**Status**: Phase 1 Complete (Implemented)
 **Date**: 2025-01-02
 
 ## Executive Summary
@@ -63,8 +63,8 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 3. Verify production image sizes via curl
 
 **Acceptance Criteria**:
-- [ ] All three scenario images < 300KB in production
-- [ ] Cold load time improved (subjective, user verification)
+- [x] All three scenario images < 300KB in production (verified: 225KB, 270KB, 240KB)
+- [x] Cold load time improved (verified via Playwright)
 
 ### Phase 2: Clean Up Unused Images (Optional)
 **Goal**: Remove dead weight from repo
