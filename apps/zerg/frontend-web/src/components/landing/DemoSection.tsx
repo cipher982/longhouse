@@ -1,26 +1,23 @@
 /**
  * DemoSection
  *
- * Product demo section with video placeholder.
- * Can be updated with actual video URL when ready.
+ * Product showcase section with tabbed screenshots.
+ * Shows Chat, Dashboard, and Canvas views.
  */
 
-import { DemoVideoPlaceholder } from "./DemoVideoPlaceholder";
+import { ProductShowcase } from "./ProductShowcase";
 
 export function DemoSection() {
   return (
     <section className="landing-demo">
       <div className="landing-section-inner">
         <span className="landing-section-label">See it in action</span>
-        <h2 className="landing-section-title">Watch How It Works</h2>
+        <h2 className="landing-section-title">Everything You Need, One Place</h2>
         <p className="landing-section-subtitle">
-          A quick walkthrough of building your first AI workflow
+          Chat with your AI, monitor your agents, and build workflows visually.
         </p>
 
-        <DemoVideoPlaceholder
-          // videoUrl="/videos/swarmlet-demo.mp4"  // Uncomment when video is ready
-          // thumbnailUrl="/images/landing/demo-thumbnail.jpg"
-        />
+        <ProductShowcase />
       </div>
     </section>
   );
