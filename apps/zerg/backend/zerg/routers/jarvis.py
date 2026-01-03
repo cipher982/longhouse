@@ -453,6 +453,51 @@ def jarvis_bootstrap(
     )
 
 
+class SupervisorThreadInfo(BaseModel):
+    """Supervisor thread information."""
+
+    thread_id: int = Field(..., description="Thread ID")
+    title: str = Field(..., description="Thread title")
+    message_count: int = Field(..., description="Number of messages in thread")
+
+
+@router.get("/supervisor/thread", response_model=SupervisorThreadInfo)
+def get_supervisor_thread(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> SupervisorThreadInfo:
+    """Get the supervisor thread for the current user.
+
+    Returns basic information about the user's supervisor thread.
+    """
+    from zerg.services.supervisor_service import SupervisorService
+
+    service = SupervisorService(db)
+    agent = service.get_or_create_supervisor_agent(current_user.id)
+    thread = service.get_or_create_supervisor_thread(current_user.id, agent)
+
+    # Count messages using proper count query (not limited to 100)
+    from sqlalchemy import func
+
+    from zerg.models.thread import ThreadMessage
+
+    message_count = (
+        db.query(func.count(ThreadMessage.id))
+        .filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.role.in_(["user", "assistant"]),  # Only count user/assistant messages
+        )
+        .scalar()
+        or 0
+    )
+
+    return SupervisorThreadInfo(
+        thread_id=thread.id,
+        title=thread.title or "Supervisor",
+        message_count=message_count,
+    )
+
+
 class JarvisPreferencesUpdate(BaseModel):
     """Request to update user preferences."""
 
