@@ -30,6 +30,16 @@ export type VoiceStatus = 'idle' | 'connecting' | 'ready' | 'listening' | 'proce
  */
 export type AssistantStatus = 'queued' | 'typing' | 'streaming' | 'final' | 'error' | 'canceled';
 
+/**
+ * Tool call stored in the database (LangChain format)
+ * These are stored per-message when an assistant makes tool calls
+ */
+export interface StoredToolCall {
+  id: string      // Tool call ID (e.g., "call_xxx")
+  name: string    // Tool name (e.g., "get_weather")
+  args: Record<string, unknown>  // Tool arguments
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -44,6 +54,8 @@ export interface ChatMessage {
   correlationId?: string
   /** Supervisor run ID for associating tool calls with this message */
   runId?: number
+  /** Tool calls made by this assistant message (hydrated from DB on page load) */
+  toolCalls?: StoredToolCall[]
   /** Token usage for debug mode */
   usage?: {
     prompt_tokens?: number | null

@@ -3,6 +3,7 @@ export type {
   AppState,
   AppAction,
   ChatMessage,
+  StoredToolCall,
   Conversation,
   VoiceMode,
   VoiceStatus,
