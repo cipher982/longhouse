@@ -1,7 +1,7 @@
 # Web Quality & Performance Guardrails
 
 **Status**: Phase 2 Complete (Implemented)
-**Date**: 2025-01-02
+**Date**: 2026-01-02
 
 ## Executive Summary
 
@@ -27,12 +27,12 @@ Total: **14.1 MB → 719 KB** (95% reduction)
 3. **No lazy loading** - Images load immediately even though section is below fold
 4. **CSS shimmer effect** - Shows skeleton while loading (correct behavior, but visible due to slow load)
 
-### Other Large Images (not in critical path)
-These exist in `/public/images/landing/` but aren't loaded via `<img>`:
-- hero-orb.png: 4.5MB (unused - hero uses SVG)
-- trust-shield.png: 4.8MB (unused)
-- integrations-grid.png: 4.9MB (unused)
-- og-image.png: 4.6MB (only for social sharing meta tag)
+### Other Landing Images (not in critical path)
+These exist in `apps/zerg/frontend-web/public/images/landing/` but aren't currently loaded via `<img>`:
+- hero-orb.png: 954,319 bytes (~0.91MB) (unused - hero uses SVG)
+- trust-shield.png: 1,126,851 bytes (~1.07MB) (unused)
+- integrations-grid.png: 1,113,944 bytes (~1.06MB) (unused)
+- og-image.png: 894,366 bytes (~0.85MB) (unused - social meta uses `/og-image.png` at `apps/zerg/frontend-web/public/og-image.png`)
 
 ## Decision Log
 
@@ -94,7 +94,7 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 
 1. Create `.github/workflows/quality.yml` with Lighthouse CI
 2. Create `lighthouserc.json` with performance thresholds
-3. Create `.size-limit.js` for bundle budgets
+3. Create `apps/zerg/frontend-web/.size-limit.json` for bundle budgets
 4. Install ImgBot from GitHub Marketplace
 
 **Acceptance Criteria**:
