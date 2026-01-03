@@ -191,13 +191,13 @@ The Swarmlet landing page has a solid structure and good visual foundation, but 
 Located at `/apps/zerg/frontend-web/public/images/landing/`:
 
 1. **canvas-preview.png** (559KB) - Small workflow diagram, looks real but basic
-2. **hero-orb.png** (4.5MB) - Decorative asset, not product screenshot
-3. **integrations-grid.png** (4.9MB) - Generic/AI-generated, not real product
-4. **og-image.png** (4.6MB) - Social share image
-5. **scenario-health.png** (4.8MB) - AI-generated illustration (smartwatch)
-6. **scenario-home.png** (4.4MB) - AI-generated illustration (neon house)
-7. **scenario-inbox.png** (4.8MB) - AI-generated illustration (email windows)
-8. **trust-shield.png** (4.8MB) - Decorative asset
+2. **hero-orb.png** (~0.91MB) - Decorative asset, not product screenshot
+3. **integrations-grid.png** (~1.06MB) - Generic/AI-generated, not real product
+4. **og-image.png** (~0.85MB) - Social share image (note: current meta tag uses `/og-image.png` at repo root public)
+5. **scenario-health.png** (~220KB) - AI-generated illustration (smartwatch)
+6. **scenario-home.png** (~235KB) - AI-generated illustration (neon house)
+7. **scenario-inbox.png** (~264KB) - AI-generated illustration (email windows)
+8. **trust-shield.png** (~1.07MB) - Decorative asset
 
 ### Real App Screenshots Available
 
