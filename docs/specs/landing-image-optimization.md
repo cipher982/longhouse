@@ -1,6 +1,6 @@
 # Web Quality & Performance Guardrails
 
-**Status**: Phase 1 Complete, Phase 2 In Progress
+**Status**: Phase 2 Complete (Implemented)
 **Date**: 2025-01-02
 
 ## Executive Summary
@@ -102,7 +102,7 @@ These exist in `/public/images/landing/` but aren't loaded via `<img>`:
 - [x] Performance score threshold: 85 (error), Accessibility: 90 (warn)
 - [x] Bundle size limit: 300KB JS, 50KB CSS (`.size-limit.json`)
 - [x] Image size check: blocks images > 2MB
-- [ ] ImgBot installed (requires user action - GitHub Marketplace)
+- [x] ImgBot installed (GitHub Marketplace)
 
 ### Phase 3: Clean Up Unused Images (Optional)
 **Goal**: Remove dead weight from repo
