@@ -16,18 +16,30 @@ Usage:
 
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages import ToolMessage
+
 from zerg.crud import crud
 from zerg.database import db_session
-from zerg.models.enums import AgentStatus, RunStatus, RunTrigger, ThreadType
-from zerg.models.models import Agent, Workflow
+from zerg.models.enums import AgentStatus
+from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
+from zerg.models.enums import ThreadType
+from zerg.models.models import Agent
+from zerg.models.models import Workflow
 from zerg.models.run import AgentRun
-from zerg.models.thread import Thread, ThreadMessage
-from zerg.models_config import DEFAULT_MODEL_ID, DEFAULT_WORKER_MODEL_ID
+from zerg.models.thread import Thread
+from zerg.models_config import DEFAULT_MODEL_ID
+from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.services.thread_service import ThreadService
 
 # Marketing tag to identify seeded data for cleanup
 MARKETING_TAG = "marketing_demo"
@@ -121,66 +133,51 @@ ALL_WORKFLOWS = [HEALTH_WORKFLOW, INBOX_WORKFLOW, HOME_WORKFLOW]
 # CHAT CONVERSATION
 # ============================================================================
 
-CHAT_CONVERSATION = [
-    {
-        "role": "user",
-        "content": "Check my health data and suggest activities for today",
-    },
-    {
-        "role": "assistant",
-        "content": "I'll check your WHOOP data to see how recovered you are today.",
-        "tool_calls": [
-            {
-                "id": "call_health_1",
-                "type": "function",
-                "function": {"name": "get_whoop_data", "arguments": "{}"},
-            }
-        ],
-    },
-    {
-        "role": "tool",
-        "content": '{"recovery_score": 85, "hrv": 68, "resting_hr": 52, "sleep_hours": 7.5, "strain": 8.2}',
-        "tool_call_id": "call_health_1",
-        "name": "get_whoop_data",
-    },
-    {
-        "role": "assistant",
-        "content": "Great news! Your recovery score is **85%** with excellent HRV (68ms). You got 7.5 hours of sleep last night. Based on this, you're well-recovered and ready for moderate to high intensity activities.\n\nI'd recommend a solid workout today - your body can handle it.",
-    },
-    {
-        "role": "user",
-        "content": "What's the weather like? Should I go for a run?",
-    },
-    {
-        "role": "assistant",
-        "content": "Let me check your location and the weather there.",
-        "tool_calls": [
-            {
-                "id": "call_loc_1",
-                "type": "function",
-                "function": {"name": "get_current_location", "arguments": "{}"},
-            }
-        ],
-    },
-    {
-        "role": "tool",
-        "content": '{"city": "San Francisco", "lat": 37.7749, "lon": -122.4194}',
-        "tool_call_id": "call_loc_1",
-        "name": "get_current_location",
-    },
-    {
-        "role": "assistant",
-        "content": "You're in San Francisco. It's a beautiful sunny day (72°F) with low humidity - perfect running weather! Given your high recovery score, I'd recommend a 5-7 mile run at moderate pace.\n\nWould you like me to create a calendar event for your run?",
-    },
-    {
-        "role": "user",
-        "content": "Yes, block out an hour at 5pm",
-    },
-    {
-        "role": "assistant",
-        "content": "Done! I've blocked 5-6pm today for your run. Have a great workout!",
-    },
-]
+def build_chat_conversation() -> list:
+    """Build the marketing chat conversation using LangChain message types.
+
+    This ensures the tool_calls format matches exactly what the real agent runner produces,
+    avoiding format mismatches between seeded data and live data.
+    """
+    return [
+        HumanMessage(content="Check my health data and suggest activities for today"),
+        AIMessage(
+            content="I'll check your WHOOP data to see how recovered you are today.",
+            tool_calls=[
+                {"id": "call_health_1", "name": "get_whoop_data", "args": {}},
+            ],
+        ),
+        ToolMessage(
+            content='{"recovery_score": 85, "hrv": 68, "resting_hr": 52, "sleep_hours": 7.5, "strain": 8.2}',
+            tool_call_id="call_health_1",
+            name="get_whoop_data",
+        ),
+        AIMessage(
+            content="Great news! Your recovery score is **85%** with excellent HRV (68ms). "
+            "You got 7.5 hours of sleep last night. Based on this, you're well-recovered "
+            "and ready for moderate to high intensity activities.\n\n"
+            "I'd recommend a solid workout today - your body can handle it.",
+        ),
+        HumanMessage(content="What's the weather like? Should I go for a run?"),
+        AIMessage(
+            content="Let me check your location and the weather there.",
+            tool_calls=[
+                {"id": "call_loc_1", "name": "get_current_location", "args": {}},
+            ],
+        ),
+        ToolMessage(
+            content='{"city": "San Francisco", "lat": 37.7749, "lon": -122.4194}',
+            tool_call_id="call_loc_1",
+            name="get_current_location",
+        ),
+        AIMessage(
+            content="You're in San Francisco. It's a beautiful sunny day (72°F) with low humidity - "
+            "perfect running weather! Given your high recovery score, I'd recommend a 5-7 mile run "
+            "at moderate pace.\n\nWould you like me to create a calendar event for your run?",
+        ),
+        HumanMessage(content="Yes, block out an hour at 5pm"),
+        AIMessage(content="Done! I've blocked 5-6pm today for your run. Have a great workout!"),
+    ]
 
 
 # ============================================================================
@@ -401,7 +398,11 @@ def seed_agent_runs(db, agents: list[Agent], user):
 
 
 def seed_chat_thread(db, supervisor: Agent):
-    """Create a Supervisor thread with realistic chat messages."""
+    """Create a Supervisor thread with realistic chat messages.
+
+    Uses ThreadService.save_new_messages() to ensure messages are stored
+    in the exact same format as the real agent runner produces.
+    """
     print("  💬 Creating chat conversation...")
 
     thread = Thread(
@@ -413,23 +414,15 @@ def seed_chat_thread(db, supervisor: Agent):
     db.add(thread)
     db.flush()
 
-    # Add messages
-    base_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-    for i, msg in enumerate(CHAT_CONVERSATION):
-        message = ThreadMessage(
-            thread_id=thread.id,
-            role=msg["role"],
-            content=msg["content"],
-            tool_calls=msg.get("tool_calls"),
-            tool_call_id=msg.get("tool_call_id"),
-            name=msg.get("name"),
-            sent_at=base_time + timedelta(seconds=i * 30),
-            processed=True,
-        )
-        db.add(message)
+    # Build conversation using LangChain message types (same as real agent)
+    langchain_messages = build_chat_conversation()
+
+    # Use ThreadService to save messages - this ensures format consistency
+    # with the real agent runner code path
+    ThreadService.save_new_messages(db, thread_id=thread.id, messages=langchain_messages)
 
     db.commit()
-    print(f"    ✓ Created thread with {len(CHAT_CONVERSATION)} messages")
+    print(f"    ✓ Created thread with {len(langchain_messages)} messages")
     return thread
 
 

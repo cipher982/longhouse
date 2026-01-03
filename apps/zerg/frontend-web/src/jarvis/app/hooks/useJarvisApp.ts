@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useCallback, useRef, useState } from 'react'
-import { useAppDispatch, type ChatMessage } from '../context'
+import { useAppDispatch, useAppState, type ChatMessage } from '../context'
 import { logger, getJarvisClient, type JarvisAPIClient } from '../../core'
 import type { ConversationTurn } from '../../data'
 
@@ -86,6 +86,7 @@ interface JarvisAppState {
  */
 export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   const dispatch = useAppDispatch()
+  const appState = useAppState()
   const optionsRef = useRef(options)
   optionsRef.current = options
 
@@ -106,6 +107,11 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   const lastBootstrapResultRef = useRef<BootstrapResult | null>(null)
   const lastSupervisorTurnsRef = useRef<ConversationTurn[]>([])
   const initStartedRef = useRef(false)
+  // Track if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread= param)
+  // Pre-hydrated messages have runId set, indicating tool_calls data was included
+  const messagesPreHydratedRef = useRef(
+    appState.messages.length > 0 && appState.messages.some(m => m.runId !== undefined)
+  )
 
   // Helper to update internal state
   const updateState = useCallback((updates: Partial<JarvisAppState>) => {
@@ -197,6 +203,13 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
 
   const loadSupervisorHistory = useCallback(async () => {
     if (!supervisorChatRef.current) return []
+
+    // Skip loading if messages were pre-hydrated (e.g., from JarvisChatPage with ?thread=)
+    // Pre-hydrated messages have runId set, indicating they came with tool_calls data
+    if (messagesPreHydratedRef.current) {
+      logger.info('[useJarvisApp] Skipping history load - messages were pre-hydrated with tool data')
+      return []
+    }
 
     try {
       logger.info('[useJarvisApp] Loading Supervisor chat history...')
