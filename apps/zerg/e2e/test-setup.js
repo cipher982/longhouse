@@ -49,8 +49,6 @@ for (let i = 0; i < 8; i++) {
 }
 
 async function globalSetup(config) {
-  console.log('🚀 Setting up test environment...');
-
   // Set environment variables for test isolation
   process.env.NODE_ENV = 'test';
   process.env.TESTING = '1';
@@ -62,7 +60,8 @@ async function globalSetup(config) {
     ? envWorkers
     : (process.env.CI ? 4 : cpuCount);
 
-  console.log(`📦 Pre-creating schemas for ${workers} Playwright workers...`);
+  // Quiet setup - only show count
+  process.stdout.write(`Setting up ${workers} workers... `);
 
   try {
     // Use uv run python to ensure correct venv with all deps
@@ -73,6 +72,7 @@ async function globalSetup(config) {
     // This ensures all schemas exist before any tests run
     const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
+import sys
 # TESTING=1 bypasses validation that requires OPENAI_API_KEY etc.
 os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
@@ -83,14 +83,13 @@ from zerg.e2e_schema_manager import drop_all_e2e_schemas, ensure_worker_schema
 # Clean slate - drop any stale schemas from previous runs
 dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
-    print(f"🗑️  Dropped {dropped} stale E2E schemas")
+    print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create schemas for all workers
+# Pre-create schemas for all workers (quiet - just count)
 for i in range(${workers}):
     ensure_worker_schema(default_engine, str(i))
-    print(f"✅ Pre-created schema e2e_worker_{i}")
 
-print(f"📦 All {${workers}} schemas ready")
+print(f"  {${workers}} worker schemas ready")
     `], {
       cwd: backendDir,
       stdio: 'inherit',
@@ -108,11 +107,12 @@ print(f"📦 All {${workers}} schemas ready")
     });
   } catch (error) {
     // Fail fast - if schemas can't be created, tests will definitely fail
-    console.error('❌ Schema pre-creation failed:', error.message);
+    console.log('FAILED');
+    console.error('Schema pre-creation failed:', error.message);
     throw error;
   }
 
-  console.log('✅ Test environment setup completed');
+  console.log('done');
 }
 
 export default globalSetup;
