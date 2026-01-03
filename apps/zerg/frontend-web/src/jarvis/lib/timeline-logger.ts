@@ -17,8 +17,7 @@
  *   T+3200ms   supervisor_complete (3155ms total)
  */
 
-import { eventBus, type EventMap } from './event-bus';
-import { logger } from '../core';
+import { eventBus } from './event-bus';
 
 interface TimelineEvent {
   phase: string;

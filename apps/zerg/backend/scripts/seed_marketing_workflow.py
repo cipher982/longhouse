@@ -188,23 +188,32 @@ CHAT_CONVERSATION = [
 # ============================================================================
 
 
-def cleanup_marketing_data(db):
-    """Remove all existing marketing demo data using raw SQL for proper cascading."""
+def cleanup_marketing_data(db, dev_user):
+    """Remove all existing marketing demo data using raw SQL for proper cascading.
+
+    IMPORTANT: All queries are scoped to dev_user.id to avoid deleting real user data.
+    """
     from sqlalchemy import text
 
     print("🧹 Cleaning up existing marketing data...")
 
-    # Find marketing workflows by name
+    # Find marketing workflows by name - SCOPED TO DEV USER
     workflow_names = [w["name"] for w in ALL_WORKFLOWS]
-    workflows = db.query(Workflow).filter(Workflow.name.in_(workflow_names)).all()
+    workflows = db.query(Workflow).filter(
+        Workflow.name.in_(workflow_names),
+        Workflow.owner_id == dev_user.id,
+    ).all()
 
-    # Find marketing agents
+    # Find marketing agents - SCOPED TO DEV USER
     agent_names = []
     for wf in ALL_WORKFLOWS:
         agent_names.extend([a["name"] for a in wf["agents"]])
     agent_names.append("Jarvis")  # Supervisor for chat
 
-    agents = db.query(Agent).filter(Agent.name.in_(agent_names)).all()
+    agents = db.query(Agent).filter(
+        Agent.name.in_(agent_names),
+        Agent.owner_id == dev_user.id,
+    ).all()
     agent_ids = [a.id for a in agents]
 
     # Delete workflows first (no FK deps)
@@ -244,9 +253,21 @@ def cleanup_marketing_data(db):
         for agent in agents:
             print(f"  - Deleted agent: {agent.name}")
 
-    # Also clean up orphaned marketing thread
-    db.execute(text("DELETE FROM thread_messages WHERE thread_id IN (SELECT id FROM agent_threads WHERE title = 'marketing')"))
-    db.execute(text("DELETE FROM agent_threads WHERE title = 'marketing'"))
+    # Also clean up orphaned marketing thread - SCOPED TO DEV USER via agent ownership
+    db.execute(text("""
+        DELETE FROM thread_messages WHERE thread_id IN (
+            SELECT t.id FROM agent_threads t
+            JOIN agents a ON t.agent_id = a.id
+            WHERE t.title = 'marketing' AND a.owner_id = :owner_id
+        )
+    """), {"owner_id": dev_user.id})
+    db.execute(text("""
+        DELETE FROM agent_threads WHERE id IN (
+            SELECT t.id FROM agent_threads t
+            JOIN agents a ON t.agent_id = a.id
+            WHERE t.title = 'marketing' AND a.owner_id = :owner_id
+        )
+    """), {"owner_id": dev_user.id})
 
     db.commit()
     print("  ✓ Cleanup complete\n")
@@ -433,8 +454,8 @@ def seed_marketing_data():
             db.commit()
             db.refresh(dev_user)
 
-        # Cleanup existing marketing data
-        cleanup_marketing_data(db)
+        # Cleanup existing marketing data (scoped to dev user)
+        cleanup_marketing_data(db, dev_user)
 
         # Seed each workflow
         all_agents = []
