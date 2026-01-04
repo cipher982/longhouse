@@ -32,6 +32,8 @@
 .jarvis-container .sidebar-content {
   padding: var(--space-4);
   overflow-y: auto;
+  flex: 1;
+  min-height: 0; /* Required for flex child to scroll */
 }
 
 /* Conversation Items */
