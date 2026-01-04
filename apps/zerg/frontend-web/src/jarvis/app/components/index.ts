@@ -1,4 +1,5 @@
 export { Sidebar } from './Sidebar'
+export { DebugPanel } from './DebugPanel'
 export { Header } from './Header'
 export { VoiceControls, type VoiceMode, type VoiceStatus } from './VoiceControls'
 export { MicButton } from './MicButton'

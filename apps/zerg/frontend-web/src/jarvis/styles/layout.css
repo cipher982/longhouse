@@ -2,11 +2,16 @@
 
 .jarvis-container .app-container {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 1fr;
   height: 100%;
   position: relative;
   overflow: hidden;
   background-color: transparent;
+}
+
+/* When debug panel is present, make room for it */
+.jarvis-container .app-container:has(.debug-panel) {
+  grid-template-columns: 280px 1fr;
 }
 
 /* Living Void Layer 2: Perspective grid floor (Tron-style)
@@ -257,6 +262,24 @@
 .jarvis-container .header-button svg {
   width: 14px;
   height: 14px;
+}
+
+/* Reset button - danger variant */
+.jarvis-container .header-button-reset {
+  border-color: rgb(239 68 68 / 30%);
+  color: var(--color-intent-error);
+}
+
+.jarvis-container .header-button-reset:hover {
+  background: rgb(239 68 68 / 15%);
+  border-color: var(--color-intent-error);
+  box-shadow: 0 0 15px rgb(239 68 68 / 25%);
+}
+
+.jarvis-container .header-button-reset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* Context Selector */
