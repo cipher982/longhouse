@@ -6,12 +6,13 @@
  * connection, and voice state. useTextChannel handles text messaging.
  */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { Sidebar, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
+import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
+import config from '../../lib/config'
 
 console.info('[Jarvis] Starting React application')
 
@@ -22,6 +23,11 @@ interface AppProps {
 export default function App({ embedded = false }: AppProps) {
   const state = useAppState()
   const dispatch = useAppDispatch()
+  const [isResetting, setIsResetting] = useState(false)
+
+  // Show debug panel for developers (local dev mode)
+  // In production, could also check user.role === 'ADMIN'
+  const showDebugPanel = config.isDevelopment
 
   // Pause expensive CSS animations when window loses focus (saves CPU/GPU)
   useEffect(() => {
@@ -58,40 +64,25 @@ export default function App({ embedded = false }: AppProps) {
     onError: (error) => console.error('[App] Text channel error:', error),
   })
 
-  // Sidebar handlers
-  const handleToggleSidebar = useCallback(() => {
+  // Debug panel toggle
+  const handleToggleDebugPanel = useCallback(() => {
     dispatch({ type: 'SET_SIDEBAR_OPEN', open: !state.sidebarOpen })
   }, [dispatch, state.sidebarOpen])
 
-  const handleNewConversation = useCallback(async () => {
-    console.log('[App] Creating new conversation')
-    supervisorToolStore.clearTools()
-    dispatch({ type: 'SET_MESSAGES', messages: [] })
-    dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-    console.log('[App] New conversation ready')
-  }, [dispatch])
-
-  const handleClearAll = useCallback(async () => {
-    console.log('[App] Clear all conversations - starting...')
+  // Reset memory - clears supervisor thread history
+  const handleReset = useCallback(async () => {
+    console.log('[App] Resetting memory (clearing history)')
+    setIsResetting(true)
     try {
       supervisorToolStore.clearTools()
       await jarvisApp.clearHistory()
-      console.log('[App] Clear all conversations - complete')
+      console.log('[App] Memory reset complete')
     } catch (error) {
-      console.warn('[App] Clear all conversations - failed:', error)
+      console.warn('[App] Reset failed:', error)
+    } finally {
+      setIsResetting(false)
     }
   }, [jarvisApp])
-
-  const handleSelectConversation = useCallback(
-    async (id: string) => {
-      console.log('[App] Switching to conversation:', id)
-      supervisorToolStore.clearTools()
-      dispatch({ type: 'SET_CONVERSATION_ID', id })
-      dispatch({ type: 'SET_MESSAGES', messages: [] })
-      console.log('[App] Switched to conversation:', id)
-    },
-    [dispatch]
-  )
 
   // Header handlers
   const handleSync = useCallback(() => {
@@ -126,17 +117,23 @@ export default function App({ embedded = false }: AppProps) {
     <>
       <OfflineBanner />
       <div className="app-container">
-        <Sidebar
-        conversations={state.conversations}
-        isOpen={state.sidebarOpen}
-        onToggle={handleToggleSidebar}
-        onNewConversation={handleNewConversation}
-        onClearAll={handleClearAll}
-        onSelectConversation={handleSelectConversation}
-      />
+        {showDebugPanel && (
+          <DebugPanel
+            isOpen={state.sidebarOpen}
+            onToggle={handleToggleDebugPanel}
+            onReset={handleReset}
+            isResetting={isResetting}
+          />
+        )}
 
       <div className="main-content">
-        {!embedded && <Header onSync={handleSync} />}
+        {!embedded && (
+          <Header
+            onSync={handleSync}
+            onReset={handleReset}
+            isResetting={isResetting}
+          />
+        )}
 
         <div className="chat-settings-bar">
           <ModelSelector />
