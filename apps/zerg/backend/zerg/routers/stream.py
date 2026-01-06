@@ -25,11 +25,9 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
-from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import db_session
-from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.enums import RunStatus
@@ -315,7 +313,6 @@ async def stream_run_replay(
     request: Request,
     after_event_id: int = 0,
     include_tokens: bool = True,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ):
     """Stream run events with replay support (Resumable SSE v1).
@@ -332,7 +329,6 @@ async def stream_run_replay(
         request: HTTP request (for Last-Event-ID header)
         after_event_id: Resume from this event ID (0 = from start)
         include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
-        db: Database session
         current_user: Authenticated user (multi-tenant filtered)
 
     Returns:
@@ -360,17 +356,24 @@ async def stream_run_replay(
         # Skip token events (for bandwidth optimization)
         GET /api/stream/runs/123?include_tokens=false
     """
-    # Security: verify ownership
-    run = (
-        db.query(AgentRun)
-        .join(Agent, Agent.id == AgentRun.agent_id)
-        .filter(AgentRun.id == run_id)
-        .filter(Agent.owner_id == current_user.id)
-        .first()
-    )
+    # Security: verify ownership using SHORT-LIVED session
+    # CRITICAL: Don't use Depends(get_db) here - it holds the session open
+    # for the entire SSE stream duration, blocking TRUNCATE during E2E resets.
+    with db_session() as db:
+        run = (
+            db.query(AgentRun)
+            .join(Agent, Agent.id == AgentRun.agent_id)
+            .filter(AgentRun.id == run_id)
+            .filter(Agent.owner_id == current_user.id)
+            .first()
+        )
 
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        # Capture values we need before session closes
+        run_status = run.status
+    # Session is now closed - no DB connection held during streaming
 
     # Handle Last-Event-ID header (SSE standard for automatic reconnect)
     # This takes precedence over query params
@@ -383,14 +386,14 @@ async def stream_run_replay(
             logger.warning(f"Invalid Last-Event-ID header: {last_event_id_header}")
 
     logger.info(
-        f"Streaming run {run_id} (status={run.status.value}, " f"after_event_id={after_event_id}, " f"include_tokens={include_tokens})"
+        f"Streaming run {run_id} (status={run_status.value}, " f"after_event_id={after_event_id}, " f"include_tokens={include_tokens})"
     )
 
     return EventSourceResponse(
         _replay_and_stream(
             run_id=run_id,
             owner_id=current_user.id,
-            status=run.status,
+            status=run_status,
             after_event_id=after_event_id,
             include_tokens=include_tokens,
         )
