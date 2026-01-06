@@ -182,7 +182,7 @@ test.describe('Visual UI Comparison with AI Analysis', () => {
   test.beforeEach(async ({ page }) => {
     // Ensure we're testing against a running local server
     // The UI switch page hosts both variants
-    await page.goto('http://localhost:47200/ui-switch.html');
+    await page.goto('/ui-switch.html');
     await page.waitForLoadState('networkidle');
   });
 
@@ -196,7 +196,7 @@ test.describe('Visual UI Comparison with AI Analysis', () => {
       console.log(`📸 Capturing ${variant.name}: ${variant.description}`);
 
       // Navigate to the specific UI
-      await page.goto(`http://localhost:47200${variant.url}`);
+      await page.goto(variant.url);
       await page.waitForLoadState('networkidle');
 
       // Wait for UI to fully render
@@ -263,7 +263,7 @@ test.describe('Visual UI Comparison with AI Analysis', () => {
 
       // Capture both UIs at this viewport
       for (const variant of UI_VARIANTS) {
-        await page.goto(`http://localhost:47200${variant.url}`);
+        await page.goto(variant.url);
         await page.waitForLoadState('networkidle');
         await page.waitForTimeout(1000);
 

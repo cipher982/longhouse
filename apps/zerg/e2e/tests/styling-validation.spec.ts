@@ -16,7 +16,7 @@ test.describe('Styling Validation', () => {
     const thread = await createTestThread(page, agent.id, 'Test Thread');
 
     // Navigate to chat
-    await page.goto(`http://localhost:47200/agent/${agent.id}/thread/${thread.id}`);
+    await page.goto(`/agent/${agent.id}/thread/${thread.id}`);
     await page.waitForSelector('.messages-container', { timeout: 10000 });
 
     // Send a test message to populate the interface
@@ -87,7 +87,7 @@ test.describe('Styling Validation', () => {
 
   test('no elements should have default browser styling', async ({ page }) => {
     const agent = await createTestAgent(page, 'Test Agent');
-    await page.goto(`http://localhost:47200/agent/${agent.id}/thread`);
+    await page.goto(`/agent/${agent.id}/thread`);
     await page.waitForSelector('.messages-container', { timeout: 10000 });
 
     /**
@@ -126,7 +126,7 @@ test.describe('Styling Validation', () => {
 
   test('all class names in use should have CSS definitions', async ({ page }) => {
     const agent = await createTestAgent(page, 'Test Agent');
-    await page.goto(`http://localhost:47200/agent/${agent.id}/thread`);
+    await page.goto(`/agent/${agent.id}/thread`);
     await page.waitForSelector('.messages-container', { timeout: 10000 });
 
     /**
@@ -200,7 +200,7 @@ test.describe('Styling Validation', () => {
 
   test('critical UI components should have consistent design tokens', async ({ page }) => {
     const agent = await createTestAgent(page, 'Test Agent');
-    await page.goto(`http://localhost:47200/agent/${agent.id}/thread`);
+    await page.goto(`/agent/${agent.id}/thread`);
     await page.waitForSelector('.messages-container', { timeout: 10000 });
 
     /**
