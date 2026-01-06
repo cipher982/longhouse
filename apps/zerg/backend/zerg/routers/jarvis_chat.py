@@ -13,10 +13,8 @@ from fastapi import HTTPException
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.models.models import AgentRun
@@ -112,7 +110,6 @@ async def _chat_stream_generator(
 @router.post("/chat")
 async def jarvis_chat(
     request: JarvisChatRequest,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> EventSourceResponse:
     """Text chat endpoint - streams responses from Supervisor.
@@ -123,7 +120,6 @@ async def jarvis_chat(
 
     Args:
         request: Chat request with user message
-        db: Database session
         current_user: Authenticated user
 
     Returns:
@@ -138,9 +134,8 @@ async def jarvis_chat(
         - supervisor_thinking: Supervisor analyzing
         - supervisor_complete: Final response with result
     """
+    from zerg.database import db_session
     from zerg.services.supervisor_service import SupervisorService
-
-    supervisor_service = SupervisorService(db)
 
     # Server-side enforcement: respect user tool configuration
     if not _is_tool_enabled(current_user.context or {}, "supervisor"):
@@ -176,34 +171,47 @@ async def jarvis_chat(
         )
     reasoning_effort = reasoning_effort.lower()
 
-    # Get or create supervisor components
-    agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
-    thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
-
-    # Create run record
+    # CRITICAL: Use SHORT-LIVED session for all DB operations
+    # Don't use Depends(get_db) - it holds the session open for the entire
+    # SSE stream duration, blocking TRUNCATE during E2E resets.
     from zerg.models.enums import RunStatus
     from zerg.models.enums import RunTrigger
 
-    run = AgentRun(
-        agent_id=agent.id,
-        thread_id=thread.id,
-        status=RunStatus.RUNNING,
-        trigger=RunTrigger.API,
-        correlation_id=request.client_correlation_id,  # Phase 1: Store correlation ID
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
+    with db_session() as db:
+        supervisor_service = SupervisorService(db)
+
+        # Get or create supervisor components
+        agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
+        thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
+
+        # Create run record
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.RUNNING,
+            trigger=RunTrigger.API,
+            correlation_id=request.client_correlation_id,  # Phase 1: Store correlation ID
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        # Capture values we need before session closes
+        run_id = run.id
+        agent_id = agent.id
+        thread_id = thread.id
+        run_status_value = run.status.value
+    # Session is now closed - no DB connection held during streaming
 
     # v2.2: Notify dashboard of new run
     await event_bus.publish(
         EventType.RUN_CREATED,
         {
             "event_type": "run_created",
-            "agent_id": agent.id,
-            "run_id": run.id,
-            "status": run.status.value,
-            "thread_id": thread.id,
+            "agent_id": agent_id,
+            "run_id": run_id,
+            "status": run_status_value,
+            "thread_id": thread_id,
             "owner_id": current_user.id,
         },
     )
@@ -211,17 +219,17 @@ async def jarvis_chat(
         EventType.RUN_UPDATED,
         {
             "event_type": "run_updated",
-            "agent_id": agent.id,
-            "run_id": run.id,
+            "agent_id": agent_id,
+            "run_id": run_id,
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
-            "thread_id": thread.id,
+            "thread_id": thread_id,
             "owner_id": current_user.id,
         },
     )
 
     logger.info(
-        f"Jarvis chat: created run {run.id} for user {current_user.id}, "
+        f"Jarvis chat: created run {run_id} for user {current_user.id}, "
         f"message: {request.message[:50]}..., model: {model_to_use}, reasoning: {reasoning_effort}",
         extra={"tag": "JARVIS"},
     )
@@ -230,7 +238,7 @@ async def jarvis_chat(
     # to avoid race conditions with event subscriptions
     return EventSourceResponse(
         _chat_stream_generator(
-            run.id,
+            run_id,
             current_user.id,
             request.message,
             request.client_correlation_id,

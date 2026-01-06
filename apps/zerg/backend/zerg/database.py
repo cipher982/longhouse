@@ -310,11 +310,19 @@ def get_session_factory() -> sessionmaker:
 
     if worker_id is None:
         # --- Default behaviour for non-E2E contexts ---
-        db_url = _settings.database_url
+        # CRITICAL: Reuse the cached default_session_factory to prevent
+        # engine proliferation. Creating a new engine per call exhausts
+        # Postgres connections under load.
+        if default_session_factory is not None:
+            return default_session_factory
 
+        # Fallback for edge cases where module loaded before DATABASE_URL set
+        # (e.g., during test discovery). This should rarely be hit in practice.
+        db_url = _settings.database_url
         if not db_url:
             raise ValueError("DATABASE_URL not set in environment")
 
+        logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
         engine = make_engine(db_url)
         return make_sessionmaker(engine)
 
