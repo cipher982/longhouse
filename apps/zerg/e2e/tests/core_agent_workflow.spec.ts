@@ -15,7 +15,7 @@ import { test, expect } from './fixtures';
 test.describe('Core Agent Workflow', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the app
-    await page.goto('http://localhost:8004');
+    await page.goto('/');
 
     // Wait for the app to load
     await page.waitForLoadState('networkidle');

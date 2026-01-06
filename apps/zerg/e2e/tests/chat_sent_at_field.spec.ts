@@ -16,18 +16,16 @@ import { test, expect, type Page } from './fixtures';
  */
 
 // Reset DB before each test to keep agent/thread ids predictable
-test.beforeEach(async ({ page, context }) => {
-  await fetch('http://localhost:47300/api/admin/reset-database', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clear_data: true }),
+test.beforeEach(async ({ page, request }) => {
+  await request.post('/api/admin/reset-database', {
+    data: { clear_data: true },
   });
-  await page.goto('http://localhost:47200');
+  await page.goto('/');
 });
 
 async function createAgentAndNavigateToChat(page: Page) {
   // Intercept auth
-  const authResponse = await page.request.post('http://localhost:47300/api/auth/google', {
+  const authResponse = await page.request.post('/api/auth/google', {
     data: { token: 'fake_token' },
   });
   const { access_token } = await authResponse.json();
@@ -41,7 +39,7 @@ async function createAgentAndNavigateToChat(page: Page) {
   ]);
 
   // Create agent via API
-  const agentRes = await page.request.post('http://localhost:47300/api/agents', {
+  const agentRes = await page.request.post('/api/agents', {
     headers: { Authorization: `Bearer ${access_token}` },
     data: {
       name: 'Test Agent',
@@ -52,7 +50,7 @@ async function createAgentAndNavigateToChat(page: Page) {
   const agent = await agentRes.json();
 
   // Navigate to chat for this agent
-  await page.goto(`http://localhost:47200/agent/${agent.id}`);
+  await page.goto(`/agent/${agent.id}`);
   await expect(page.getByTestId('chat-container')).toBeVisible({ timeout: 5000 });
 }
 
@@ -186,13 +184,13 @@ test.describe('Chat sent_at Field - Server Validation', () => {
     await createAgentAndNavigateToChat(page);
 
     // Get access token
-    const authResponse = await page.request.post('http://localhost:47300/api/auth/google', {
+    const authResponse = await page.request.post('/api/auth/google', {
       data: { token: 'fake_token' },
     });
     const { access_token } = await authResponse.json();
 
     // Create thread
-    const threadRes = await page.request.post('http://localhost:47300/api/agents/1/threads', {
+    const threadRes = await page.request.post('/api/agents/1/threads', {
       headers: { Authorization: `Bearer ${access_token}` },
       data: { title: 'Validation test' },
     });
@@ -202,7 +200,7 @@ test.describe('Chat sent_at Field - Server Validation', () => {
     const pastTime = new Date();
     pastTime.setMinutes(pastTime.getMinutes() - 10);
 
-    const msgRes = await page.request.post(`http://localhost:47300/api/threads/${thread.id}/messages`, {
+    const msgRes = await page.request.post(`/api/threads/${thread.id}/messages`, {
       headers: { Authorization: `Bearer ${access_token}` },
       data: {
         role: 'user',
