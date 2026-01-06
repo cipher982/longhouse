@@ -90,6 +90,7 @@ def clear_user_data(engine) -> dict[str, any]:
     """Clear user-generated data while preserving infrastructure.
 
     Uses schema discovery to find tables to clear, avoiding hardcoded lists.
+    Includes timeouts to prevent hanging if SSE connections hold locks.
 
     Args:
         engine: SQLAlchemy engine
@@ -122,6 +123,12 @@ def clear_user_data(engine) -> dict[str, any]:
     start_time = time.perf_counter()
 
     with engine.connect() as conn:
+        # CRITICAL: Set timeouts to fail fast if locks can't be acquired
+        # This prevents hanging when SSE connections hold transactions open
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("SET lock_timeout = '5s'"))
+            conn.execute(text("SET statement_timeout = '30s'"))
+
         # Count rows before clearing
         total_before = 0
         for table in clear_tables:

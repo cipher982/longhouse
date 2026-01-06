@@ -270,7 +270,6 @@ def get_run_status(
 @router.get("/runs/{run_id}/stream")
 async def attach_to_run_stream(
     run_id: int,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ):
     """Attach to an existing run's event stream.
@@ -282,32 +281,50 @@ async def attach_to_run_stream(
 
     Args:
         run_id: ID of the run to attach to
-        db: Database session
         current_user: Authenticated user (multi-tenant filtered)
 
     Returns:
         EventSourceResponse for SSE streaming
     """
-    # Multi-tenant security: only return runs owned by the current user
-    run = (
-        db.query(AgentRun)
-        .join(Agent, Agent.id == AgentRun.agent_id)
-        .filter(AgentRun.id == run_id)
-        .filter(Agent.owner_id == current_user.id)
-        .first()
-    )
+    from zerg.database import db_session
 
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+    # CRITICAL: Use SHORT-LIVED session for security check and data retrieval
+    # Don't use Depends(get_db) - it holds the session open for the entire
+    # SSE stream duration, blocking TRUNCATE during E2E resets.
+    with db_session() as db:
+        # Multi-tenant security: only return runs owned by the current user
+        run = (
+            db.query(AgentRun)
+            .join(Agent, Agent.id == AgentRun.agent_id)
+            .filter(AgentRun.id == run_id)
+            .filter(Agent.owner_id == current_user.id)
+            .first()
+        )
+
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        # Capture all values we need before session closes
+        run_id_val = run.id
+        run_status = run.status
+        run_error = run.error
+        run_finished_at = run.finished_at
+        thread_id = run.thread_id
+
+        # For completed runs, get result now (while session is open)
+        result = None
+        if run_status in (RunStatus.SUCCESS, RunStatus.FAILED):
+            result = _get_last_assistant_message(db, thread_id)
+    # Session is now closed - no DB connection held during streaming
 
     # Check run status
-    if run.status == RunStatus.RUNNING:
+    if run_status == RunStatus.RUNNING:
         # Stream live events using existing stream_run_events
         from zerg.routers.jarvis_sse import stream_run_events
 
         return EventSourceResponse(
             stream_run_events(
-                run_id=run.id,
+                run_id=run_id_val,
                 owner_id=current_user.id,
                 client_correlation_id=None,
             )
@@ -315,19 +332,14 @@ async def attach_to_run_stream(
     else:
         # Run is complete/failed - return single completion event and close
         async def completed_stream():
-            # Get result if available
-            result = None
-            if run.status in (RunStatus.SUCCESS, RunStatus.FAILED):
-                result = _get_last_assistant_message(db, run.thread_id)
-
             # Send completion event matching the format from jarvis_sse.py
-            event_type = "supervisor_complete" if run.status == RunStatus.SUCCESS else "error"
+            event_type = "supervisor_complete" if run_status == RunStatus.SUCCESS else "error"
             payload = {
-                "run_id": run.id,
-                "status": run.status.value,
+                "run_id": run_id_val,
+                "status": run_status.value,
                 "result": result,
-                "error": run.error,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error": run_error,
+                "finished_at": run_finished_at.isoformat() if run_finished_at else None,
             }
 
             yield {

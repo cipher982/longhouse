@@ -383,7 +383,6 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
 @router.get("/supervisor/events")
 async def jarvis_supervisor_events(
     run_id: int,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_jarvis_user),
 ) -> EventSourceResponse:
     """SSE stream for supervisor run progress.
@@ -403,7 +402,6 @@ async def jarvis_supervisor_events(
 
     Args:
         run_id: The supervisor run ID to track
-        db: Database session
         current_user: Authenticated user
 
     Returns:
@@ -412,21 +410,28 @@ async def jarvis_supervisor_events(
     Raises:
         HTTPException 404: If run not found or doesn't belong to user
     """
-    # Validate run exists and belongs to user
-    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-    if not run:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {run_id} not found",
-        )
+    from zerg.database import db_session
 
-    # Check ownership via the run's agent
-    agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
-    if not agent or agent.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run {run_id} not found",  # Don't reveal existence to other users
-        )
+    # CRITICAL: Use SHORT-LIVED session for security check
+    # Don't use Depends(get_db) - it holds the session open for the entire
+    # SSE stream duration, blocking TRUNCATE during E2E resets.
+    with db_session() as db:
+        # Validate run exists and belongs to user
+        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+        if not run:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run {run_id} not found",
+            )
+
+        # Check ownership via the run's agent
+        agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
+        if not agent or agent.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run {run_id} not found",  # Don't reveal existence to other users
+            )
+    # Session is now closed - no DB connection held during streaming
 
     return EventSourceResponse(_supervisor_event_generator(run_id, current_user.id))
 
