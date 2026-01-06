@@ -52,8 +52,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
    */
   async function openSettingsDrawer(page: Page, agentId: number) {
     // Find and click the agent card settings button
-    const settingsButton = page.locator(`[data-testid="edit-agent-${agentId}"]`).first();
-    await safeClick(page, settingsButton, { maxAttempts: 3 });
+    await safeClick(page, `[data-testid="edit-agent-${agentId}"]`, { maxAttempts: 3 });
 
     // Wait for drawer to slide in and stabilize
     const drawer = page.locator('.agent-settings-drawer.open');
