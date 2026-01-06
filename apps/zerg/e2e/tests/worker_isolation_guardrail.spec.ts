@@ -8,7 +8,7 @@
  * with real parallel test workers (0-15).
  */
 
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect } from './fixtures';
 
 // Use unique worker IDs that won't collide with real Playwright workers
 const WORKER_ID_A = 'guardrail_a';
