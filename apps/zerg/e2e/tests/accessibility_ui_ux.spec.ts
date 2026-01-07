@@ -464,7 +464,7 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('✅ Responsive design test completed');
   });
 
-  test('User workflow usability testing', async ({ page }) => {
+  test('User workflow usability testing', async ({ page, request }) => {
     console.log('🚀 Starting user workflow usability test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
