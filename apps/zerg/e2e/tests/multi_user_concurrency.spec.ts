@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import type { APIRequestContext } from '@playwright/test';
 
 /**
  * MULTI-USER AND CONCURRENCY E2E TEST
@@ -15,7 +16,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Multi-User and Concurrency', () => {
-  test('Multiple user sessions with data isolation', async ({ browser }) => {
+  test('Multiple user sessions with data isolation', async ({ browser, request }) => {
     console.log('🚀 Starting multi-user data isolation test...');
 
     const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -45,7 +46,7 @@ test.describe('Multi-User and Concurrency', () => {
           await session.page.waitForTimeout(1000);
 
           // Create agent specific to this user
-          const agentResponse = await session.page.request.post('http://localhost:8001/api/agents', {
+          const agentResponse = await request.post('/api/agents', {
             headers: {
               'X-Test-Worker': session.userId,
               'Content-Type': 'application/json',
@@ -82,7 +83,7 @@ test.describe('Multi-User and Concurrency', () => {
     const isolationResults = await Promise.all(
       userSessions.map(async (session, index) => {
         try {
-          const response = await session.page.request.get('http://localhost:8001/api/agents', {
+          const response = await session.request.get('/api/agents', {
             headers: { 'X-Test-Worker': session.userId }
           });
 
@@ -134,7 +135,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('✅ Multi-user data isolation test completed');
   });
 
-  test('Concurrent workflow execution', async ({ browser }) => {
+  test('Concurrent workflow execution', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent workflow execution test...');
 
     const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -148,7 +149,7 @@ test.describe('Multi-User and Concurrency', () => {
         const userId = `${baseWorkerId}_workflow_${index}`;
 
         // Create agent for this user
-        const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+        const agentResponse = await request.post('/api/agents', {
           headers: {
             'X-Test-Worker': userId,
             'Content-Type': 'application/json',
@@ -181,7 +182,7 @@ test.describe('Multi-User and Concurrency', () => {
         if (!session.agent) return { success: false, reason: 'No agent' };
 
         try {
-          const workflowResponse = await session.page.request.post('http://localhost:8001/api/workflows', {
+          const workflowResponse = await session.request.post('/api/workflows', {
             headers: {
               'X-Test-Worker': session.userId,
               'Content-Type': 'application/json',
@@ -255,7 +256,7 @@ test.describe('Multi-User and Concurrency', () => {
             const session = workflowSessions.find(s => s.userId === wf.userId);
             if (!session) return { success: false, reason: 'Session not found' };
 
-            const executionResponse = await session.page.request.post(`http://localhost:8001/api/workflow-executions/${wf.workflow.id}/start`, {
+            const executionResponse = await session.request.post(`/api/workflow-executions/${wf.workflow.id}/start`, {
               headers: {
                 'X-Test-Worker': wf.userId,
                 'Content-Type': 'application/json',
@@ -303,7 +304,7 @@ test.describe('Multi-User and Concurrency', () => {
             try {
               await session.page.waitForTimeout(1000);
 
-              const statusResponse = await session.page.request.get(`http://localhost:8001/api/workflow-executions/${exec.execution.id}`, {
+              const statusResponse = await session.request.get(`/api/workflow-executions/${exec.execution.id}`, {
                 headers: { 'X-Test-Worker': exec.userId }
               });
 
@@ -348,7 +349,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('✅ Concurrent workflow execution test completed');
   });
 
-  test('WebSocket message broadcasting and isolation', async ({ browser }) => {
+  test('WebSocket message broadcasting and isolation', async ({ browser, request }) => {
     console.log('🚀 Starting WebSocket broadcasting test...');
 
     const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -401,7 +402,7 @@ test.describe('Multi-User and Concurrency', () => {
     const secondarySession = wsSessions[1];
 
     // Create agent in primary session
-    const agentResponse = await primarySession.page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await primarySession.request.post('/api/agents', {
       headers: {
         'X-Test-Worker': primarySession.userId,
         'Content-Type': 'application/json',
@@ -463,7 +464,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('📊 Test 4: Testing high-frequency message handling...');
 
     const rapidOperations = Array.from({ length: 5 }, (_, i) =>
-      primarySession.page.request.post('http://localhost:8001/api/agents', {
+      primarySession.request.post('/api/agents', {
         headers: {
           'X-Test-Worker': primarySession.userId,
           'Content-Type': 'application/json',
@@ -508,7 +509,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('✅ WebSocket broadcasting test completed');
   });
 
-  test('Resource sharing and conflict resolution', async ({ browser }) => {
+  test('Resource sharing and conflict resolution', async ({ browser, request }) => {
     console.log('🚀 Starting resource sharing and conflict resolution test...');
 
     const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -535,7 +536,7 @@ test.describe('Multi-User and Concurrency', () => {
     const conflictOperations = await Promise.all(
       conflictSessions.map(async (session) => {
         try {
-          const agentResponse = await session.page.request.post('http://localhost:8001/api/agents', {
+          const agentResponse = await session.request.post('/api/agents', {
             headers: {
               'X-Test-Worker': session.userId,
               'Content-Type': 'application/json',
@@ -590,7 +591,7 @@ test.describe('Multi-User and Concurrency', () => {
 
     await Promise.all(
       conflictSessions.map(async (session) => {
-        const listResponse = await session.page.request.get('http://localhost:8001/api/agents', {
+        const listResponse = await session.request.get('/api/agents', {
           headers: { 'X-Test-Worker': session.userId }
         });
 
@@ -614,7 +615,7 @@ test.describe('Multi-User and Concurrency', () => {
             // Note: This would require an update endpoint
             // For now, we'll test by trying to create workflows referencing the same agent
 
-            const workflowResponse = await session.page.request.post('http://localhost:8001/api/workflows', {
+            const workflowResponse = await session.request.post('/api/workflows', {
               headers: {
                 'X-Test-Worker': session.userId,
                 'Content-Type': 'application/json',
@@ -663,7 +664,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('✅ Resource sharing and conflict resolution test completed');
   });
 
-  test('Session management and cleanup', async ({ browser }) => {
+  test('Session management and cleanup', async ({ browser, request }) => {
     console.log('🚀 Starting session management test...');
 
     const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -679,7 +680,7 @@ test.describe('Multi-User and Concurrency', () => {
     await page1.goto('/');
     await page1.waitForTimeout(1000);
 
-    const agentResponse = await page1.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': userId1,
         'Content-Type': 'application/json',
@@ -711,7 +712,7 @@ test.describe('Multi-User and Concurrency', () => {
 
     if (sessionAgent) {
       // Try to access the agent from a new session with same worker ID
-      const persistenceResponse = await page2.request.get('http://localhost:8001/api/agents', {
+      const persistenceResponse = await request.get('/api/agents', {
         headers: { 'X-Test-Worker': userId1 } // Use same worker ID as closed session
       });
 
@@ -731,7 +732,7 @@ test.describe('Multi-User and Concurrency', () => {
     console.log('📊 Test 3: Verifying session isolation...');
 
     // Create data in session 2 with different worker ID
-    const session2Response = await page2.request.post('http://localhost:8001/api/agents', {
+    const session2Response = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': userId2,
         'Content-Type': 'application/json',
@@ -749,7 +750,7 @@ test.describe('Multi-User and Concurrency', () => {
       console.log('📊 Created agent in session 2:', session2Agent.id);
 
       // Check isolation: session 2 should not see session 1 data by default
-      const isolationResponse = await page2.request.get('http://localhost:8001/api/agents', {
+      const isolationResponse = await request.get('/api/agents', {
         headers: { 'X-Test-Worker': userId2 }
       });
 
@@ -780,7 +781,7 @@ test.describe('Multi-User and Concurrency', () => {
     const tempUserId = `${baseWorkerId}_temp_${Date.now()}`;
 
     // Create temporary data
-    const tempResponse = await tempPage.request.post('http://localhost:8001/api/agents', {
+    const tempResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': tempUserId,
         'Content-Type': 'application/json',

@@ -54,7 +54,7 @@ test.describe('Agent ID Fix Verification', () => {
     console.log('✅ Step 3: Dragged agent to canvas');
 
     // Step 4: Verify canvas data has proper agent_id
-    const workflowResponse = await page.request.get('http://localhost:8001/api/workflows/current');
+    const workflowResponse = await request.get('/api/workflows/current');
     expect(workflowResponse.ok()).toBe(true);
 
     const workflow = await workflowResponse.json();
@@ -142,7 +142,7 @@ test.describe('Agent ID Fix Verification', () => {
     await page.waitForTimeout(2000);
 
     // Check canvas data structure
-    const workflowResponse = await page.request.get('http://localhost:8001/api/workflows/current');
+    const workflowResponse = await request.get('/api/workflows/current');
     const workflow = await workflowResponse.json();
 
     console.log('📋 Verifying canvas data structure...');

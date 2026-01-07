@@ -10,7 +10,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Middleware Debug', () => {
-  test('Middleware header processing validation', async ({ page }, testInfo) => {
+  test('Middleware header processing validation', async ({ page, request }, testInfo) => {
     console.log('🔍 Starting middleware debug test...');
 
     // Get the worker ID from test info
@@ -21,7 +21,7 @@ test.describe('Middleware Debug', () => {
     // Make a simple API request to trigger middleware
     console.log('🔍 Making API request to trigger middleware...');
     try {
-      const response = await page.request.get('http://localhost:8001/');
+      const response = await request.get('/);
       console.log('📊 Health check response status:', response.status());
       console.log('📊 Health check response text:', await response.text());
     } catch (error) {
@@ -31,7 +31,7 @@ test.describe('Middleware Debug', () => {
     // Try agent endpoint
     console.log('🔍 Making agent API request...');
     try {
-      const response = await page.request.get('http://localhost:8001/api/agents');
+      const response = await request.get('/api/agents');
       console.log('📊 Agent API response status:', response.status());
       const text = await response.text();
       console.log('📊 Agent API response:', text.substring(0, 500));

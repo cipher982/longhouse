@@ -21,7 +21,7 @@ test.describe('Perfect Graph Persistence', () => {
 
     // Step 1: Create test agent
     console.log('🏗️  Step 1: Creating test agent...');
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       data: {
         name: `Perfect Test Agent ${workerId}`,
         system_instructions: 'Perfect test agent',
