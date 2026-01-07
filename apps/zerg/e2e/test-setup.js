@@ -62,8 +62,8 @@ async function globalSetup(config) {
 
   // Create extra schemas to account for retries. With fullyParallel + retries,
   // Playwright can assign workerIndex values higher than the configured worker count.
-  // Each retry can spawn a new worker index, so we create 2x to be safe.
-  const schemaCount = workers * 2;
+  // With 342 tests and retries, worker indices can reach 150+, so create plenty.
+  const schemaCount = Math.max(workers * 2, 200);
 
   // Quiet setup - only show count
   process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
