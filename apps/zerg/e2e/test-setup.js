@@ -60,8 +60,13 @@ async function globalSetup(config) {
     ? envWorkers
     : (process.env.CI ? 4 : cpuCount);
 
+  // Create extra schemas to account for retries. With fullyParallel + retries,
+  // Playwright can assign workerIndex values higher than the configured worker count.
+  // Each retry can spawn a new worker index, so we create 2x to be safe.
+  const schemaCount = workers * 2;
+
   // Quiet setup - only show count
-  process.stdout.write(`Setting up ${workers} workers... `);
+  process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
 
   try {
     // Use uv run python to ensure correct venv with all deps
@@ -85,11 +90,11 @@ dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
     print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create schemas for all workers (quiet - just count)
-for i in range(${workers}):
+# Pre-create schemas for all workers (including extra for retries)
+for i in range(${schemaCount}):
     ensure_worker_schema(default_engine, str(i))
 
-print(f"  {${workers}} worker schemas ready")
+print(f"  {${schemaCount}} worker schemas ready")
     `], {
       cwd: backendDir,
       stdio: 'inherit',

@@ -22,6 +22,8 @@ from zerg.config import get_settings
 
 _WORKER_ENGINES: Dict[str, Engine] = {}
 _WORKER_SESSIONMAKERS: Dict[str, sessionmaker] = {}
+# Per-worker init locks prevent cross-worker serialization during E2E startup.
+_WORKER_INIT_LOCKS: Dict[str, threading.Lock] = {}
 # Use RLock (reentrant) since _get_postgres_schema_session is called while lock is held
 _WORKER_LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
@@ -33,10 +35,26 @@ def clear_worker_caches():
     This is needed for E2E tests to ensure session factories are created
     with the correct configuration after environment variables are set.
     """
-    global _WORKER_ENGINES, _WORKER_SESSIONMAKERS
+    global _WORKER_ENGINES, _WORKER_SESSIONMAKERS, _WORKER_INIT_LOCKS
     with _WORKER_LOCK:
         _WORKER_ENGINES.clear()
         _WORKER_SESSIONMAKERS.clear()
+        _WORKER_INIT_LOCKS.clear()
+
+
+def _get_worker_init_lock(worker_id: str) -> threading.Lock:
+    """Get (or create) a per-worker init lock.
+
+    This avoids serializing initialization for *different* Playwright workers
+    behind a single global lock while still preventing double-init for the same
+    worker_id.
+    """
+    with _WORKER_LOCK:
+        lock = _WORKER_INIT_LOCKS.get(worker_id)
+        if lock is None:
+            lock = threading.Lock()
+            _WORKER_INIT_LOCKS[worker_id] = lock
+        return lock
 
 
 # ---------------------------------------------------------------------------
@@ -213,86 +231,107 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     Returns:
         A sessionmaker configured for the worker's schema
     """
-    # All cache access under lock for thread safety
+    # Fast-path: cached sessionmaker
     with _WORKER_LOCK:
-        if worker_id in _WORKER_SESSIONMAKERS:
-            return _WORKER_SESSIONMAKERS[worker_id]
+        cached = _WORKER_SESSIONMAKERS.get(worker_id)
+    if cached is not None:
+        return cached
 
-        # Use the main DATABASE_URL (Postgres)
-        db_url = (_settings.database_url or "").strip()
-        if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
-            db_url = db_url[1:-1].strip()
+    # Use the main DATABASE_URL (Postgres)
+    db_url = (_settings.database_url or "").strip()
+    if (db_url.startswith('"') and db_url.endswith('"')) or (db_url.startswith("'") and db_url.endswith("'")):
+        db_url = db_url[1:-1].strip()
 
-        from zerg.e2e_schema_manager import ensure_worker_schema
-        from zerg.e2e_schema_manager import get_schema_name
+    from sqlalchemy import text
 
-        # Idempotent schema creation - safe for concurrent processes
-        # Unlike recreate_worker_schema(), this won't DROP a schema that
-        # another process might be using. Schemas are pre-created in globalSetup.
-        # See: docs/work/e2e-test-infrastructure-redesign.md
-        #
-        # CRITICAL: Use NullPool for admin operations to prevent connection
-        # exhaustion during parallel worker startup. With N workers each creating
-        # an admin_engine with pool_size=2, max_overflow=3 (5 connections),
-        # we'd temporarily need N×5 connections just for schema setup.
-        # NullPool creates connections on-demand and closes them immediately.
-        admin_engine = create_engine(db_url, poolclass=NullPool)
-        ensure_worker_schema(admin_engine, worker_id)
-        schema_name = get_schema_name(worker_id)
+    from zerg.e2e_schema_manager import ensure_worker_schema
+    from zerg.e2e_schema_manager import get_schema_name
 
-        # Dispose the admin engine (releases any remaining connections).
-        # With NullPool this is mostly a no-op but good hygiene.
-        try:
-            admin_engine.dispose()
-        except Exception:
-            pass
+    schema_name = get_schema_name(worker_id)
 
-        # Create schema-routed engine for this worker.
-        #
-        # NOTE: We prefer wiring schema routing into the *connection itself*
-        # (libpq `options=-csearch_path=...`) rather than relying solely on
-        # runtime `SET search_path` calls. This prevents subtle cases where a
-        # pooled connection might retain a default search_path and write to
-        # public instead of the worker schema.
-        url = make_url(db_url)
-        query = dict(url.query)
-        existing_options = (query.get("options") or "").strip()
-        schema_options = f"-csearch_path={schema_name},public"
-        query["options"] = f"{existing_options} {schema_options}".strip() if existing_options else schema_options
-        engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
-
-        # Create test user for foreign key constraints (E2E tests need a user for agent creation)
-        from sqlalchemy import text
-
-        with engine.connect() as conn:
-            conn.execute(text(f"SET search_path TO {schema_name}, public"))
-            result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
-            user_count = result.scalar()
-            if user_count == 0:
-                logger.debug("Worker %s (Postgres schema) creating test user...", worker_id)
+    # Avoid doing full create_all(checkfirst=True) work on every cold start when
+    # schemas are already pre-created in Playwright globalSetup.
+    #
+    # If the schema is missing (e.g., globalSetup dropped schemas while a backend
+    # process was still running), we fall back to the full ensure.
+    admin_engine = create_engine(db_url, poolclass=NullPool)
+    schema_exists = False
+    try:
+        with admin_engine.connect() as conn:
+            schema_exists = bool(
                 conn.execute(
-                    text("""
+                    text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :schema"),
+                    {"schema": schema_name},
+                ).fetchone()
+            )
+            conn.commit()
+    except Exception:
+        schema_exists = False
+
+    if not schema_exists:
+        ensure_worker_schema(admin_engine, worker_id)
+
+    # Dispose the admin engine (releases any remaining connections). With NullPool
+    # this is mostly a no-op but good hygiene.
+    try:
+        admin_engine.dispose()
+    except Exception:
+        pass
+
+    # Create schema-routed engine for this worker.
+    #
+    # NOTE: We prefer wiring schema routing into the *connection itself*
+    # (libpq `options=-csearch_path=...`) rather than relying solely on runtime
+    # `SET search_path` calls. This prevents subtle cases where a pooled
+    # connection might retain a default search_path and write to public instead
+    # of the worker schema.
+    url = make_url(db_url)
+    query = dict(url.query)
+    existing_options = (query.get("options") or "").strip()
+    schema_options = f"-csearch_path={schema_name},public"
+    query["options"] = f"{existing_options} {schema_options}".strip() if existing_options else schema_options
+    engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
+
+    # Create test user for foreign key constraints (E2E tests need a user for agent creation)
+    with engine.connect() as conn:
+        conn.execute(text(f"SET search_path TO {schema_name}, public"))
+        result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
+        user_count = result.scalar()
+        if user_count == 0:
+            logger.debug("Worker %s (Postgres schema) creating test user...", worker_id)
+            conn.execute(
+                text("""
                     INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
                                       display_name, context, created_at, updated_at)
                     VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
                            'Test User', '{}', NOW(), NOW())
                 """)
-                )
-                conn.commit()
-                logger.debug("Worker %s (Postgres schema) test user created", worker_id)
+            )
+            conn.commit()
+            logger.debug("Worker %s (Postgres schema) test user created", worker_id)
 
-        # Add event listener to set search_path on every connection
-        @event.listens_for(engine, "connect")
-        def set_search_path(dbapi_conn, connection_record):
-            cursor = dbapi_conn.cursor()
-            cursor.execute(f"SET search_path TO {schema_name}, public")
-            cursor.close()
+    # Add event listener to set search_path on every connection
+    @event.listens_for(engine, "connect")
+    def set_search_path(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute(f"SET search_path TO {schema_name}, public")
+        cursor.close()
 
-        session_factory = make_sessionmaker(engine)
+    session_factory = make_sessionmaker(engine)
+
+    with _WORKER_LOCK:
+        # Another thread could have initialized while we were creating (unlikely
+        # with per-worker lock, but keep this safe).
+        existing = _WORKER_SESSIONMAKERS.get(worker_id)
+        if existing is not None:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+            return existing
 
         _WORKER_ENGINES[worker_id] = engine
         _WORKER_SESSIONMAKERS[worker_id] = session_factory
-
         return session_factory
 
 
@@ -335,13 +374,16 @@ def get_session_factory() -> sessionmaker:
         return make_sessionmaker(engine)
 
     # --- Per-worker Postgres schema isolation (E2E tests) ---
-    if worker_id in _WORKER_SESSIONMAKERS:
-        return _WORKER_SESSIONMAKERS[worker_id]
+    cached = _WORKER_SESSIONMAKERS.get(worker_id)
+    if cached is not None:
+        return cached
 
-    # Lazily build the engine (thread-safe)
-    with _WORKER_LOCK:
-        if worker_id in _WORKER_SESSIONMAKERS:
-            return _WORKER_SESSIONMAKERS[worker_id]
+    # Lazily build the engine (per-worker lock avoids cross-worker serialization)
+    init_lock = _get_worker_init_lock(worker_id)
+    with init_lock:
+        cached = _WORKER_SESSIONMAKERS.get(worker_id)
+        if cached is not None:
+            return cached
 
         # Route to Postgres schema isolation
         if _settings.e2e_use_postgres_schemas:

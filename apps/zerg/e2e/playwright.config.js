@@ -141,7 +141,7 @@ const config = {
       port: BACKEND_PORT,
       cwd: __dirname,
       reuseExistingServer: !process.env.CI, // Allow reusing in development
-      timeout: 60_000,
+      timeout: 120_000, // Backend needs time for schema setup
       env: {
         ...process.env,
         BACKEND_PORT: String(BACKEND_PORT),
