@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 // Reset DB before each test to keep thread ids predictable
 test.beforeEach(async ({ request }) => {
-  await request.post('http://localhost:8001/admin/reset-database');
+  await request.post('/admin/reset-database');
 });
 
 async function createAgentAndGetId(page: Page): Promise<string> {
