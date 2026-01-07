@@ -44,37 +44,50 @@ for (let i = 0; i < 8; i++) {
 
 async function globalTeardown(config) {
   // Quiet cleanup - suppress output by default
+  // Teardown is best-effort: globalSetup will clean stale schemas anyway
   try {
     const backendDir = path.resolve(__dirname, '../backend');
 
     // Call Python cleanup script to remove all test databases/schemas
+    // Use a short timeout - if it hangs, globalSetup will clean up next run
     const cleanup = spawn('uv', ['run', 'python', '-c', `
 import os
+import sys
 os.environ['TESTING'] = '1'
 os.environ['E2E_USE_POSTGRES_SCHEMAS'] = '1'
 
-from zerg.e2e_schema_manager import drop_all_e2e_schemas
-from zerg.database import default_engine
-drop_all_e2e_schemas(default_engine)
+try:
+    from zerg.e2e_schema_manager import drop_all_e2e_schemas
+    from zerg.database import default_engine
+    if default_engine:
+        drop_all_e2e_schemas(default_engine)
+except Exception as e:
+    # Best-effort cleanup - globalSetup will handle stale schemas
+    print(f"Teardown warning: {e}", file=sys.stderr)
+    sys.exit(0)  # Don't fail on cleanup issues
     `], {
       cwd: backendDir,
       stdio: 'pipe',  // Suppress output
       env: { ...process.env, E2E_USE_POSTGRES_SCHEMAS: '1', TESTING: '1' }
     });
 
-    await new Promise((resolve, reject) => {
+    // Timeout after 30s - don't let cleanup hang indefinitely
+    const timeoutId = setTimeout(() => {
+      cleanup.kill('SIGTERM');
+    }, 30000);
+
+    await new Promise((resolve) => {
       cleanup.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Cleanup failed with code ${code}`));
-        }
+        clearTimeout(timeoutId);
+        // Always resolve - cleanup is best-effort
+        resolve();
       });
     });
 
   } catch (error) {
     // Log cleanup failures to stderr but don't fail the test run
-    console.error('Test cleanup failed:', error.message);
+    // globalSetup will clean stale schemas on next run
+    console.error('Test cleanup warning:', error.message);
   }
 }
 
