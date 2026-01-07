@@ -21,7 +21,7 @@ test.describe('Middleware Debug', () => {
     // Make a simple API request to trigger middleware
     console.log('🔍 Making API request to trigger middleware...');
     try {
-      const response = await request.get('/);
+      const response = await request.get('/');
       console.log('📊 Health check response status:', response.status());
       console.log('📊 Health check response text:', await response.text());
     } catch (error) {

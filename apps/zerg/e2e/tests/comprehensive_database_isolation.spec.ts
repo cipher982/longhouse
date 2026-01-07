@@ -54,7 +54,7 @@ test.describe('Comprehensive Database Isolation', () => {
 
     // Test simple health check first
     try {
-      const healthResponse = await request.get('/, {
+      const healthResponse = await request.get('/', {
         headers: {
           'X-Test-Worker': workerId,
         }
