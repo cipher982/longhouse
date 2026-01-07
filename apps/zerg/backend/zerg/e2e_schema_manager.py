@@ -16,9 +16,11 @@ SCHEMA_PREFIX = "e2e_worker_"
 # Maximum number of E2E schemas to create. Worker IDs are wrapped modulo this value.
 # This prevents unbounded schema growth when Playwright assigns high worker indices
 # (e.g., with fullyParallel + retries, worker indices can reach 2x test count).
-# 64 schemas is sufficient: each Playwright worker runs tests sequentially, and
-# TRUNCATE at test start ensures isolation even if schemas are reused.
-MAX_E2E_SCHEMAS = 64
+#
+# With 342 tests and 16 concurrent workers, worker indices grow to ~350+.
+# 128 schemas keeps collision to ~3 tests per schema on average, reducing
+# TRUNCATE lock contention when tests share a schema.
+MAX_E2E_SCHEMAS = 128
 
 
 def get_schema_name(worker_id: str) -> str:
