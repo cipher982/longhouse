@@ -132,10 +132,14 @@ function WelcomeHeader() {
             location.pathname === href ||
             (href !== '/' && location.pathname.startsWith(href))
 
+          // Generate testid from label, e.g., "Canvas" -> "global-canvas-tab"
+          const testId = `global-${label.toLowerCase()}-tab`;
+
           return (
             <button
               key={href}
               type="button"
+              data-testid={testId}
               className={clsx("nav-tab", { "nav-tab--active": isActive })}
               aria-current={isActive ? 'page' : undefined}
               onClick={() => navigate(href)}
