@@ -14,6 +14,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from zerg.config import get_settings
 
@@ -128,13 +129,14 @@ def make_engine(db_url: str, **kwargs) -> Engine:
             f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only Postgres is supported (postgresql+psycopg://...)."
         )
 
-    # E2E tests: reduce pool size to prevent connection exhaustion
-    # With N Playwright workers, each gets its own engine. Default pool (5+10=15)
-    # × N workers can exceed Postgres max_connections (100).
+    # E2E tests: use moderate pool size (Postgres max_connections increased to 500)
+    # With N Playwright workers, each gets its own engine.
+    # pool_size=3 + max_overflow=5 = 8 connections max per worker
+    # 16 workers × 8 = 128 connections max, well under the 500 limit
     # See: docs/work/e2e-test-infrastructure-redesign.md
     if _settings.e2e_use_postgres_schemas:
-        kwargs.setdefault("pool_size", 2)
-        kwargs.setdefault("max_overflow", 3)  # Max 5 connections per engine
+        kwargs.setdefault("pool_size", 3)
+        kwargs.setdefault("max_overflow", 5)  # Max 8 connections per engine
 
     # Connection pool health: pre_ping verifies connections before use,
     # pool_recycle closes connections after 5 minutes to handle DB restarts
@@ -228,12 +230,18 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
         # Unlike recreate_worker_schema(), this won't DROP a schema that
         # another process might be using. Schemas are pre-created in globalSetup.
         # See: docs/work/e2e-test-infrastructure-redesign.md
-        admin_engine = make_engine(db_url)
+        #
+        # CRITICAL: Use NullPool for admin operations to prevent connection
+        # exhaustion during parallel worker startup. With N workers each creating
+        # an admin_engine with pool_size=2, max_overflow=3 (5 connections),
+        # we'd temporarily need N×5 connections just for schema setup.
+        # NullPool creates connections on-demand and closes them immediately.
+        admin_engine = create_engine(db_url, poolclass=NullPool)
         ensure_worker_schema(admin_engine, worker_id)
         schema_name = get_schema_name(worker_id)
 
-        # Dispose the admin engine so we don't keep extra connections around.
-        # The actual request engine below will carry schema routing settings.
+        # Dispose the admin engine (releases any remaining connections).
+        # With NullPool this is mostly a no-op but good hygiene.
         try:
             admin_engine.dispose()
         except Exception:
