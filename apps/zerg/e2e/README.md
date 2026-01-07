@@ -17,7 +17,7 @@ make test-e2e-grep GREP="Jarvis"
 
 - Playwright starts an isolated backend (`apps/zerg/e2e/spawn-test-backend.js`) and a frontend dev server.
 - Default ports are `BACKEND_PORT=8001` and `FRONTEND_PORT=8002` (override via env).
-- Database isolation is per-Playwright-worker (SQLite routed by the `X-Test-Worker` header).
+- Database isolation is per-Playwright-worker (Postgres schema per worker, routed by the `X-Test-Worker` header).
 
 ## Setup
 
@@ -97,7 +97,7 @@ npx playwright test --trace on
 
 - **Test output**: Console logs with timestamps
 - **Playwright traces**: Visual debugging in browser
-- **Database logs**: SQLite query logs (if enabled)
+- **Database logs**: PostgreSQL query logs (if enabled)
 - **Network logs**: HTTP request/response details
 
 ## 📚 Dependencies
