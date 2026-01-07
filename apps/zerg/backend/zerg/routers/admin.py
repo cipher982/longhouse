@@ -43,6 +43,15 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+try:
+    # When E2E_USE_POSTGRES_SCHEMAS=1, WorkerDBMiddleware populates this
+    # contextvar so zerg.database.get_session_factory can route to the correct
+    # worker schema. We explicitly set it inside threadpool work to avoid
+    # relying on contextvar propagation implementation details.
+    from zerg.middleware.worker_db import current_worker_id as _current_worker_id
+except Exception:  # pragma: no cover - middleware not present in some contexts
+    _current_worker_id = None  # type: ignore[assignment]
+
 
 class ResetType(str, Enum):
     """Database reset operation types."""
@@ -102,6 +111,13 @@ def clear_user_data(engine) -> dict[str, any]:
 
     from sqlalchemy import text
 
+    settings = get_settings()
+    # Counting rows for every table adds measurable latency under parallel E2E.
+    # It's useful in dev/prod for diagnostics, but unnecessary for tests.
+    should_count_rows = os.getenv("RESET_DB_COUNT_ROWS", "").strip() == "1" or not (
+        settings.testing or settings.e2e_use_postgres_schemas or os.getenv("NODE_ENV") == "test"
+    )
+
     # Discover all tables from SQLAlchemy metadata
     all_tables = set(Base.metadata.tables.keys())
 
@@ -129,14 +145,16 @@ def clear_user_data(engine) -> dict[str, any]:
             conn.execute(text("SET lock_timeout = '5s'"))
             conn.execute(text("SET statement_timeout = '30s'"))
 
-        # Count rows before clearing
-        total_before = 0
-        for table in clear_tables:
-            try:
-                count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
-                total_before += count
-            except Exception:
-                pass
+        total_before: int | None = None
+        if should_count_rows:
+            # Count rows before clearing (best-effort; for diagnostics only)
+            total_before = 0
+            for table in clear_tables:
+                try:
+                    count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
+                    total_before += count
+                except Exception:
+                    pass
 
         if engine.dialect.name == "postgresql":
             # PostgreSQL: Use TRUNCATE CASCADE for efficiency
@@ -162,6 +180,7 @@ def clear_user_data(engine) -> dict[str, any]:
         "operation": "clear_data",
         "tables_cleared": sorted(list(clear_tables)),
         "rows_cleared": total_before,
+        "counts_skipped": not should_count_rows,
         "duration_ms": duration_ms,
     }
 
@@ -184,12 +203,23 @@ def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[st
 
 
 @router.post("/reset-database")
-async def reset_database(request: DatabaseResetRequest, current_user=Depends(require_super_admin)):
+async def reset_database(
+    request: DatabaseResetRequest,
+    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    current_user=Depends(require_super_admin),
+):
     """Reset the database by dropping all tables and recreating them.
 
     Requires super admin privileges (user must be in ADMIN_EMAILS).
     In production environments, requires additional password confirmation.
     """
+    # NOTE: This endpoint intentionally runs synchronously (no threadpool).
+    # In E2E, 16 workers will all hit this endpoint at once; serializing the
+    # TRUNCATE avoids Postgres lock thrash and statement_timeouts.
+    return _reset_database_sync(request, current_user, x_test_worker)
+
+
+def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id: str | None):
     settings = get_settings()
 
     # Log the reset attempt for audit purposes
@@ -217,6 +247,10 @@ async def reset_database(request: DatabaseResetRequest, current_user=Depends(req
     if not settings.testing and not is_production and (settings.environment or "") not in ["development", ""]:
         logger.warning("Attempted to reset database in unsupported environment")
         raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
+
+    token = None
+    if _current_worker_id is not None and worker_id is not None:
+        token = _current_worker_id.set(worker_id)
 
     try:
         # Obtain the *current* engine – respects Playwright worker isolation
@@ -509,6 +543,9 @@ async def reset_database(request: DatabaseResetRequest, current_user=Depends(req
         if "UNIQUE constraint failed: users.email" in str(e):
             return {"message": "Database reset successfully (existing user)"}
         return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
+    finally:
+        if token is not None and _current_worker_id is not None:
+            _current_worker_id.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -764,8 +801,12 @@ async def get_user_usage_details(
 
 
 @_legacy_router.post("/reset-database")
-async def _legacy_reset_database(request: DatabaseResetRequest, current_user=Depends(require_super_admin)):  # noqa: D401 – thin wrapper
-    return await reset_database(request, current_user)  # noqa: WPS110 – re-use logic
+async def _legacy_reset_database(
+    request: DatabaseResetRequest,
+    x_test_worker: str | None = Header(default=None, alias="X-Test-Worker"),
+    current_user=Depends(require_super_admin),
+):  # noqa: D401 – thin wrapper
+    return _reset_database_sync(request, current_user, x_test_worker)  # noqa: WPS110 – re-use logic
 
 
 # mount the legacy router without the global /api prefix
