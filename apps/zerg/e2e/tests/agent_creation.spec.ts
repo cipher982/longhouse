@@ -10,22 +10,22 @@ test.describe('Agent Creation', () => {
     await page.waitForLoadState('networkidle');
 
     // Create first agent
-    await page.click('#create-agent-button');
+    await page.click('[data-testid="create-agent-btn"]');
     await page.waitForTimeout(500);
 
     // Create second agent
-    await page.click('#create-agent-button');
+    await page.click('[data-testid="create-agent-btn"]');
     await page.waitForTimeout(500);
 
     // Create third agent
-    await page.click('#create-agent-button');
+    await page.click('[data-testid="create-agent-btn"]');
     await page.waitForTimeout(500);
 
     // Wait for agents to appear
-    await page.waitForSelector('table#agents-table tbody tr[data-agent-id]');
+    await page.waitForSelector('#agents-table-body tr[data-agent-id]');
 
     // Get all agent rows
-    const agentRows = page.locator('table#agents-table tbody tr[data-agent-id]');
+    const agentRows = page.locator('#agents-table-body tr[data-agent-id]');
     const count = await agentRows.count();
     expect(count).toBeGreaterThanOrEqual(3);
 

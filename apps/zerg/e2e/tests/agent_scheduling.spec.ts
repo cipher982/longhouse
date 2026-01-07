@@ -14,8 +14,8 @@ test.describe('Agent scheduling UI', () => {
     await page.locator('[data-testid="create-agent-btn"]').click();
     const row = page.locator('tr[data-agent-id]').first();
     const id = await row.getAttribute('data-agent-id');
-    await page.locator(`[data-testid="edit-agent-${id}"]`).click();
-    await page.waitForSelector('#agent-modal', { state: 'visible' });
+    await page.locator(`[data-testid="debug-agent-${id}"]`).click();
+    await page.waitForSelector('[data-testid="agent-debug-modal"]', { state: 'visible' });
     return id;
   }
 
@@ -87,7 +87,7 @@ test.describe('Agent scheduling UI', () => {
     // Check if validation is implemented
     await page.waitForTimeout(500);
     const errorElements = page.locator('.validation-error, .error-msg');
-    const modalStillVisible = await page.locator('#agent-modal').isVisible();
+    const modalStillVisible = await page.locator('[data-testid="agent-debug-modal"]').isVisible();
 
     if (await errorElements.count() === 0 && !modalStillVisible) {
       test.skip(true, 'Client-side validation for scheduling not implemented yet');
