@@ -1,12 +1,12 @@
 import { test, expect } from './fixtures';
 
 test.describe('Agent scheduling UI', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.beforeEach(async ({ request }) => {
+    await request.post('/admin/reset-database');
   });
 
-  test.afterEach(async ({ page }) => {
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.afterEach(async ({ request }) => {
+    await request.post('/admin/reset-database');
   });
 
   async function createAndOpenConfig(page) {

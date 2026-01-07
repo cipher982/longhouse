@@ -248,7 +248,8 @@ export async function runMultipleWorkflowTests(
     testLog.info(`\n🚀 Starting workflow test: ${scenario.name}`);
 
     // Reset database for clean state
-    await page.request.post('http://localhost:8001/admin/reset-database');
+    const backendPort = process.env.BACKEND_PORT || '8001';
+    await page.request.post(`http://localhost:${backendPort}/admin/reset-database`);
     await page.goto('/');
     await page.waitForTimeout(2000);
 

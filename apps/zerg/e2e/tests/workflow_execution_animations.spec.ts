@@ -10,10 +10,8 @@ import { test, expect } from './fixtures';
  */
 
 // Helper to create workflow with connected nodes
+// Note: Reset is done in beforeEach, this just sets up the workflow
 async function createConnectedWorkflow(page) {
-    // Reset database
-    await page.request.post('http://localhost:8001/admin/reset-database');
-
     // Navigate to canvas
     await page.goto('/');
     const canvasTab = page.getByTestId('global-canvas-tab');
@@ -48,8 +46,8 @@ async function createConnectedWorkflow(page) {
 }
 
 test.describe('Workflow Execution Animations', () => {
-    test.beforeEach(async ({ page }) => {
-        await page.request.post('http://localhost:8001/admin/reset-database');
+    test.beforeEach(async ({ request }) => {
+        await request.post('/admin/reset-database');
     });
 
     test('Connection lines should animate during workflow execution', async ({ page }) => {
@@ -170,8 +168,7 @@ test.describe('Workflow Execution Animations', () => {
     });
 
     test('Multiple connected nodes should animate sequentially', async ({ page }) => {
-        // Reset and setup
-        await page.request.post('http://localhost:8001/admin/reset-database');
+        // beforeEach already reset, just navigate
         await page.goto('/');
         const canvasTab = page.getByTestId('global-canvas-tab');
         if (await canvasTab.count()) {
