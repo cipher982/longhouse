@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 
 test.beforeEach(async ({ request }) => {
-  await request.post('http://localhost:8001/admin/reset-database');
+  await request.post('/admin/reset-database');
 });
 
 // Stubs for trigger management – UI selectors may evolve, skip if missing.

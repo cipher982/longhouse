@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 // Ensure every test in this file starts with an empty DB so row counts are
 // deterministic across parallel pages.
 test.beforeEach(async ({ request }) => {
-  await request.post('http://localhost:8001/admin/reset-database');
+  await request.post('/admin/reset-database');
 });
 
 test('Dashboard live update placeholder', async ({ browser }) => {

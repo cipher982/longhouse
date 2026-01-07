@@ -20,13 +20,13 @@ async function openTemplateGallery(page: Page) {
 }
 
 test.describe('Template Gallery Tests', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.beforeEach(async ({ page, request }) => {
+    await request.post('/admin/reset-database');
     await navigateToCanvas(page);
   });
 
-  test.afterEach(async ({ page }) => {
-    await page.request.post('http://localhost:8001/admin/reset-database');
+  test.afterEach(async ({ request }) => {
+    await request.post('/admin/reset-database');
   });
 
   test('Open template gallery modal', async ({ page }) => {

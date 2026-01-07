@@ -9,9 +9,9 @@ test.describe('Agent ID Fix Verification', () => {
   // The create button directly creates an agent without opening a form.
   // Tests also expect #agent-name, #system-instructions, #task-instructions inputs.
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, request }) => {
     // Reset database to ensure clean state
-    await page.request.post('http://localhost:8001/admin/reset-database');
+    await request.post('/admin/reset-database');
     await page.goto('/');
     await page.waitForTimeout(2000);
   });
