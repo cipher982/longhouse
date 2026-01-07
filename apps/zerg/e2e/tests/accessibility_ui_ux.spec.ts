@@ -497,7 +497,7 @@ test.describe('Accessibility and UI/UX', () => {
     }
 
     // Create agent via API for workflow testing
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',

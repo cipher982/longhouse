@@ -35,7 +35,7 @@ test.describe('Canvas Tab Switch Persistence', () => {
 
     // Step 1: Create an agent via API
     console.log('📝 Step 1: Creating agent via API...');
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       data: {
         name: `Persistence Test Agent ${workerId}`,
         system_instructions: 'You are a test agent for persistence testing',

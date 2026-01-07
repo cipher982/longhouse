@@ -15,7 +15,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Tool Palette and Node Connections', () => {
-  test('Tool palette discovery and cataloging', async ({ page }) => {
+  test('Tool palette discovery and cataloging', async ({ page, request }) => {
     console.log('🚀 Starting tool palette discovery test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -81,13 +81,13 @@ test.describe('Tool Palette and Node Connections', () => {
     console.log('✅ Tool palette discovery completed');
   });
 
-  test('Tool drag-and-drop from palette to canvas', async ({ page }) => {
+  test('Tool drag-and-drop from palette to canvas', async ({ page, request }) => {
     console.log('🚀 Starting tool drag-and-drop test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
 
     // First create an agent to work with
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -177,13 +177,13 @@ test.describe('Tool Palette and Node Connections', () => {
     console.log('✅ Tool drag-and-drop test completed');
   });
 
-  test('Node connection handle detection and interaction', async ({ page }) => {
+  test('Node connection handle detection and interaction', async ({ page, request }) => {
     console.log('🚀 Starting node connection test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
 
     // Create test agent for connections
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -306,7 +306,7 @@ test.describe('Tool Palette and Node Connections', () => {
     console.log('✅ Node connection test completed');
   });
 
-  test('Complex workflow topology creation', async ({ page }) => {
+  test('Complex workflow topology creation', async ({ page, request }) => {
     console.log('🚀 Starting complex workflow topology test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -316,7 +316,7 @@ test.describe('Tool Palette and Node Connections', () => {
     const agents = [];
 
     for (let i = 0; i < 3; i++) {
-      const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+      const agentResponse = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -390,7 +390,7 @@ test.describe('Tool Palette and Node Connections', () => {
           }
         };
 
-        const workflowResponse = await page.request.post('http://localhost:8001/api/workflows', {
+        const workflowResponse = await request.post('/api/workflows', {
           headers: {
             'X-Test-Worker': workerId,
             'Content-Type': 'application/json',
@@ -405,7 +405,7 @@ test.describe('Tool Palette and Node Connections', () => {
           // Test 3: Verify topology integrity
           console.log('📊 Test 3: Verifying topology integrity...');
 
-          const verifyResponse = await page.request.get(`http://localhost:8001/api/workflows/${workflow.id}`, {
+          const verifyResponse = await request.get(`/api/workflows/${workflow.id}`, {
             headers: { 'X-Test-Worker': workerId }
           });
 
@@ -455,13 +455,13 @@ test.describe('Tool Palette and Node Connections', () => {
     console.log('✅ Complex workflow topology test completed');
   });
 
-  test('Connection validation and constraint checking', async ({ page }) => {
+  test('Connection validation and constraint checking', async ({ page, request }) => {
     console.log('🚀 Starting connection validation test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
 
     // Create test agents
-    const agent1Response = await page.request.post('http://localhost:8001/api/agents', {
+    const agent1Response = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -474,7 +474,7 @@ test.describe('Tool Palette and Node Connections', () => {
       }
     });
 
-    const agent2Response = await page.request.post('http://localhost:8001/api/agents', {
+    const agent2Response = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -514,7 +514,7 @@ test.describe('Tool Palette and Node Connections', () => {
       }
     };
 
-    const validResponse = await page.request.post('http://localhost:8001/api/workflows', {
+    const validResponse = await request.post('/api/workflows', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -546,7 +546,7 @@ test.describe('Tool Palette and Node Connections', () => {
       }
     };
 
-    const circularResponse = await page.request.post('http://localhost:8001/api/workflows', {
+    const circularResponse = await request.post('/api/workflows', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -577,7 +577,7 @@ test.describe('Tool Palette and Node Connections', () => {
       }
     };
 
-    const invalidNodeResponse = await page.request.post('http://localhost:8001/api/workflows', {
+    const invalidNodeResponse = await request.post('/api/workflows', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',

@@ -16,7 +16,7 @@ import { resetDatabaseViaRequest } from './helpers/database-helpers';
  */
 
 test.describe('Data Persistence and Recovery', () => {
-  test('Data persistence across sessions', async ({ page, context }) => {
+  test('Data persistence across sessions', async ({ page, context, request }) => {
     console.log('🚀 Starting data persistence test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -36,7 +36,7 @@ test.describe('Data Persistence and Recovery', () => {
     const testAgentName = `Persistence Test Agent ${Date.now()}`;
 
     // Create an agent
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -109,7 +109,7 @@ test.describe('Data Persistence and Recovery', () => {
     await newPage.waitForTimeout(3000);
 
     // First check via API to ensure agent exists in database
-    const persistedResponse = await newPage.request.get('http://localhost:8001/api/agents', {
+    const persistedResponse = await request.get('/api/agents', {
       headers: { 'X-Test-Worker': workerId }
     });
 
@@ -142,7 +142,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('✅ Data persistence test completed');
   });
 
-  test('Auto-save and draft recovery', async ({ page }) => {
+  test('Auto-save and draft recovery', async ({ page, request }) => {
     console.log('🚀 Starting auto-save test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -215,7 +215,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('✅ Auto-save test completed');
   });
 
-  test('Data consistency and integrity', async ({ page }) => {
+  test('Data consistency and integrity', async ({ page, request }) => {
     console.log('🚀 Starting data consistency test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -224,7 +224,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('📊 Test 1: Testing data relationships...');
 
     // Create an agent first
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -243,7 +243,7 @@ test.describe('Data Persistence and Recovery', () => {
 
     // Try to create a workflow that references this agent
     try {
-      const workflowResponse = await page.request.post('http://localhost:8001/api/workflows', {
+      const workflowResponse = await request.post('/api/workflows', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -268,7 +268,7 @@ test.describe('Data Persistence and Recovery', () => {
         console.log('📊 Created workflow with agent reference:', workflow.id);
 
         // Verify the relationship is maintained
-        const workflowCheck = await page.request.get(`http://localhost:8001/api/workflows/${workflow.id}`, {
+        const workflowCheck = await request.get(`/api/workflows/${workflow.id}`, {
           headers: { 'X-Test-Worker': workerId }
         });
 
@@ -290,7 +290,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('📊 Test 2: Testing data integrity...');
 
     // Get initial agent count
-    const initialResponse = await page.request.get('http://localhost:8001/api/agents', {
+    const initialResponse = await request.get('/api/agents', {
       headers: { 'X-Test-Worker': workerId }
     });
 
@@ -300,7 +300,7 @@ test.describe('Data Persistence and Recovery', () => {
       console.log('📊 Initial agent count:', initialCount);
 
       // Create another agent
-      const newAgentResponse = await page.request.post('http://localhost:8001/api/agents', {
+      const newAgentResponse = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -315,7 +315,7 @@ test.describe('Data Persistence and Recovery', () => {
 
       if (newAgentResponse.ok()) {
         // Verify count increased
-        const afterResponse = await page.request.get('http://localhost:8001/api/agents', {
+        const afterResponse = await request.get('/api/agents', {
           headers: { 'X-Test-Worker': workerId }
         });
 
@@ -336,7 +336,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('✅ Data consistency test completed');
   });
 
-  test('Data export and import integrity', async ({ page }) => {
+  test('Data export and import integrity', async ({ page, request }) => {
     console.log('🚀 Starting export/import test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -383,7 +383,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('📊 Test 3: API data integrity verification...');
 
     // Create test data
-    const testAgentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const testAgentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -401,7 +401,7 @@ test.describe('Data Persistence and Recovery', () => {
       console.log('📊 Created test agent for export:', testAgent.id);
 
       // Retrieve the same agent to verify data integrity
-      const retrieveResponse = await page.request.get(`http://localhost:8001/api/agents/${testAgent.id}`, {
+      const retrieveResponse = await request.get(`/api/agents/${testAgent.id}`, {
         headers: { 'X-Test-Worker': workerId }
       });
 
@@ -426,7 +426,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('✅ Export/import test completed');
   });
 
-  test('Recovery from data corruption scenarios', async ({ page }) => {
+  test('Recovery from data corruption scenarios', async ({ page, request }) => {
     console.log('🚀 Starting data corruption recovery test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -436,7 +436,7 @@ test.describe('Data Persistence and Recovery', () => {
 
     try {
       // Try to create agent with invalid/corrupted data
-      const corruptResponse = await page.request.post('http://localhost:8001/api/agents', {
+      const corruptResponse = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -466,7 +466,7 @@ test.describe('Data Persistence and Recovery', () => {
     console.log('📊 Test 2: System state recovery...');
 
     // Create valid agent after corruption attempt
-    const recoveryResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const recoveryResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',

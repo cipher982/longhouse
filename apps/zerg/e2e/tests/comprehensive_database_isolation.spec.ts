@@ -11,7 +11,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Comprehensive Database Isolation', () => {
-  test('Complete database isolation validation', async ({ page }) => {
+  test('Complete database isolation validation', async ({ page, request }) => {
     console.log('🔍 Starting comprehensive database isolation test...');
 
     // Get the worker ID from environment
@@ -54,7 +54,7 @@ test.describe('Comprehensive Database Isolation', () => {
 
     // Test simple health check first
     try {
-      const healthResponse = await page.request.get('http://localhost:8001/', {
+      const healthResponse = await request.get('/, {
         headers: {
           'X-Test-Worker': workerId,
         }
@@ -72,7 +72,7 @@ test.describe('Comprehensive Database Isolation', () => {
 
     // Test agent endpoint
     try {
-      const agentResponse = await page.request.get('http://localhost:8001/api/agents', {
+      const agentResponse = await request.get('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
         }
@@ -93,7 +93,7 @@ test.describe('Comprehensive Database Isolation', () => {
 
     // Test workflow endpoint
     try {
-      const workflowResponse = await page.request.get('http://localhost:8001/api/workflows', {
+      const workflowResponse = await request.get('/api/workflows', {
         headers: {
           'X-Test-Worker': workerId,
         }
@@ -115,7 +115,7 @@ test.describe('Comprehensive Database Isolation', () => {
     // Test agent creation
     console.log('🔍 Testing agent creation...');
     try {
-      const createResponse = await page.request.post('http://localhost:8001/api/agents', {
+      const createResponse = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',

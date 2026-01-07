@@ -20,7 +20,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
 
     // Step 1: Create agent for workflow
     console.log('📊 Step 1: Creating test agent...');
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'Content-Type': 'application/json',
       },
@@ -39,7 +39,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
     // Step 2: Create a simple workflow (if workflow creation is supported)
     console.log('📊 Step 2: Attempting workflow creation...');
     try {
-      const workflowResponse = await page.request.post('http://localhost:8001/api/workflows', {
+      const workflowResponse = await request.post('/api/workflows', {
         headers: {
           'Content-Type': 'application/json',
         },
@@ -83,7 +83,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
 
         // Step 3: Execute the workflow
         console.log('📊 Step 3: Executing workflow...');
-        const executionResponse = await page.request.post(`http://localhost:8001/api/workflow-executions/${workflow.id}/start`, {
+        const executionResponse = await request.post(`/api/workflow-executions/${workflow.id}/start`, {
           headers: {
             'Content-Type': 'application/json',
           },
@@ -106,7 +106,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
           while (attempts < maxAttempts) {
             await page.waitForTimeout(1000);
 
-            const statusResponse = await page.request.get(`http://localhost:8001/api/workflow-executions/${execution.id}`);
+            const statusResponse = await request.get(`/api/workflow-executions/${execution.id}`);
 
             if (statusResponse.ok()) {
               const status = await statusResponse.json();
@@ -141,7 +141,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
     console.log('📊 Step 5: Testing direct HTTP tool usage...');
     try {
       // Check if there's a tools endpoint to test HTTP functionality
-      const toolsResponse = await page.request.get('http://localhost:8001/api/tools');
+      const toolsResponse = await request.get('/api/tools');
 
       if (toolsResponse.ok()) {
         const tools = await toolsResponse.json();
