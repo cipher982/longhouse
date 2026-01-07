@@ -30,6 +30,9 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: "no"
+    # Increase max_connections for parallel E2E tests (16+ Playwright workers)
+    # Default is 100, which is too low when each worker has its own connection pool
+    command: postgres -c max_connections=500 -c shared_buffers=256MB
     ports:
       - "5432:5432"  # Expose for E2E tests (spawned backend runs on host)
     environment:
