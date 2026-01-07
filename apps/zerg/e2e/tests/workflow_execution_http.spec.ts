@@ -12,7 +12,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Workflow Execution with HTTP Tools', () => {
-  test('Execute workflow with HTTP tool and verify requests', async ({ page }, testInfo) => {
+  test('Execute workflow with HTTP tool and verify requests', async ({ page, request }, testInfo) => {
     console.log('🚀 Starting workflow execution test...');
 
     const workerId = String(testInfo.workerIndex);

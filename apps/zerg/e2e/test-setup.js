@@ -60,10 +60,10 @@ async function globalSetup(config) {
     ? envWorkers
     : (process.env.CI ? 4 : cpuCount);
 
-  // Create extra schemas to account for retries. With fullyParallel + retries,
-  // Playwright can assign workerIndex values higher than the configured worker count.
-  // With 342 tests and 1 retry each, worker indices can theoretically reach 684.
-  const schemaCount = Math.max(workers * 2, 400);
+  // Schema count must match backend's MAX_E2E_SCHEMAS (64) in e2e_schema_manager.py.
+  // Worker IDs are wrapped modulo this value, so we only need 64 schemas regardless
+  // of how many tests run or how high Playwright's worker indices grow.
+  const schemaCount = 64;
 
   // Quiet setup - only show count
   process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
@@ -90,11 +90,12 @@ dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
     print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create schemas for all workers (including extra for retries)
+# Pre-create exactly MAX_E2E_SCHEMAS (64) schemas.
+# Worker IDs are wrapped modulo this value in get_schema_name().
 for i in range(${schemaCount}):
     ensure_worker_schema(default_engine, str(i))
 
-print(f"  {${schemaCount}} worker schemas ready")
+print(f"  {${schemaCount}} worker schemas ready (worker IDs wrap modulo {${schemaCount}})")
     `], {
       cwd: backendDir,
       stdio: 'inherit',
