@@ -60,10 +60,10 @@ async function globalSetup(config) {
     ? envWorkers
     : (process.env.CI ? 4 : cpuCount);
 
-  // Schema count must match backend's MAX_E2E_SCHEMAS (64) in e2e_schema_manager.py.
-  // Worker IDs are wrapped modulo this value, so we only need 64 schemas regardless
-  // of how many tests run or how high Playwright's worker indices grow.
-  const schemaCount = 64;
+  // Schema count must match backend's MAX_E2E_SCHEMAS (128) in e2e_schema_manager.py.
+  // Worker IDs are wrapped modulo this value. 128 schemas reduces collision probability
+  // when many tests run (342 tests → ~350+ worker indices with retries).
+  const schemaCount = 128;
 
   // Quiet setup - only show count
   process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
@@ -90,7 +90,7 @@ dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
     print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create exactly MAX_E2E_SCHEMAS (64) schemas.
+# Pre-create exactly MAX_E2E_SCHEMAS (128) schemas.
 # Worker IDs are wrapped modulo this value in get_schema_name().
 for i in range(${schemaCount}):
     ensure_worker_schema(default_engine, str(i))
