@@ -339,7 +339,7 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
       }}
       role="presentation"
     >
-      <aside className={clsx("agent-settings-drawer", { open: isOpen })}>
+      <aside className={clsx("agent-settings-drawer", { open: isOpen })} data-testid="agent-debug-modal">
         <header className="agent-settings-header">
           <div>
             <h2>Agent Config</h2>
