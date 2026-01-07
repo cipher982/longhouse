@@ -15,7 +15,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Performance and Load Testing', () => {
-  test('UI responsiveness benchmarking', async ({ page }) => {
+  test('UI responsiveness benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting UI responsiveness test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -91,7 +91,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ UI responsiveness test completed');
   });
 
-  test('API response time benchmarking', async ({ page }) => {
+  test('API response time benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting API performance test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -108,7 +108,7 @@ test.describe('Performance and Load Testing', () => {
     for (const apiTest of apiTests) {
       try {
         const startTime = Date.now();
-        const response = await page.request[apiTest.method](`http://localhost:8001${apiTest.endpoint}`, {
+        const response = await request[apiTest.method](`${apiTest.endpoint}`, {
           headers: { 'X-Test-Worker': workerId }
         });
         const responseTime = Date.now() - startTime;
@@ -133,7 +133,7 @@ test.describe('Performance and Load Testing', () => {
 
     const batchSize = 10;
     const batchRequests = Array.from({ length: batchSize }, () =>
-      page.request.get('http://localhost:8001/api/agents', {
+      request.get('/api/agents', {
         headers: { 'X-Test-Worker': workerId }
       })
     );
@@ -158,7 +158,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ API performance test completed');
   });
 
-  test('Database performance with large datasets', async ({ page }) => {
+  test('Database performance with large datasets', async ({ page, request }) => {
     console.log('🚀 Starting database performance test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -170,7 +170,7 @@ test.describe('Performance and Load Testing', () => {
 
     const creationStart = Date.now();
     for (let i = 0; i < datasetSize; i++) {
-      const promise = page.request.post('http://localhost:8001/api/agents', {
+      const promise = request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -207,7 +207,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('📊 Test 2: Query performance with large dataset...');
 
     const queryStart = Date.now();
-    const queryResponse = await page.request.get('http://localhost:8001/api/agents', {
+    const queryResponse = await request.get('/api/agents', {
       headers: { 'X-Test-Worker': workerId }
     });
     const queryTime = Date.now() - queryStart;
@@ -229,7 +229,7 @@ test.describe('Performance and Load Testing', () => {
 
     try {
       const paginationStart = Date.now();
-      const paginatedResponse = await page.request.get('http://localhost:8001/api/agents?limit=10&offset=0', {
+      const paginatedResponse = await request.get('/api/agents?limit=10&offset=0', {
         headers: { 'X-Test-Worker': workerId }
       });
       const paginationTime = Date.now() - paginationStart;
@@ -253,7 +253,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ Database performance test completed');
   });
 
-  test('Memory usage and resource monitoring', async ({ page, context }) => {
+  test('Memory usage and resource monitoring', async ({ page, context, request }) => {
     console.log('🚀 Starting memory usage test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -295,7 +295,7 @@ test.describe('Performance and Load Testing', () => {
 
     // Create several agents to test memory usage
     for (let i = 0; i < 10; i++) {
-      await page.request.post('http://localhost:8001/api/agents', {
+      await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -368,7 +368,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ Memory usage test completed');
   });
 
-  test('Concurrent user simulation', async ({ browser }) => {
+  test('Concurrent user simulation', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent user simulation...');
 
     const workerIdBase = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -392,7 +392,7 @@ test.describe('Performance and Load Testing', () => {
         await page.waitForTimeout(500);
 
         // Create an agent as this user
-        const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+        const agentResponse = await request.post('/api/agents', {
           headers: {
             'X-Test-Worker': userId,
             'Content-Type': 'application/json',
@@ -441,7 +441,7 @@ test.describe('Performance and Load Testing', () => {
     console.log('✅ Concurrent user simulation completed');
   });
 
-  test('Large workflow performance', async ({ page }) => {
+  test('Large workflow performance', async ({ page, request }) => {
     console.log('🚀 Starting large workflow performance test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -452,7 +452,7 @@ test.describe('Performance and Load Testing', () => {
     const agents = [];
 
     for (let i = 0; i < agentCount; i++) {
-      const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+      const agentResponse = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -526,7 +526,7 @@ test.describe('Performance and Load Testing', () => {
         canvas_data: { nodes, edges }
       };
 
-      const workflowResponse = await page.request.post('http://localhost:8001/api/workflows', {
+      const workflowResponse = await request.post('/api/workflows', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -547,7 +547,7 @@ test.describe('Performance and Load Testing', () => {
 
         // Test retrieval performance
         const retrievalStart = Date.now();
-        const retrievalResponse = await page.request.get(`http://localhost:8001/api/workflows/${workflow.id}`, {
+        const retrievalResponse = await request.get(`/api/workflows/${workflow.id}`, {
           headers: { 'X-Test-Worker': workerId }
         });
         const retrievalTime = Date.now() - retrievalStart;

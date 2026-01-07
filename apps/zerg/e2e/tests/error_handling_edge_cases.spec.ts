@@ -15,7 +15,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Error Handling and Edge Cases', () => {
-  test('API error handling with invalid data', async ({ page }) => {
+  test('API error handling with invalid data', async ({ page, request }) => {
     console.log('🚀 Starting API error handling test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -24,7 +24,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 1: Invalid agent creation - missing required fields
     console.log('📊 Test 1: Invalid agent creation - missing fields');
     try {
-      const response = await page.request.post('http://localhost:8001/api/agents', {
+      const response = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -49,7 +49,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Invalid JSON payload
     console.log('📊 Test 2: Invalid JSON payload');
     try {
-      const response = await page.request.post('http://localhost:8001/api/agents', {
+      const response = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -68,7 +68,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 3: Large payload handling');
     try {
       const largeString = 'x'.repeat(10000); // 10KB string
-      const response = await page.request.post('http://localhost:8001/api/agents', {
+      const response = await request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -94,7 +94,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 4: Invalid HTTP methods
     console.log('📊 Test 4: Invalid HTTP methods');
     try {
-      const response = await page.request.patch('http://localhost:8001/api/agents', {
+      const response = await request.patch('/api/agents', {
         headers: { 'X-Test-Worker': workerId },
         data: { test: 'data' }
       });
@@ -109,7 +109,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 5: Non-existent resource access
     console.log('📊 Test 5: Non-existent resource access');
     try {
-      const response = await page.request.get('http://localhost:8001/api/agents/999999', {
+      const response = await request.get('/api/agents/999999', {
         headers: { 'X-Test-Worker': workerId }
       });
 
@@ -123,7 +123,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('✅ API error handling test completed');
   });
 
-  test('Database constraint and data integrity', async ({ page }) => {
+  test('Database constraint and data integrity', async ({ page, request }) => {
     console.log('🚀 Starting database constraint test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -133,7 +133,7 @@ test.describe('Error Handling and Edge Cases', () => {
     const agentName = `Duplicate Test Agent ${Date.now()}`;
 
     // Create first agent
-    const firstResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const firstResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -151,7 +151,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 First agent created:', firstAgent.id);
 
     // Attempt to create duplicate
-    const duplicateResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const duplicateResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -175,7 +175,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 2: Field length validation');
     const extremelyLongName = 'x'.repeat(1000);
 
-    const longFieldResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const longFieldResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
@@ -198,7 +198,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('✅ Database constraint test completed');
   });
 
-  test('Concurrent operations and race conditions', async ({ page }) => {
+  test('Concurrent operations and race conditions', async ({ page, request }) => {
     console.log('🚀 Starting concurrency test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -206,7 +206,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 1: Concurrent agent creation
     console.log('📊 Test 1: Concurrent agent creation');
     const concurrentRequests = Array.from({ length: 5 }, (_, i) =>
-      page.request.post('http://localhost:8001/api/agents', {
+      request.post('/api/agents', {
         headers: {
           'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
@@ -238,7 +238,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Test 2: Rapid-fire requests to same endpoint
     console.log('📊 Test 2: Rapid-fire GET requests');
     const rapidRequests = Array.from({ length: 10 }, () =>
-      page.request.get('http://localhost:8001/api/agents', {
+      request.get('/api/agents', {
         headers: { 'X-Test-Worker': workerId }
       })
     );
@@ -258,7 +258,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('✅ Concurrency test completed');
   });
 
-  test('UI error state handling', async ({ page }) => {
+  test('UI error state handling', async ({ page, request }) => {
     console.log('🚀 Starting UI error state test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';

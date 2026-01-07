@@ -12,7 +12,7 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Real-time WebSocket Monitoring', () => {
-  test('WebSocket event monitoring and real-time updates', async ({ page }) => {
+  test('WebSocket event monitoring and real-time updates', async ({ page, request }) => {
     console.log('🚀 Starting WebSocket monitoring test...');
 
     const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
@@ -59,7 +59,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
 
     // Step 3: Create an agent to trigger WebSocket updates
     console.log('📊 Step 3: Creating agent to trigger updates...');
-    const agentResponse = await page.request.post('http://localhost:8001/api/agents', {
+    const agentResponse = await request.post('/api/agents', {
       headers: {
         'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
