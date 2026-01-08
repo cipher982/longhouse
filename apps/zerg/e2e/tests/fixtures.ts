@@ -76,6 +76,8 @@ export const test = base.extend<TestFixtures>({
       extraHTTPHeaders: {
         'X-Test-Worker': workerId,
       },
+      // Increase timeout for API requests - reset-database can be slow under parallel load
+      timeout: 30_000,
     });
     await use(request);
     await request.dispose();
