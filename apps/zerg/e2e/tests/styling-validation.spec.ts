@@ -225,7 +225,7 @@ test.describe('Styling Validation', () => {
     expect(designTokens.transitionFast).toBeTruthy();
 
     // Check that primary button uses design tokens
-    const primaryButton = page.locator('.send-button').first();
+    const primaryButton = page.locator('[data-testid="send-message-btn"]').first();
     if (await primaryButton.isVisible()) {
       const buttonStyles = await primaryButton.evaluate((el) => {
         const styles = window.getComputedStyle(el);

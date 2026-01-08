@@ -1,11 +1,10 @@
 import { test, expect } from './fixtures';
 
-// NB:  This is a *smoke* test – we do not attempt to mock the entire backend.
-// The compiled WASM app is expected to be served on http://localhost:8002 by
-// `./build.sh --serve` (see README).  CI starts the dev-server in the
-// background before invoking `pnpm playwright test`.
+// Legacy test from the pre-unified (WASM) dashboard. The current app is the
+// unified SPA behind the Playwright webServer and no longer serves anything on
+// `http://localhost:8002`, nor does it have the old modal/testids.
 
-test('Agent modal – only one tab-content is visible', async ({ page }) => {
+test.skip('Agent modal – only one tab-content is visible', async ({ page }) => {
   // 1) Load SPA
   await page.goto('http://localhost:8002');
 
