@@ -238,7 +238,7 @@ export async function navigateToChat(page: Page, agentId: string): Promise<void>
 
   // Wait for chat interface to load (if implemented)
   try {
-    await waitForElement(page, '.chat-input', 5000);
+    await waitForElement(page, '[data-testid="chat-input"]', 5000);
   } catch (error) {
     // Chat UI might not be fully implemented yet
     testLog.warn('Chat UI not fully loaded, continuing...');
@@ -352,7 +352,8 @@ export async function waitForToast(
  * This is a convenience wrapper for tests that have a Page but need to create threads
  */
 export async function createTestThread(page: Page, agentId: string, title: string): Promise<Thread> {
-  const apiClient = createApiClient('0'); // Use default worker for page-based tests
+  const workerId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
+  const apiClient = createApiClient(workerId);
 
   const thread = await apiClient.createThread({
     agent_id: agentId,
