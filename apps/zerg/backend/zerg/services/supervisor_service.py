@@ -611,6 +611,113 @@ class SupervisorService:
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
+            # Durable runs (master/worker): if this supervisor spawned one or more workers in this run,
+            # treat this as an intermediate "ack" turn and defer completion until a continuation
+            # run synthesizes worker results.
+            #
+            # Without this, the supervisor often emits a "delegating..." assistant message and
+            # marks the run SUCCESS immediately, so worker completion never triggers a follow-up
+            # response (worker_runner only triggers continuations for DEFERRED runs).
+            from zerg.models.agent_run_event import AgentRunEvent
+
+            worker_job_count = self.db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).count()
+            if worker_job_count > 0:
+                run.status = RunStatus.DEFERRED
+                run.duration_ms = duration_ms
+                # Store a short summary for the task inbox ("first response" behavior).
+                if result_text:
+                    run.summary = (result_text[:500] + "...") if len(result_text) > 500 else result_text
+                self.db.commit()
+
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="supervisor_deferred",
+                    payload={
+                        "agent_id": agent.id,
+                        "thread_id": thread.id,
+                        # Use the model's intermediate response as the "deferred message" shown in chat.
+                        "message": result_text or "Delegating this to a worker now. I'll report back when it finishes.",
+                        # Reason is important because not all DEFERRED runs should close their SSE streams.
+                        "reason": "waiting_for_worker",
+                        # Keep the stream open so the connected chat can receive the continuation result.
+                        "close_stream": False,
+                        "owner_id": owner_id,
+                    },
+                )
+
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="run_updated",
+                    payload={
+                        "agent_id": agent.id,
+                        "status": "deferred",
+                        "thread_id": thread.id,
+                        "owner_id": owner_id,
+                    },
+                )
+
+                # Race-safety: if the worker finished before we flipped the run to DEFERRED,
+                # the worker runner couldn't trigger the continuation. If all workers already
+                # emitted worker_complete, schedule a continuation immediately (idempotent).
+                worker_complete_count = (
+                    self.db.query(AgentRunEvent)
+                    .filter(AgentRunEvent.run_id == run.id, AgentRunEvent.event_type == "worker_complete")
+                    .count()
+                )
+                if worker_complete_count >= worker_job_count:
+                    latest = (
+                        self.db.query(AgentRunEvent)
+                        .filter(
+                            AgentRunEvent.run_id == run.id,
+                            AgentRunEvent.event_type.in_(["worker_summary_ready", "worker_complete"]),
+                        )
+                        .order_by(AgentRunEvent.id.desc())
+                        .first()
+                    )
+                    if latest and isinstance(latest.payload, dict):
+                        job_id = latest.payload.get("job_id")
+                        worker_id = latest.payload.get("worker_id")
+                        summary = latest.payload.get("summary")
+                        status = latest.payload.get("status")
+                        error = latest.payload.get("error")
+
+                        if isinstance(job_id, int) and isinstance(worker_id, str):
+                            summary_text = summary
+                            if not isinstance(summary_text, str) or not summary_text.strip():
+                                if status == "failed":
+                                    summary_text = f"Worker failed: {error or 'Unknown error'}"
+                                else:
+                                    summary_text = "(Worker completed — no summary available)"
+
+                            async def _schedule_continuation() -> None:
+                                from zerg.database import get_session_factory
+
+                                session_factory = get_session_factory()
+                                fresh_db = session_factory()
+                                try:
+                                    supervisor = SupervisorService(fresh_db)
+                                    await supervisor.run_continuation(
+                                        original_run_id=run.id,
+                                        job_id=job_id,
+                                        worker_id=worker_id,
+                                        result_summary=summary_text,
+                                    )
+                                finally:
+                                    fresh_db.close()
+
+                            asyncio.create_task(_schedule_continuation())
+
+                return SupervisorRunResult(
+                    run_id=run.id,
+                    thread_id=thread.id,
+                    status="deferred",
+                    result=result_text or "Delegating to a worker…",
+                    duration_ms=duration_ms,
+                    debug_url=f"/supervisor/{run.id}",
+                )
+
             # Update run status
             run.status = RunStatus.SUCCESS
             run.finished_at = end_time.replace(tzinfo=None)

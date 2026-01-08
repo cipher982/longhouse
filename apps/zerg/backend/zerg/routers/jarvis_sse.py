@@ -40,6 +40,30 @@ async def stream_run_events(
     queue: asyncio.Queue = asyncio.Queue()
     pending_workers = 0
     supervisor_done = False
+    continuation_cache: dict[int, bool] = {}
+
+    def _is_direct_continuation(candidate_run_id: int) -> bool:
+        """Return True if candidate_run_id is a continuation of run_id.
+
+        This allows a single client SSE stream to receive the follow-up supervisor
+        synthesis that happens in a new run (durable runs v2.2).
+        """
+        if candidate_run_id in continuation_cache:
+            return continuation_cache[candidate_run_id]
+
+        try:
+            from zerg.database import db_session
+            from zerg.models.models import AgentRun
+
+            with db_session() as db:
+                candidate = db.query(AgentRun).filter(AgentRun.id == candidate_run_id).first()
+                is_cont = bool(candidate and candidate.continuation_of_run_id == run_id)
+                continuation_cache[candidate_run_id] = is_cont
+                return is_cont
+        except Exception:
+            # Best-effort only; if lookup fails, do not leak events across runs.
+            continuation_cache[candidate_run_id] = False
+            return False
 
     async def event_handler(event):
         """Filter and queue relevant events."""
@@ -47,9 +71,15 @@ async def stream_run_events(
         if event.get("owner_id") != owner_id:
             return
 
-        # Filter by run_id
+        # Filter by run_id, but allow direct continuation runs to flow through
+        # so the connected client sees the supervisor's follow-up response.
         if "run_id" in event and event.get("run_id") != run_id:
-            return
+            candidate_run_id = event.get("run_id")
+            if not isinstance(candidate_run_id, int) or not _is_direct_continuation(candidate_run_id):
+                return
+            # Alias continuation run_id back to the original for UI stability.
+            event = dict(event)
+            event["run_id"] = run_id
 
         # Tool events MUST have run_id to prevent leaking across runs
         event_type = event.get("event_type") or event.get("type")
@@ -114,8 +144,11 @@ async def stream_run_events(
                 elif event_type == "supervisor_complete":
                     supervisor_done = True
                 elif event_type == "supervisor_deferred":
-                    # v2.2: Timeout migration - supervisor deferred, close stream
-                    complete = True
+                    # v2.2: Timeout migration default is to close the stream, but some
+                    # DEFERRED states (e.g., waiting for worker continuations) should
+                    # keep the stream open so the connected client receives the final answer.
+                    if event.get("close_stream", True):
+                        complete = True
                 elif event_type == "error":
                     complete = True
 
