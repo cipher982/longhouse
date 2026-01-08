@@ -1,8 +1,5 @@
 import { test, expect } from './fixtures';
 
-// Skip: Chat perfect test needs selector updates for new chat UI
-test.skip();
-
 // Reset DB before each test to keep agent/thread ids predictable
 test.beforeEach(async ({ request }) => {
   await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
