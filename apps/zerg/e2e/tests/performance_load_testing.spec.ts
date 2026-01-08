@@ -18,7 +18,7 @@ test.describe('Performance and Load Testing', () => {
   test('UI responsiveness benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting UI responsiveness test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Test 1: Page load performance
@@ -94,7 +94,7 @@ test.describe('Performance and Load Testing', () => {
   test('API response time benchmarking', async ({ page, request }) => {
     console.log('🚀 Starting API performance test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Single API request benchmarking
     console.log('📊 Test 1: Single API request performance...');
@@ -161,7 +161,7 @@ test.describe('Performance and Load Testing', () => {
   test('Database performance with large datasets', async ({ page, request }) => {
     console.log('🚀 Starting database performance test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create large dataset
     console.log('📊 Test 1: Creating large dataset...');
@@ -256,7 +256,7 @@ test.describe('Performance and Load Testing', () => {
   test('Memory usage and resource monitoring', async ({ page, context, request }) => {
     console.log('🚀 Starting memory usage test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Initial memory baseline
     console.log('📊 Test 1: Establishing memory baseline...');
@@ -371,7 +371,7 @@ test.describe('Performance and Load Testing', () => {
   test('Concurrent user simulation', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent user simulation...');
 
-    const workerIdBase = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerIdBase = process.env.TEST_PARALLEL_INDEX || '0';
     const concurrentUsers = 5;
 
     // Test 1: Simulate concurrent users
@@ -444,7 +444,7 @@ test.describe('Performance and Load Testing', () => {
   test('Large workflow performance', async ({ page, request }) => {
     console.log('🚀 Starting large workflow performance test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create agents for large workflow
     console.log('📊 Test 1: Creating agents for large workflow...');

@@ -17,7 +17,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
   let testAgentId: number;
 
   test.beforeEach(async ({ page }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Reset database for clean state
     await resetDatabaseViaRequest(page, { workerId });
@@ -41,7 +41,7 @@ test.describe('Agent Settings Drawer - Auto-Save', () => {
   });
 
   test.afterEach(async ({ page }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
     if (testAgentId) {
       await deleteAgentViaAPI(workerId, testAgentId);
     }

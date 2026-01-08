@@ -19,7 +19,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Multiple user sessions with data isolation', async ({ browser, request }) => {
     console.log('🚀 Starting multi-user data isolation test...');
 
-    const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
     const userCount = 3;
 
     // Create multiple user contexts
@@ -138,7 +138,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Concurrent workflow execution', async ({ browser, request }) => {
     console.log('🚀 Starting concurrent workflow execution test...');
 
-    const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
     const concurrentUsers = 3;
 
     // Create users and their workflows
@@ -352,7 +352,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('WebSocket message broadcasting and isolation', async ({ browser, request }) => {
     console.log('🚀 Starting WebSocket broadcasting test...');
 
-    const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
     const wsUsers = 2;
 
     // Create user sessions with WebSocket monitoring
@@ -512,7 +512,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Resource sharing and conflict resolution', async ({ browser, request }) => {
     console.log('🚀 Starting resource sharing and conflict resolution test...');
 
-    const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
     const conflictUsers = 2;
 
     // Create sessions for conflict testing
@@ -667,7 +667,7 @@ test.describe('Multi-User and Concurrency', () => {
   test('Session management and cleanup', async ({ browser, request }) => {
     console.log('🚀 Starting session management test...');
 
-    const baseWorkerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const baseWorkerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Session lifecycle management
     console.log('📊 Test 1: Testing session lifecycle...');
