@@ -307,8 +307,11 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
                 elif event_type == "supervisor_complete":
                     supervisor_done = True
                 elif event_type == "supervisor_deferred":
-                    # v2.2: Timeout migration - supervisor deferred, close stream
-                    complete = True
+                    # v2.2: Timeout migration default is to close the stream, but some
+                    # DEFERRED states (e.g., waiting for worker continuations) should
+                    # keep the stream open so the connected client receives the final answer.
+                    if event.get("close_stream", True):
+                        complete = True
                 elif event_type == "error":
                     complete = True
 
