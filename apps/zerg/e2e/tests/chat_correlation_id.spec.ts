@@ -9,9 +9,6 @@
 
 import { test, expect, type Page } from './fixtures';
 
-// Skip: Correlation ID tests need chat UI selector updates
-test.skip();
-
 test.describe('Chat Correlation ID Flow', () => {
   test('frontend generates UUID correlation ID and sends to backend', async ({ page }) => {
     // Navigate to Jarvis chat
