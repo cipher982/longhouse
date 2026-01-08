@@ -1,5 +1,4 @@
 import { test, expect } from './fixtures';
-import { resetDatabaseViaRequest } from './helpers/database-helpers';
 
 /**
  * AGENT CREATION FULL TEST
@@ -12,17 +11,21 @@ import { resetDatabaseViaRequest } from './helpers/database-helpers';
  *
  * NOTE: The AgentCreate API does NOT accept a `name` field - names are auto-generated
  * as "New Agent". We use `system_instructions` as the unique marker for isolation testing.
+ *
+ * IMPORTANT: Always use the `request` fixture for API calls - it has the correct
+ * X-Test-Worker header. Never pass workerId separately as that can cause mismatches.
  */
 
 test.describe('Agent Creation Full Workflow', () => {
-  test('Complete agent creation and isolation test', async ({ page, request, backendUrl }, testInfo) => {
-    // Get the worker ID from testInfo (same source as fixtures)
-    const workerId = String(testInfo.workerIndex);
-    const uniqueMarker = `worker_${workerId}_${Date.now()}`;
+  test('Complete agent creation and isolation test', async ({ page, request }, testInfo) => {
+    const uniqueMarker = `worker_${testInfo.workerIndex}_${Date.now()}`;
 
     // Step 0: Reset database to ensure clean state
-    // IMPORTANT: Don't swallow errors - if reset fails, test should fail fast
-    await resetDatabaseViaRequest(page, { workerId });
+    // Use the request fixture which already has the correct X-Test-Worker header
+    const resetResponse = await request.post('/api/admin/reset-database', {
+      data: { reset_type: 'clear_data' }
+    });
+    expect(resetResponse.ok(), `Reset failed: ${await resetResponse.text()}`).toBeTruthy();
 
     // Step 1: Verify empty state
     const initialAgents = await request.get('/api/agents');
