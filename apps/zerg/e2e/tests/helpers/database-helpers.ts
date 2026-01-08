@@ -87,6 +87,7 @@ export async function resetDatabaseViaRequest(
   options: DatabaseResetOptions & { workerId?: string } = {}
 ): Promise<void> {
   const { retries = 3, workerId } = options;
+  const effectiveWorkerId = workerId ?? process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX;
   let attempts = 0;
 
   // Use single backend port; isolation via X-Test-Worker header
@@ -98,7 +99,7 @@ export async function resetDatabaseViaRequest(
       const response = await page.request.post(`${baseUrl}/api/admin/reset-database`, {
         headers: {
           'Content-Type': 'application/json',
-          ...(workerId !== undefined ? { 'X-Test-Worker': workerId } : {}),
+          ...(effectiveWorkerId !== undefined ? { 'X-Test-Worker': effectiveWorkerId } : {}),
         },
         data: {
           reset_type: 'clear_data',
