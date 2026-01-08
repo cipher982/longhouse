@@ -311,7 +311,7 @@ export async function navigateToAgentChat(page: Page, agentId: string): Promise<
 
   // Wait for chat interface to load
   try {
-    await page.waitForSelector('.chat-input', { timeout: 5000 });
+    await page.waitForSelector('[data-testid="chat-input"]', { timeout: 5000 });
     testLog.info(`✅ Navigated to chat for agent ${agentId}`);
   } catch (error) {
     testLog.warn(`Chat UI not fully loaded for agent ${agentId}, continuing...`);
@@ -323,7 +323,8 @@ export async function navigateToAgentChat(page: Page, agentId: string): Promise<
  * This is a convenience wrapper for tests that have a Page but need to create agents
  */
 export async function createTestAgent(page: Page, name: string): Promise<Agent> {
-  const apiClient = createApiClient('0'); // Use default worker for page-based tests
+  const workerId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
+  const apiClient = createApiClient(workerId);
 
   const config: CreateAgentRequest = {
     name: name || `Test Agent ${Date.now()}`,
