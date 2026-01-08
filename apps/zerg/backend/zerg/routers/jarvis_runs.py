@@ -194,15 +194,37 @@ def get_active_run(
     supervisor_service = SupervisorService(db)
     supervisor_agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
 
-    # Find the most recent RUNNING or DEFERRED run for this user's supervisor
-    # DEFERRED runs are streamable (work continues in background)
+    # Prefer RUNNING runs. DEFERRED runs are "in-flight" only if they have not
+    # already produced a successful continuation.
     active_run = (
         db.query(AgentRun)
         .filter(AgentRun.agent_id == supervisor_agent.id)
-        .filter(AgentRun.status.in_([RunStatus.RUNNING, RunStatus.DEFERRED]))
+        .filter(AgentRun.status == RunStatus.RUNNING)
         .order_by(AgentRun.created_at.desc())
         .first()
     )
+
+    if not active_run:
+        from sqlalchemy import exists
+        from sqlalchemy.orm import aliased
+
+        from zerg.models.enums import RunTrigger
+
+        Continuation = aliased(AgentRun)
+        has_terminal_continuation = exists().where(
+            (Continuation.continuation_of_run_id == AgentRun.id)
+            & (Continuation.trigger == RunTrigger.CONTINUATION)
+            & (Continuation.status.in_([RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED]))
+        )
+
+        active_run = (
+            db.query(AgentRun)
+            .filter(AgentRun.agent_id == supervisor_agent.id)
+            .filter(AgentRun.status == RunStatus.DEFERRED)
+            .filter(~has_terminal_continuation)
+            .order_by(AgentRun.created_at.desc())
+            .first()
+        )
 
     if not active_run:
         # No active run - return 204 No Content
