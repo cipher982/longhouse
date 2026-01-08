@@ -31,17 +31,6 @@ function findDotEnv(startDir: string): string | null {
 // No other code changes are required.
 // ---------------------------------------------------------------------------
 
-// Maximum number of worker schemas to use. Playwright's workerIndex can exceed
-// the configured worker count when tests timeout/crash and new workers spawn.
-// We wrap workerIndex modulo this value to ensure we stay within pre-created schemas.
-// This MUST match the value in test-setup.js and playwright.config.js.
-const MAX_WORKER_SCHEMAS = 8;
-
-function getWorkerId(testInfo: { workerIndex: number }): string {
-  // Wrap workerIndex to stay within pre-created schema bounds
-  return String(testInfo.workerIndex % MAX_WORKER_SCHEMAS);
-}
-
 // Load dynamic backend port from .env
 function getBackendPort(): number {
   // Check environment variable first
@@ -78,7 +67,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   request: async ({ playwright, backendUrl }, use, testInfo) => {
-    const workerId = getWorkerId(testInfo);
+    const workerId = String(testInfo.workerIndex);
     const request = await playwright.request.newContext({
       baseURL: backendUrl, // Use dynamic backend URL
       extraHTTPHeaders: {
@@ -90,7 +79,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   context: async ({ browser }, use, testInfo) => {
-    const workerId = getWorkerId(testInfo);
+    const workerId = String(testInfo.workerIndex);
 
     const context = await browser.newContext({
       extraHTTPHeaders: {
