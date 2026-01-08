@@ -1,8 +1,5 @@
 import { test, expect } from './fixtures';
 
-// Skip: Realtime update tests have flaky browser context handling
-test.skip();
-
 // Ensure every test in this file starts with an empty DB so row counts are
 // deterministic across parallel pages.
 test.beforeEach(async ({ request }) => {
@@ -10,6 +7,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 test('Dashboard live update placeholder', async ({ browser }) => {
+  test.skip(true, 'Multi-tab real-time sync requires SSE/WebSocket mocking');
   // Open two tabs to simulate multi-tab sync
   const context = await browser.newContext();
   const page1 = await context.newPage();
@@ -53,6 +51,7 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
 });
 
 test('Message streaming via WebSocket', async ({ page, request }) => {
+  test.skip(true, 'Streaming test requires LLM mocking');
   console.log('🎯 Testing: Message streaming through WebSocket');
 
   // Create agent
