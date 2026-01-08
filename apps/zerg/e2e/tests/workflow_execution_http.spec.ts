@@ -15,7 +15,7 @@ test.describe('Workflow Execution with HTTP Tools', () => {
   test('Execute workflow with HTTP tool and verify requests', async ({ page, request }, testInfo) => {
     console.log('🚀 Starting workflow execution test...');
 
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
     console.log('📊 Worker ID:', workerId);
 
     // Step 1: Create agent for workflow

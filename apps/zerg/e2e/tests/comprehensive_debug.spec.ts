@@ -12,29 +12,25 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Comprehensive Debug', () => {
-  test('Complete system debug and diagnosis', async ({ page, backendUrl }, testInfo) => {
+  test('Complete system debug and diagnosis', async ({ request }, testInfo) => {
     console.log('🔍 Starting comprehensive debug test...');
 
     // Get the worker ID from test info
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
     console.log('📊 Worker ID:', workerId);
     console.log('📊 NODE_ENV:', process.env.NODE_ENV);
-
-    // Use shared backend started by Playwright webServer
-    console.log('📊 Backend URL:', backendUrl);
-    // No per-test server lifecycle required
 
     try {
 
     // Test 1: Basic connectivity
     console.log('🔍 Test 1: Basic connectivity');
-    const response = await page.request.get(`${backendUrl}/`);
+    const response = await request.get('/');
     expect(response.status()).toBe(200);
     console.log('✅ Backend is accessible');
 
     // Test 2: Header transmission
     console.log('🔍 Test 2: Header transmission');
-    const headerResponse = await page.request.get(`${backendUrl}/`, {
+    const headerResponse = await request.get('/', {
       headers: {
         'X-Debug-Test': 'header-test'
       }
@@ -44,7 +40,7 @@ test.describe('Comprehensive Debug', () => {
 
     // Test 3: Agent endpoint - GET (should work)
     console.log('🔍 Test 3: Agent GET endpoint');
-    const agentGetResponse = await page.request.get(`${backendUrl}/api/agents`);
+    const agentGetResponse = await request.get('/api/agents');
     expect(agentGetResponse.status()).toBe(200);
     const agents = await agentGetResponse.json();
     console.log('📊 Agent GET count:', agents.length);
@@ -55,14 +51,14 @@ test.describe('Comprehensive Debug', () => {
 
     // Try a simpler POST endpoint first
     console.log('📊 Testing user endpoint...');
-    const userResponse = await page.request.get(`${backendUrl}/api/users/me`);
+    const userResponse = await request.get('/api/users/me');
     expect(userResponse.status()).toBe(200);
     const user = await userResponse.json();
     console.log('📊 User data available:', !!user);
 
     // Test 5: Try creating a workflow (with proper canvas)
     console.log('🔍 Test 5: Workflow creation test');
-    const workflowResponse = await page.request.post(`${backendUrl}/api/workflows`, {
+    const workflowResponse = await request.post('/api/workflows', {
       headers: { 'Content-Type': 'application/json' },
       data: {
         name: `Test Workflow ${workerId}`,
@@ -77,7 +73,7 @@ test.describe('Comprehensive Debug', () => {
 
     // Test 6: Agent creation with minimal data
     console.log('🔍 Test 6: Minimal agent creation');
-    const agentResponse = await page.request.post(`${backendUrl}/api/agents`, {
+    const agentResponse = await request.post('/api/agents', {
       headers: { 'Content-Type': 'application/json' },
       data: {
         name: 'Minimal Agent',
@@ -93,7 +89,7 @@ test.describe('Comprehensive Debug', () => {
 
     // Test 7: System health
     console.log('🔍 Test 7: System health');
-    const adminResponse = await page.request.get(`${backendUrl}/api/system/health`);
+    const adminResponse = await request.get('/api/system/health');
     expect(adminResponse.status()).toBe(200);
     const health = await adminResponse.json();
     console.log('📊 System health:', JSON.stringify(health));

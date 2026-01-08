@@ -151,7 +151,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should flush queued messages when connection established', async ({ page, request }) => {
     console.log('🚀 Testing queue flush on connection...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create test agent
     const response = await request.post('/api/agents', {
@@ -209,7 +209,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should maintain queue during reconnection attempts', async ({ page, request }) => {
     console.log('🚀 Testing queue behavior during reconnection...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create test agent
     await request.post('/api/agents', {
@@ -269,7 +269,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should clear queue on successful reconnection', async ({ page, request }) => {
     console.log('🚀 Testing queue clear after successful reconnection...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     await request.post('/api/agents', {
       headers: {
@@ -352,7 +352,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should handle mixed message types in queue', async ({ page, request }) => {
     console.log('🚀 Testing queue with different message types...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     await request.post('/api/agents', {
       headers: {
@@ -405,7 +405,7 @@ test.describe('WebSocket Bounded Message Queue', () => {
   test('should not queue messages when WebSocket is OPEN', async ({ page, request }) => {
     console.log('🚀 Testing that messages send immediately when connected...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     await request.post('/api/agents', {
       headers: {

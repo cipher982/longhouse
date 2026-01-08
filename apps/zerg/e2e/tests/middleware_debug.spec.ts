@@ -14,7 +14,7 @@ test.describe('Middleware Debug', () => {
     console.log('🔍 Starting middleware debug test...');
 
     // Get the worker ID from test info
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
     console.log('📊 Worker ID:', workerId);
     console.log('📊 NODE_ENV:', process.env.NODE_ENV);
 

@@ -30,8 +30,8 @@ test.describe('Canvas Tab Switch Persistence', () => {
     await expect(page.locator('#header-title')).toBeVisible();
   });
 
-  test('agent nodes and connections persist across tab switches', async ({ page }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+  test('agent nodes and connections persist across tab switches', async ({ page, request }, testInfo) => {
+    const workerId = String(testInfo.parallelIndex);
 
     // Step 1: Create an agent via API
     console.log('📝 Step 1: Creating agent via API...');
