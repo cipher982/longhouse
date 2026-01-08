@@ -205,8 +205,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
     await newThreadBtn.click();
 
-    // Wait for URL to change
-    await page.waitForTimeout(1000);
+    // Wait for URL to change (deterministic wait, not arbitrary timeout)
+    await page.waitForURL((url) => url.toString() !== firstThreadUrl, { timeout: 5000 });
 
     const secondThreadUrl = page.url();
     console.log(`📊 Second thread URL: ${secondThreadUrl}`);
@@ -227,8 +227,11 @@ test.describe('Happy Path Tests - Core User Flows', () => {
 
     if (threadCount >= 2) {
       // Click first thread (should be at index 1 since newest is at 0)
+      const currentUrl = page.url();
       await threadList.nth(1).click();
-      await page.waitForTimeout(500);
+
+      // Wait for URL to change (thread switch complete)
+      await page.waitForURL((url) => url.toString() !== currentUrl, { timeout: 5000 });
 
       // CRITICAL: Verify we're back on first thread with correct message
       await expect(messagesContainer).toContainText(thread1Message, { timeout: 5000 });
