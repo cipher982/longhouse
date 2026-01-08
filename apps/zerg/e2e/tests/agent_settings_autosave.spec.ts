@@ -8,51 +8,47 @@
  */
 
 import { test, expect, type Page } from './fixtures';
-import { createAgentViaAPI, deleteAgentViaAPI } from './helpers/agent-helpers';
-import { resetDatabaseViaRequest } from './helpers/database-helpers';
 import { safeClick, waitForStableElement } from './helpers/test-utils';
 import { waitForToast } from './helpers/test-helpers';
 
 test.describe('Agent Settings Drawer - Auto-Save', () => {
-  let testAgentId: number;
+  let testAgentId: string;
 
-  test.beforeEach(async ({ page }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+  test.beforeEach(async ({ page, request }) => {
+    // Reset database for clean state (request fixture has correct X-Test-Worker header)
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 
-    // Reset database for clean state
-    await resetDatabaseViaRequest(page, { workerId });
-
-    // Create test agent with no allowed tools
-    const agent = await createAgentViaAPI(workerId, {
-      name: 'Auto-Save Test Agent',
-      allowed_tools: [],
+    // Create test agent using request fixture (ensures same worker header as browser)
+    const createResp = await request.post('/api/agents', {
+      data: {
+        name: 'Auto-Save Test Agent',
+        model: 'gpt-mock',
+        system_instructions: 'Test agent for autosave E2E',
+        task_instructions: 'Perform test tasks',
+      }
     });
-    testAgentId = agent.id;
+    expect(createResp.ok()).toBeTruthy();
+    const agent = await createResp.json();
+    testAgentId = String(agent.id);
 
-    // Navigate to dashboard
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
-
-    // Click dashboard tab if not already there
-    const dashboardTab = page.locator('.header-nav');
-    if (await dashboardTab.isVisible()) {
-      await dashboardTab.click();
-    }
+    // Navigate to dashboard and wait for agent to appear
+    // Note: React dashboard uses debug-agent-* to open settings drawer, not edit-agent-*
+    await page.goto('/dashboard');
+    await expect(page.locator(`[data-testid="debug-agent-${testAgentId}"]`)).toBeVisible({ timeout: 15_000 });
   });
 
-  test.afterEach(async ({ page }, testInfo) => {
-    const workerId = String(testInfo.parallelIndex);
+  test.afterEach(async ({ request }) => {
     if (testAgentId) {
-      await deleteAgentViaAPI(workerId, testAgentId);
+      await request.delete(`/api/agents/${testAgentId}`);
     }
   });
 
   /**
    * Helper: Opens the agent settings drawer
    */
-  async function openSettingsDrawer(page: Page, agentId: number) {
-    // Find and click the agent card settings button
-    await safeClick(page, `[data-testid="edit-agent-${agentId}"]`, { maxAttempts: 3 });
+  async function openSettingsDrawer(page: Page, agentId: string) {
+    // Find and click the agent debug/settings button (React dashboard uses debug-agent-*)
+    await safeClick(page, `[data-testid="debug-agent-${agentId}"]`, { maxAttempts: 3 });
 
     // Wait for drawer to slide in and stabilize
     const drawer = page.locator('.agent-settings-drawer.open');
