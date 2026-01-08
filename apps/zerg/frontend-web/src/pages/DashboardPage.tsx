@@ -734,6 +734,7 @@ export default function DashboardPage() {
                   type="checkbox"
                   id="dashboard-scope-toggle"
                   data-testid="dashboard-scope-toggle"
+                  aria-label="Toggle between my agents and all agents"
                   checked={scope === "all"}
                   onChange={(e) => {
                     const newScope = e.target.checked ? "all" : "my";
