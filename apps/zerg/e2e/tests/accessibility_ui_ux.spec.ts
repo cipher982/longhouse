@@ -18,7 +18,7 @@ test.describe('Accessibility and UI/UX', () => {
   test('WCAG compliance and semantic markup', async ({ page }) => {
     console.log('🚀 Starting WCAG compliance test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Navigate to application
@@ -467,7 +467,7 @@ test.describe('Accessibility and UI/UX', () => {
   test('User workflow usability testing', async ({ page, request }) => {
     console.log('🚀 Starting user workflow usability test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Primary user journey - Agent creation
     console.log('📊 Test 1: Testing agent creation workflow...');

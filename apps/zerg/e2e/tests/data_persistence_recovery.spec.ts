@@ -19,7 +19,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data persistence across sessions', async ({ page, context, request }) => {
     console.log('🚀 Starting data persistence test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Reset database to ensure clean state
@@ -145,7 +145,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Auto-save and draft recovery', async ({ page, request }) => {
     console.log('🚀 Starting auto-save test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     try {
       // Navigate to application with shorter timeout
@@ -218,7 +218,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data consistency and integrity', async ({ page, request }) => {
     console.log('🚀 Starting data consistency test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create multiple related entities and verify relationships
     console.log('📊 Test 1: Testing data relationships...');
@@ -339,7 +339,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Data export and import integrity', async ({ page, request }) => {
     console.log('🚀 Starting export/import test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Check for export functionality
     console.log('📊 Test 1: Looking for export functionality...');
@@ -429,7 +429,7 @@ test.describe('Data Persistence and Recovery', () => {
   test('Recovery from data corruption scenarios', async ({ page, request }) => {
     console.log('🚀 Starting data corruption recovery test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Invalid data format handling
     console.log('📊 Test 1: Invalid data format recovery...');

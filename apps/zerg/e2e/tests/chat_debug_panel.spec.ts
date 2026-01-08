@@ -14,8 +14,9 @@ test.beforeEach(async ({ request }) => {
 
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
+
   // Wait for chat UI to load
-  const chatInterface = page.locator('.text-input-container, .chat-wrapper');
+  const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
   await expect(chatInterface.first()).toBeVisible({ timeout: 10000 });
 }
 

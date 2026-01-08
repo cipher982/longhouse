@@ -16,8 +16,8 @@ test.describe('Perfect Graph Persistence', () => {
     await expect(page.locator('#header-title')).toBeVisible();
   });
 
-  test('complete graph persists as single entity across tab switches', async ({ page }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+  test('complete graph persists as single entity across tab switches', async ({ page, request }, testInfo) => {
+    const workerId = String(testInfo.parallelIndex);
 
     // Step 1: Create test agent
     console.log('🏗️  Step 1: Creating test agent...');

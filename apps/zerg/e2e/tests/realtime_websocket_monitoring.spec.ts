@@ -15,7 +15,7 @@ test.describe('Real-time WebSocket Monitoring', () => {
   test('WebSocket event monitoring and real-time updates', async ({ page, request }) => {
     console.log('🚀 Starting WebSocket monitoring test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Step 1: Navigate to application and wait for WebSocket connections

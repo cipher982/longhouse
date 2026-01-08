@@ -18,7 +18,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('API error handling with invalid data', async ({ page, request }) => {
     console.log('🚀 Starting API error handling test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Test 1: Invalid agent creation - missing required fields
@@ -126,7 +126,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Database constraint and data integrity', async ({ page, request }) => {
     console.log('🚀 Starting database constraint test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create agent with duplicate name (if uniqueness enforced)
     console.log('📊 Test 1: Duplicate name handling');
@@ -201,7 +201,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Concurrent operations and race conditions', async ({ page, request }) => {
     console.log('🚀 Starting concurrency test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Concurrent agent creation
     console.log('📊 Test 1: Concurrent agent creation');
@@ -261,7 +261,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('UI error state handling', async ({ page, request }) => {
     console.log('🚀 Starting UI error state test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Navigate to application
     await page.goto('/');

@@ -175,7 +175,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should handle multiple rapid subscribe/unsubscribe cycles', async ({ page, request }) => {
     console.log('🚀 Testing rapid subscription changes...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create multiple agents to trigger subscriptions
     const agentIds: number[] = [];
@@ -266,7 +266,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should re-subscribe after timeout allows retry', async ({ page, request }) => {
     console.log('🚀 Testing retry mechanism after timeout...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create an agent
     const response = await request.post('/api/agents', {
@@ -333,7 +333,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should cleanup timeouts on component unmount', async ({ page, request }) => {
     console.log('🚀 Testing timeout cleanup on unmount...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create an agent
     const response = await request.post('/api/agents', {
@@ -371,7 +371,7 @@ test.describe('WebSocket Subscription Confirmation', () => {
   test('should handle subscription ack when backend implements it', async ({ page, request }) => {
     console.log('🚀 Testing subscription acknowledgment (future behavior)...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     const ackMessages: any[] = [];
     let subscribeMessageId: string | null = null;
@@ -443,7 +443,7 @@ test.describe('WebSocket Subscription Edge Cases', () => {
   test('should handle duplicate subscription attempts', async ({ page, request }) => {
     console.log('🚀 Testing duplicate subscription handling...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create an agent
     const response = await request.post('/api/agents', {

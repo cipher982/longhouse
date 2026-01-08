@@ -18,7 +18,7 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Tool palette discovery and cataloging', async ({ page, request }) => {
     console.log('🚀 Starting tool palette discovery test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Navigate to canvas
@@ -84,7 +84,7 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Tool drag-and-drop from palette to canvas', async ({ page, request }) => {
     console.log('🚀 Starting tool drag-and-drop test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // First create an agent to work with
     const agentResponse = await request.post('/api/agents', {
@@ -180,7 +180,7 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Node connection handle detection and interaction', async ({ page, request }) => {
     console.log('🚀 Starting node connection test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create test agent for connections
     const agentResponse = await request.post('/api/agents', {
@@ -309,7 +309,7 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Complex workflow topology creation', async ({ page, request }) => {
     console.log('🚀 Starting complex workflow topology test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create multiple agents for complex workflow
     console.log('📊 Test 1: Creating multiple agents...');
@@ -458,7 +458,7 @@ test.describe('Tool Palette and Node Connections', () => {
   test('Connection validation and constraint checking', async ({ page, request }) => {
     console.log('🚀 Starting connection validation test...');
 
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Create test agents
     const agent1Response = await request.post('/api/agents', {

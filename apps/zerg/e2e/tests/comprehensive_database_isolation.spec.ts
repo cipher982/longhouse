@@ -15,7 +15,7 @@ test.describe('Comprehensive Database Isolation', () => {
     console.log('🔍 Starting comprehensive database isolation test...');
 
     // Get the worker ID from environment
-    const workerId = process.env.PW_TEST_WORKER_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     console.log('📊 Worker ID:', workerId);
 
     // Navigate to the app - this should trigger database initialization

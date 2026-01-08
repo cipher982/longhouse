@@ -14,9 +14,10 @@ import { test, expect } from './fixtures';
  */
 
 test.describe('Agent + Tool Complete E2E Workflow', () => {
-  test.beforeEach(async ({ page }) => {
-    // With in-memory database, we start clean every time
-    // No need for manual reset - just navigate to the app
+  test.beforeEach(async ({ page, request }) => {
+    // Ensure clean state for this worker before each test.
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+
     await page.goto('/', { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);
 

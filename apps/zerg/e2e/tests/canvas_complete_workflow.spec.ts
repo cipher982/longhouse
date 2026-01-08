@@ -17,7 +17,7 @@ test.describe('Complete Canvas Workflow', () => {
   test('End-to-end canvas workflow with agent and tool execution', async ({ page, request }, testInfo) => {
     console.log('🚀 Starting complete canvas workflow test...');
 
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
     console.log('📊 Worker ID:', workerId);
 
     // Step 1: Create Agent via API first to ensure it exists

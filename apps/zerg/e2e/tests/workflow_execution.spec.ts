@@ -69,18 +69,16 @@ async function addAgentNodeToWorkflow(page: Page, agentName: string) {
 }
 
 test.describe('Workflow Execution End-to-End Tests', () => {
-  test.beforeEach(async ({ page, backendUrl }) => {
-    // Reset database before each test
-    await page.request.post(`${backendUrl}/admin/reset-database`, { data: { reset_type: 'clear_data' } });
+  test.beforeEach(async ({ request }) => {
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
-  test.afterEach(async ({ page, backendUrl }) => {
-    // Clean up after each test
-    await page.request.post(`${backendUrl}/admin/reset-database`, { data: { reset_type: 'clear_data' } });
+  test.afterEach(async ({ request }) => {
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('Create workflow and execute simple workflow', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
     const agent = await createTestAgent(request, workerId);
@@ -110,7 +108,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
     // SKIP: Logs drawer selector needs investigation (#execution-logs-drawer not found)
     // This test documents the expected behavior for real-time log streaming
     // TODO: Fix logs drawer visibility after execution starts
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
     const agent = await createTestAgent(request, workerId);
@@ -155,7 +153,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow execution logs panel can be toggled', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
     const agent = await createTestAgent(request, workerId);
@@ -194,7 +192,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
     // SKIP: Execution may complete too fast to verify phase transitions in test environment
     // This test documents expected behavior of execution status indicators
     // TODO: Investigate why execution phase still shows "Running" after completion
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
     const agent = await createTestAgent(request, workerId);
@@ -235,7 +233,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
   });
 
   test('Workflow save and load persistence', async ({ page, request }, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
     const agent = await createTestAgent(request, workerId);

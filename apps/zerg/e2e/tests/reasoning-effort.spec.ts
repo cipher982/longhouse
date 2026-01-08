@@ -20,7 +20,7 @@ test.beforeEach(async ({ request }) => {
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
 
-  // Wait for Jarvis chat UI to load (look for PTT button or chat interface)
+  // Wait for Jarvis chat UI to load
   const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
   await expect(chatInterface.first()).toBeVisible({ timeout: 10000 });
   console.log('✅ Chat page loaded');
