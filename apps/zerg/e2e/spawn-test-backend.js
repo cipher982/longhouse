@@ -91,14 +91,18 @@ const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
 // E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
 // Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn workers.
-// Default to half of CPU cores for uvicorn (each handles multiple Playwright workers).
+// Pinned defaults for reproducible test runs:
+// - Local: 6 uvicorn workers (tested optimal with 16 Playwright workers for zero flake)
+// - CI: 2 uvicorn workers (conservative for shared runners)
 // Override with UVICORN_WORKERS env var if needed.
-const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
-const defaultUvicornWorkers = Math.max(2, Math.floor(cpuCount / 2));
+const defaultLocalUvicornWorkers = 6;   // Tested: 0 failures, 47s runtime
+const defaultCIUvicornWorkers = 2;
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
 const uvicornWorkers = workerId
   ? 1  // Legacy per-worker backend mode (deprecated)
-  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : defaultUvicornWorkers);
+  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0
+      ? envUvicornWorkers
+      : (process.env.CI ? defaultCIUvicornWorkers : defaultLocalUvicornWorkers));
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
