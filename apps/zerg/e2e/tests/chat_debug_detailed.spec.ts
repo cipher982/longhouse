@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 
 test.describe('Detailed Chat Debug', () => {
-  test('Debug chat flow with console logs', async ({ page }) => {
+  test('Debug chat flow with console logs', async ({ page }, testInfo) => {
     // Capture all console messages
     const consoleMessages: string[] = [];
     page.on('console', msg => {
@@ -28,8 +28,9 @@ test.describe('Detailed Chat Debug', () => {
     console.log('🐛 Starting detailed debug test...');
 
     // Open the app
-    await page.goto('http://localhost:8002');
-    await page.waitForSelector('.dashboard-container', { timeout: 10000 });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await page.waitForSelector('.header-nav', { timeout: 15000 });
 
     // Count agents before creation
     const initialCount = await page.locator('tr[data-agent-id]').count();
@@ -59,11 +60,11 @@ test.describe('Detailed Chat Debug', () => {
     const chatButton = page.locator(`[data-testid="chat-agent-${newestAgentId}"]`);
     console.log(`🐛 Looking for chat button: [data-testid="chat-agent-${newestAgentId}"]`);
     await chatButton.click();
-    await page.waitForSelector('.chat-input', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="chat-input"]', { timeout: 10000 });
 
     // Send message
     const testMessage = 'Debug test message';
-    await page.fill('.chat-input', testMessage);
+    await page.fill('[data-testid="chat-input"]', testMessage);
     await page.click('[data-testid="send-message-btn"]');
 
     // Wait a bit for backend processing
@@ -96,7 +97,7 @@ test.describe('Detailed Chat Debug', () => {
     wsMessages.forEach(msg => console.log(msg));
 
     // Take screenshot for debugging
-    await page.screenshot({ path: 'debug-chat-state.png' });
+    await page.screenshot({ path: testInfo.outputPath('debug-chat-state.png') });
 
     console.log('🐛 Debug test completed - check output above');
   });
