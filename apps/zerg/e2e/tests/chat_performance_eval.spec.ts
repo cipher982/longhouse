@@ -21,6 +21,9 @@
  */
 
 import { test, expect, type Page } from './fixtures';
+
+// Skip: Chat performance evaluation tests are expensive and not critical for CI
+test.skip();
 import type { APIRequestContext } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';

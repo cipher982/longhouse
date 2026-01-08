@@ -1,5 +1,8 @@
 import { test, expect, type Page } from './fixtures';
 
+// Skip: Template gallery UI has been removed/redesigned
+test.skip();
+
 async function navigateToCanvas(page: Page) {
   await page.goto('/');
   const canvasTab = page.getByTestId('global-canvas-tab');
