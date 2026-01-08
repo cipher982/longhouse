@@ -32,8 +32,8 @@ test.describe('Chat Debug - Single Message Flow', () => {
 
     // Verify chat UI loads
     console.log('📋 Step 3: Verifying chat UI elements...');
-    await expect(page.locator('.chat-input')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('.send-button')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="send-message-btn"]')).toBeVisible({ timeout: 5000 });
     console.log('✅ Chat UI elements are visible');
 
     // Check initial state of messages container
@@ -45,16 +45,16 @@ test.describe('Chat Debug - Single Message Flow', () => {
     const testMessage = 'Debug test message';
     console.log(`📋 Step 4: Sending message: "${testMessage}"`);
 
-    await page.locator('.chat-input').fill(testMessage);
+    await page.locator('[data-testid="chat-input"]').fill(testMessage);
     console.log('✅ Message filled in chat input');
 
     // Check if input has the text
-    const inputValue = await page.locator('.chat-input').inputValue();
+    const inputValue = await page.locator('[data-testid="chat-input"]').inputValue();
     console.log(`📋 Input value after fill: "${inputValue}"`);
 
     // Click send button
     console.log('📋 Step 5: Clicking send button...');
-    await page.locator('.send-button').click();
+    await page.locator('[data-testid="send-message-btn"]').click();
     console.log('✅ Send button clicked');
 
     // Wait a moment for any immediate updates
@@ -65,7 +65,7 @@ test.describe('Chat Debug - Single Message Flow', () => {
     console.log(`📋 Messages container content after send: "${contentAfterSend}"`);
 
     // Check if input was cleared (indicates message was processed)
-    const inputAfterSend = await page.locator('.chat-input').inputValue();
+    const inputAfterSend = await page.locator('[data-testid="chat-input"]').inputValue();
     console.log(`📋 Input value after send: "${inputAfterSend}"`);
 
     // Wait a bit longer for any async updates
