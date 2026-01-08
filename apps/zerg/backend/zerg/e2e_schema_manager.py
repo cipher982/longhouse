@@ -13,34 +13,17 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PREFIX = "e2e_worker_"
 
-# Maximum number of E2E schemas to create. Worker IDs are wrapped modulo this value.
-# This prevents unbounded schema growth when Playwright assigns high worker indices
-# (e.g., with fullyParallel + retries, worker indices can reach 2x test count).
-#
-# With 342 tests and 16 concurrent workers, worker indices grow to ~350+.
-# 128 schemas keeps collision to ~3 tests per schema on average, reducing
-# TRUNCATE lock contention when tests share a schema.
-MAX_E2E_SCHEMAS = 128
-
 
 def get_schema_name(worker_id: str) -> str:
     """Generate schema name for a worker.
 
-    Worker IDs are wrapped modulo MAX_E2E_SCHEMAS to ensure they map to
-    pre-created schemas. This handles Playwright's unbounded worker index
-    assignment when using fullyParallel + retries.
+    Worker IDs are mapped 1:1 to schemas. This is the safest mental model:
+    each Playwright worker (or test-only identifier like ``guardrail_a``) gets
+    its own schema and should never collide with others.
     """
     # Sanitize worker_id to prevent SQL injection
     safe_id = "".join(c for c in str(worker_id) if c.isalnum() or c == "_")
-
-    # Wrap numeric worker IDs to stay within pre-created schema bounds
-    try:
-        numeric_id = int(safe_id)
-        wrapped_id = numeric_id % MAX_E2E_SCHEMAS
-        return f"{SCHEMA_PREFIX}{wrapped_id}"
-    except ValueError:
-        # Non-numeric worker IDs (e.g., "main", "setup") use as-is
-        return f"{SCHEMA_PREFIX}{safe_id}"
+    return f"{SCHEMA_PREFIX}{safe_id}"
 
 
 def recreate_worker_schema(engine: Engine, worker_id: str) -> str:

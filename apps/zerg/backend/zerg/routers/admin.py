@@ -157,7 +157,7 @@ def clear_user_data(engine) -> dict[str, any]:
                     pass
 
         if engine.dialect.name == "postgresql":
-            # PostgreSQL: Use TRUNCATE CASCADE for efficiency
+            # PostgreSQL: Use TRUNCATE CASCADE for efficiency.
             if clear_tables:
                 tables_list = ", ".join(f'"{table}"' for table in sorted(clear_tables))
                 conn.execute(text(f"TRUNCATE TABLE {tables_list} RESTART IDENTITY CASCADE"))
@@ -213,9 +213,7 @@ async def reset_database(
     Requires super admin privileges (user must be in ADMIN_EMAILS).
     In production environments, requires additional password confirmation.
     """
-    # NOTE: This endpoint intentionally runs synchronously (no threadpool).
-    # In E2E, 16 workers will all hit this endpoint at once; serializing the
-    # TRUNCATE avoids Postgres lock thrash and statement_timeouts.
+    # Run synchronously so the HTTP response reflects a completed commit.
     return _reset_database_sync(request, current_user, x_test_worker)
 
 
