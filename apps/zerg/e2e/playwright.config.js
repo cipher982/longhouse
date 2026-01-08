@@ -69,10 +69,14 @@ const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
 // Define workers count first so we can use it later
-// In CI, cap at 4. Locally, use all available cores for maximum speed.
+// Default to local CPU count, but cap to keep E2E stable on laptops.
+// Override with `PLAYWRIGHT_WORKERS=<n>` when you want to tune concurrency.
 const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
 const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const workers = Number.isFinite(envWorkers) && envWorkers > 0 ? envWorkers : (process.env.CI ? 4 : cpuCount);
+const maxLocalWorkers = 8;  // Tested optimal - prevents DB contention
+const workers = Number.isFinite(envWorkers) && envWorkers > 0
+  ? envWorkers
+  : (process.env.CI ? 4 : Math.min(cpuCount, maxLocalWorkers));
 
 const frontendServer = {
   // React dev server for Playwright runs

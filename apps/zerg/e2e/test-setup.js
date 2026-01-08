@@ -54,16 +54,18 @@ async function globalSetup(config) {
   process.env.TESTING = '1';
 
   // Calculate worker count (must match playwright.config.js logic)
+  // Keep in sync with playwright.config.js.
   const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
   const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+  const maxLocalWorkers = 8;
   const workers = Number.isFinite(envWorkers) && envWorkers > 0
     ? envWorkers
-    : (process.env.CI ? 4 : cpuCount);
+    : (process.env.CI ? 4 : Math.min(cpuCount, maxLocalWorkers));
 
-  // Schema count must match backend's MAX_E2E_SCHEMAS (128) in e2e_schema_manager.py.
-  // Worker IDs are wrapped modulo this value. 128 schemas reduces collision probability
-  // when many tests run (342 tests → ~350+ worker indices with retries).
-  const schemaCount = 128;
+  // Pre-create one schema per Playwright worker id (0..workers-1).
+  // Other tests may use custom non-numeric worker IDs (e.g. guardrail_a) which are
+  // created lazily by the backend when first requested.
+  const schemaCount = workers;
 
   // Quiet setup - only show count
   process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
@@ -90,12 +92,11 @@ dropped = drop_all_e2e_schemas(default_engine)
 if dropped > 0:
     print(f"  Dropped {dropped} stale schemas", file=sys.stderr)
 
-# Pre-create exactly MAX_E2E_SCHEMAS (128) schemas.
-# Worker IDs are wrapped modulo this value in get_schema_name().
+# Pre-create one schema per Playwright worker id (0..workers-1).
 for i in range(${schemaCount}):
     ensure_worker_schema(default_engine, str(i))
 
-print(f"  {${schemaCount}} worker schemas ready (worker IDs wrap modulo {${schemaCount}})")
+print(f"  {${schemaCount}} worker schemas ready")
     `], {
       cwd: backendDir,
       stdio: 'inherit',
