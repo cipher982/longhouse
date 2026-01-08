@@ -67,7 +67,10 @@ export const test = base.extend<TestFixtures>({
   },
 
   request: async ({ playwright, backendUrl }, use, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    // Use parallelIndex (0 to workers-1) instead of workerIndex.
+    // workerIndex can exceed the configured worker count when Playwright
+    // restarts workers after test failures/timeouts.
+    const workerId = String(testInfo.parallelIndex);
     const request = await playwright.request.newContext({
       baseURL: backendUrl, // Use dynamic backend URL
       extraHTTPHeaders: {
@@ -79,7 +82,7 @@ export const test = base.extend<TestFixtures>({
   },
 
   context: async ({ browser }, use, testInfo) => {
-    const workerId = String(testInfo.workerIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     const context = await browser.newContext({
       extraHTTPHeaders: {
