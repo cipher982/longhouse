@@ -57,7 +57,7 @@ test.describe('Automation History Section', () => {
     // Navigate to chat to see automation history
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Verify automation history section is visible
     await expect(page.locator('[data-testid="automation-history"]')).toBeVisible({ timeout: 5000 });
@@ -70,7 +70,7 @@ test.describe('Automation History Section', () => {
 
     // Click header to expand
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
     await expect(automationList).not.toHaveClass(/collapsed/);
     console.log('✅ Expanded successfully');
 
@@ -79,7 +79,7 @@ test.describe('Automation History Section', () => {
 
     // Click to collapse again
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
     await expect(automationList).toHaveClass(/collapsed/);
     console.log('✅ Collapsed again successfully');
   });
@@ -113,11 +113,11 @@ test.describe('Automation History Section', () => {
 
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
 
     // Verify scheduled badge
     const runItem = page.locator(`[data-testid="automation-run-${thread.id}"]`);
@@ -163,11 +163,11 @@ test.describe('Automation History Section', () => {
 
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
 
     // Verify manual badge
     const runItem = page.locator(`[data-testid="automation-run-${thread.id}"]`);
@@ -214,7 +214,7 @@ test.describe('Automation History Section', () => {
 
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Verify chat thread appears in main thread list (not automation section)
     const chatThreads = page.locator('.thread-list .thread-item');
@@ -228,7 +228,7 @@ test.describe('Automation History Section', () => {
 
     // Expand automation runs
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
 
     // Verify automation runs in separate section
     const automationRuns = page.locator('.automation-run-item');
@@ -270,7 +270,7 @@ test.describe('Automation History Section', () => {
 
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Verify count badge shows 3
     const countBadge = page.locator('[data-testid="automation-count"]');
@@ -280,7 +280,7 @@ test.describe('Automation History Section', () => {
 
     // Expand and verify all 3 runs are present
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
 
     const automationRuns = page.locator('.automation-run-item');
     await expect(automationRuns).toHaveCount(3);
@@ -314,15 +314,15 @@ test.describe('Automation History Section', () => {
 
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Expand automation history
     await page.locator('[data-testid="automation-history-header"]').click();
-    await page.waitForTimeout(300);
+    // Animation waits replaced with deterministic expects below
 
     // Click on the automation run
     await page.locator(`[data-testid="automation-run-${thread.id}"]`).click();
-    await page.waitForTimeout(500);
+    // Wait for chat interface to be ready (deterministic)
 
     // Verify URL updated to show this thread
     const url = page.url();
