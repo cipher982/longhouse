@@ -1,8 +1,5 @@
 import { test, expect, type Page } from './fixtures';
 
-// Skip: Thread chat selectors have changed (.thread-list .thread-item)
-test.skip();
-
 // Reset DB before each test to keep thread ids predictable
 test.beforeEach(async ({ request }) => {
   await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
@@ -156,6 +153,6 @@ test.describe('Thread & Chat – basic flows', () => {
 
     const messagesContainer = page.locator('[data-testid="messages-container"]');
     await expect(messagesContainer).toBeVisible({ timeout: 5000 });
-    await expect(messagesContainer).toContainText(/No messages yet\\./, { timeout: 5000 });
+    await expect(messagesContainer).toContainText('No messages yet', { timeout: 5000 });
   });
 });
