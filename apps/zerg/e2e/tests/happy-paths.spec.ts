@@ -174,9 +174,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     const agentId = await createAgentViaUI(page);
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
 
-    // Wait for chat to load
+    // Wait for chat to load (deterministic - replaces arbitrary timeout)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // Check if new thread button exists - skip if not implemented yet

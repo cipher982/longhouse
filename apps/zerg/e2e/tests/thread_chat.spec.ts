@@ -136,9 +136,14 @@ test.describe('Thread & Chat – basic flows', () => {
 
     const sendBtn = page.locator('[data-testid="send-message-btn"]');
     await expect(sendBtn).toBeVisible({ timeout: 5000 });
-    await sendBtn.click();
 
-    // Wait for message to appear (indicates backend received it) before reloading
+    // Wait for the API response to complete (not just optimistic UI update)
+    const [response] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/') && r.request().method() === 'POST' && r.status() === 200, { timeout: 15000 }),
+      sendBtn.click(),
+    ]);
+
+    // Also verify UI shows the message
     await expect(page.locator('[data-testid="messages-container"]')).toContainText('Persist this', { timeout: 10000 });
     await page.reload();
 
