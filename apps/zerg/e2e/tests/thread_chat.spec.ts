@@ -137,6 +137,9 @@ test.describe('Thread & Chat – basic flows', () => {
     const sendBtn = page.locator('[data-testid="send-message-btn"]');
     await expect(sendBtn).toBeVisible({ timeout: 5000 });
     await sendBtn.click();
+
+    // Wait for message to appear (indicates backend received it) before reloading
+    await expect(page.locator('[data-testid="messages-container"]')).toContainText('Persist this', { timeout: 10000 });
     await page.reload();
 
     // Re-navigate to chat after reload

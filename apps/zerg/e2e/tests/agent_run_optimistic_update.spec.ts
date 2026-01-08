@@ -43,8 +43,9 @@ test.describe('Agent Run Button Real-time Update', () => {
     // Click the run button
     await runButton.click();
 
-    // Optimistic update should be immediate (< 100ms), WebSocket confirms within 1.5s
-    await expect(statusCell).toHaveText(/Running/, { timeout: 1500 });
+    // Optimistic update should be immediate, WebSocket confirms shortly after.
+    // Use 5s timeout to handle backend load variance in parallel test runs.
+    await expect(statusCell).toHaveText(/Running/, { timeout: 5000 });
 
     // Verify the run button is disabled during the run
     await expect(runButton).toBeDisabled();

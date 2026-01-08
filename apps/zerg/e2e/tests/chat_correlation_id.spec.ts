@@ -94,19 +94,23 @@ test.describe('Chat Correlation ID Flow', () => {
       }
     });
 
-    // Send first message
+    // Send first message and wait for API response
     const inputSelector = '.text-input-container textarea, .text-input-container input[type="text"]';
     await page.locator(inputSelector).fill('first message');
-    const sendButton = page.locator('button.send-button, button[aria-label*="Send"], button:has-text("Send")').first();
-    await sendButton.click();
+    const sendButton = page.locator('button.send-button').first();
 
-    await page.waitForTimeout(2000);
+    // Wait for the API request to complete
+    const [firstResponse] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/jarvis/chat') && r.status() === 200, { timeout: 15000 }),
+      sendButton.click(),
+    ]);
 
-    // Send second message
+    // Send second message and wait for API response
     await page.locator(inputSelector).fill('second message');
-    await sendButton.click();
-
-    await page.waitForTimeout(2000);
+    const [secondResponse] = await Promise.all([
+      page.waitForResponse(r => r.url().includes('/api/jarvis/chat') && r.status() === 200, { timeout: 15000 }),
+      sendButton.click(),
+    ]);
 
     // Verify we captured two different correlation IDs
     expect(correlationIds.length).toBeGreaterThanOrEqual(2);
