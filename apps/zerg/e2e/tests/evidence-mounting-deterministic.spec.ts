@@ -37,7 +37,7 @@ interface WorkerCompletePayload {
 // Test setup - reset DB and configure scripted model before each test
 test.beforeEach(async ({ request }) => {
   // 1. Reset database
-  await request.post('/admin/reset-database');
+  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 
   // 2. Configure supervisor to use scripted model
   const configResponse = await request.post('/admin/configure-test-model', {

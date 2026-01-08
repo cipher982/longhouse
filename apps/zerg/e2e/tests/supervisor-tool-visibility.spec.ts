@@ -11,7 +11,7 @@ import { test, expect, type Page } from './fixtures';
 // Reset DB before each test (skip if backend not available)
 test.beforeEach(async ({ request }) => {
   try {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   } catch (e) {
     // Backend not running - tests will be skipped
   }

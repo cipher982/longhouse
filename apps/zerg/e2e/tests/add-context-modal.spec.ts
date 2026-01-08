@@ -14,7 +14,7 @@ import { test, expect, type Page } from './fixtures';
 
 // Reset DB before each test for clean state
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database');
+  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 });
 
 /**

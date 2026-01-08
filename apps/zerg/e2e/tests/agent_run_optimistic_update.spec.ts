@@ -13,7 +13,7 @@ import { test, expect } from './fixtures';
 test.describe('Agent Run Button Real-time Update', () => {
   // Reset database before each test to prevent pollution from previous runs
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('should transition to running via optimistic update and websocket', async ({ page }) => {

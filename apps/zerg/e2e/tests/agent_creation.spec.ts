@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 test.describe('Agent Creation', () => {
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('creates agents with "New Agent" placeholder name', async ({ page }) => {

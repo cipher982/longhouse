@@ -15,7 +15,7 @@ import { test, expect } from './fixtures';
 test.describe('WebSocket Subscription Confirmation (Real E2E)', () => {
   test.beforeEach(async ({ request }) => {
     // Use fixture-provided request context with auth headers
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('successful subscription tracks message ID and waits for ack', async ({ page }) => {
