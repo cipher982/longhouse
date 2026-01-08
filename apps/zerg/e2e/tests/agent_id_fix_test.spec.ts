@@ -11,7 +11,7 @@ test.describe('Agent ID Fix Verification', () => {
 
   test.beforeEach(async ({ page, request }) => {
     // Reset database to ensure clean state
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
     await page.goto('/');
     await page.waitForTimeout(2000);
   });

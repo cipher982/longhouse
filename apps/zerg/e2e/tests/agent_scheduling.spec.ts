@@ -2,11 +2,11 @@ import { test, expect } from './fixtures';
 
 test.describe('Agent scheduling UI', () => {
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test.afterEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   async function createAndOpenConfig(page) {

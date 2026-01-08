@@ -176,7 +176,7 @@ export class ApiClient {
 
   async resetDatabase(): Promise<void> {
     try {
-      await this.request('POST', '/api/admin/reset-database');
+      await this.request('POST', '/api/admin/reset-database', { reset_type: 'clear_data' });
       // Wait for database to be fully reset before proceeding
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {

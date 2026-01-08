@@ -71,12 +71,12 @@ async function addAgentNodeToWorkflow(page: Page, agentName: string) {
 test.describe('Workflow Execution End-to-End Tests', () => {
   test.beforeEach(async ({ page, backendUrl }) => {
     // Reset database before each test
-    await page.request.post(`${backendUrl}/admin/reset-database`);
+    await page.request.post(`${backendUrl}/admin/reset-database`, { data: { reset_type: 'clear_data' } });
   });
 
   test.afterEach(async ({ page, backendUrl }) => {
     // Clean up after each test
-    await page.request.post(`${backendUrl}/admin/reset-database`);
+    await page.request.post(`${backendUrl}/admin/reset-database`, { data: { reset_type: 'clear_data' } });
   });
 
   test('Create workflow and execute simple workflow', async ({ page, request }, testInfo) => {

@@ -47,7 +47,7 @@ async function createConnectedWorkflow(page) {
 
 test.describe('Workflow Execution Animations', () => {
     test.beforeEach(async ({ request }) => {
-        await request.post('/admin/reset-database');
+        await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
     });
 
     test('Connection lines should animate during workflow execution', async ({ page }) => {

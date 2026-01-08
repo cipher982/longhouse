@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 test.describe('Authentication flows', () => {
   // Reset DB before each test for clean state
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('Dev login flow - landing page to dashboard', async ({ page }) => {

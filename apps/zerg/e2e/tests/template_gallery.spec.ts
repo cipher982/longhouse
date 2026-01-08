@@ -21,12 +21,12 @@ async function openTemplateGallery(page: Page) {
 
 test.describe('Template Gallery Tests', () => {
   test.beforeEach(async ({ page, request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
     await navigateToCanvas(page);
   });
 
   test.afterEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('Open template gallery modal', async ({ page }) => {

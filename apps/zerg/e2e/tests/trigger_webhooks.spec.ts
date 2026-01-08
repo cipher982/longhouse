@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database');
+  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 });
 
 // Stubs for trigger management – UI selectors may evolve, skip if missing.

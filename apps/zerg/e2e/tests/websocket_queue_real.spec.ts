@@ -16,7 +16,7 @@ import { test, expect } from './fixtures';
 
 test.describe('WebSocket Bounded Message Queue (Real E2E)', () => {
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database');
+    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
   });
 
   test('queue enforces 100 message limit with FIFO eviction', async ({ page }) => {

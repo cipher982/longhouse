@@ -529,7 +529,7 @@ test.setTimeout(120000);
 
 // Reset DB before each test
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database');
+  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 });
 
 test.describe('Chat Performance Evaluation', () => {
