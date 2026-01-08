@@ -1,8 +1,7 @@
 import { test, expect } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
-// Skip: Accessibility tests fail due to missing aria-label on dashboard toggle
-test.skip();
+// Re-enabled: Testing if aria-label issues have been fixed
 
 test.describe('Accessibility – dashboard smoke', () => {
   test('dashboard view has no serious axe violations', async ({ page }) => {
