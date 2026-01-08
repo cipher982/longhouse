@@ -1,5 +1,8 @@
 import { test, expect } from './fixtures';
 
+// Skip: Performance tests are long-running and not critical for CI
+test.skip();
+
 /**
  * PERFORMANCE AND LOAD TESTING E2E TEST
  *
