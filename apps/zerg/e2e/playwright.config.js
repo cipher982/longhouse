@@ -69,13 +69,16 @@ const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
 // Define workers count first so we can use it later
-// Default to CPU core count locally (uvicorn workers scale to match).
-// Override with `PLAYWRIGHT_WORKERS=<n>` when you want to tune concurrency.
-const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
+// Pinned defaults for reproducible test runs:
+// - Local: 16 Playwright workers (pair with 6+ uvicorn workers for zero flake)
+// - CI: 4 Playwright workers (conservative for shared runners)
+// Override with PLAYWRIGHT_WORKERS env var if needed.
 const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+const defaultLocalWorkers = 16;  // Tested optimal with 6 uvicorn workers
+const defaultCIWorkers = 4;
 const workers = Number.isFinite(envWorkers) && envWorkers > 0
   ? envWorkers
-  : (process.env.CI ? 4 : cpuCount);
+  : (process.env.CI ? defaultCIWorkers : defaultLocalWorkers);
 
 const frontendServer = {
   // React dev server for Playwright runs
