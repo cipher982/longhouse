@@ -147,14 +147,16 @@ def make_engine(db_url: str, **kwargs) -> Engine:
             f"Unsupported DATABASE_URL driver '{parsed.drivername}'. " "Only Postgres is supported (postgresql+psycopg://...)."
         )
 
-    # E2E tests: use moderate pool size (Postgres max_connections increased to 500)
-    # With N Playwright workers, each gets its own engine.
-    # pool_size=3 + max_overflow=5 = 8 connections max per worker
-    # 16 workers × 8 = 128 connections max, well under the 500 limit
-    # See: docs/work/e2e-test-infrastructure-redesign.md
+    # E2E tests: use conservative pool size to prevent connection explosion.
+    # With multiple uvicorn workers, each process creates per-worker engines.
+    # Worst case: uvicorn_workers × playwright_workers × (pool_size + max_overflow)
+    # Example: 6 uvicorn × 16 playwright × 4 = 384 connections (under 500 limit)
+    # Configure via E2E_DB_POOL_SIZE and E2E_DB_MAX_OVERFLOW env vars.
     if _settings.e2e_use_postgres_schemas:
-        kwargs.setdefault("pool_size", 3)
-        kwargs.setdefault("max_overflow", 5)  # Max 8 connections per engine
+        pool_size = int(os.environ.get("E2E_DB_POOL_SIZE", "2"))
+        max_overflow = int(os.environ.get("E2E_DB_MAX_OVERFLOW", "2"))
+        kwargs.setdefault("pool_size", pool_size)
+        kwargs.setdefault("max_overflow", max_overflow)
 
     # Connection pool health: pre_ping verifies connections before use,
     # pool_recycle closes connections after 5 minutes to handle DB restarts
