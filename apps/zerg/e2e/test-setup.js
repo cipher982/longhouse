@@ -53,7 +53,8 @@ async function globalSetup(config) {
   process.env.NODE_ENV = 'test';
   process.env.TESTING = '1';
 
-  // Calculate worker count for display purposes
+  // Calculate worker count (must match playwright.config.js logic)
+  // Keep in sync with playwright.config.js.
   const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
   const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
   const maxLocalWorkers = 8;
@@ -61,13 +62,10 @@ async function globalSetup(config) {
     ? envWorkers
     : (process.env.CI ? 4 : Math.min(cpuCount, maxLocalWorkers));
 
-  // Pre-create exactly MAX_WORKER_SCHEMAS schemas.
-  // This MUST match MAX_WORKER_SCHEMAS in fixtures.ts.
-  // Playwright's workerIndex can exceed the configured worker count when tests
-  // timeout/crash and new workers spawn. The fixtures wrap workerIndex modulo
-  // this value to ensure tests always use pre-created schemas.
-  const MAX_WORKER_SCHEMAS = 8;
-  const schemaCount = MAX_WORKER_SCHEMAS;
+  // Pre-create one schema per Playwright worker id (0..workers-1).
+  // Other tests may use custom non-numeric worker IDs (e.g. guardrail_a) which are
+  // created lazily by the backend when first requested.
+  const schemaCount = workers;
 
   // Quiet setup - only show count
   process.stdout.write(`Setting up ${schemaCount} schemas for ${workers} workers... `);
