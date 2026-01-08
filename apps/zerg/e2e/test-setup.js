@@ -57,10 +57,9 @@ async function globalSetup(config) {
   // Keep in sync with playwright.config.js.
   const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
   const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-  const maxLocalWorkers = 8;
   const workers = Number.isFinite(envWorkers) && envWorkers > 0
     ? envWorkers
-    : (process.env.CI ? 4 : Math.min(cpuCount, maxLocalWorkers));
+    : (process.env.CI ? 4 : cpuCount);
 
   // Pre-create one schema per Playwright worker id (0..workers-1).
   // Other tests may use custom non-numeric worker IDs (e.g. guardrail_a) which are

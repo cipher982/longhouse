@@ -11,6 +11,7 @@ import { spawn } from 'child_process';
 import { join } from 'path';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -89,14 +90,15 @@ const { BACKEND_PORT } = getPortsFromEnv();
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 
 // E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
-// Use single uvicorn worker to eliminate cache fragmentation across processes.
-// Each uvicorn process has its own _WORKER_ENGINES cache - with multiple workers,
-// both think they need to DROP+CREATE schemas, causing races.
-// See: docs/work/e2e-test-infrastructure-redesign.md
+// Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn workers.
+// Default to half of CPU cores for uvicorn (each handles multiple Playwright workers).
+// Override with UVICORN_WORKERS env var if needed.
+const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
+const defaultUvicornWorkers = Math.max(2, Math.floor(cpuCount / 2));
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
 const uvicornWorkers = workerId
   ? 1  // Legacy per-worker backend mode (deprecated)
-  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : 1);
+  : (Number.isFinite(envUvicornWorkers) && envUvicornWorkers > 0 ? envUvicornWorkers : defaultUvicornWorkers);
 
 if (workerId) {
     console.log(`[spawn-backend] Starting isolated backend for worker ${workerId} on port ${port}`);
