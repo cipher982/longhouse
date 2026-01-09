@@ -132,8 +132,10 @@ export interface EventMap {
   };
 
   // Test Events (E2E ready signals - DEV mode only)
+  // Note: Prefer sticky flags (window.__jarvis.ready) over events for "ready" signals
   'test:chat_ready': { timestamp: number };
-  'test:messages_loaded': { count: number; timestamp: number };
+  // Placeholder for future use - not currently emitted
+  // 'test:messages_loaded': { count: number; timestamp: number };
 }
 
 // Interaction state machine types
