@@ -119,9 +119,9 @@ export default function RunnersPage() {
         />
 
         {actionError && (
-          <div className="action-error" role="alert">
+          <div className="ui-action-error-banner" role="alert">
             {actionError}
-            <button type="button" className="dismiss-error" onClick={() => setActionError(null)}>
+            <button type="button" className="ui-action-error-dismiss" onClick={() => setActionError(null)}>
               Dismiss
             </button>
           </div>

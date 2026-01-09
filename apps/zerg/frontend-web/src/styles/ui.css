@@ -347,6 +347,38 @@
     color: var(--color-intent-error);
   }
 
+  /* --- Action Error Banner --- */
+  .ui-action-error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-md);
+    color: #fca5a5;
+    font-size: 0.875rem;
+    margin-bottom: var(--space-4);
+  }
+
+  .ui-action-error-dismiss {
+    background: transparent;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    color: #fca5a5;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    flex-shrink: 0;
+  }
+
+  .ui-action-error-dismiss:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+
   /* --- Section Header --- */
   .ui-section-header {
     display: flex;
