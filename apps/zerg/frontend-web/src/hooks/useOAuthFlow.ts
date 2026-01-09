@@ -5,8 +5,21 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-export function useOAuthFlow(onSuccess: () => void) {
+interface UseOAuthFlowResult {
+  startOAuthFlow: (connectorType: string) => void;
+  oauthPending: string | null;
+  oauthError: string | null;
+  clearError: () => void;
+}
+
+export function useOAuthFlow(
+  onSuccess: () => void,
+  onError?: (error: string) => void
+): UseOAuthFlowResult {
   const [oauthPending, setOauthPending] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+
+  const clearError = useCallback(() => setOauthError(null), []);
 
   const handleOAuthMessage = useCallback(
     (event: MessageEvent) => {
@@ -21,11 +34,13 @@ export function useOAuthFlow(onSuccess: () => void) {
         console.log(`OAuth success: ${provider} connected as ${username || "user"}`);
         onSuccess();
       } else if (error) {
+        const errorMsg = `Failed to connect ${provider}: ${error}`;
         console.error(`OAuth failed for ${provider}: ${error}`);
-        alert(`Failed to connect ${provider}: ${error}`);
+        setOauthError(errorMsg);
+        onError?.(errorMsg);
       }
     },
-    [oauthPending, onSuccess]
+    [oauthPending, onSuccess, onError]
   );
 
   useEffect(() => {
@@ -35,6 +50,7 @@ export function useOAuthFlow(onSuccess: () => void) {
 
   const startOAuthFlow = useCallback((connectorType: string) => {
     setOauthPending(connectorType);
+    setOauthError(null);
 
     const width = 600;
     const height = 700;
@@ -49,7 +65,9 @@ export function useOAuthFlow(onSuccess: () => void) {
 
     if (!popup) {
       setOauthPending(null);
-      alert("Popup blocked. Please allow popups for this site.");
+      const errorMsg = "Popup blocked. Please allow popups for this site.";
+      setOauthError(errorMsg);
+      onError?.(errorMsg);
       return;
     }
 
@@ -59,7 +77,7 @@ export function useOAuthFlow(onSuccess: () => void) {
         setOauthPending(null);
       }
     }, 500);
-  }, []);
+  }, [onError]);
 
-  return { startOAuthFlow, oauthPending };
+  return { startOAuthFlow, oauthPending, oauthError, clearError };
 }

@@ -14,14 +14,15 @@ interface ConfirmDialogProps {
 }
 
 /**
- * Accessible confirmation dialog following WAI-ARIA AlertDialog pattern.
+ * Accessible confirmation dialog following WAI-ARIA Dialog pattern.
  *
  * Features:
- * - role="alertdialog" for destructive actions
+ * - role="alertdialog" for danger/warning variants, role="dialog" for default
  * - Focus trapped inside dialog
  * - Initial focus on Cancel (least destructive) by default
  * - Esc closes dialog
  * - aria-labelledby + aria-describedby
+ * - data-testid attributes for e2e testing
  */
 export function ConfirmDialog({
   isOpen,
@@ -98,11 +99,12 @@ export function ConfirmDialog({
     >
       <div
         ref={dialogRef}
-        role="alertdialog"
+        role={variant === 'danger' || variant === 'warning' ? 'alertdialog' : 'dialog'}
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
         className={`confirm-dialog confirm-dialog--${variant}`}
+        data-testid="confirm-dialog"
       >
         <h2 id="confirm-dialog-title" className="confirm-dialog__title">
           {title}
@@ -116,6 +118,7 @@ export function ConfirmDialog({
             type="button"
             className="confirm-dialog__button confirm-dialog__button--cancel"
             onClick={onCancel}
+            data-testid="confirm-cancel"
           >
             {cancelLabel}
           </button>
@@ -123,6 +126,7 @@ export function ConfirmDialog({
             type="button"
             className={`confirm-dialog__button confirm-dialog__button--confirm confirm-dialog__button--${variant}`}
             onClick={onConfirm}
+            data-testid="confirm-confirm"
           >
             {confirmLabel}
           </button>
