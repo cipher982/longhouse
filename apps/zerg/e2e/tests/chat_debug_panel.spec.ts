@@ -24,9 +24,15 @@ async function sendMessage(page: Page, message: string): Promise<void> {
   const inputSelector = page.locator('.text-input');
   const sendButton = page.locator('.send-button');
   await inputSelector.fill(message);
-  await sendButton.click();
-  // Wait for response
-  await page.waitForTimeout(2000);
+  // Wait for both UI update AND backend persistence (Jarvis uses /api/jarvis/chat)
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'POST' && r.url().includes('/api/jarvis/chat') && r.status() === 200,
+      { timeout: 15000 }
+    ),
+    expect(page.locator('.message.user').filter({ hasText: message })).toBeVisible({ timeout: 15000 }),
+    sendButton.click(),
+  ]);
 }
 
 test.describe('Debug Panel Tests', () => {
@@ -44,9 +50,6 @@ test.describe('Debug Panel Tests', () => {
 
   test('debug panel shows thread info', async ({ page }) => {
     await navigateToChatPage(page);
-
-    // Wait for thread info to load (fetched from API)
-    await page.waitForTimeout(1000);
 
     // Debug panel should show Thread section (with section header)
     const threadSectionHeader = page.locator('.debug-section-header').filter({ hasText: /^Thread$/ });
@@ -114,31 +117,31 @@ test.describe('Reset Memory Tests', () => {
     // Send a message to create history
     await sendMessage(page, 'Hello, this is a test message');
 
-    // Wait longer for the full request/response cycle
-    await page.waitForTimeout(5000);
-
     // Verify message appears in UI
     await expect(page.locator('.message.user')).toBeVisible({ timeout: 10000 });
 
     // Get initial thread info (should have at least 2 messages: system + user)
-    const initialThreadResponse = await request.get('/api/jarvis/supervisor/thread');
-    const initialThread = await initialThreadResponse.json();
-    console.log('Initial thread state:', initialThread);
-
-    // Verify we have more than just the system message
-    expect(initialThread.message_count).toBeGreaterThan(1);
+    // Poll until message_count > 1 since the chat API might be async
+    await expect.poll(async () => {
+      const response = await request.get('/api/jarvis/supervisor/thread');
+      const thread = await response.json();
+      console.log('Polling thread state:', thread.message_count);
+      return thread.message_count;
+    }, { timeout: 10000, message: 'Message count should be > 1' }).toBeGreaterThan(1);
 
     // Click reset button
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
-    await resetButton.click();
-
-    // Wait for reset to complete
-    await page.waitForTimeout(2000);
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        { timeout: 15000 }
+      ),
+      resetButton.click(),
+    ]);
 
     // Verify user messages are cleared from UI
     const userMessages = page.locator('.message.user');
-    const messageCount = await userMessages.count();
-    expect(messageCount).toBe(0);
+    await expect(userMessages).toHaveCount(0, { timeout: 15000 });
 
     // Verify backend thread is cleared (all messages including system deleted)
     const finalThreadResponse = await request.get('/api/jarvis/supervisor/thread');
@@ -154,9 +157,6 @@ test.describe('Reset Memory Tests', () => {
 
     // Send a message and wait for response
     await sendMessage(page, 'Test message for reset');
-
-    // Wait for assistant response and backend to update
-    await page.waitForTimeout(8000);
 
     // Wait for debug panel to refresh (it polls every 10s, but also on message change)
     // Force a refresh by looking for the message in UI first
@@ -182,28 +182,30 @@ test.describe('Reset Memory Tests', () => {
       console.log('Debug panel shows 0 messages - thread info may not have refreshed yet');
     }
 
-    // Click reset
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
-    await resetButton.click();
-
-    // Wait for reset and refresh
-    await page.waitForTimeout(3000);
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === 'DELETE' && r.url().includes('/api/jarvis/history') && (r.status() === 200 || r.status() === 204),
+        { timeout: 15000 }
+      ),
+      resetButton.click(),
+    ]);
 
     // Verify UI messages are cleared
     const userMessages = page.locator('.message.user');
-    const uiMessageCount = await userMessages.count();
-    expect(uiMessageCount).toBe(0);
+    await expect(userMessages).toHaveCount(0, { timeout: 15000 });
 
     // Check debug panel shows 0 messages after reset
-    const afterText = await messageRow.textContent();
-    console.log('Message count after reset:', afterText);
-
-    // Extract the after count
-    const afterMatch = afterText?.match(/(\d+)/);
-    const afterCount = afterMatch ? parseInt(afterMatch[1]) : 0;
-
-    // After reset, UI and debug panel should both show 0
-    expect(afterCount).toBe(0);
+    await expect
+      .poll(
+        async () => {
+          const afterText = (await messageRow.textContent()) ?? '';
+          const afterMatch = afterText.match(/(\d+)/);
+          return afterMatch ? parseInt(afterMatch[1], 10) : 0;
+        },
+        { timeout: 15000 }
+      )
+      .toBe(0);
   });
 });
 

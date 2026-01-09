@@ -27,6 +27,17 @@ async function navigateToKnowledgeSources(page: Page): Promise<void> {
   await expect(page.locator('[data-testid="add-context-btn"]')).toBeVisible({ timeout: 15000 });
 }
 
+async function openAddContextModal(page: Page): Promise<void> {
+  await Promise.all([
+    expect(page.locator('.add-context-modal')).toBeVisible({ timeout: 5000 }),
+    page.locator('[data-testid="add-context-btn"]').click(),
+  ]);
+
+  // Ensure modal content is ready (avoids arbitrary sleeps)
+  await expect(page.locator('#context-title')).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('.context-tab:has-text("Paste Text")')).toBeVisible({ timeout: 5000 });
+}
+
 test.describe('AddContextModal - Modal Open/Close', () => {
 
   test('opens modal when clicking "Add Context" button', async ({ page }) => {
@@ -115,9 +126,7 @@ test.describe('AddContextModal - Tab Switching', () => {
     console.log('🎯 Testing: Default tab is Paste Text');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Paste Text tab should be active
     const pasteTab = page.locator('.context-tab:has-text("Paste Text")');
@@ -134,9 +143,7 @@ test.describe('AddContextModal - Tab Switching', () => {
     console.log('🎯 Testing: Switch to Upload File tab');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Click Upload File tab
     const uploadTab = page.locator('.context-tab:has-text("Upload File")');
@@ -160,9 +167,7 @@ test.describe('AddContextModal - Tab Switching', () => {
     console.log('🎯 Testing: Switch back to Paste Text tab');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Switch to Upload tab
     const uploadTab = page.locator('.context-tab:has-text("Upload File")');
@@ -189,9 +194,7 @@ test.describe('AddContextModal - Form Validation', () => {
     console.log('🎯 Testing: Submit button disabled with empty fields');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Submit button should be disabled
     const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
@@ -204,9 +207,7 @@ test.describe('AddContextModal - Form Validation', () => {
     console.log('🎯 Testing: Submit button disabled with only title');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill only title
     await page.locator('#context-title').fill('Test Title');
@@ -222,9 +223,7 @@ test.describe('AddContextModal - Form Validation', () => {
     console.log('🎯 Testing: Submit button disabled with only content');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill only content
     await page.locator('#context-content').fill('Test content');
@@ -240,9 +239,7 @@ test.describe('AddContextModal - Form Validation', () => {
     console.log('🎯 Testing: Submit button enabled when both fields filled');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill both fields
     await page.locator('#context-title').fill('Test Title');
@@ -259,9 +256,7 @@ test.describe('AddContextModal - Form Validation', () => {
     console.log('🎯 Testing: Submit button disabled with whitespace-only input');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill with whitespace only
     await page.locator('#context-title').fill('   ');
@@ -282,9 +277,7 @@ test.describe('AddContextModal - Form Submission', () => {
     console.log('🎯 Testing: Successful submission flow');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill form
     await page.locator('#context-title').fill('My Test Document');
@@ -294,12 +287,9 @@ test.describe('AddContextModal - Form Submission', () => {
     const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
     await submitBtn.click();
 
-    // Wait for success message
-    await page.waitForTimeout(1000);
-
     // Success message should appear
     const successMsg = page.locator('.context-success');
-    await expect(successMsg).toBeVisible({ timeout: 5000 });
+    await expect(successMsg).toBeVisible({ timeout: 15000 });
     await expect(successMsg).toContainText('My Test Document');
     await expect(successMsg).toContainText('saved');
 
@@ -310,9 +300,7 @@ test.describe('AddContextModal - Form Submission', () => {
     console.log('🎯 Testing: Form clears after successful submission');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill form
     await page.locator('#context-title').fill('My Test Document');
@@ -322,8 +310,7 @@ test.describe('AddContextModal - Form Submission', () => {
     const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
     await submitBtn.click();
 
-    // Wait for submission to complete
-    await page.waitForTimeout(1000);
+    await expect(page.locator('.context-success')).toBeVisible({ timeout: 15000 });
 
     // Form fields should be empty
     await expect(page.locator('#context-title')).toHaveValue('');
@@ -339,18 +326,17 @@ test.describe('AddContextModal - Form Submission', () => {
     console.log('🎯 Testing: Can submit another document after success');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // First submission
     await page.locator('#context-title').fill('First Document');
     await page.locator('#context-content').fill('First content');
     await page.locator('.modal-button-primary:has-text("Save Document")').click();
-    await page.waitForTimeout(1000);
 
     // Success message should appear
-    await expect(page.locator('.context-success')).toBeVisible();
+    await expect(page.locator('.context-success')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('#context-title')).toHaveValue('');
+    await expect(page.locator('#context-content')).toHaveValue('');
 
     // Fill form again
     await page.locator('#context-title').fill('Second Document');
@@ -362,11 +348,10 @@ test.describe('AddContextModal - Form Submission', () => {
 
     // Submit again
     await submitBtn.click();
-    await page.waitForTimeout(1000);
 
     // New success message should appear
     const successMsg = page.locator('.context-success');
-    await expect(successMsg).toContainText('Second Document');
+    await expect(successMsg).toContainText('Second Document', { timeout: 15000 });
 
     console.log('✅ Can submit another document after success');
   });
@@ -375,9 +360,7 @@ test.describe('AddContextModal - Form Submission', () => {
     console.log('🎯 Testing: Submit button loading state');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Fill form
     await page.locator('#context-title').fill('Test Document');
@@ -393,11 +376,8 @@ test.describe('AddContextModal - Form Submission', () => {
     // Should be disabled during submission
     await expect(submitBtn).toBeDisabled();
 
-    // Wait for completion
-    await page.waitForTimeout(1000);
-
     // Should return to "Save Document"
-    await expect(submitBtn).toHaveText('Save Document');
+    await expect(submitBtn).toHaveText('Save Document', { timeout: 15000 });
 
     console.log('✅ Submit button shows loading state correctly');
   });
@@ -410,9 +390,7 @@ test.describe('AddContextModal - Upload Tab', () => {
     console.log('🎯 Testing: Drop zone visible in upload tab');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Switch to upload tab
     await page.locator('.context-tab:has-text("Upload File")').click();
@@ -432,9 +410,7 @@ test.describe('AddContextModal - Upload Tab', () => {
     console.log('🎯 Testing: Drop zone click to browse');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Switch to upload tab
     await page.locator('.context-tab:has-text("Upload File")').click();
@@ -457,9 +433,7 @@ test.describe('AddContextModal - Existing Docs Count', () => {
     console.log('🎯 Testing: Shows no docs message');
 
     await navigateToKnowledgeSources(page);
-    await page.locator('[data-testid="add-context-btn"]').click();
-
-    await page.waitForTimeout(500);
+    await openAddContextModal(page);
 
     // Should show no docs message
     const docsCount = page.locator('.context-docs-count');
