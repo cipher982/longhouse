@@ -19,6 +19,7 @@ export default function RunnerDetailPage() {
   const [selectedCapabilities, setSelectedCapabilities] = useState<string[]>([]);
   const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const allCapabilities = [
     { id: "exec.readonly", label: "Read-only execution", description: "Can run read-only commands" },
@@ -32,15 +33,16 @@ export default function RunnerDetailPage() {
   };
 
   const handleSaveCapabilities = async () => {
+    setActionError(null);
     try {
       await updateRunnerMutation.mutateAsync({
         id: runnerId,
         data: { capabilities: selectedCapabilities },
       });
       setIsEditingCapabilities(false);
-    } catch (error) {
-      console.error("Failed to update capabilities:", error);
-      alert("Failed to update capabilities");
+    } catch (err) {
+      console.error("Failed to update capabilities:", err);
+      setActionError("Failed to update capabilities. Please try again.");
     }
   };
 
@@ -56,12 +58,13 @@ export default function RunnerDetailPage() {
       return;
     }
 
+    setActionError(null);
     try {
       await revokeRunnerMutation.mutateAsync(runnerId);
       navigate("/runners");
-    } catch (error) {
-      console.error("Failed to revoke runner:", error);
-      alert("Failed to revoke runner");
+    } catch (err) {
+      console.error("Failed to revoke runner:", err);
+      setActionError("Failed to revoke runner. Please try again.");
     }
   };
 
@@ -80,13 +83,14 @@ export default function RunnerDetailPage() {
     // Clear any previously displayed secret before starting rotation
     setRotatedSecret(null);
     setSecretCopied(false);
+    setActionError(null);
 
     try {
       const result = await rotateSecretMutation.mutateAsync(runnerId);
       setRotatedSecret(result.runner_secret);
-    } catch (error) {
-      console.error("Failed to rotate secret:", error);
-      alert("Failed to rotate secret");
+    } catch (err) {
+      console.error("Failed to rotate secret:", err);
+      setActionError("Failed to rotate secret. Please try again.");
     }
   };
 
@@ -165,6 +169,15 @@ export default function RunnerDetailPage() {
             </span>
           </div>
         </div>
+
+        {actionError && (
+          <div className="action-error" role="alert">
+            {actionError}
+            <button type="button" className="dismiss-error" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
 
         <div className="runner-detail-sections">
           <section className="detail-section">

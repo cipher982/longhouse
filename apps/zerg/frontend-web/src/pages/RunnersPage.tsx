@@ -20,6 +20,7 @@ export default function RunnersPage() {
   const revokeRunnerMutation = useRevokeRunner();
   const confirm = useConfirm();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleRevoke = async (runner: Runner) => {
     const confirmed = await confirm({
@@ -33,11 +34,12 @@ export default function RunnersPage() {
       return;
     }
 
+    setActionError(null);
     try {
       await revokeRunnerMutation.mutateAsync(runner.id);
-    } catch (error) {
-      console.error("Failed to revoke runner:", error);
-      alert("Failed to revoke runner");
+    } catch (err) {
+      console.error("Failed to revoke runner:", err);
+      setActionError("Failed to revoke runner. Please try again.");
     }
   };
 
@@ -115,6 +117,15 @@ export default function RunnersPage() {
             </Button>
           }
         />
+
+        {actionError && (
+          <div className="action-error" role="alert">
+            {actionError}
+            <button type="button" className="dismiss-error" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {runners && runners.length === 0 ? (
           <EmptyState
