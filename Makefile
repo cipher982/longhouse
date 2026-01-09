@@ -231,6 +231,10 @@ test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
 	cd apps/zerg/backend && ./run_backend_tests.sh
 	cd apps/zerg/frontend-web && bun run test
 
+test-frontend-unit: ## Run frontend unit tests only
+	@echo "🧪 Running frontend unit tests..."
+	cd apps/zerg/frontend-web && bun run test
+
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test

@@ -408,7 +408,7 @@ const handleToolPointerDown = useCallback(
   // Fetch workflow by ID or name from URL param, or current workflow
   // If param is numeric, treat as ID; otherwise treat as name
   const isNumericId = workflowIdParam ? /^\d+$/.test(workflowIdParam) : false;
-  const { data: workflow } = useQuery<Workflow>({
+  const { data: workflow, isFetched: isWorkflowFetched } = useQuery<Workflow>({
     queryKey: workflowIdParam
       ? isNumericId
         ? ["workflow", parseInt(workflowIdParam, 10)]
@@ -467,11 +467,11 @@ const handleToolPointerDown = useCallback(
   // Ready signal - indicates canvas is interactive (even if empty)
   // Used by E2E tests and marketing screenshots
   useEffect(() => {
-    if (canvasInitializedRef.current) {
+    if (isWorkflowFetched) {
       document.body.setAttribute('data-ready', 'true');
     }
     return () => document.body.removeAttribute('data-ready');
-  }, []);
+  }, [isWorkflowFetched]);
 
   // Sync ref with latest execution for stable WebSocket handler
   useEffect(() => {
