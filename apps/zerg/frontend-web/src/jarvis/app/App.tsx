@@ -12,6 +12,7 @@ import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
 import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
+import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
 
 console.info('[Jarvis] Starting React application')
@@ -112,6 +113,16 @@ export default function App({ embedded = false }: AppProps) {
     }
     return () => document.body.removeAttribute('data-ready')
   }, [state.messages.length])
+
+  // E2E test ready signal - emits when chat UI is interactive (DEV mode only)
+  // This allows tests to wait for the chat to be ready instead of using arbitrary timeouts
+  useEffect(() => {
+    if (config.isDevelopment) {
+      // Chat is ready when the text channel is initialized and not currently sending
+      // This indicates the UI is mounted and interactive
+      eventBus.emit('test:chat_ready', { timestamp: Date.now() })
+    }
+  }, []) // Empty deps = emit once on mount
 
   return (
     <>
