@@ -202,6 +202,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('🚀 Starting concurrency test...');
 
     const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const timestamp = Date.now();
 
     // Test 1: Concurrent agent creation
     console.log('📊 Test 1: Concurrent agent creation');
@@ -212,7 +213,7 @@ test.describe('Error Handling and Edge Cases', () => {
           'Content-Type': 'application/json',
         },
         data: {
-          name: `Concurrent Agent ${i} ${Date.now()}`,
+          name: `Concurrent Agent ${i} ${timestamp}`,
           system_instructions: `Concurrent test agent ${i}`,
           task_instructions: 'Test concurrent creation',
           model: 'gpt-mock',
@@ -220,20 +221,16 @@ test.describe('Error Handling and Edge Cases', () => {
       })
     );
 
-    try {
-      const results = await Promise.all(concurrentRequests);
-      const successCount = results.filter(r => r.status() === 201).length;
-      const errorCount = results.filter(r => r.status() !== 201).length;
+    const results = await Promise.all(concurrentRequests);
+    const successCount = results.filter(r => r.status() === 201).length;
+    const errorCount = results.filter(r => r.status() !== 201).length;
 
-      console.log('📊 Concurrent creation success:', successCount);
-      console.log('📊 Concurrent creation errors:', errorCount);
+    console.log('📊 Concurrent creation success:', successCount);
+    console.log('📊 Concurrent creation errors:', errorCount);
 
-      if (successCount >= 3) {
-        console.log('✅ Concurrent operations handled well');
-      }
-    } catch (error) {
-      console.log('📊 Concurrent test error:', error.message);
-    }
+    // Use flexible assertion - at least 3 of 5 should succeed
+    expect(successCount).toBeGreaterThanOrEqual(3);
+    console.log('✅ Concurrent operations handled well');
 
     // Test 2: Rapid-fire requests to same endpoint
     console.log('📊 Test 2: Rapid-fire GET requests');
@@ -243,17 +240,13 @@ test.describe('Error Handling and Edge Cases', () => {
       })
     );
 
-    try {
-      const rapidResults = await Promise.all(rapidRequests);
-      const rapidSuccessCount = rapidResults.filter(r => r.ok()).length;
+    const rapidResults = await Promise.all(rapidRequests);
+    const rapidSuccessCount = rapidResults.filter(r => r.ok()).length;
 
-      console.log('📊 Rapid requests success:', rapidSuccessCount);
-      if (rapidSuccessCount >= 8) {
-        console.log('✅ Rapid requests handled well');
-      }
-    } catch (error) {
-      console.log('📊 Rapid requests error:', error.message);
-    }
+    console.log('📊 Rapid requests success:', rapidSuccessCount);
+    // Use flexible assertion - at least 8 of 10 should succeed
+    expect(rapidSuccessCount).toBeGreaterThanOrEqual(8);
+    console.log('✅ Rapid requests handled well');
 
     console.log('✅ Concurrency test completed');
   });
@@ -265,18 +258,21 @@ test.describe('Error Handling and Edge Cases', () => {
 
     // Navigate to application
     await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.waitForLoadState('networkidle');
 
     // Test 1: Network connectivity loss simulation
     console.log('📊 Test 1: Network connectivity simulation');
     try {
       // Simulate offline state
       await page.context().setOffline(true);
-      await page.waitForTimeout(500);
 
-      // Try to interact with UI while offline
-      await page.locator('.header-nav').click();
-      await page.waitForTimeout(1000);
+      // Try to interact with UI while offline - use locator with wait
+      const headerNav = page.locator('.header-nav');
+      if (await headerNav.count() > 0) {
+        await headerNav.click({ timeout: 2000 }).catch(() => {
+          console.log('📊 Header nav click failed (expected while offline)');
+        });
+      }
 
       // Check for offline indicators or error messages
       const errorMessages = await page.locator('.error, .offline, [data-testid*="error"]').count();
@@ -284,7 +280,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
       // Restore connectivity
       await page.context().setOffline(false);
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState('networkidle');
 
       console.log('✅ Network connectivity simulation completed');
     } catch (error) {
@@ -298,7 +294,7 @@ test.describe('Error Handling and Edge Cases', () => {
     try {
       // Try to navigate to non-existent routes
       await page.goto('/invalid-route-that-does-not-exist');
-      await page.waitForTimeout(1000);
+      await page.waitForLoadState('domcontentloaded');
 
       // Check if there's a 404 page or error handling
       const pageTitle = await page.title();
@@ -317,7 +313,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
     // Test 3: JavaScript error handling
     console.log('📊 Test 3: JavaScript error monitoring');
-    const jsErrors = [];
+    const jsErrors: string[] = [];
     page.on('pageerror', error => {
       jsErrors.push(error.message);
       console.log('📊 JavaScript error caught:', error.message);
@@ -325,13 +321,17 @@ test.describe('Error Handling and Edge Cases', () => {
 
     // Navigate back to main app
     await page.goto('/');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle');
 
-    // Try various UI interactions that might cause errors
-    await page.getByTestId('global-canvas-tab').click();
-    await page.waitForTimeout(500);
-    await page.locator('.header-nav').click();
-    await page.waitForTimeout(500);
+    // Try various UI interactions that might cause errors - wait for elements
+    const canvasTab = page.getByTestId('global-canvas-tab');
+    await expect(canvasTab).toBeVisible({ timeout: 5000 });
+    await canvasTab.click();
+
+    const headerNav = page.locator('.header-nav');
+    if (await headerNav.count() > 0) {
+      await headerNav.click();
+    }
 
     console.log('📊 JavaScript errors detected:', jsErrors.length);
     if (jsErrors.length === 0) {

@@ -153,12 +153,13 @@ test.describe('Reset Memory Tests', () => {
     await expect(userMessages).toHaveCount(0, { timeout: 15000 });
 
     // Verify backend thread is cleared (all messages including system deleted)
-    const finalThreadResponse = await request.get('/api/jarvis/supervisor/thread');
-    const finalThread = await finalThreadResponse.json();
-    console.log('Final thread state:', finalThread);
-
-    // DELETE /api/jarvis/history clears all messages (0 remaining)
-    expect(finalThread.message_count).toBe(0);
+    // Use polling to wait for backend state to stabilize
+    await expect.poll(async () => {
+      const finalThreadResponse = await request.get('/api/jarvis/supervisor/thread');
+      const finalThread = await finalThreadResponse.json();
+      console.log('Polling final thread state:', finalThread.message_count);
+      return finalThread.message_count;
+    }, { timeout: 10000, message: 'Backend message count should be 0 after reset' }).toBe(0);
   });
 
   test('reset memory updates debug panel message count', async ({ page }) => {
@@ -167,8 +168,7 @@ test.describe('Reset Memory Tests', () => {
     // Send a message and wait for response
     await sendMessage(page, 'Test message for reset');
 
-    // Wait for debug panel to refresh (it polls every 10s, but also on message change)
-    // Force a refresh by looking for the message in UI first
+    // Wait for message to appear in UI
     await expect(page.locator('.message.user')).toBeVisible({ timeout: 10000 });
 
     // Get debug panel message row (use DB count since we're testing backend reset)
@@ -176,20 +176,15 @@ test.describe('Reset Memory Tests', () => {
     const threadSection = threadSectionHeader.locator('..');
     const messageRow = threadSection.locator('.debug-row').filter({ hasText: 'Messages (DB)' });
 
-    // Get the message count before reset
-    const beforeText = await messageRow.textContent();
-    console.log('Message count before reset:', beforeText);
-
-    // Extract the number - should be > 0 after sending message
-    const beforeMatch = beforeText?.match(/(\d+)/);
-    const beforeCount = beforeMatch ? parseInt(beforeMatch[1]) : 0;
-    console.log('Parsed before count:', beforeCount);
-
-    // If beforeCount is still 0, the debug panel hasn't refreshed yet
-    // This is acceptable - the test is about the UI clearing after reset
-    if (beforeCount === 0) {
-      console.log('Debug panel shows 0 messages - thread info may not have refreshed yet');
-    }
+    // Wait for debug panel to show > 0 messages (deterministic wait for panel refresh)
+    await expect.poll(
+      async () => {
+        const text = await messageRow.textContent();
+        const match = text?.match(/(\d+)/);
+        return match ? parseInt(match[1]) : 0;
+      },
+      { timeout: 15000, message: 'Debug panel should show > 0 messages after sending message' }
+    ).toBeGreaterThan(0);
 
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
     await Promise.all([
