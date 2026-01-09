@@ -9,25 +9,41 @@ test.describe('Agent Creation', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    // Create first agent
-    await page.click('[data-testid="create-agent-btn"]');
-    await page.waitForTimeout(500);
+    // Wait for create button to be ready
+    await expect(page.locator('[data-testid="create-agent-btn"]')).toBeVisible({ timeout: 5000 });
 
-    // Create second agent
-    await page.click('[data-testid="create-agent-btn"]');
-    await page.waitForTimeout(500);
+    // Create first agent with deterministic wait for API response
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 10000 }
+      ),
+      page.click('[data-testid="create-agent-btn"]'),
+    ]);
 
-    // Create third agent
-    await page.click('[data-testid="create-agent-btn"]');
-    await page.waitForTimeout(500);
+    // Create second agent with deterministic wait
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 10000 }
+      ),
+      page.click('[data-testid="create-agent-btn"]'),
+    ]);
 
-    // Wait for agents to appear
-    await page.waitForSelector('#agents-table-body tr[data-agent-id]');
+    // Create third agent with deterministic wait
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 10000 }
+      ),
+      page.click('[data-testid="create-agent-btn"]'),
+    ]);
+
+    // Wait for all 3 agent rows to appear
+    await expect(page.locator('#agents-table-body tr[data-agent-id]')).toHaveCount(3, { timeout: 10000 });
 
     // Get all agent rows
     const agentRows = page.locator('#agents-table-body tr[data-agent-id]');
-    const count = await agentRows.count();
-    expect(count).toBeGreaterThanOrEqual(3);
 
     // Check agent names are all "New Agent"
     const firstAgentName = await agentRows.nth(0).locator('td[data-label="Name"]').textContent();
