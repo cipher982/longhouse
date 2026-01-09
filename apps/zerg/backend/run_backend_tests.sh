@@ -13,6 +13,7 @@
 # macOS runners).
 export XDG_CACHE_HOME="$(pwd)/.uv_cache"
 export TMPDIR="$(pwd)/.uv_tmp"
+export UV_CACHE_DIR="$XDG_CACHE_HOME"
 
 # Ensure we run inside *backend/* so uv picks up the correct pyproject.toml
 mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"

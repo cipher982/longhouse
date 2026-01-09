@@ -1,4 +1,4 @@
-import { createContext, useState, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { ConfirmDialog } from './ConfirmDialog';
 import type { ConfirmOptions } from './types';
 
@@ -48,7 +48,19 @@ export function ConfirmProvider({ children }: ConfirmProviderProps) {
   const [state, setState] = useState<DialogState>(initialState);
   const resolveRef = useRef<((value: boolean) => void) | null>(null);
 
+  useEffect(() => {
+    return () => {
+      resolveRef.current?.(false);
+      resolveRef.current = null;
+    };
+  }, []);
+
   const confirm = useCallback<ConfirmFn>((options) => {
+    if (resolveRef.current) {
+      console.warn('[ConfirmProvider] confirm() called while another confirm is open; returning false.');
+      return Promise.resolve(false);
+    }
+
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve;
       setState({

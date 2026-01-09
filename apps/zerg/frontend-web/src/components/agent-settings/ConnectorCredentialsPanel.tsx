@@ -193,9 +193,9 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
   return (
     <>
       {oauthError && (
-        <div className="action-error" role="alert">
+        <div className="ui-action-error-banner" role="alert">
           {oauthError}
-          <button type="button" className="dismiss-error" onClick={() => setOauthError(null)}>
+          <button type="button" className="ui-action-error-dismiss" onClick={() => setOauthError(null)}>
             Dismiss
           </button>
         </div>
