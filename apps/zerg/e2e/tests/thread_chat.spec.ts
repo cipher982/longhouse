@@ -23,8 +23,6 @@ test.describe('Thread & Chat – basic flows', () => {
     // Chat view should appear - REQUIRE that elements exist (no more skipping!)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 5000 });
 
-    await page.waitForSelector('[data-testid="chat-input"]', { state: 'visible' });
-
     // Click "New Thread" to ensure fresh context (if it exists)
     const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
     if (await newThreadBtn.count() > 0) {
@@ -36,10 +34,20 @@ test.describe('Thread & Chat – basic flows', () => {
     await input.fill('Hello agent');
     const sendBtn = page.locator('[data-testid="send-message-btn"]');
     await expect(sendBtn).toBeVisible({ timeout: 5000 });
-    await sendBtn.click();
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === 'POST' &&
+          (r.status() === 200 || r.status() === 201) &&
+          r.url().includes('/api/threads/') &&
+          r.url().includes('/messages'),
+        { timeout: 15000 }
+      ),
+      sendBtn.click(),
+    ]);
 
     // Verify the message appears in messages container.
-    await expect(page.locator('[data-testid="messages-container"]')).toContainText('Hello agent', { timeout: 5000 });
+    await expect(page.locator('[data-testid="messages-container"]')).toContainText('Hello agent', { timeout: 15000 });
   });
 
   test('Wait for and verify agent response (placeholder)', async ({ page }) => {
