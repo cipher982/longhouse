@@ -15,6 +15,7 @@ import {
 } from "../../hooks/useAgentConnectors";
 import type { ConnectorStatus } from "../../types/connectors";
 import { ConnectorConfigModal, type ConfigModalState } from "./ConnectorConfigModal";
+import { useConfirm } from "../confirm";
 
 // Connectors that support OAuth flow instead of manual credential entry
 const OAUTH_CONNECTORS = ["github"] as const;
@@ -34,6 +35,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
   const deleteConnector = useDeleteConnector(agentId);
   const testConnector = useTestConnector(agentId);
   const testBeforeSave = useTestConnectorBeforeSave(agentId);
+  const confirm = useConfirm();
   const [oauthPending, setOauthPending] = useState<string | null>(null);
 
   const [modal, setModal] = useState<ConfigModalState>({
@@ -160,8 +162,15 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     );
   };
 
-  const handleDelete = (connector: ConnectorStatus) => {
-    if (!window.confirm(`Remove ${connector.name} credentials from this agent?`)) {
+  const handleDelete = async (connector: ConnectorStatus) => {
+    const confirmed = await confirm({
+      title: `Remove ${connector.name} credentials?`,
+      message: 'This agent will no longer have access to this integration.',
+      confirmLabel: 'Remove',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     deleteConnector.mutate(connector.type);

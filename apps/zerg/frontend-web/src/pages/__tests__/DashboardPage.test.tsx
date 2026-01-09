@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DashboardPage from "../DashboardPage";
 import { TestRouter } from "../../test/test-utils";
+import { ConfirmProvider } from "../../components/confirm";
 import {
   fetchDashboardSnapshot,
   createAgent,
@@ -123,9 +124,11 @@ describe("DashboardPage", () => {
 
     return render(
       <QueryClientProvider client={queryClient}>
-        <TestRouter>
-          <DashboardPage />
-        </TestRouter>
+        <ConfirmProvider>
+          <TestRouter>
+            <DashboardPage />
+          </TestRouter>
+        </ConfirmProvider>
       </QueryClientProvider>
     );
   }

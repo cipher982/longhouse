@@ -464,13 +464,14 @@ const handleToolPointerDown = useCallback(
     return () => cancelAnimationFrame(frame);
   }, [nodes, reactFlowInstance]);
 
-  // Marketing ready signal - indicates page is ready for screenshot capture
+  // Ready signal - indicates canvas is interactive (even if empty)
+  // Used by E2E tests and marketing screenshots
   useEffect(() => {
-    if (canvasInitializedRef.current && nodes.length > 0) {
+    if (canvasInitializedRef.current) {
       document.body.setAttribute('data-ready', 'true');
     }
     return () => document.body.removeAttribute('data-ready');
-  }, [nodes.length]);
+  }, []);
 
   // Sync ref with latest execution for stable WebSocket handler
   useEffect(() => {

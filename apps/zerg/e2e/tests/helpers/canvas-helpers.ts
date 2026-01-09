@@ -24,7 +24,13 @@ export interface ExecutionMonitor {
  */
 export async function navigateToCanvas(page: Page): Promise<void> {
   await page.getByTestId('global-canvas-tab').click();
-  await page.waitForTimeout(2000);
+
+  // Wait for data-ready signal instead of arbitrary timeout
+  await page.waitForFunction(
+    () => document.body.getAttribute('data-ready') === 'true',
+    {},
+    { timeout: 10000 }
+  );
 
   // Verify canvas loaded
   await expect(page.locator('#canvas-container')).toBeVisible({ timeout: 10000 });
@@ -52,8 +58,12 @@ export async function dragAgentToCanvas(
   const agentPill = page.locator('#agent-shelf .agent-pill').nth(agentIndex);
   const canvasArea = page.locator('#canvas-container canvas');
 
+  const nodeCountBefore = await page.locator('.canvas-node, .generic-node').count();
+
   await agentPill.dragTo(canvasArea, { targetPosition: position });
-  await page.waitForTimeout(1000);
+
+  // Wait for a new node to appear instead of arbitrary timeout
+  await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(nodeCountBefore + 1, { timeout: 5000 });
 }
 
 /**
@@ -87,9 +97,13 @@ export async function dragToolToCanvas(
 
   await expect(toolElement).toBeVisible({ timeout: 10000 });
 
+  const nodeCountBefore = await page.locator('.canvas-node, .generic-node').count();
+
   const canvasArea = page.locator('#canvas-container canvas');
   await toolElement.dragTo(canvasArea, { targetPosition: position });
-  await page.waitForTimeout(1000);
+
+  // Wait for a new node to appear instead of arbitrary timeout
+  await expect(page.locator('.canvas-node, .generic-node')).toHaveCount(nodeCountBefore + 1, { timeout: 5000 });
 }
 
 /**
@@ -149,12 +163,16 @@ export async function connectNodes(
   const inputHandleX = toNode.boundingBox.x + toNode.boundingBox.width / 2;
   const inputHandleY = toNode.boundingBox.y + 10;
 
+  const edgeCountBefore = await page.locator('.react-flow__edge, .canvas-edge').count();
+
   // Perform drag connection
   await page.mouse.move(outputHandleX, outputHandleY);
   await page.mouse.down();
   await page.mouse.move(inputHandleX, inputHandleY);
   await page.mouse.up();
-  await page.waitForTimeout(1000);
+
+  // Wait for a new edge to appear instead of arbitrary timeout
+  await expect(page.locator('.react-flow__edge, .canvas-edge')).toHaveCount(edgeCountBefore + 1, { timeout: 5000 });
 }
 
 /**
@@ -167,10 +185,11 @@ export async function configureTool(
 ): Promise<void> {
   // Double-click to open config
   await toolNode.element.dblclick();
-  await page.waitForTimeout(1000);
 
-  // Look for configuration modal
+  // Look for configuration modal to appear
   const configModal = page.locator('#tool-config-modal, .modal:has-text("Config"), .config-modal');
+  await expect(configModal).toBeVisible({ timeout: 5000 });
+
   if (await configModal.count() > 0) {
     // Fill configuration fields
     for (const [fieldName, value] of Object.entries(config)) {
@@ -194,7 +213,8 @@ export async function configureTool(
     const saveBtn = page.locator('button:has-text("Save"), #save-config, .save-btn');
     if (await saveBtn.count() > 0) {
       await saveBtn.click();
-      await page.waitForTimeout(1000);
+      // Wait for modal to close after save
+      await expect(configModal).not.toBeVisible({ timeout: 5000 });
     }
   }
 }
@@ -255,18 +275,30 @@ export function startExecutionMonitoring(page: Page): ExecutionMonitor {
 export async function executeWorkflow(page: Page): Promise<void> {
   const runButton = page.locator('#run-btn, button:has-text("Run"), .run-button');
   await expect(runButton).toBeVisible({ timeout: 5000 });
-  await runButton.click();
-  await page.waitForTimeout(2000); // Initial wait for execution to start
+
+  // Wait for API response after clicking run
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/workflow') && r.request().method() === 'POST',
+      { timeout: 10000 }
+    ),
+    runButton.click(),
+  ]);
 }
 
 /**
  * Wait for workflow execution to complete
+ * Monitors for execution_finished WebSocket event or status change
  */
 export async function waitForExecutionComplete(
   page: Page,
   timeoutMs: number = 10000
 ): Promise<void> {
-  await page.waitForTimeout(timeoutMs);
+  // Wait for execution status indicator to show completion (success/failed/cancelled)
+  // or for logs panel to show "EXECUTION FINISHED" or "EXECUTION COMPLETED"
+  await expect(
+    page.locator('[data-execution-status="completed"], [data-execution-status="success"], [data-execution-status="failed"], .execution-log:has-text("FINISHED"), .execution-log:has-text("COMPLETED")')
+  ).toBeVisible({ timeout: timeoutMs });
 }
 
 /**

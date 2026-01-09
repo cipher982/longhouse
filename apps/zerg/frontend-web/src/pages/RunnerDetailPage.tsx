@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useRunner, useUpdateRunner, useRevokeRunner, useRotateRunnerSecret } from "../hooks/useRunners";
+import { useConfirm } from "../components/confirm";
 import "../styles/runner-detail.css";
 
 export default function RunnerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const runnerId = id ? parseInt(id, 10) : 0;
+  const confirm = useConfirm();
 
   const { data: runner, isLoading, error } = useRunner(runnerId);
   const updateRunnerMutation = useUpdateRunner();
@@ -43,7 +45,14 @@ export default function RunnerDetailPage() {
   };
 
   const handleRevoke = async () => {
-    if (!confirm(`Revoke runner "${runner?.name}"? It will no longer be able to connect.`)) {
+    const confirmed = await confirm({
+      title: `Revoke runner "${runner?.name}"?`,
+      message: 'This runner will no longer be able to connect. You can create a new runner if needed.',
+      confirmLabel: 'Revoke',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -57,13 +66,14 @@ export default function RunnerDetailPage() {
   };
 
   const handleRotateSecret = async () => {
-    if (!confirm(
-      `Rotate secret for runner "${runner?.name}"?\n\n` +
-      "This will:\n" +
-      "• Generate a new secret (old secret becomes invalid)\n" +
-      "• Disconnect the runner if connected\n\n" +
-      "You'll need to update the runner with the new secret."
-    )) {
+    const confirmed = await confirm({
+      title: `Rotate secret for "${runner?.name}"?`,
+      message: 'This will generate a new secret (old secret becomes invalid), disconnect the runner if connected, and you\'ll need to update the runner with the new secret.',
+      confirmLabel: 'Rotate Secret',
+      cancelLabel: 'Keep Current',
+      variant: 'warning',
+    });
+    if (!confirmed) {
       return;
     }
 

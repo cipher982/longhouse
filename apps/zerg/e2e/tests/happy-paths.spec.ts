@@ -105,20 +105,43 @@ async function sendMessage(page: Page, message: string): Promise<void> {
 /**
  * Create a new thread and wait for API response.
  */
-async function createNewThread(page: Page): Promise<void> {
+async function createNewThread(page: Page): Promise<number> {
   const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
   await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
 
-  await Promise.all([
+  const [createResponse] = await Promise.all([
     page.waitForResponse(
-      (r) => r.request().method() === 'POST' && r.status() === 201 && r.url().includes('/api/threads'),
+      (r) =>
+        r.request().method() === 'POST' &&
+        r.status() === 201 &&
+        (() => {
+          try {
+            return new URL(r.url()).pathname === '/api/threads';
+          } catch {
+            return r.url().includes('/api/threads');
+          }
+        })(),
       { timeout: 15000 }
     ),
     newThreadBtn.click(),
   ]);
 
+  const createdThread = await createResponse.json();
+  const newThreadId = createdThread?.id;
+  if (typeof newThreadId !== 'number') {
+    throw new Error(`Expected create thread response to include numeric id, got: ${JSON.stringify(createdThread)}`);
+  }
+
+  // Wait for URL to include new thread id and UI selection to update
+  await page.waitForURL((url) => url.pathname.includes(`/thread/${newThreadId}`), { timeout: 15000 });
+  const threadRow = page.locator(`[data-testid="thread-row-${newThreadId}"]`);
+  await expect(threadRow).toBeVisible({ timeout: 15000 });
+  await expect(threadRow).toHaveClass(/selected/, { timeout: 15000 });
+
   // Wait for chat input to be ready after thread creation
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
+
+  return newThreadId;
 }
 
 // ============================================================================
@@ -207,14 +230,12 @@ test.describe('Thread Management', () => {
     await navigateToChat(page, agentId);
 
     const urlBeforeNewThread = page.url();
+    const threadIdBeforeNewThread = urlBeforeNewThread.match(/\/thread\/([^/?]+)/)?.[1];
 
-    await createNewThread(page);
-
-    // URL should change (new thread ID)
-    await page.waitForURL((url) => url.toString() !== urlBeforeNewThread, { timeout: 15000 });
-
-    const urlAfterNewThread = page.url();
-    expect(urlAfterNewThread).not.toBe(urlBeforeNewThread);
+    const newThreadId = await createNewThread(page);
+    if (threadIdBeforeNewThread) {
+      expect(String(newThreadId)).not.toBe(threadIdBeforeNewThread);
+    }
 
     // Thread list should have at least 2 threads
     const threadList = page.locator('.thread-list [data-testid^="thread-row-"]');
