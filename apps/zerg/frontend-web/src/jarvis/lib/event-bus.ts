@@ -130,6 +130,10 @@ export interface EventMap {
     errorDetails?: Record<string, unknown>;
     timestamp: number;
   };
+
+  // Test Events (E2E ready signals - DEV mode only)
+  'test:chat_ready': { timestamp: number };
+  'test:messages_loaded': { count: number; timestamp: number };
 }
 
 // Interaction state machine types
