@@ -37,6 +37,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
   const testBeforeSave = useTestConnectorBeforeSave(agentId);
   const confirm = useConfirm();
   const [oauthPending, setOauthPending] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   const [modal, setModal] = useState<ConfigModalState>({
     isOpen: false,
@@ -62,7 +63,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
         refetch();
       } else if (error) {
         console.error(`OAuth connection failed: ${error}`);
-        alert(`Failed to connect ${provider}: ${error}`);
+        setOauthError(`Failed to connect ${provider}: ${error}`);
       }
     },
     [oauthPending, refetch]
@@ -77,6 +78,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
   // Open OAuth popup for supported connectors
   const startOAuthFlow = (connectorType: string) => {
     setOauthPending(connectorType);
+    setOauthError(null);
 
     // Open popup centered on screen
     const width = 600;
@@ -93,7 +95,7 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
     // Handle popup blocked or closed
     if (!popup) {
       setOauthPending(null);
-      alert("Popup blocked. Please allow popups for this site.");
+      setOauthError("Popup blocked. Please allow popups for this site.");
       return;
     }
 
@@ -190,6 +192,14 @@ export function ConnectorCredentialsPanel({ agentId }: ConnectorCredentialsPanel
 
   return (
     <>
+      {oauthError && (
+        <div className="action-error" role="alert">
+          {oauthError}
+          <button type="button" className="dismiss-error" onClick={() => setOauthError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="connector-groups">
         <div className="connector-group">
           <h4>Notifications</h4>
