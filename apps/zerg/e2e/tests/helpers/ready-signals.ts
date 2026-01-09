@@ -4,10 +4,16 @@
  * These helpers replace arbitrary waitForTimeout() calls with event-driven waiting,
  * making tests more reliable and faster.
  *
- * Pattern:
- * 1. waitForPageReady() - waits for data-ready="true" on body (general page readiness)
- * 2. waitForEvent() - waits for a specific EventBus event via window.__jarvis.eventBus
- * 3. emitTestEvent() - emits a test event to trigger component reactions (for testing UI responses)
+ * Recommended Pattern (most reliable):
+ * 1. waitForReadyFlag() - waits for sticky flags on window.__jarvis.ready (preferred for "ready" signals)
+ * 2. waitForPageReady() - waits for data-ready="true" on body (general page readiness)
+ *
+ * Event-based Pattern (for async operations):
+ * 3. waitForEvent() - waits for a specific EventBus event (use for long-running ops like supervisor:complete)
+ * 4. emitTestEvent() - emits a test event to trigger component reactions (for testing UI responses)
+ *
+ * Note: Prefer sticky flags over events for "ready" signals to avoid race conditions
+ * where the event fires before the test listener is attached.
  */
 
 import { Page } from '@playwright/test';
@@ -28,6 +34,11 @@ export interface WaitForEventOptions {
 
 export interface WaitForEventBusOptions {
   /** Timeout in milliseconds (default: 5000) */
+  timeout?: number;
+}
+
+export interface WaitForReadyFlagOptions {
+  /** Timeout in milliseconds (default: 10000) */
   timeout?: number;
 }
 
@@ -59,6 +70,38 @@ export async function waitForPageReady(
 }
 
 /**
+ * Wait for a sticky ready flag on window.__jarvis.ready.
+ *
+ * This is the PREFERRED method for waiting on "ready" signals because it avoids
+ * the race condition where an event fires before the test listener is attached.
+ * The app sets flags like `window.__jarvis.ready.chatReady = true` which persist
+ * until the component unmounts.
+ *
+ * Available flags:
+ * - 'chatReady' - Jarvis chat UI is mounted and interactive
+ *
+ * @example
+ * await waitForReadyFlag(page, 'chatReady');
+ * // Chat is now ready for interaction
+ */
+export async function waitForReadyFlag(
+  page: Page,
+  flagName: 'chatReady' | string,
+  options: WaitForReadyFlagOptions = {}
+): Promise<void> {
+  const { timeout = 10000 } = options;
+
+  await page.waitForFunction(
+    ({ flag }) => {
+      const w = window as any;
+      return w.__jarvis?.ready?.[flag] === true;
+    },
+    { flag: flagName },
+    { timeout }
+  );
+}
+
+/**
  * Wait for the EventBus to become available (window.__jarvis.eventBus).
  *
  * This is useful after navigation to chat pages to ensure the Jarvis app is mounted
@@ -78,7 +121,9 @@ export async function waitForEventBusAvailable(
   await page.waitForFunction(
     () => {
       const w = window as any;
-      return w.__jarvis?.eventBus !== undefined;
+      const bus = w.__jarvis?.eventBus;
+      // Check that eventBus exists AND has the required methods
+      return bus && typeof bus.on === 'function' && typeof bus.emit === 'function';
     },
     {},
     { timeout }
@@ -119,16 +164,25 @@ export async function waitForEvent<T = unknown>(
 
           if (w.__jarvis?.eventBus) {
             // eventBus is available, subscribe to event
-            const timeoutId = setTimeout(() => {
-              unsubscribe();
+            const remainingTime = timeout - (Date.now() - startTime);
+            if (remainingTime <= 0) {
               reject(new Error(`Timeout waiting for event "${eventName}" after ${timeout}ms`));
-            }, timeout - (Date.now() - startTime));
+              return;
+            }
 
+            let timeoutId: number | undefined;
             const unsubscribe = w.__jarvis.eventBus.on(eventName, (data: T) => {
-              clearTimeout(timeoutId);
+              if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+              }
               unsubscribe();
               resolve(data);
             });
+
+            timeoutId = window.setTimeout(() => {
+              unsubscribe();
+              reject(new Error(`Timeout waiting for event "${eventName}" after ${timeout}ms`));
+            }, remainingTime);
           } else if (Date.now() - startTime > timeout) {
             reject(new Error(`EventBus not available after ${timeout}ms. Ensure app is running in DEV mode.`));
           } else {

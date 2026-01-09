@@ -114,15 +114,29 @@ export default function App({ embedded = false }: AppProps) {
     return () => document.body.removeAttribute('data-ready')
   }, [state.messages.length])
 
-  // E2E test ready signal - emits when chat UI is interactive (DEV mode only)
-  // This allows tests to wait for the chat to be ready instead of using arbitrary timeouts
+  // E2E test ready signal - sets sticky flag when chat UI is interactive (DEV mode only)
+  // Uses sticky flags instead of events to avoid race conditions where tests miss the event
   useEffect(() => {
     if (config.isDevelopment) {
-      // Chat is ready when the text channel is initialized and not currently sending
-      // This indicates the UI is mounted and interactive
+      type JarvisWindow = Window & { __jarvis?: { ready?: { chatReady?: boolean; chatReadyTimestamp?: number }; eventBus?: unknown } }
+      const w = window as JarvisWindow
+      w.__jarvis = w.__jarvis || {}
+      w.__jarvis.ready = w.__jarvis.ready || {}
+      w.__jarvis.ready.chatReady = true
+      w.__jarvis.ready.chatReadyTimestamp = Date.now()
+      // Also emit event for backwards compatibility
       eventBus.emit('test:chat_ready', { timestamp: Date.now() })
     }
-  }, []) // Empty deps = emit once on mount
+    return () => {
+      if (config.isDevelopment) {
+        type JarvisWindow = Window & { __jarvis?: { ready?: { chatReady?: boolean } } }
+        const w = window as JarvisWindow
+        if (w.__jarvis?.ready) {
+          w.__jarvis.ready.chatReady = false
+        }
+      }
+    }
+  }, []) // Empty deps = set once on mount, clear on unmount
 
   return (
     <>
