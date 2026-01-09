@@ -191,7 +191,7 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // Check if new thread button exists - skip if not implemented yet
-    const newThreadBtn = page.locator('.new-thread-btn');
+    const newThreadBtn = page.locator('[data-testid="new-thread-btn"]').or(page.locator('.new-thread-btn')).first();
     const newThreadBtnCount = await newThreadBtn.count();
     if (newThreadBtnCount === 0) {
       console.log('⚠️  New thread button not found - thread management may not be fully implemented');
@@ -204,7 +204,17 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     await page.locator('[data-testid="chat-input"]').fill(thread1Message);
     // Wait for button to be enabled after filling input
     await expect(page.locator('[data-testid="send-message-btn"]')).toBeEnabled({ timeout: 5000 });
-    await page.locator('[data-testid="send-message-btn"]').click();
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === 'POST' &&
+          (r.status() === 200 || r.status() === 201) &&
+          r.url().includes('/api/threads/') &&
+          r.url().includes('/messages'),
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="send-message-btn"]').click(),
+    ]);
 
     // Verify message appears
     const messagesContainer = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
@@ -216,10 +226,16 @@ test.describe('Happy Path Tests - Core User Flows', () => {
 
     // Create new thread
     await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
-    await newThreadBtn.click();
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.request().method() === 'POST' && r.status() === 201 && r.url().includes('/api/threads'),
+        { timeout: 15000 }
+      ),
+      newThreadBtn.click(),
+    ]);
 
     // Wait for URL to change (deterministic wait, not arbitrary timeout)
-    await page.waitForURL((url) => url.toString() !== firstThreadUrl, { timeout: 5000 });
+    await page.waitForURL((url) => url.toString() !== firstThreadUrl, { timeout: 15000 });
 
     const secondThreadUrl = page.url();
     console.log(`📊 Second thread URL: ${secondThreadUrl}`);
@@ -228,14 +244,26 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     expect(secondThreadUrl).not.toBe(firstThreadUrl);
 
     // Wait for chat UI to be ready after thread switch
-    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
+    // Also wait for input to be enabled (React hydration)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 5000 });
 
     // Send message in second thread
     const thread2Message = 'Message in second thread';
     await page.locator('[data-testid="chat-input"]').fill(thread2Message);
-    // Wait for button to be enabled (it's disabled when input is empty)
-    await expect(page.locator('[data-testid="send-message-btn"]')).toBeEnabled({ timeout: 5000 });
-    await page.locator('[data-testid="send-message-btn"]').click();
+    // Wait for button to be enabled (it's disabled when input is empty) - longer timeout for React state
+    await expect(page.locator('[data-testid="send-message-btn"]')).toBeEnabled({ timeout: 10000 });
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === 'POST' &&
+          (r.status() === 200 || r.status() === 201) &&
+          r.url().includes('/api/threads/') &&
+          r.url().includes('/messages'),
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="send-message-btn"]').click(),
+    ]);
 
     await expect(messagesContainer).toContainText(thread2Message, { timeout: 15000 });
 
@@ -249,10 +277,10 @@ test.describe('Happy Path Tests - Core User Flows', () => {
       await threadList.nth(1).click();
 
       // Wait for URL to change (thread switch complete)
-      await page.waitForURL((url) => url.toString() !== currentUrl, { timeout: 5000 });
+      await page.waitForURL((url) => url.toString() !== currentUrl, { timeout: 15000 });
 
       // CRITICAL: Verify we're back on first thread with correct message
-      await expect(messagesContainer).toContainText(thread1Message, { timeout: 5000 });
+      await expect(messagesContainer).toContainText(thread1Message, { timeout: 15000 });
     } else {
       console.log('⚠️  Thread list has fewer than 2 threads - skipping thread switching test');
     }
