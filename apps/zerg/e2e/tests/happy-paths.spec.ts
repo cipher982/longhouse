@@ -26,22 +26,24 @@ test.beforeEach(async ({ request }) => {
 async function createAgentViaUI(page: Page): Promise<string> {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(500); // Let React hydrate
 
-  // Wait for dashboard to be ready and button to be enabled
+  // Wait for dashboard to be ready and button to be enabled (deterministic)
   const createBtn = page.locator('[data-testid="create-agent-btn"]');
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 10000 });
 
-  // Create agent
-  await createBtn.click();
+  // Create agent and wait for API response
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 10000 }
+    ),
+    createBtn.click(),
+  ]);
 
-  // Wait for new row with more patience
+  // Wait for new row to appear (deterministic)
   const row = page.locator('tr[data-agent-id]').first();
   await expect(row).toBeVisible({ timeout: 10000 });
-
-  // Wait for row to stabilize
-  await page.waitForTimeout(500);
 
   const agentId = await row.getAttribute('data-agent-id');
   if (!agentId) {
@@ -74,11 +76,16 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     const initialCount = await page.locator('tr[data-agent-id]').count();
     console.log(`📊 Initial agent count: ${initialCount}`);
 
-    // Create agent
-    await page.locator('[data-testid="create-agent-btn"]').click();
+    // Create agent and wait for API response (deterministic)
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 10000 }
+      ),
+      page.locator('[data-testid="create-agent-btn"]').click(),
+    ]);
 
     // Wait for new agent row to appear
-    await page.waitForTimeout(500); // Give time for API response
     await page.locator('tr[data-agent-id]').nth(initialCount).waitFor({ timeout: 10000 });
 
     // Verify agent appears in list
@@ -107,9 +114,9 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Click "Chat with Agent" button
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
 
-    // Wait for navigation to complete
+    // Wait for navigation to complete (deterministic - wait for chat UI)
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500); // Allow for any redirects
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // Get final URL
     const url = page.url();
@@ -146,18 +153,23 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     const agentId = await createAgentViaUI(page);
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
 
-    // Wait for chat to load
+    // Wait for chat to load (deterministic)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="send-message-btn"]')).toBeVisible({ timeout: 10000 });
 
-    // Type and send message
+    // Type and send message with deterministic wait for API response
     const testMessage = 'Hello, this is a test message for happy path validation';
     await page.locator('[data-testid="chat-input"]').fill(testMessage);
 
-    // Click send
-    await page.locator('[data-testid="send-message-btn"]').click();
+    // Click send and wait for API response
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/threads/') && r.url().includes('/messages') && r.request().method() === 'POST',
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="send-message-btn"]').click(),
+    ]);
 
     // CRITICAL: Verify message appears in messages container
     // Try different possible selectors for messages container
@@ -190,6 +202,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Send message in first thread
     const thread1Message = 'Message in first thread';
     await page.locator('[data-testid="chat-input"]').fill(thread1Message);
+    // Wait for button to be enabled after filling input
+    await expect(page.locator('[data-testid="send-message-btn"]')).toBeEnabled({ timeout: 5000 });
     await page.locator('[data-testid="send-message-btn"]').click();
 
     // Verify message appears
@@ -213,9 +227,14 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Verify URLs are different
     expect(secondThreadUrl).not.toBe(firstThreadUrl);
 
+    // Wait for chat UI to be ready after thread switch
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 5000 });
+
     // Send message in second thread
     const thread2Message = 'Message in second thread';
     await page.locator('[data-testid="chat-input"]').fill(thread2Message);
+    // Wait for button to be enabled (it's disabled when input is empty)
+    await expect(page.locator('[data-testid="send-message-btn"]')).toBeEnabled({ timeout: 5000 });
     await page.locator('[data-testid="send-message-btn"]').click();
 
     await expect(messagesContainer).toContainText(thread2Message, { timeout: 15000 });
@@ -250,7 +269,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Navigate to chat - should get trailing slash
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat UI to stabilize (deterministic)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const initialUrl = page.url();
     console.log(`📊 Initial URL: ${initialUrl}`);
@@ -290,16 +310,14 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Click chat button (should include name in query params)
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat UI (deterministic)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const url = page.url();
     console.log(`📊 Final URL: ${url}`);
 
     // Verify URL is valid (either with or without query params)
     expect(url).toMatch(/\/agent\/\d+\/thread\//);
-
-    // Verify chat still works regardless of query params
-    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     console.log('✅ Navigation works correctly (with or without query params)');
   });
@@ -313,22 +331,26 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Navigate to chat
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+    // Wait for chat UI (deterministic)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // Get initial URL (should have thread ID)
     const initialUrl = page.url();
     console.log(`📊 Initial URL: ${initialUrl}`);
 
-    // Send a message (this should NOT create a duplicate thread)
+    // Send a message (this should NOT create a duplicate thread) - wait for API response
     await page.locator('[data-testid="chat-input"]').fill('Test message');
-    await page.locator('[data-testid="send-message-btn"]').click();
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/threads/') && r.url().includes('/messages') && r.request().method() === 'POST',
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="send-message-btn"]').click(),
+    ]);
 
-    // Wait for message to send
+    // Wait for message to appear in UI
     const messagesContainer = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
     await expect(messagesContainer).toContainText('Test message', { timeout: 15000 });
-
-    // Wait a bit for any async operations
-    await page.waitForTimeout(1000);
 
     // URL should not change (no new thread created)
     const finalUrl = page.url();
@@ -394,9 +416,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     // Navigate to chat
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
 
-    // Verify all critical chat UI elements are present
+    // Verify all critical chat UI elements are present (deterministic)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('[data-testid="send-message-btn"]')).toBeVisible({ timeout: 5000 });
 
@@ -422,14 +443,13 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     console.log('Step 2: Navigating to chat...');
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
+
+    // Verify chat loads (deterministic)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // Verify URL is correct
     let url = page.url();
     expectUrlPattern(url, /\/agent\/\d+\/thread\//, 'Initial chat URL should be correct');
-
-    // Verify chat loads
-    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     // STEP 3: Send message
     console.log('Step 3: Sending message...');
@@ -437,7 +457,15 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     console.log(`📊 URL before sending message: ${urlBeforeSend}`);
 
     await page.locator('[data-testid="chat-input"]').fill('Test message for journey');
-    await page.locator('[data-testid="send-message-btn"]').click();
+
+    // Wait for API response (deterministic)
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/threads/') && r.url().includes('/messages') && r.request().method() === 'POST',
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="send-message-btn"]').click(),
+    ]);
 
     const messagesContainer = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
     await expect(messagesContainer).toContainText('Test message for journey', { timeout: 15000 });
@@ -449,9 +477,8 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     console.log('Step 4: Returning to dashboard...');
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
 
-    // Verify agent still exists
+    // Verify agent still exists (deterministic)
     await expect(page.locator(`tr[data-agent-id="${agentId}"]`)).toBeVisible({ timeout: 5000 });
 
     // STEP 5: Navigate back to chat and verify message persists
@@ -459,27 +486,21 @@ test.describe('Happy Path Tests - Core User Flows', () => {
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
     await page.waitForLoadState('networkidle');
 
-    // Log URL immediately after navigation
+    // Wait for chat UI to load (deterministic)
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
+
+    // Log URL
     let urlAfterClick = page.url();
     console.log(`📊 URL after clicking chat button: ${urlAfterClick}`);
-
-    await page.waitForTimeout(1000); // Give time for thread to load
-
-    // Log URL after wait
-    let urlAfterWait = page.url();
-    console.log(`📊 URL after waiting: ${urlAfterWait}`);
 
     // Create fresh locator reference after navigation
     const messagesContainerAfterReturn = page.locator('[data-testid="messages-container"]').or(page.locator('.messages-container')).first();
 
-    // Wait for messages to load
-    await page.waitForTimeout(1000);
-
-    // Check if there are any messages at all
+    // Check message count
     const messageCount = await page.locator('[data-role="chat-message-user"], [data-role="chat-message-assistant"]').count();
     console.log(`📊 Message count in container: ${messageCount}`);
 
-    // Message should still be visible
+    // Message should still be visible (deterministic wait)
     await expect(messagesContainerAfterReturn).toContainText('Test message for journey', { timeout: 15000 });
 
     console.log('✅ Complete user journey successful - create, chat, return, persistence verified!');

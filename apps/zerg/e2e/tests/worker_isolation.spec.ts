@@ -56,10 +56,10 @@ test.describe('Worker Database Isolation', () => {
     // Navigate to dashboard and verify agent appears in UI
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
 
+    // Wait for agent row to be visible (deterministic)
     const agentRow = page.locator(`tr[data-agent-id="${agent.id}"]`);
-    await expect(agentRow).toBeVisible({ timeout: 5000 });
+    await expect(agentRow).toBeVisible({ timeout: 10000 });
     console.log('✅ Agent visible in UI');
 
     // The actual cross-worker isolation is tested by running this test
@@ -182,13 +182,10 @@ test.describe('Worker Database Isolation', () => {
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
 
-    // Verify WebSocket URLs include worker parameter
+    // Wait for at least one WebSocket connection (deterministic polling)
     // fixtures.ts:113-136 injects worker=<id> into all WebSocket URLs
-
-    // CRITICAL: Must have at least one WebSocket connection to validate
-    expect(wsUrls.length).toBeGreaterThan(0);
+    await expect.poll(() => wsUrls.length, { timeout: 10000, message: 'Expected at least one WebSocket connection' }).toBeGreaterThan(0);
     console.log(`✅ WebSocket connections detected: ${wsUrls.length}`);
 
     // Verify worker parameter is present in WebSocket URLs
