@@ -5,7 +5,7 @@
  * These credentials are shared across all agents owned by the user.
  */
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import {
   useAccountConnectors,
   useConfigureAccountConnector,
@@ -18,6 +18,7 @@ import { ConnectorConfigModal, type ConfigModalState } from "../components/agent
 import { ConnectorCard, isOAuthConnector } from "../components/connectors/ConnectorCard";
 import { useOAuthFlow } from "../hooks/useOAuthFlow";
 import { SectionHeader, EmptyState } from "../components/ui";
+import { useConfirm } from "../components/confirm";
 
 export default function IntegrationsPage() {
   const { data: connectors, isLoading, error, refetch } = useAccountConnectors();
@@ -25,6 +26,7 @@ export default function IntegrationsPage() {
   const deleteConnector = useDeleteAccountConnector();
   const testConnector = useTestAccountConnector();
   const testBeforeSave = useTestAccountConnectorBeforeSave();
+  const confirm = useConfirm();
 
   const { startOAuthFlow, oauthPending } = useOAuthFlow(refetch);
 
@@ -91,8 +93,15 @@ export default function IntegrationsPage() {
     );
   };
 
-  const handleDelete = (connector: AccountConnectorStatus) => {
-    if (!window.confirm(`Remove ${connector.name} integration from your account?`)) {
+  const handleDelete = async (connector: AccountConnectorStatus) => {
+    const confirmed = await confirm({
+      title: `Remove ${connector.name}?`,
+      message: 'This will remove this integration from your account. Any agents using these credentials will lose access.',
+      confirmLabel: 'Remove',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
     deleteConnector.mutate(connector.type);
@@ -105,6 +114,14 @@ export default function IntegrationsPage() {
   // Group connectors by category
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
+
+  // Ready signal - indicates page is interactive (even if empty)
+  useEffect(() => {
+    if (!isLoading) {
+      document.body.setAttribute('data-ready', 'true');
+    }
+    return () => document.body.removeAttribute('data-ready');
+  }, [isLoading]);
 
   if (error) {
     return (

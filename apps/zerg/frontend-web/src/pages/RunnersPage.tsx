@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRunners, useRevokeRunner } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
@@ -11,16 +11,25 @@ import {
   EmptyState
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
+import { useConfirm } from "../components/confirm";
 import "../styles/runners.css";
 
 export default function RunnersPage() {
   const navigate = useNavigate();
   const { data: runners, isLoading, error } = useRunners();
   const revokeRunnerMutation = useRevokeRunner();
+  const confirm = useConfirm();
   const [showAddModal, setShowAddModal] = useState(false);
 
   const handleRevoke = async (runner: Runner) => {
-    if (!confirm(`Revoke runner "${runner.name}"? It will no longer be able to connect.`)) {
+    const confirmed = await confirm({
+      title: `Revoke runner "${runner.name}"?`,
+      message: 'This runner will no longer be able to connect. You can create a new runner if needed.',
+      confirmLabel: 'Revoke',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -60,6 +69,14 @@ export default function RunnersPage() {
     const diffDays = Math.floor(diffHours / 24);
     return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
   };
+
+  // Ready signal - indicates page is interactive (even if empty)
+  useEffect(() => {
+    if (!isLoading) {
+      document.body.setAttribute('data-ready', 'true');
+    }
+    return () => document.body.removeAttribute('data-ready');
+  }, [isLoading]);
 
   if (isLoading) {
     return (

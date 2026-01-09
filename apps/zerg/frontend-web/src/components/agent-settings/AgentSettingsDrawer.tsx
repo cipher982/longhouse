@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import clsx from "clsx";
+import { useConfirm } from "../confirm";
 import {
   useAddMcpServer,
   useAgentDetails,
@@ -38,6 +39,7 @@ type AllowedToolOption = {
 
 export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsDrawerProps) {
   const { user } = useAuth();
+  const confirm = useConfirm();
   const { data: agent } = useAgentDetails(isOpen ? agentId : null);
   const { data: policy } = useContainerPolicy();
   const { data: servers, isLoading: loadingServers } = useMcpServers(isOpen ? agentId : null);
@@ -83,13 +85,17 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
   });
 
   // Unified close handler that guards all close paths
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback(async () => {
     // Check if debounce timer is active (user has unsaved changes)
     if (debouncedUpdateAllowedTools.hasPendingDebounce) {
-      const confirmed = window.confirm(
-        "You have unsaved changes. Save before closing?"
-      );
-      if (confirmed) {
+      const shouldSave = await confirm({
+        title: 'Unsaved changes',
+        message: 'You have unsaved changes. Do you want to save them before closing?',
+        confirmLabel: 'Save & Close',
+        cancelLabel: 'Discard',
+        variant: 'warning',
+      });
+      if (shouldSave) {
         // Flush pending changes immediately
         debouncedUpdateAllowedTools.flush();
         // Note: drawer will close, mutation happens in background
@@ -102,14 +108,20 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
 
     // Check if mutation is in-flight
     if (debouncedUpdateAllowedTools.isPending) {
-      const confirmed = window.confirm("Save in progress. Close anyway?");
-      if (!confirmed) {
+      const closeAnyway = await confirm({
+        title: 'Save in progress',
+        message: 'Changes are still being saved. Close anyway?',
+        confirmLabel: 'Close Anyway',
+        cancelLabel: 'Wait',
+        variant: 'warning',
+      });
+      if (!closeAnyway) {
         return;
       }
     }
 
     onClose();
-  }, [debouncedUpdateAllowedTools, onClose]);
+  }, [debouncedUpdateAllowedTools, onClose, confirm]);
 
   // Rehydrate selectedTools from server state when drawer opens
   useEffect(() => {
@@ -317,10 +329,14 @@ export function AgentSettingsDrawer({ agentId, isOpen, onClose }: AgentSettingsD
     });
   };
 
-  const handleRemoveServer = (server: McpServerResponse) => {
-    const confirmed =
-      typeof window === "undefined" ||
-      window.confirm(`Remove MCP server "${server.name}" from this agent?`);
+  const handleRemoveServer = async (server: McpServerResponse) => {
+    const confirmed = await confirm({
+      title: `Remove MCP server "${server.name}"?`,
+      message: 'This agent will no longer have access to tools provided by this MCP server.',
+      confirmLabel: 'Remove',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
     if (!confirmed) {
       return;
     }

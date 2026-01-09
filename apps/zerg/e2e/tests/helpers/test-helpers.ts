@@ -119,8 +119,12 @@ export async function waitForDashboardReady(page: Page): Promise<void> {
     throw new Error(`Dashboard did not load properly. DOM state: ${JSON.stringify(domState)}`);
   }
 
-  // Wait a bit more for any reactive updates
-  await page.waitForTimeout(500);
+  // Wait for data-ready signal instead of arbitrary timeout
+  await page.waitForFunction(
+    () => document.body.getAttribute('data-ready') === 'true',
+    {},
+    { timeout: 5000 }
+  );
 }
 
 /**

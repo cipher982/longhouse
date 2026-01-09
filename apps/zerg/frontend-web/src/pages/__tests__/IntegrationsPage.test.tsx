@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import IntegrationsPage from "../IntegrationsPage";
+import { ConfirmProvider } from "../../components/confirm";
 
 // Capture original fetch to restore later
 const realFetch = global.fetch;
@@ -67,7 +68,9 @@ function renderIntegrationsPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <IntegrationsPage />
+      <ConfirmProvider>
+        <IntegrationsPage />
+      </ConfirmProvider>
     </QueryClientProvider>
   );
 }
