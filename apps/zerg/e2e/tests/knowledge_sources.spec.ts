@@ -1,87 +1,45 @@
 /**
- * KNOWLEDGE SOURCES E2E TESTS - V1.1
+ * KNOWLEDGE SOURCES E2E TESTS
  *
- * These tests validate the complete knowledge source workflow:
- * 1. Add URL knowledge source via UI
- * 2. Trigger sync
- * 3. Search synced content via KnowledgeSearchPanel
+ * Tests the knowledge sources feature:
+ * - Page loads and shows empty state or list
+ * - User can add a URL knowledge source
+ * - User can see knowledge sources in list
+ * - User can search knowledge
+ * - User can delete a knowledge source
  *
- * Uses the backend's mock URL fetcher for reliable test content.
+ * Strategy:
+ * - Each test validates ONE invariant
+ * - All waits are deterministic (API responses, element states)
+ * - No arbitrary timeouts or networkidle waits
+ * - Tests are isolated (reset DB per test)
  */
 
 import { test, expect, type Page } from './fixtures';
 
-// Skip: Knowledge sources UI selectors need updates
-test.skip();
-
-// Reset DB before each test for clean state
+// Reset DB before each test for clean, isolated state
 test.beforeEach(async ({ request }) => {
   await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
 });
 
-/**
- * Helper: Complete dev login flow - handles both landing page and protected route modals
- */
-async function ensureLoggedIn(page: Page): Promise<void> {
-  // Go to dashboard root first
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(500);
-
-  // Check if we're already authenticated (can see dashboard elements)
-  const createBtn = page.locator('[data-testid="create-agent-btn"]');
-  if (await createBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    // Already authenticated
-    return;
-  }
-
-  // Check for Dev Login button (appears on auth modals and landing page)
-  const devLoginBtn = page.locator('button:has-text("Dev Login")');
-  if (await devLoginBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await devLoginBtn.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-    return;
-  }
-
-  // Try landing page "Start Free" flow
-  const startFreeBtn = page.locator('button:has-text("Start Free"), a:has-text("Start Free")').first();
-  if (await startFreeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await startFreeBtn.click();
-
-    // Wait for modal and dev login button
-    const modalDevLogin = page.locator('button:has-text("Dev Login")');
-    await expect(modalDevLogin).toBeVisible({ timeout: 5000 });
-    await modalDevLogin.click();
-
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-  }
-}
+// ============================================================================
+// HELPERS - Reusable, deterministic operations
+// ============================================================================
 
 /**
- * Helper: Navigate to knowledge sources page
+ * Navigate to knowledge sources page and wait for it to load.
  */
 async function navigateToKnowledgeSources(page: Page): Promise<void> {
-  // Ensure we're logged in first
-  await ensureLoggedIn(page);
-
-  // Now navigate to knowledge sources
   await page.goto('/settings/knowledge');
-  await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(500); // Let React hydrate
 
-  // Check if auth modal appeared on protected route
-  const devLoginBtn = page.locator('button:has-text("Dev Login")');
-  if (await devLoginBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await devLoginBtn.click();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-  }
+  // Wait for either the "Add Source" button (loaded state) or empty state
+  await expect(
+    page.locator('[data-testid="add-knowledge-source-btn"]')
+  ).toBeVisible({ timeout: 15000 });
 }
 
 /**
- * Helper: Create a URL knowledge source via API (faster than UI for setup)
+ * Create a URL knowledge source via API for faster test setup.
  */
 async function createUrlSourceViaApi(
   request: import('@playwright/test').APIRequestContext,
@@ -100,218 +58,349 @@ async function createUrlSourceViaApi(
 }
 
 /**
- * Helper: Sync a knowledge source via API
+ * Delete a knowledge source via API.
  */
-async function syncSourceViaApi(
+async function deleteSourceViaApi(
   request: import('@playwright/test').APIRequestContext,
   sourceId: number
 ): Promise<void> {
-  const response = await request.post(`/api/knowledge/sources/${sourceId}/sync`);
-  expect(response.ok()).toBeTruthy();
+  const response = await request.delete(`/api/knowledge/sources/${sourceId}`);
+  expect(response.status()).toBe(204);
 }
 
-test.describe('Knowledge Sources - Happy Path', () => {
+// ============================================================================
+// SMOKE TESTS - Core knowledge sources functionality
+// ============================================================================
 
-  test('HAPPY PATH: Navigate to knowledge sources page', async ({ page }) => {
-    console.log('🎯 Testing: Knowledge Sources Page Navigation');
-
+test.describe('Knowledge Sources - Core', () => {
+  test('page loads and shows empty state when no sources exist', async ({ page }) => {
     await navigateToKnowledgeSources(page);
 
-    // Verify page loaded - should see "Add Source" button
-    await expect(page.locator('[data-testid="add-knowledge-source-btn"]')).toBeVisible({ timeout: 10000 });
+    // Should show "Add Source" button
+    await expect(page.locator('[data-testid="add-knowledge-source-btn"]')).toBeVisible();
 
-    // Should show empty state initially
-    const emptyState = page.locator('.empty-state');
-    await expect(emptyState).toBeVisible({ timeout: 5000 });
-
-    console.log('✅ Knowledge sources page loads correctly');
+    // Should show empty state message (using EmptyState component)
+    const emptyStateTitle = page.locator('h3:has-text("No knowledge sources configured yet")');
+    await expect(emptyStateTitle).toBeVisible({ timeout: 5000 });
   });
 
-  test('HAPPY PATH: Add URL knowledge source via UI', async ({ page }) => {
-    console.log('🎯 Testing: Add URL Knowledge Source via UI');
+  test('page loads and shows source list when sources exist', async ({ page, request }) => {
+    // Create a source via API
+    const source = await createUrlSourceViaApi(request, 'Test Docs', 'https://example.com/docs.md');
 
     await navigateToKnowledgeSources(page);
 
-    // Click "Add Source" button
-    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
-
-    // Modal should open - wait for type selection to appear
-    await expect(page.locator('[data-testid="source-type-url"]')).toBeVisible({ timeout: 5000 });
-
-    // Select URL type
-    await page.locator('[data-testid="source-type-url"]').click();
-
-    // URL config form should appear
-    await expect(page.locator('[data-testid="url-input"]')).toBeVisible({ timeout: 5000 });
-
-    // Fill in URL
-    await page.locator('[data-testid="url-input"]').fill('https://example.com/test-docs.md');
-
-    // Submit
-    await page.locator('[data-testid="submit-url-source"]').click();
-
-    // Wait for modal to close and source to appear
-    await page.waitForTimeout(1000);
-
-    // Should see the source card now
-    const sourceCard = page.locator('[data-testid^="knowledge-source-"]').first();
-    await expect(sourceCard).toBeVisible({ timeout: 10000 });
-
-    console.log('✅ URL knowledge source added successfully');
-  });
-
-  test('HAPPY PATH: Sync knowledge source and verify status', async ({ page, request }) => {
-    console.log('🎯 Testing: Sync Knowledge Source');
-
-    // Create source via API (faster setup)
-    const source = await createUrlSourceViaApi(
-      request,
-      'Test Docs',
-      'https://httpbin.org/robots.txt' // Simple text endpoint that works
-    );
-
-    await navigateToKnowledgeSources(page);
-
-    // Source card should be visible
+    // Should show the source card
     const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
     await expect(sourceCard).toBeVisible({ timeout: 10000 });
 
-    // Click sync button
-    await page.locator(`[data-testid="sync-source-${source.id}"]`).click();
+    // Should show source name
+    await expect(sourceCard).toContainText('Test Docs');
+  });
 
-    // Wait for sync to complete - status should change
-    // Initially "pending" or "syncing", then "success" or "failed"
-    await page.waitForTimeout(3000);
+  test('source card shows correct status and details', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'My Documentation', 'https://example.com/api-docs.md');
 
-    // Refresh to see updated status
-    await page.reload();
-    await page.waitForLoadState('networkidle');
+    await navigateToKnowledgeSources(page);
 
-    // Card should still exist
+    const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
     await expect(sourceCard).toBeVisible({ timeout: 10000 });
 
-    console.log('✅ Knowledge source sync triggered successfully');
+    // Should show "Pending" status (never synced)
+    await expect(sourceCard.locator('text=Pending')).toBeVisible();
+
+    // Should show URL type
+    await expect(sourceCard.locator('text=URL')).toBeVisible();
+
+    // Should show Sync Now button
+    await expect(sourceCard.locator(`[data-testid="sync-source-${source.id}"]`)).toBeVisible();
   });
-
-  test('HAPPY PATH: Search panel appears when sources exist', async ({ page, request }) => {
-    console.log('🎯 Testing: KnowledgeSearchPanel Visibility');
-
-    // Create source via API
-    const source = await createUrlSourceViaApi(
-      request,
-      'Test Docs',
-      'https://example.com/docs.md'
-    );
-
-    await navigateToKnowledgeSources(page);
-
-    // Source card should be visible
-    await expect(page.locator(`[data-testid="knowledge-source-${source.id}"]`)).toBeVisible({ timeout: 10000 });
-
-    // Search panel should be visible (only shows when sources exist)
-    await expect(page.locator('[data-testid="knowledge-search-panel"]')).toBeVisible({ timeout: 5000 });
-
-    // Search input should be available
-    await expect(page.locator('[data-testid="knowledge-search-input"]')).toBeVisible({ timeout: 5000 });
-
-    console.log('✅ KnowledgeSearchPanel appears when sources exist');
-  });
-
-  test('HAPPY PATH: Search knowledge base via KnowledgeSearchPanel', async ({ page, request }) => {
-    console.log('🎯 Testing: Knowledge Search Functionality');
-
-    // Create and sync a source via API for known content
-    const source = await createUrlSourceViaApi(
-      request,
-      'Test Documentation',
-      'https://httpbin.org/robots.txt'
-    );
-
-    // Sync it to populate content
-    await syncSourceViaApi(request, source.id);
-
-    await navigateToKnowledgeSources(page);
-
-    // Verify search panel is visible
-    await expect(page.locator('[data-testid="knowledge-search-panel"]')).toBeVisible({ timeout: 10000 });
-
-    // Type a search query (robots.txt contains "User-agent")
-    const searchInput = page.locator('[data-testid="knowledge-search-input"]');
-    await searchInput.fill('User-agent');
-
-    // Wait for search results (debounced)
-    await page.waitForTimeout(1500);
-
-    // Check if results appear OR "no results" message (depends on sync success)
-    const hasResults = await page.locator('[data-testid="knowledge-search-results"]').count() > 0;
-    const noResultsMsg = page.locator('.search-no-results');
-
-    // Either should be true - we just want to verify the search executes
-    expect(hasResults || await noResultsMsg.isVisible()).toBeTruthy();
-
-    console.log(`✅ Knowledge search executed (results found: ${hasResults})`);
-  });
-
-  test('HAPPY PATH: Complete workflow - Add, Sync, Search', async ({ page }) => {
-    console.log('🎯 Testing: Complete Knowledge Source Workflow');
-
-    // Step 1: Navigate to knowledge page
-    await navigateToKnowledgeSources(page);
-
-    // Step 2: Add a URL source via UI
-    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
-    await page.locator('[data-testid="source-type-url"]').click();
-    await page.locator('[data-testid="url-input"]').fill('https://httpbin.org/robots.txt');
-    await page.locator('[data-testid="submit-url-source"]').click();
-
-    // Wait for source to appear
-    await page.waitForTimeout(1000);
-    const sourceCard = page.locator('[data-testid^="knowledge-source-"]').first();
-    await expect(sourceCard).toBeVisible({ timeout: 10000 });
-
-    // Get source ID from card
-    const testId = await sourceCard.getAttribute('data-testid');
-    const sourceId = testId?.replace('knowledge-source-', '');
-    console.log(`📊 Created source with ID: ${sourceId}`);
-
-    // Step 3: Trigger sync
-    await page.locator(`[data-testid="sync-source-${sourceId}"]`).click();
-
-    // Wait for sync
-    await page.waitForTimeout(3000);
-
-    // Step 4: Verify search panel works
-    await expect(page.locator('[data-testid="knowledge-search-panel"]')).toBeVisible({ timeout: 5000 });
-
-    // Type search query
-    await page.locator('[data-testid="knowledge-search-input"]').fill('robots');
-    await page.waitForTimeout(1500);
-
-    console.log('✅ Complete knowledge source workflow validated');
-  });
-
 });
 
-test.describe('Knowledge Sources - Error Handling', () => {
+// ============================================================================
+// ADD SOURCE TESTS - Modal workflow
+// ============================================================================
 
-  test('Handles short search queries gracefully', async ({ page, request }) => {
-    console.log('🎯 Testing: Short Query Handling');
-
-    // Create a source so search panel appears
-    await createUrlSourceViaApi(request, 'Test', 'https://example.com/');
-
+test.describe('Knowledge Sources - Add Source', () => {
+  test('clicking Add Source opens modal with type selection', async ({ page }) => {
     await navigateToKnowledgeSources(page);
-    await expect(page.locator('[data-testid="knowledge-search-panel"]')).toBeVisible({ timeout: 10000 });
 
-    // Type single character
-    await page.locator('[data-testid="knowledge-search-input"]').fill('a');
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
 
-    // Should show hint about minimum characters
-    const hint = page.locator('.search-hint');
-    await expect(hint).toBeVisible({ timeout: 2000 });
-    await expect(hint).toContainText('at least 2 characters');
+    // Modal should open with type selection
+    const modal = page.locator('.modal-container');
+    await expect(modal).toBeVisible({ timeout: 5000 });
 
-    console.log('✅ Short query handling works correctly');
+    // Should show both type options
+    await expect(page.locator('[data-testid="source-type-url"]')).toBeVisible();
+    // Use more specific selector - the GitHub button contains an h3 with the text
+    await expect(modal.locator('h3:has-text("GitHub Repository")')).toBeVisible();
   });
 
+  test('selecting URL type shows URL configuration form', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
+    await page.locator('[data-testid="source-type-url"]').click();
+
+    // Should show URL form
+    await expect(page.locator('[data-testid="url-input"]')).toBeVisible({ timeout: 5000 });
+
+    // Should show name input
+    await expect(page.locator('input[placeholder="My Documentation"]')).toBeVisible();
+
+    // Submit button should be disabled without URL
+    await expect(page.locator('[data-testid="submit-url-source"]')).toBeDisabled();
+  });
+
+  test('can add URL knowledge source via UI', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    // Open modal and select URL type
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
+    await page.locator('[data-testid="source-type-url"]').click();
+
+    // Fill in the URL
+    await page.locator('[data-testid="url-input"]').fill('https://httpbin.org/robots.txt');
+
+    // Submit button should now be enabled
+    const submitBtn = page.locator('[data-testid="submit-url-source"]');
+    await expect(submitBtn).toBeEnabled({ timeout: 5000 });
+
+    // Wait for API response when submitting
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/knowledge/sources') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 15000 }
+      ),
+      submitBtn.click(),
+    ]);
+
+    // Modal should close
+    await expect(page.locator('.modal-container')).not.toBeVisible({ timeout: 5000 });
+
+    // New source should appear in the list
+    const sourceCard = page.locator('[data-testid^="knowledge-source-"]').first();
+    await expect(sourceCard).toBeVisible({ timeout: 10000 });
+  });
+
+  test('can set custom name for URL source', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
+    await page.locator('[data-testid="source-type-url"]').click();
+
+    // Fill in custom name and URL
+    await page.locator('input[placeholder="My Documentation"]').fill('Custom Source Name');
+    await page.locator('[data-testid="url-input"]').fill('https://example.com/docs.md');
+
+    // Submit
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/knowledge/sources') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 15000 }
+      ),
+      page.locator('[data-testid="submit-url-source"]').click(),
+    ]);
+
+    // Source should appear with custom name
+    await expect(page.locator('text=Custom Source Name')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('can cancel adding source via Cancel button', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
+    await expect(page.locator('.modal-container')).toBeVisible({ timeout: 5000 });
+
+    // Click Cancel
+    await page.locator('button:has-text("Cancel")').click();
+
+    // Modal should close
+    await expect(page.locator('.modal-container')).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('can go back from URL form to type selection', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    await page.locator('[data-testid="add-knowledge-source-btn"]').click();
+    await page.locator('[data-testid="source-type-url"]').click();
+
+    // Should be on URL form
+    await expect(page.locator('[data-testid="url-input"]')).toBeVisible({ timeout: 5000 });
+
+    // Click Back
+    await page.locator('button:has-text("Back")').click();
+
+    // Should be back on type selection
+    await expect(page.locator('[data-testid="source-type-url"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="url-input"]')).not.toBeVisible();
+  });
+});
+
+// ============================================================================
+// SEARCH TESTS - Knowledge search panel
+// ============================================================================
+
+test.describe('Knowledge Sources - Search', () => {
+  test('search panel appears when sources exist', async ({ page, request }) => {
+    // Create a source so search panel shows
+    await createUrlSourceViaApi(request, 'Test Docs', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    // Search panel should be visible
+    await expect(page.locator('[data-testid="knowledge-search-panel"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="knowledge-search-input"]')).toBeVisible();
+  });
+
+  test('search panel does not appear when no sources exist', async ({ page }) => {
+    await navigateToKnowledgeSources(page);
+
+    // With no sources, we should see empty state, not search panel
+    await expect(page.locator('h3:has-text("No knowledge sources configured yet")')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="knowledge-search-panel"]')).not.toBeVisible();
+  });
+
+  test('typing less than 2 characters shows hint', async ({ page, request }) => {
+    await createUrlSourceViaApi(request, 'Test Docs', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    const searchInput = page.locator('[data-testid="knowledge-search-input"]');
+    await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+    // Type single character
+    await searchInput.fill('a');
+
+    // Should show hint about minimum characters
+    await expect(page.locator('text=at least 2 characters')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('search executes with valid query', async ({ page, request }) => {
+    await createUrlSourceViaApi(request, 'Test Docs', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    const searchInput = page.locator('[data-testid="knowledge-search-input"]');
+    await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+    // Type valid query
+    await searchInput.fill('test query');
+
+    // Wait for search API call (debounced)
+    await page.waitForResponse(
+      (r) => r.url().includes('/api/knowledge/search') && r.request().method() === 'GET',
+      { timeout: 10000 }
+    );
+
+    // Should show either results or "no results" message
+    const hasResults = await page.locator('[data-testid="knowledge-search-results"]').isVisible();
+    const hasNoResults = await page.locator('text=No results found').isVisible();
+
+    expect(hasResults || hasNoResults).toBeTruthy();
+  });
+});
+
+// ============================================================================
+// DELETE TESTS - Source deletion
+// ============================================================================
+
+test.describe('Knowledge Sources - Delete', () => {
+  test('delete button is visible on source card', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'Delete Test', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
+    await expect(sourceCard).toBeVisible({ timeout: 10000 });
+
+    // Delete button should be visible
+    await expect(sourceCard.locator('button:has-text("Delete")')).toBeVisible();
+  });
+
+  test('clicking delete removes source after confirmation', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'To Be Deleted', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
+    await expect(sourceCard).toBeVisible({ timeout: 10000 });
+
+    // Set up dialog handler for confirmation
+    page.on('dialog', (dialog) => dialog.accept());
+
+    // Click delete and wait for API response
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes(`/api/knowledge/sources/${source.id}`) && r.request().method() === 'DELETE',
+        { timeout: 15000 }
+      ),
+      sourceCard.locator('button:has-text("Delete")').click(),
+    ]);
+
+    // Source should be removed from list
+    await expect(sourceCard).not.toBeVisible({ timeout: 10000 });
+  });
+
+  test('dismissing delete confirmation keeps source', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'Keep Me', 'https://example.com/');
+
+    await navigateToKnowledgeSources(page);
+
+    const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
+    await expect(sourceCard).toBeVisible({ timeout: 10000 });
+
+    // Set up dialog handler to dismiss
+    page.on('dialog', (dialog) => dialog.dismiss());
+
+    // Click delete
+    await sourceCard.locator('button:has-text("Delete")').click();
+
+    // Source should still be visible
+    await expect(sourceCard).toBeVisible({ timeout: 5000 });
+  });
+});
+
+// ============================================================================
+// SYNC TESTS - Source syncing
+// ============================================================================
+
+test.describe('Knowledge Sources - Sync', () => {
+  test('sync button triggers sync API call', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'Sync Test', 'https://httpbin.org/robots.txt');
+
+    await navigateToKnowledgeSources(page);
+
+    const syncBtn = page.locator(`[data-testid="sync-source-${source.id}"]`);
+    await expect(syncBtn).toBeVisible({ timeout: 10000 });
+
+    // Click sync and wait for API response
+    await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes(`/api/knowledge/sources/${source.id}/sync`) && r.request().method() === 'POST',
+        { timeout: 30000 }
+      ),
+      syncBtn.click(),
+    ]);
+
+    // After sync completes, button text should return to "Sync Now"
+    // (was "Syncing..." during the operation)
+    await expect(syncBtn).toContainText('Sync Now', { timeout: 10000 });
+  });
+
+  test('sync button shows syncing state during operation', async ({ page, request }) => {
+    const source = await createUrlSourceViaApi(request, 'Sync State Test', 'https://httpbin.org/robots.txt');
+
+    await navigateToKnowledgeSources(page);
+
+    const syncBtn = page.locator(`[data-testid="sync-source-${source.id}"]`);
+    await expect(syncBtn).toBeVisible({ timeout: 10000 });
+
+    // Start sync (don't wait for response)
+    syncBtn.click();
+
+    // Button should show syncing state
+    await expect(syncBtn).toContainText('Syncing', { timeout: 5000 });
+  });
 });
