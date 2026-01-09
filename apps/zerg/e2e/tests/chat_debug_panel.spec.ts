@@ -3,9 +3,14 @@
  *
  * Tests the debug panel visibility, content, and reset functionality.
  * The debug panel is shown only in dev mode (config.isDevelopment).
+ *
+ * Uses the ready-signals pattern for reliable waiting:
+ * - waitForEventBusAvailable: Ensures Jarvis app is mounted and EventBus is ready
+ * - This replaces arbitrary timeouts with deterministic app-state checks
  */
 
 import { test, expect, type Page } from './fixtures';
+import { waitForEventBusAvailable } from './helpers/ready-signals';
 
 // Reset DB before each test
 test.beforeEach(async ({ request }) => {
@@ -15,9 +20,13 @@ test.beforeEach(async ({ request }) => {
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
 
-  // Wait for chat UI to load
+  // Wait for EventBus to be available (proves Jarvis app is mounted)
+  // This is more reliable than waiting for arbitrary selectors
+  await waitForEventBusAvailable(page, { timeout: 10000 });
+
+  // Also verify chat UI elements are present
   const chatInterface = page.locator('.text-input-container, .chat-wrapper, .transcript');
-  await expect(chatInterface.first()).toBeVisible({ timeout: 10000 });
+  await expect(chatInterface.first()).toBeVisible({ timeout: 5000 });
 }
 
 async function sendMessage(page: Page, message: string): Promise<void> {
