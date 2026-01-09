@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   useKnowledgeSources,
   useDeleteKnowledgeSource,
@@ -14,12 +14,14 @@ import {
   EmptyState
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
+import { useConfirm } from "../components/confirm";
 import "../styles/knowledge-sources.css";
 
 export default function KnowledgeSourcesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isContextModalOpen, setIsContextModalOpen] = useState(false);
   const [syncingIds, setSyncingIds] = useState<Set<number>>(new Set());
+  const confirm = useConfirm();
 
   const { data: sources, isLoading, error } = useKnowledgeSources();
   const deleteMutation = useDeleteKnowledgeSource();
@@ -38,8 +40,15 @@ export default function KnowledgeSourcesPage() {
     }
   };
 
-  const handleDelete = (id: number) => {
-    if (confirm("Are you sure you want to delete this knowledge source?")) {
+  const handleDelete = async (id: number) => {
+    const confirmed = await confirm({
+      title: 'Delete knowledge source?',
+      message: 'This will permanently remove this knowledge source and all indexed content.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
+    if (confirmed) {
       deleteMutation.mutate(id);
     }
   };
@@ -48,8 +57,15 @@ export default function KnowledgeSourcesPage() {
   const handleContextSubmit = async (title: string, content: string) => {
     console.log("AddContextModal submit:", { title, content });
     // TODO: Call API to create knowledge source with source_type: "user_text"
-    await new Promise((resolve) => setTimeout(resolve, 500)); // Simulate API delay
   };
+
+  // Ready signal - indicates page is interactive (even if empty)
+  useEffect(() => {
+    if (!isLoading) {
+      document.body.setAttribute('data-ready', 'true');
+    }
+    return () => document.body.removeAttribute('data-ready');
+  }, [isLoading]);
 
   if (isLoading) {
     return (

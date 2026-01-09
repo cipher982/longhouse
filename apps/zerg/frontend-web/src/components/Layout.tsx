@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useShelf } from "../lib/useShelfState";
 import { useWebSocket, ConnectionStatusIndicator } from "../lib/useWebSocket";
+import { useConfirm } from "./confirm";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
 
@@ -12,6 +13,7 @@ function WelcomeHeader() {
   const { isShelfOpen, toggleShelf } = useShelf();
   const location = useLocation();
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Close mobile nav on route change
@@ -74,8 +76,15 @@ function WelcomeHeader() {
 
   const userInitials = getUserInitials(user);
 
-  const handleAvatarClick = () => {
-    if (confirm("Do you want to log out?")) {
+  const handleAvatarClick = async () => {
+    const confirmed = await confirm({
+      title: 'Log out?',
+      message: 'You will need to sign in again to access your account.',
+      confirmLabel: 'Log out',
+      cancelLabel: 'Stay signed in',
+      variant: 'default',
+    });
+    if (confirmed) {
       logout();
     }
   };

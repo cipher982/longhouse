@@ -7,6 +7,7 @@ import { TestRouter } from "../../test/test-utils";
 
 import ChatPage from "../ChatPage";
 import { ShelfProvider } from "../../lib/useShelfState";
+import { ConfirmProvider } from "../../components/confirm";
 import type { Thread, ThreadMessage } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
@@ -53,13 +54,15 @@ function renderChatPage(initialEntry = "/agent/1/thread/42") {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShelfProvider>
-        <TestRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path="/agent/:agentId/thread/:threadId?" element={<ChatPage />} />
-          </Routes>
-        </TestRouter>
-      </ShelfProvider>
+      <ConfirmProvider>
+        <ShelfProvider>
+          <TestRouter initialEntries={[initialEntry]}>
+            <Routes>
+              <Route path="/agent/:agentId/thread/:threadId?" element={<ChatPage />} />
+            </Routes>
+          </TestRouter>
+        </ShelfProvider>
+      </ConfirmProvider>
     </QueryClientProvider>
   );
 }

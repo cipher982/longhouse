@@ -27,6 +27,7 @@ import {
   SectionHeader,
   EmptyState
 } from "../components/ui";
+import { useConfirm } from "../components/confirm";
 
 // App logo (served from public folder)
 const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
@@ -65,6 +66,7 @@ export default function DashboardPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
+  const confirm = useConfirm();
   const [scope, setScope] = useState<Scope>("my");
   const [sortConfig, setSortConfig] = useState<SortConfig>(() => loadSortConfig());
   const [expandedAgentId, setExpandedAgentId] = useState<number | null>(null);
@@ -414,13 +416,14 @@ export default function DashboardPage() {
 
   const runsDataLoading = isLoading && !dashboardData;
 
-  // Marketing ready signal - indicates page is ready for screenshot capture
+  // Ready signal - indicates page is interactive (even if empty)
+  // Used by E2E tests and marketing screenshots
   useEffect(() => {
-    if (!isLoading && agents.length > 0) {
+    if (!isLoading) {
       document.body.setAttribute('data-ready', 'true');
     }
     return () => document.body.removeAttribute('data-ready');
-  }, [isLoading, agents.length]);
+  }, [isLoading]);
 
   // Keep sendMessage ref up-to-date for stable cleanup
   useEffect(() => {
@@ -1074,9 +1077,15 @@ export default function DashboardPage() {
     setSettingsAgentId(agentId);
   }
 
-  function handleDeleteAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, name: string) {
+  async function handleDeleteAgent(event: ReactMouseEvent<HTMLButtonElement>, agentId: number, name: string) {
     event.stopPropagation();
-    const confirmed = typeof window === "undefined" || window.confirm(`Delete agent ${name}?`);
+    const confirmed = await confirm({
+      title: `Delete agent "${name}"?`,
+      message: 'This action cannot be undone. All associated data will be permanently removed.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Keep',
+      variant: 'danger',
+    });
     if (!confirmed) {
       return;
     }

@@ -294,40 +294,16 @@ export default function ChatPage() {
 
   return (
     <>
-      <div id="chat-view-container" className="chat-view-container">
+      <div id="chat-view-container" className="chat-view-container" data-testid="chat-page">
         <header className="chat-header">
           <button
             type="button"
             className="back-button"
             onClick={() => navigate("/dashboard")}
+            aria-label="Back to dashboard"
           >
             ←
           </button>
-          {agent?.id != null && (
-            <button
-              type="button"
-              data-testid={`chat-agent-${agent.id}`}
-              onClick={() => {
-                if (effectiveThreadId != null) {
-                  navigate(`/agent/${agent.id}/thread/${effectiveThreadId}`, { replace: true });
-                } else {
-                  navigate(`/agent/${agent.id}/thread/`, { replace: true });
-                }
-              }}
-              aria-hidden="true"
-              tabIndex={-1}
-              style={{
-                position: "absolute",
-                width: 1,
-                height: 1,
-                opacity: 0,
-                pointerEvents: "auto",
-                overflow: "hidden",
-              }}
-            >
-              {agent.name}
-            </button>
-          )}
           <div className="agent-info">
             <div className="agent-name">{agent?.name ?? "Agent"}</div>
             <div>
