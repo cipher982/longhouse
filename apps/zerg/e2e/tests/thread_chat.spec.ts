@@ -109,22 +109,28 @@ test.describe('Thread & Chat – basic flows', () => {
     await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
 
     const newThreadBtn = page.locator('[data-testid="new-thread-btn"]');
-    await expect(newThreadBtn).toBeVisible({ timeout: 5000 }); // REQUIRE thread management
+    await expect(newThreadBtn).toBeVisible({ timeout: 5000 });
 
-    await newThreadBtn.click();
+    // Wait for POST response when creating new thread
+    await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/threads') && resp.request().method() === 'POST'),
+      newThreadBtn.click(),
+    ]);
+
     const threadRow = page.locator('.thread-list [data-testid^="thread-row-"]').first();
-    await expect(threadRow).toBeVisible({ timeout: 5000 }); // REQUIRE thread list
+    await expect(threadRow).toBeVisible({ timeout: 5000 });
 
     const editBtn = threadRow.locator('[data-testid^="edit-thread-"]').first();
     await expect(editBtn).toBeVisible({ timeout: 5000 });
 
     await editBtn.click();
     const titleInput = threadRow.locator('input.thread-title-input');
-    await expect(titleInput).toBeVisible({ timeout: 5000 }); // REQUIRE title editing
+    await expect(titleInput).toBeVisible({ timeout: 5000 });
+    await expect(titleInput).toBeFocused({ timeout: 2000 }); // Wait for focus
 
     await titleInput.fill('Renamed');
 
-    // Wait for PUT response after pressing Enter (avoids flaky assertion)
+    // Wait for PUT response after pressing Enter
     await Promise.all([
       page.waitForResponse(resp => resp.url().includes('/api/threads/') && resp.request().method() === 'PUT'),
       titleInput.press('Enter'),
