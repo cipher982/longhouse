@@ -352,14 +352,13 @@ test.describe('Automation History Section', () => {
 
     // Wait for chat interface to load (don't use networkidle as it may timeout)
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
-    await page.waitForTimeout(1000);
 
-    // Verify automation section is NOT visible
-    await expect(page.locator('[data-testid="automation-history"]')).not.toBeVisible();
+    // Verify automation section is NOT rendered at all
+    await expect(page.locator('[data-testid="automation-history"]')).toHaveCount(0);
     console.log('✅ Automation section correctly hidden when empty');
 
     // Verify chat thread still works
-    await expect(page.locator('.thread-list .thread-item')).toHaveCount(1);
+    await expect(page.locator('.thread-list .thread-item')).toHaveCount(1, { timeout: 10000 });
     console.log('✅ Chat threads still display normally');
   });
 });

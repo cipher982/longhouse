@@ -74,14 +74,27 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
     // Send message
     const persistentMessage = 'This should persist after reload';
     await page.getByTestId('chat-input').fill(persistentMessage);
-    await page.getByTestId('send-message-btn').click();
+
+    // Wait for message to be persisted before reloading (optimistic UI is not enough)
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === 'POST' &&
+          (r.status() === 200 || r.status() === 201) &&
+          r.url().includes('/api/threads/') &&
+          r.url().includes('/messages'),
+        { timeout: 15000 }
+      ),
+      page.getByTestId('send-message-btn').click(),
+    ]);
 
     // Verify message appears
     await expect(page.getByTestId('messages-container')).toContainText(persistentMessage, { timeout: 10000 });
+    const threadUrl = page.url();
 
     // Reload page and navigate back to chat
     await page.reload();
-    await page.locator(`[data-testid="chat-agent-${agentId}"]`).click();
+    await page.goto(threadUrl);
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
