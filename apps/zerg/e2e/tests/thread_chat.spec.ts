@@ -123,7 +123,13 @@ test.describe('Thread & Chat – basic flows', () => {
     await expect(titleInput).toBeVisible({ timeout: 5000 }); // REQUIRE title editing
 
     await titleInput.fill('Renamed');
-    await titleInput.press('Enter');
+
+    // Wait for PUT response after pressing Enter (avoids flaky assertion)
+    await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/threads/') && resp.request().method() === 'PUT'),
+      titleInput.press('Enter'),
+    ]);
+
     await expect(threadRow).toContainText('Renamed');
   });
 
