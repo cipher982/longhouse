@@ -94,13 +94,26 @@ test.describe('Chat Functional Tests - Complete Message Flow', () => {
 
     // Reload page and navigate back to chat
     await page.reload();
-    await page.goto(threadUrl);
+    const threadIdMatch = threadUrl.match(/\/thread\/([^/?#]+)/);
+    const threadId = threadIdMatch?.[1];
+
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.request().method() === 'GET' &&
+          r.status() === 200 &&
+          r.url().includes('/api/threads/') &&
+          (threadId ? r.url().includes(`/api/threads/${threadId}`) : true),
+        { timeout: 15000 }
+      ),
+      page.goto(threadUrl),
+    ]);
 
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
 
     // **CRITICAL: Verify message persisted**
     await expect(page.getByTestId('messages-container')).toContainText(persistentMessage, {
-      timeout: 10000
+      timeout: 15000
     });
   });
 
