@@ -3,77 +3,154 @@
 This repo is optimized for a solo dev shipping fast with AI writing most code.
 The goal is **deterministic, parallel E2E** that can run constantly without flakes.
 
-## Non-negotiable contracts (make UI testable)
+## Current State (Jan 2025)
 
-1. **Stable selectors**
-   - Prefer `data-testid="..."` for anything E2E touches.
-   - Don’t assert on “pretty” CSS classnames or DOM structure.
+| Metric | Value | Notes |
+|--------|-------|-------|
+| E2E tests passing | 138 | Deterministic, no sleeps |
+| E2E tests skipped | 188 | Across 43 spec files |
+| Unit tests passing | 88 | 6 skipped (WebRTC in Docker) |
+| Allowlisted files (waitForTimeout) | 10 | Legacy, in skipped specs |
+| Allowlisted files (networkidle) | 7 | Legacy, in skipped specs |
 
-2. **No arbitrary sleeps**
-   - Avoid `waitForTimeout()` and `networkidle` in Playwright tests.
-   - Replace with “web-first” / deterministic waits:
-     - `await expect(locator).toBeVisible()`
-     - `await Promise.all([page.waitForResponse(...), click()])`
-     - `await expect.poll(() => ...)`
+### Skipped Specs by Category
 
-3. **Page readiness is explicit**
-   - Pages should set `document.body.dataset.ready = "true"` when interactive (even if empty state).
-   - Pages should remove it on unmount.
-   - E2E helpers rely on `body[data-ready="true"]` instead of blind delays.
+| Category | Files | Notes |
+|----------|-------|-------|
+| Canvas/Workflow | 8 | Complex visual/execution flows |
+| Chat | 6 | SSE streaming, real-time |
+| Agent | 3 | Tool execution flows |
+| Auth | 1 | OAuth mocking needed |
+| Other | 25 | Perf, websocket, visual, etc. |
 
-4. **No `window.confirm()` / `alert()`**
-   - Use the promise-based confirm system instead of browser dialogs.
-   - Use inline error banners instead of `alert()`.
+Progress metric: **shrink skipped specs without adding anti-patterns**.
 
-## Key implementation (recent changes)
+## Non-negotiable Contracts (Testable UI)
 
-- Confirm system (promise-based, test-friendly):
-  - `apps/zerg/frontend-web/src/components/confirm/ConfirmProvider.tsx`
-  - `apps/zerg/frontend-web/src/components/confirm/ConfirmDialog.tsx`
-  - `apps/zerg/frontend-web/src/components/confirm/useConfirm.ts`
-  - Provider wiring: `apps/zerg/frontend-web/src/main.tsx`
+### 1. Stable selectors
+- Prefer `data-testid="..."` for anything E2E touches.
+- Don't assert on CSS classnames or DOM structure.
 
-- Ready signals:
-  - `body[data-ready]` added/standardized on key pages:
-    - `apps/zerg/frontend-web/src/pages/DashboardPage.tsx`
-    - `apps/zerg/frontend-web/src/pages/CanvasPage.tsx`
-    - `apps/zerg/frontend-web/src/pages/RunnersPage.tsx`
-    - `apps/zerg/frontend-web/src/pages/IntegrationsPage.tsx`
-    - `apps/zerg/frontend-web/src/pages/KnowledgeSourcesPage.tsx`
+### 2. No arbitrary sleeps
+- Avoid `waitForTimeout()` and `networkidle` in Playwright tests.
+- Replace with deterministic waits:
+  ```ts
+  await expect(locator).toBeVisible()
+  await Promise.all([page.waitForResponse(...), click()])
+  await expect.poll(() => ...)
+  ```
 
-- Realtime/chat “sticky ready” (avoids event-race flakes):
-  - `apps/zerg/frontend-web/src/jarvis/app/App.tsx` (`window.__jarvis.ready.chatReady`)
-  - `apps/zerg/e2e/tests/helpers/ready-signals.ts`
+### 3. Page readiness is explicit
+- Pages set `document.body.dataset.ready = "true"` when interactive (even if empty).
+- E2E helpers wait on `body[data-ready="true"]` instead of blind delays.
+- For CanvasPage: use React Query's `isFetched`, not refs.
 
-## Shared UI primitives (avoid new generic global classes)
+### 4. No blocking dialogs
+- No `window.confirm()` - use promise-based `useConfirm()` hook.
+- No `alert()` - use inline error banners with `ui-action-error-*` classes.
 
-- Inline error banner styling is now in the `ui-*` system:
-  - CSS: `apps/zerg/frontend-web/src/styles/ui.css` (`.ui-action-error-banner`, `.ui-action-error-dismiss`)
+## CI Guard (Anti-Pattern Regression Fence)
 
-## How to run tests (always via make)
+```bash
+make lint-test-patterns  # Runs as part of `make validate`
+```
 
-- Unit tests: `make test`
-- Frontend unit tests only: `make test-frontend-unit`
-- E2E: `make test-e2e`
-- Single E2E file: `make test-e2e-single TEST=tests/happy-paths.spec.ts`
-- E2E debugging: `make test-e2e-errors` and `make test-e2e-query Q='.failed[]'`
+Detects and fails on:
+- `window.confirm(` in frontend src
+- `alert(` in frontend src
+- `waitForTimeout(` in active (non-skipped) E2E tests
+- `networkidle` in active (non-skipped) E2E tests
 
-## Debugging mindset (first principles)
+Allowlists exist for grandfathered files in skipped specs. The guard prevents NEW violations.
 
-When E2E is flaky, the “root causes” are usually:
-- **No stable selector** → add `data-testid`, don’t “fix the test” with sleeps.
-- **No readiness contract** → set `data-ready`, add a sticky flag for mount-time events.
-- **Async UI without an observable completion** → add a visible state change or event you can await.
-- **Backend throughput** → ensure dev/test server has enough workers; then fix tests to wait correctly.
+## Key Implementation Files
 
-## Next work (if tests regress again)
+### Confirm System (promise-based, test-friendly)
+```
+apps/zerg/frontend-web/src/components/confirm/
+├── ConfirmProvider.tsx  # Context provider, cleanup on unmount, rejects concurrent calls
+├── ConfirmDialog.tsx    # Accessible modal, role="alertdialog" for danger/warning
+├── useConfirm.ts        # Hook: const { confirm } = useConfirm()
+├── types.ts             # ConfirmOptions, ConfirmVariant
+└── index.ts
+```
 
-1. Start with a single failing spec and make it deterministic (no retries, no sleeps).
-2. If the failure is “UI didn’t update”, decide what the canonical “done” signal is:
-   - a response completion, an event, or a visible UI change.
-3. Add missing test hooks (`data-testid`, `data-ready`, sticky flags) in the UI, not in Playwright.
-4. Only then scale parallelism.
+Test hooks:
+- `data-testid="confirm-dialog"` on container
+- `data-testid="confirm-confirm"` on confirm button
+- `data-testid="confirm-cancel"` on cancel button
 
-## Canonical deeper doc
+### Ready Signals
+Pages with `body[data-ready="true"]`:
+- `DashboardPage.tsx` - triggers on `!isLoading`
+- `CanvasPage.tsx` - triggers on `isFetched` from useQuery
+- `RunnersPage.tsx`
+- `IntegrationsPage.tsx`
+- `KnowledgeSourcesPage.tsx`
 
-`E2E_HANDOFF.md` is the longer, maintained version (architecture + patterns + troubleshooting).
+### Inline Error UI
+- CSS primitives: `apps/zerg/frontend-web/src/styles/ui.css`
+- Classes: `.ui-action-error-banner`, `.ui-action-error-dismiss`
+- Pattern: `role="alert"` for accessibility, dismissible via button
+
+### Confirm Dialog CSS
+- Namespaced to `ui-confirm-*` (not generic `.confirm-dialog`)
+- File: `apps/zerg/frontend-web/src/components/confirm/ConfirmDialog.css`
+
+## How to Run Tests
+
+```bash
+# Always use make targets (handles env vars, parallelism, isolation)
+make test              # Unit tests (backend + frontend)
+make test-frontend-unit # Frontend unit tests only
+make test-e2e          # Full E2E suite
+make test-e2e-single TEST=tests/happy-paths.spec.ts  # Single spec
+make test-e2e-errors   # Show last run's errors
+make test-e2e-query Q='.failed[]'  # Query results JSON
+
+# Validation (CI runs this)
+make validate          # Includes lint-test-patterns
+```
+
+## Debugging Mindset
+
+When E2E is flaky, root causes are usually:
+1. **No stable selector** - add `data-testid`, don't "fix" with sleeps
+2. **No readiness contract** - set `data-ready`, add sticky flag for mount-time events
+3. **Async UI without observable completion** - add visible state change to await
+4. **Backend throughput** - ensure enough workers, then fix tests to wait correctly
+
+## Next Steps (Priority Order)
+
+### Quick wins (re-enable without adding anti-patterns)
+- `happy-paths.spec.ts` - core flows
+- `unified-frontend.spec.ts` - SPA routing
+- `search_filter.spec.ts` - simple UI
+
+### Medium effort
+- Chat specs (6 files) - SSE streaming patterns
+- Agent specs (3 files) - tool execution flows
+
+### Heavy lift
+- Canvas/Workflow specs (8 files) - visual canvas, execution flows
+- Perf/load testing specs - may need dedicated infra
+
+### Shrink allowlists
+Each file removed from `scripts/lint-test-patterns.sh` allowlists = real progress.
+
+## Commits (Jan 2025 Session)
+
+```
+81ae531 ci: add lint guard for test anti-patterns
+2d962f2 fix(e2e): update tests for custom confirm dialog
+bfe014a fix(frontend): namespace confirm dialog styles
+04ab426 fix(frontend): harden confirm system and fix data-ready semantics
+e3a2ba8 fix(frontend): improve confirm dialog accessibility and remove alert() calls
+5eb01b3 refactor(frontend): replace window.confirm with promise-based confirm system
+```
+
+## Canonical Docs
+
+- `AGENTS.md` - repo overview, commands, gotchas
+- `docs/E2E_HANDOFF.md` - longer E2E architecture doc (if exists)
+- `scripts/lint-test-patterns.sh` - CI guard implementation + allowlists
