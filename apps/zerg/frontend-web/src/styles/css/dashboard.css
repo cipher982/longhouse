@@ -604,6 +604,33 @@
     z-index: 2;
   }
 
+  /* Row expand/collapse toggle */
+  .expand-toggle-btn {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-right: var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color var(--motion-duration-fast) var(--motion-easing-standard),
+                color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .expand-toggle-btn:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .expand-toggle-btn:focus-visible {
+    outline: 2px solid var(--color-intent-primary);
+    outline-offset: 2px;
+  }
+
   .editable-name {
     cursor: text;
     border-bottom: 1px dashed transparent;
