@@ -417,9 +417,9 @@ test.describe('Node Operations', () => {
     await expect(contextMenu).toContainText('Delete');
   });
 
-  test('NODE 3: Delete node via context menu', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
-    await navigateToCanvas(page);
+	  test('NODE 3: Delete node via context menu', async ({ page, request }) => {
+	    const agentId = await createAgentViaAPI(request);
+	    await navigateToCanvas(page);
 
     // Add a node
     const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
@@ -433,16 +433,21 @@ test.describe('Node Operations', () => {
     const nodes = page.locator('.react-flow__node');
     await expect(nodes).toHaveCount(1);
 
-    // Right-click and delete
-    const node = nodes.first();
-    await node.click({ button: 'right' });
+	    // Right-click and delete
+	    const node = nodes.first();
+	    await node.click({ button: 'right' });
 
-    const deleteBtn = page.locator('.canvas-context-menu button').filter({ hasText: 'Delete' });
-    await deleteBtn.click();
+	    const contextMenu = page.locator('.canvas-context-menu');
+	    await expect(contextMenu).toBeVisible({ timeout: 5000 });
 
-    // Node should be gone - poll for this instead of waiting for save
-    await expect(nodes).toHaveCount(0, { timeout: 10000 });
-  });
+	    const deleteBtn = contextMenu.locator('button').filter({ hasText: 'Delete' });
+	    await expect(deleteBtn).toBeVisible({ timeout: 5000 });
+	    await deleteBtn.click();
+	    await expect(contextMenu).toHaveCount(0, { timeout: 5000 });
+
+	    // Node should be gone - poll for this instead of waiting for save
+	    await expect(nodes).toHaveCount(0, { timeout: 10000 });
+	  });
 
   test('NODE 4: Duplicate node via context menu', async ({ page, request }) => {
     const agentId = await createAgentViaAPI(request);
