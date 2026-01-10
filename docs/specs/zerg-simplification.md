@@ -1,7 +1,7 @@
 # Zerg Simplification Spec
 
-**Status:** In Progress
-**Created:** 2025-01-10
+**Status:** Complete
+**Created:** 2026-01-10
 **Protocol:** SDP-1 (loose)
 
 ---
@@ -28,12 +28,13 @@ Reduce cognitive load and improve testability by:
 
 ---
 
-## Current State
+## Final State
 
-- **E2E Results:** 142 passed, 188 skipped, 1 flaky
-- **Test-model gating:** 3 locations with inconsistent logic
-- **models_config.py:** 337 LOC for 2.7KB JSON file
-- **Readiness contracts:** Inconsistent across pages
+- **Core E2E:** 20 tests, 0 flaky
+- **Full E2E:** 139 passed, 188 skipped, 0 flaky
+- **Test-model gating:** Consolidated in `zerg/testing/test_models.py`
+- **models_config.py:** Simplified, no lazy loading
+- **Readiness contracts:** Unified (`data-ready` + `data-screenshot-ready`)
 
 ---
 

@@ -222,8 +222,8 @@ test.describe('Agent Shelf', () => {
     await createAgentViaAPI(request);
     await navigateToCanvas(page);
 
-    // Find the agents toggle button
-    const agentsToggle = page.locator('button').filter({ hasText: /Agents/ }).first();
+    // Find the agents toggle button by its aria-controls attribute
+    const agentsToggle = page.locator('[aria-controls="shelf-agent-list"]');
     await expect(agentsToggle).toBeVisible();
 
     // Collapse the section
@@ -231,7 +231,7 @@ test.describe('Agent Shelf', () => {
 
     // Agent list should be hidden (content area collapsed)
     const agentsList = page.locator('#shelf-agent-list');
-    await expect(agentsList).toBeHidden({ timeout: 3000 });
+    await expect(agentsList).toBeHidden();
   });
 
   test('SHELF 4: Tools section shows built-in tools', async ({ page }) => {

@@ -40,14 +40,11 @@ def capture_screenshot(browser, name: str, config: dict, base_url: str):
     print(f"  Navigating to {config['url']}")
     page.goto(url)
 
-    # Wait for app to signal readiness
+    # Wait for app to signal screenshot readiness (content loaded, animations settled)
     try:
-        page.wait_for_selector("[data-ready='true']", timeout=READY_TIMEOUT)
+        page.wait_for_selector("[data-screenshot-ready='true']", timeout=READY_TIMEOUT)
     except PlaywrightTimeout:
-        print(f"  Warning: Ready signal not received for {name}, capturing anyway")
-
-    # Small buffer for any final renders
-    page.wait_for_timeout(500)
+        print(f"  Warning: Screenshot-ready signal not received for {name}, capturing anyway")
 
     # Build screenshot args
     output_path = FRONTEND_DIR / config["output"]
