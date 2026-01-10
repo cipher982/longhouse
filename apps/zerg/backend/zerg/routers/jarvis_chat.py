@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -155,8 +156,20 @@ async def jarvis_chat(
     from zerg.models_config import get_model_by_id
 
     model_to_use = request.model or saved_prefs.get("chat_model") or get_default_model_id_str()
+
+    # Allow test models (gpt-scripted) during E2E testing
+    # ZERG_TOOL_STUBS_PATH indicates E2E testing mode (same check as zerg_react_agent.py)
+    is_e2e_testing = bool(os.getenv("ZERG_TOOL_STUBS_PATH"))
+    is_test_model = model_to_use in ("gpt-scripted",)
+
     model_config = get_model_by_id(model_to_use)
-    if not model_config or model_to_use == "gpt-mock":
+    if model_to_use == "gpt-mock":
+        # gpt-mock is never allowed via API (unit tests only)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid model: {model_to_use}",
+        )
+    if not model_config and not (is_test_model and is_e2e_testing):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid model: {model_to_use}",
