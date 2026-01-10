@@ -1,5 +1,5 @@
 import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { PlayIcon, MessageCircleIcon, SettingsIcon, TrashIcon } from "../../components/icons";
+import { PlayIcon, MessageCircleIcon, SettingsIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon } from "../../components/icons";
 import type { AgentSummary, AgentRun } from "../../services/api";
 import { formatDateTimeShort, formatStatus, formatDuration, capitaliseFirst, formatTokens, formatCost, formatRunStatusIcon } from "./formatters";
 import { computeSuccessStats, determineLastRunIndicator } from "./sorting";
@@ -84,17 +84,31 @@ export function AgentTableRow({
     rows[nextIndex]?.focus();
   };
 
+  const detailRowId = `agent-detail-${agent.id}`;
+
   return (
     <Fragment key={agent.id}>
       <tr
         data-agent-id={agent.id}
-        aria-expanded={isExpanded ? "true" : "false"}
         className={`agent-row ${agent.status === "error" ? "error-row" : ""}`}
         tabIndex={0}
         onClick={() => onToggleRow(agent.id)}
         onKeyDown={handleRowKeyDown}
       >
         <td data-label="Name" className="name-cell">
+          <button
+            type="button"
+            className="expand-toggle-btn"
+            aria-expanded={isExpanded}
+            aria-controls={detailRowId}
+            aria-label={isExpanded ? `Collapse ${agent.name} details` : `Expand ${agent.name} details`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleRow(agent.id);
+            }}
+          >
+            {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+          </button>
           {editingAgentId === agent.id ? (
             <input
               className="inline-edit-input"
@@ -198,7 +212,7 @@ export function AgentTableRow({
         </td>
       </tr>
       {isExpanded && (
-        <tr className="agent-detail-row" key={`detail-${agent.id}`}>
+        <tr id={detailRowId} className="agent-detail-row" key={`detail-${agent.id}`}>
           <td colSpan={emptyColspan}>
             <div className="agent-detail-container">
               {runsDataLoading && <span>Loading run history...</span>}
