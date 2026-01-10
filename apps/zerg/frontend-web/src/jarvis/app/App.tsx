@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector } from './components'
+import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator } from './components'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
@@ -183,6 +183,9 @@ export default function App({ embedded = false }: AppProps) {
 
       {/* Hidden audio element for remote playback */}
       <audio id="remoteAudio" autoPlay style={{ display: 'none' }}></audio>
+
+      {/* Run status indicator for E2E testing - hidden but accessible via data-testid */}
+      <RunStatusIndicator />
       </div>
     </>
   )

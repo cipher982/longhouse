@@ -302,9 +302,13 @@ def _make_llm(agent_row, tools, *, tool_choice: dict | str | bool | None = None)
     settings = get_settings()
     enable_token_stream = settings.llm_token_stream
 
-    # Handle mock/scripted models for testing (guarded by settings.testing)
+    # Handle mock/scripted models for testing (guarded by settings.testing or ZERG_TOOL_STUBS_PATH)
+    # ZERG_TOOL_STUBS_PATH indicates E2E testing mode which also allows test models
+    import os
+
+    is_e2e_testing = bool(os.getenv("ZERG_TOOL_STUBS_PATH"))
     if agent_row.model in ("gpt-mock", "gpt-scripted"):
-        if not settings.testing:
+        if not settings.testing and not is_e2e_testing:
             raise RuntimeError(f"Test model '{agent_row.model}' cannot be used in production. " f"Set TESTING=1 to enable test models.")
 
         if agent_row.model == "gpt-mock":

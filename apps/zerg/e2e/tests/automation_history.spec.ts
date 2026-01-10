@@ -27,13 +27,13 @@ async function createAgentAndGetId(page: Page): Promise<string> {
 }
 
 test.describe('Automation History Section', () => {
-  test('Collapsible section toggles visibility', async ({ page }) => {
+  test('Collapsible section toggles visibility', async ({ page, request }) => {
     console.log('🎯 Testing: Automation history collapse/expand toggle');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Thread',
@@ -42,7 +42,7 @@ test.describe('Automation History Section', () => {
     });
 
     // Create a scheduled automation run via API
-    const response = await page.request.post('/api/threads', {
+    const response = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Scheduled Test Run',
@@ -84,13 +84,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ Collapsed again successfully');
   });
 
-  test('Scheduled runs show correct badge', async ({ page }) => {
+  test('Scheduled runs show correct badge', async ({ page, request }) => {
     console.log('🎯 Testing: Scheduled run badge display');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Thread',
@@ -99,7 +99,7 @@ test.describe('Automation History Section', () => {
     });
 
     // Create a scheduled run
-    const response = await page.request.post('/api/threads', {
+    const response = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Scheduled Automation',
@@ -134,13 +134,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ Thread type attribute correct');
   });
 
-  test('Manual runs show correct badge', async ({ page }) => {
+  test('Manual runs show correct badge', async ({ page, request }) => {
     console.log('🎯 Testing: Manual run badge display');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Thread',
@@ -149,7 +149,7 @@ test.describe('Automation History Section', () => {
     });
 
     // Create a manual run
-    const response = await page.request.post('/api/threads', {
+    const response = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Manual Run',
@@ -184,13 +184,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ Thread type attribute correct');
   });
 
-  test('Automation threads separated from chat threads', async ({ page }) => {
+  test('Automation threads separated from chat threads', async ({ page, request }) => {
     console.log('🎯 Testing: Thread type separation');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create both types of threads
-    const chatResponse = await page.request.post('/api/threads', {
+    const chatResponse = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Regular Chat Thread',
@@ -201,7 +201,7 @@ test.describe('Automation History Section', () => {
     const chatThread = await chatResponse.json();
     console.log(`📊 Created chat thread ID: ${chatThread.id}`);
 
-    const scheduledResponse = await page.request.post('/api/threads', {
+    const scheduledResponse = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Scheduled Run',
@@ -241,13 +241,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ Chat thread correctly excluded from automation section');
   });
 
-  test('Automation count badge shows correct number', async ({ page }) => {
+  test('Automation count badge shows correct number', async ({ page, request }) => {
     console.log('🎯 Testing: Automation count badge accuracy');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Thread',
@@ -257,7 +257,7 @@ test.describe('Automation History Section', () => {
 
     // Create 3 automation runs (mix of scheduled and manual)
     for (let i = 0; i < 3; i++) {
-      const response = await page.request.post('/api/threads', {
+      const response = await request.post('/api/threads', {
         data: {
           agent_id: parseInt(agentId),
           title: `Automation Run ${i + 1}`,
@@ -287,13 +287,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ All 3 automation runs visible');
   });
 
-  test('Can select and view automation run', async ({ page }) => {
+  test('Can select and view automation run', async ({ page, request }) => {
     console.log('🎯 Testing: Selecting automation run navigates to thread');
 
     const agentId = await createAgentAndGetId(page);
 
     // Create a chat thread first to prevent auto-creation
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Thread',
@@ -302,7 +302,7 @@ test.describe('Automation History Section', () => {
     });
 
     // Create automation run with a message
-    const response = await page.request.post('/api/threads', {
+    const response = await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Clickable Automation',
@@ -334,13 +334,13 @@ test.describe('Automation History Section', () => {
     console.log('✅ Automation run marked as selected');
   });
 
-  test('Automation section hidden when no automation threads exist', async ({ page }) => {
+  test('Automation section hidden when no automation threads exist', async ({ page, request }) => {
     console.log('🎯 Testing: Automation section hidden when empty');
 
     const agentId = await createAgentAndGetId(page);
 
     // Only create a regular chat thread
-    await page.request.post('/api/threads', {
+    await request.post('/api/threads', {
       data: {
         agent_id: parseInt(agentId),
         title: 'Chat Only',

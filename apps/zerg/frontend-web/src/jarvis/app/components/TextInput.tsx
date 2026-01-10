@@ -59,6 +59,7 @@ export function TextInput({
       <input
         type="text"
         className="text-input"
+        data-testid="chat-input"
         placeholder={placeholder}
         aria-label="Message input"
         value={value}
