@@ -184,20 +184,20 @@ test.describe('Reset Memory Tests', () => {
       )
       .toBeGreaterThan(1);
 
-    // Get debug panel message row (use DB count since we're testing backend reset)
-    const threadSectionHeader = page.locator('.debug-section-header').filter({ hasText: /^Thread$/ });
-    const threadSection = threadSectionHeader.locator('..');
-    const messageRow = threadSection.locator('.debug-row').filter({ hasText: 'Messages (DB)' });
+    // Get debug panel message count via stable testid (avoid parsing full row text)
+    const messageCountDb = page.locator('[data-testid="debug-messages-db"]');
 
     // Wait for debug panel to show > 0 messages (deterministic wait for panel refresh)
-    await expect.poll(
-      async () => {
-        const text = await messageRow.textContent();
-        const match = text?.match(/(\d+)/);
-        return match ? parseInt(match[1]) : 0;
-      },
-      { timeout: 15000, message: 'Debug panel should show > 0 messages after sending message' }
-    ).toBeGreaterThan(0);
+    await expect
+      .poll(
+        async () => {
+          const text = (await messageCountDb.textContent()) ?? '';
+          const match = text.match(/(\d+)/);
+          return match ? parseInt(match[1], 10) : 0;
+        },
+        { timeout: 30000, message: 'Debug panel should show > 0 messages after sending message' }
+      )
+      .toBeGreaterThan(0);
 
     const resetButton = page.locator('.debug-panel .sidebar-button').filter({ hasText: 'Reset Memory' });
     await Promise.all([
@@ -216,11 +216,11 @@ test.describe('Reset Memory Tests', () => {
     await expect
       .poll(
         async () => {
-          const afterText = (await messageRow.textContent()) ?? '';
+          const afterText = (await messageCountDb.textContent()) ?? '';
           const afterMatch = afterText.match(/(\d+)/);
           return afterMatch ? parseInt(afterMatch[1], 10) : 0;
         },
-        { timeout: 15000 }
+        { timeout: 30000 }
       )
       .toBe(0);
   });

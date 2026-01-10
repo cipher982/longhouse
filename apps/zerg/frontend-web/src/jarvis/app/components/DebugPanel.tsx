@@ -114,15 +114,21 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
             <div className="debug-section-header">Thread</div>
             <div className="debug-row">
               <span className="debug-label">ID</span>
-              <span className="debug-value">{threadInfo?.thread_id ?? '—'}</span>
+              <span className="debug-value" data-testid="debug-thread-id">
+                {threadInfo?.thread_id ?? '—'}
+              </span>
             </div>
             <div className="debug-row">
               <span className="debug-label">Messages (DB)</span>
-              <span className="debug-value">{threadInfo?.message_count ?? '—'}</span>
+              <span className="debug-value" data-testid="debug-messages-db">
+                {threadInfo?.message_count ?? '—'}
+              </span>
             </div>
             <div className="debug-row">
               <span className="debug-label">Messages (UI)</span>
-              <span className="debug-value">{state.messages.length}</span>
+              <span className="debug-value" data-testid="debug-messages-ui">
+                {state.messages.length}
+              </span>
             </div>
             <div className="debug-row">
               <span className="debug-label">Streaming</span>
