@@ -141,17 +141,12 @@ const config = {
       retries: 0,  // Core suite must pass on first try
       use: { ...devices['Desktop Chrome'] },
     },
-    // Full suite: All tests including core, with retries
-    // Run with: make test-e2e or bunx playwright test --project=full
-    {
-      name: 'full',
-      testDir: './tests',
-      use: { ...devices['Desktop Chrome'] },
-    },
-    // Default: full suite (for backwards compatibility)
+    // Full suite: All non-core tests, with retries (core suite has its own project with retries=0)
+    // Run with: make test-e2e or bunx playwright test --project=chromium
     {
       name: 'chromium',
       testDir: './tests',
+      testIgnore: ['**/core/**'],
       use: { ...devices['Desktop Chrome'] },
     },
   ],
