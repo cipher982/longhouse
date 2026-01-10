@@ -376,8 +376,8 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('📊 Test 1: Testing mobile viewport...');
 
     await page.setViewportSize({ width: 375, height: 667 }); // iPhone dimensions
-    await page.goto('/');
-    await page.waitForTimeout(1000);
+    await page.goto('/dashboard');
+    await page.waitForFunction(() => document.body.getAttribute('data-ready') === 'true', {}, { timeout: 20000 });
 
     const mobileLayout = await page.evaluate(() => {
       return {
@@ -400,7 +400,9 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('📊 Test 2: Testing tablet viewport...');
 
     await page.setViewportSize({ width: 768, height: 1024 }); // iPad dimensions
-    await page.waitForTimeout(500);
+    await expect.poll(async () => {
+      return page.evaluate(() => document.body.offsetWidth > 0);
+    }, { timeout: 10000 }).toBe(true);
 
     const tabletLayout = await page.evaluate(() => {
       return {
@@ -415,7 +417,9 @@ test.describe('Accessibility and UI/UX', () => {
     console.log('📊 Test 3: Testing desktop viewport...');
 
     await page.setViewportSize({ width: 1920, height: 1080 }); // Full HD
-    await page.waitForTimeout(500);
+    await expect.poll(async () => {
+      return page.evaluate(() => document.body.offsetWidth > 0);
+    }, { timeout: 10000 }).toBe(true);
 
     const desktopLayout = await page.evaluate(() => {
       return {

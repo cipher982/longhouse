@@ -148,13 +148,20 @@ test.describe('Agent Run Button Real-time Update', () => {
     const runButton = page.locator(`[data-testid="run-agent-${agentId}"]`);
     await expect(runButton).toBeVisible({ timeout: 5000 });
 
-    // Mock the API to fail
+    // Mock the API to fail (and assert the route is actually hit to avoid false positives)
+    let taskRequests = 0;
     await page.route('**/api/agents/*/task', async (route) => {
+      taskRequests += 1;
       await route.abort('failed');
     });
 
     // Click the run button
     await runButton.click();
+
+    // Ensure our failure route was actually used
+    await expect
+      .poll(async () => taskRequests, { timeout: 5000, message: 'Expected run task request to be intercepted' })
+      .toBeGreaterThan(0);
 
     // Wait for status to rollback to Idle
     // The optimistic update shows Running immediately, then rollback happens after API error
@@ -162,5 +169,8 @@ test.describe('Agent Run Button Real-time Update', () => {
       async () => await statusCell.textContent(),
       { timeout: 10000, message: 'Status should rollback to Idle after API error' }
     ).toContain('Idle');
+
+    // Run button should remain usable after failure (no stuck pending state)
+    await expect(runButton).toBeEnabled({ timeout: 5000 });
   });
 });
