@@ -106,37 +106,48 @@ export default function App({ embedded = false }: AppProps) {
   // Map voice status for mic button
   const micStatus = state.voiceStatus as 'idle' | 'connecting' | 'ready' | 'listening' | 'processing' | 'speaking' | 'error'
 
-  // Marketing ready signal - indicates chat is ready for screenshot capture
+  // Readiness Contract (see src/lib/readiness-contract.ts):
+  // - data-ready="true": Page is INTERACTIVE (can click, type)
+  // - data-screenshot-ready="true": Content loaded for marketing captures
+  //
+  // Chat uses window.__jarvis.ready.chatReady as the authoritative interactive signal.
+  // We sync data-ready to this flag to match dashboard/canvas behavior.
   useEffect(() => {
-    if (state.messages.length > 0) {
-      document.body.setAttribute('data-ready', 'true')
-    }
-    return () => document.body.removeAttribute('data-ready')
-  }, [state.messages.length])
+    // Set up the chatReady flag and data-ready attribute together
+    // This ensures consistent behavior with dashboard/canvas pages
+    type JarvisWindow = Window & { __jarvis?: { ready?: { chatReady?: boolean; chatReadyTimestamp?: number }; eventBus?: unknown } }
+    const w = window as JarvisWindow
+    w.__jarvis = w.__jarvis || {}
+    w.__jarvis.ready = w.__jarvis.ready || {}
+    w.__jarvis.ready.chatReady = true
+    w.__jarvis.ready.chatReadyTimestamp = Date.now()
 
-  // E2E test ready signal - sets sticky flag when chat UI is interactive (DEV mode only)
-  // Uses sticky flags instead of events to avoid race conditions where tests miss the event
-  useEffect(() => {
+    // Set data-ready when chat is interactive (matches dashboard/canvas contract)
+    document.body.setAttribute('data-ready', 'true')
+
+    // Emit event for backwards compatibility (DEV mode only)
     if (config.isDevelopment) {
-      type JarvisWindow = Window & { __jarvis?: { ready?: { chatReady?: boolean; chatReadyTimestamp?: number }; eventBus?: unknown } }
-      const w = window as JarvisWindow
-      w.__jarvis = w.__jarvis || {}
-      w.__jarvis.ready = w.__jarvis.ready || {}
-      w.__jarvis.ready.chatReady = true
-      w.__jarvis.ready.chatReadyTimestamp = Date.now()
-      // Also emit event for backwards compatibility
       eventBus.emit('test:chat_ready', { timestamp: Date.now() })
     }
+
     return () => {
-      if (config.isDevelopment) {
-        type JarvisWindow = Window & { __jarvis?: { ready?: { chatReady?: boolean } } }
-        const w = window as JarvisWindow
-        if (w.__jarvis?.ready) {
-          w.__jarvis.ready.chatReady = false
-        }
+      document.body.removeAttribute('data-ready')
+      const w2 = window as JarvisWindow
+      if (w2.__jarvis?.ready) {
+        w2.__jarvis.ready.chatReady = false
       }
     }
   }, []) // Empty deps = set once on mount, clear on unmount
+
+  // Screenshot ready signal - indicates content is loaded for marketing captures
+  // This is separate from data-ready because screenshots need visible content,
+  // while interactive readiness just needs the UI to be mounted and responsive.
+  useEffect(() => {
+    if (state.messages.length > 0) {
+      document.body.setAttribute('data-screenshot-ready', 'true')
+    }
+    return () => document.body.removeAttribute('data-screenshot-ready')
+  }, [state.messages.length])
 
   return (
     <>
