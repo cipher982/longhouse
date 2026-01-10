@@ -4,16 +4,41 @@
  * These helpers replace arbitrary waitForTimeout() calls with event-driven waiting,
  * making tests more reliable and faster.
  *
- * Recommended Pattern (most reliable):
- * 1. waitForReadyFlag() - waits for sticky flags on window.__jarvis.ready (preferred for "ready" signals)
- * 2. waitForPageReady() - waits for data-ready="true" on body (general page readiness)
+ * == READINESS CONTRACT ==
  *
- * Event-based Pattern (for async operations):
- * 3. waitForEvent() - waits for a specific EventBus event (use for long-running ops like supervisor:complete)
- * 4. emitTestEvent() - emits a test event to trigger component reactions (for testing UI responses)
+ * All pages follow a unified readiness contract (see frontend-web/src/lib/readiness-contract.ts):
  *
- * Note: Prefer sticky flags over events for "ready" signals to avoid race conditions
- * where the event fires before the test listener is attached.
+ * 1. data-ready="true" on document.body
+ *    Meaning: Page is INTERACTIVE - can click, type, interact
+ *    When set: After initial data loaded AND UI is mounted and responsive
+ *    Use: waitForPageReady() for most E2E tests
+ *
+ * 2. data-screenshot-ready="true" on document.body
+ *    Meaning: Content is loaded and animations have settled
+ *    When set: When visual content is stable for screenshots
+ *    Use: waitForScreenshotReady() for marketing automation
+ *
+ * Page-specific behavior:
+ * - Dashboard: Both set when !isLoading
+ * - Canvas: Both set when isWorkflowFetched
+ * - Chat: data-ready on mount, data-screenshot-ready when messages.length > 0
+ *
+ * == RECOMMENDED PATTERNS ==
+ *
+ * For interactive readiness (most tests):
+ *   await waitForPageReady(page);
+ *
+ * For chat-specific (checks window.__jarvis.ready.chatReady):
+ *   await waitForReadyFlag(page, 'chatReady');
+ *
+ * For marketing screenshots:
+ *   await waitForScreenshotReady(page);
+ *
+ * For async operations (supervisor completion, etc.):
+ *   await waitForEvent(page, 'supervisor:complete', { timeout: 30000 });
+ *
+ * Note: Prefer sticky flags/attributes over events for "ready" signals to avoid race
+ * conditions where the event fires before the test listener is attached.
  */
 
 import { Page } from '@playwright/test';
@@ -270,6 +295,34 @@ export async function waitForAllReady(
 }
 
 /**
+ * Wait for page to be ready for marketing screenshots.
+ *
+ * This waits for data-screenshot-ready="true" which indicates:
+ * - Content is loaded (messages visible, data fetched)
+ * - Animations have settled
+ * - Visual state is stable for capture
+ *
+ * Use this for marketing automation, not for interactive E2E tests.
+ * For interactive tests, use waitForPageReady() instead.
+ *
+ * @example
+ * await waitForScreenshotReady(page);
+ * await page.screenshot({ path: 'marketing-chat.png' });
+ */
+export async function waitForScreenshotReady(
+  page: Page,
+  options: { timeout?: number } = {}
+): Promise<void> {
+  const { timeout = 10000 } = options;
+
+  await page.waitForFunction(
+    () => document.body.getAttribute('data-screenshot-ready') === 'true',
+    {},
+    { timeout }
+  );
+}
+
+/**
  * Check if a page/component is ready without waiting.
  *
  * Useful for conditional logic or polling scenarios.
@@ -288,5 +341,19 @@ export async function isPageReady(
   return await page.evaluate(
     ({ attr, val }) => document.body.getAttribute(attr) === val,
     { attr: attribute, val: value }
+  );
+}
+
+/**
+ * Check if page is ready for screenshot capture without waiting.
+ *
+ * @example
+ * if (await isScreenshotReady(page)) {
+ *   await page.screenshot({ path: 'capture.png' });
+ * }
+ */
+export async function isScreenshotReady(page: Page): Promise<boolean> {
+  return await page.evaluate(
+    () => document.body.getAttribute('data-screenshot-ready') === 'true'
   );
 }
