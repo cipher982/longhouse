@@ -378,6 +378,84 @@ async def attach_to_run_stream(
         return EventSourceResponse(completed_stream())
 
 
+class RunEvent(BaseModel):
+    """Single event from a run."""
+
+    id: int
+    event_type: str
+    payload: Dict[str, Any]
+    created_at: datetime
+
+
+class RunEventsResponse(BaseModel):
+    """Response for run events query."""
+
+    run_id: int
+    events: List[RunEvent]
+    total: int
+
+
+@router.get("/runs/{run_id}/events", response_model=RunEventsResponse)
+def get_run_events(
+    run_id: int,
+    event_type: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_jarvis_user),
+) -> RunEventsResponse:
+    """Get events for a specific run.
+
+    Returns events stored during run execution, optionally filtered by type.
+    This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
+
+    Args:
+        run_id: ID of the run to query
+        event_type: Optional filter by event type (e.g., "supervisor_tool_started")
+        limit: Maximum number of events to return (default 100)
+        db: Database session
+        current_user: Authenticated user (multi-tenant filtered)
+
+    Returns:
+        List of events for the run
+
+    Raises:
+        HTTPException: 404 if run not found or not owned by user
+    """
+    # Multi-tenant security: only return runs owned by the current user
+    run = (
+        db.query(AgentRun)
+        .join(Agent, Agent.id == AgentRun.agent_id)
+        .filter(AgentRun.id == run_id)
+        .filter(Agent.owner_id == current_user.id)
+        .first()
+    )
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Query events
+    query = db.query(AgentRunEvent).filter(AgentRunEvent.run_id == run_id)
+
+    if event_type:
+        query = query.filter(AgentRunEvent.event_type == event_type)
+
+    events = query.order_by(AgentRunEvent.created_at).limit(limit).all()
+
+    return RunEventsResponse(
+        run_id=run_id,
+        events=[
+            RunEvent(
+                id=event.id,
+                event_type=event.event_type,
+                payload=event.payload or {},
+                created_at=event.created_at,
+            )
+            for event in events
+        ],
+        total=len(events),
+    )
+
+
 class TimelineEvent(BaseModel):
     """Single event in a timeline with timing information."""
 

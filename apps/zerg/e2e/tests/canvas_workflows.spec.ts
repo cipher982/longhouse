@@ -503,9 +503,9 @@ test.describe('Workflow Persistence', () => {
     expect(saveResponse.ok()).toBeTruthy();
   });
 
-  test('PERSIST 2: Nodes persist after page reload', async ({ page, request }) => {
-    const agentId = await createAgentViaAPI(request);
-    await navigateToCanvas(page);
+	  test('PERSIST 2: Nodes persist after page reload', async ({ page, request }) => {
+	    const agentId = await createAgentViaAPI(request);
+	    await navigateToCanvas(page);
 
     // Add a node
     const agentPill = page.locator(`[data-testid="shelf-agent-${agentId}"]`);
@@ -515,21 +515,29 @@ test.describe('Workflow Persistence', () => {
     await agentPill.dragTo(pane);
     await waitForWorkflowSave(page);
 
-    // Verify node exists
-    const nodes = page.locator('.react-flow__node');
-    await expect(nodes).toHaveCount(1);
+	    // Verify node exists
+	    const nodes = page.locator('.react-flow__node');
+	    await expect(nodes).toHaveCount(1);
 
-    // Reload the page - use navigateToCanvas helper which waits for proper load
-    await page.reload();
+	    // Reload the page and wait for the workflow to be fetched again.
+	    // This prevents flakiness where the UI is mounted but the workflow query hasn't resolved yet.
+	    const workflowLoad = page.waitForResponse(
+	      (r) => r.url().includes('/api/workflows/current') && r.request().method() === 'GET' && r.status() === 200,
+	      { timeout: 15000 }
+	    );
+	    await page.reload();
+	    const workflow = await workflowLoad.then((r) => r.json());
+	    const persistedNodeCount = Array.isArray(workflow?.canvas?.nodes) ? workflow.canvas.nodes.length : 0;
+	    expect(persistedNodeCount).toBe(1);
 
-    // Wait for canvas container and React Flow to be ready
-    await expect(page.locator('[data-testid="canvas-container"]')).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.react-flow')).toBeVisible({ timeout: 10000 });
+	    // Wait for canvas container and React Flow to be ready
+	    await expect(page.locator('[data-testid="canvas-container"]')).toBeVisible({ timeout: 10000 });
+	    await expect(page.locator('.react-flow')).toBeVisible({ timeout: 10000 });
 
-    // Give the canvas time to load workflow data and render nodes
-    // Nodes should reappear from persisted state
-    await expect(nodes).toHaveCount(1, { timeout: 15000 });
-  });
+	    // Nodes should reappear from persisted state
+	    const nodesAfterReload = page.locator('.react-flow__node');
+	    await expect(nodesAfterReload).toHaveCount(1, { timeout: 15000 });
+	  });
 
   test('PERSIST 3: Nodes persist after navigation away and back', async ({ page, request }) => {
     const agentId = await createAgentViaAPI(request);

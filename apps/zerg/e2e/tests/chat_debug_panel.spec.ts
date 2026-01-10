@@ -162,7 +162,7 @@ test.describe('Reset Memory Tests', () => {
     }, { timeout: 10000, message: 'Backend message count should be 0 after reset' }).toBe(0);
   });
 
-  test('reset memory updates debug panel message count', async ({ page }) => {
+  test('reset memory updates debug panel message count', async ({ page, request }) => {
     await navigateToChatPage(page);
 
     // Send a message and wait for response
@@ -170,6 +170,19 @@ test.describe('Reset Memory Tests', () => {
 
     // Wait for message to appear in UI
     await expect(page.locator('.message.user')).toBeVisible({ timeout: 10000 });
+
+    // Ensure backend thread has persisted messages before asserting on debug panel rendering.
+    // This avoids flakiness where the panel refresh lags slightly behind the POST response.
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get('/api/jarvis/supervisor/thread');
+          const thread = await response.json();
+          return thread.message_count;
+        },
+        { timeout: 10000, message: 'Backend message count should be > 1 after sending message' }
+      )
+      .toBeGreaterThan(1);
 
     // Get debug panel message row (use DB count since we're testing backend reset)
     const threadSectionHeader = page.locator('.debug-section-header').filter({ hasText: /^Thread$/ });
