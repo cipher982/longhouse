@@ -1,4 +1,79 @@
-# See `E2E_HANDOFF.md`.
-#
-# This file exists because an earlier handoff request explicitly asked for a
-# repo-root doc named `banana`. `E2E_HANDOFF.md` is the maintained version.
+# E2E + Testable UI Handoff (banana)
+
+This repo is optimized for a solo dev shipping fast with AI writing most code.
+The goal is **deterministic, parallel E2E** that can run constantly without flakes.
+
+## Non-negotiable contracts (make UI testable)
+
+1. **Stable selectors**
+   - Prefer `data-testid="..."` for anything E2E touches.
+   - Don’t assert on “pretty” CSS classnames or DOM structure.
+
+2. **No arbitrary sleeps**
+   - Avoid `waitForTimeout()` and `networkidle` in Playwright tests.
+   - Replace with “web-first” / deterministic waits:
+     - `await expect(locator).toBeVisible()`
+     - `await Promise.all([page.waitForResponse(...), click()])`
+     - `await expect.poll(() => ...)`
+
+3. **Page readiness is explicit**
+   - Pages should set `document.body.dataset.ready = "true"` when interactive (even if empty state).
+   - Pages should remove it on unmount.
+   - E2E helpers rely on `body[data-ready="true"]` instead of blind delays.
+
+4. **No `window.confirm()` / `alert()`**
+   - Use the promise-based confirm system instead of browser dialogs.
+   - Use inline error banners instead of `alert()`.
+
+## Key implementation (recent changes)
+
+- Confirm system (promise-based, test-friendly):
+  - `apps/zerg/frontend-web/src/components/confirm/ConfirmProvider.tsx`
+  - `apps/zerg/frontend-web/src/components/confirm/ConfirmDialog.tsx`
+  - `apps/zerg/frontend-web/src/components/confirm/useConfirm.ts`
+  - Provider wiring: `apps/zerg/frontend-web/src/main.tsx`
+
+- Ready signals:
+  - `body[data-ready]` added/standardized on key pages:
+    - `apps/zerg/frontend-web/src/pages/DashboardPage.tsx`
+    - `apps/zerg/frontend-web/src/pages/CanvasPage.tsx`
+    - `apps/zerg/frontend-web/src/pages/RunnersPage.tsx`
+    - `apps/zerg/frontend-web/src/pages/IntegrationsPage.tsx`
+    - `apps/zerg/frontend-web/src/pages/KnowledgeSourcesPage.tsx`
+
+- Realtime/chat “sticky ready” (avoids event-race flakes):
+  - `apps/zerg/frontend-web/src/jarvis/app/App.tsx` (`window.__jarvis.ready.chatReady`)
+  - `apps/zerg/e2e/tests/helpers/ready-signals.ts`
+
+## Shared UI primitives (avoid new generic global classes)
+
+- Inline error banner styling is now in the `ui-*` system:
+  - CSS: `apps/zerg/frontend-web/src/styles/ui.css` (`.ui-action-error-banner`, `.ui-action-error-dismiss`)
+
+## How to run tests (always via make)
+
+- Unit tests: `make test`
+- Frontend unit tests only: `make test-frontend-unit`
+- E2E: `make test-e2e`
+- Single E2E file: `make test-e2e-single TEST=tests/happy-paths.spec.ts`
+- E2E debugging: `make test-e2e-errors` and `make test-e2e-query Q='.failed[]'`
+
+## Debugging mindset (first principles)
+
+When E2E is flaky, the “root causes” are usually:
+- **No stable selector** → add `data-testid`, don’t “fix the test” with sleeps.
+- **No readiness contract** → set `data-ready`, add a sticky flag for mount-time events.
+- **Async UI without an observable completion** → add a visible state change or event you can await.
+- **Backend throughput** → ensure dev/test server has enough workers; then fix tests to wait correctly.
+
+## Next work (if tests regress again)
+
+1. Start with a single failing spec and make it deterministic (no retries, no sleeps).
+2. If the failure is “UI didn’t update”, decide what the canonical “done” signal is:
+   - a response completion, an event, or a visible UI change.
+3. Add missing test hooks (`data-testid`, `data-ready`, sticky flags) in the UI, not in Playwright.
+4. Only then scale parallelism.
+
+## Canonical deeper doc
+
+`E2E_HANDOFF.md` is the longer, maintained version (architecture + patterns + troubleshooting).
