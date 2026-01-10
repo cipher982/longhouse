@@ -327,16 +327,20 @@ test.describe('Knowledge Sources - Delete', () => {
     const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
     await expect(sourceCard).toBeVisible({ timeout: 10000 });
 
-    // Set up dialog handler for confirmation
-    page.on('dialog', (dialog) => dialog.accept());
+    // Click delete button
+    await sourceCard.locator('button:has-text("Delete")').click();
 
-    // Click delete and wait for API response
+    // Wait for custom confirm dialog to appear
+    const confirmDialog = page.locator('[data-testid="confirm-dialog"]');
+    await expect(confirmDialog).toBeVisible({ timeout: 5000 });
+
+    // Click confirm button and wait for API response
     await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes(`/api/knowledge/sources/${source.id}`) && r.request().method() === 'DELETE',
         { timeout: 15000 }
       ),
-      sourceCard.locator('button:has-text("Delete")').click(),
+      page.locator('[data-testid="confirm-confirm"]').click(),
     ]);
 
     // Source should be removed from list
@@ -351,11 +355,18 @@ test.describe('Knowledge Sources - Delete', () => {
     const sourceCard = page.locator(`[data-testid="knowledge-source-${source.id}"]`);
     await expect(sourceCard).toBeVisible({ timeout: 10000 });
 
-    // Set up dialog handler to dismiss
-    page.on('dialog', (dialog) => dialog.dismiss());
-
-    // Click delete
+    // Click delete button
     await sourceCard.locator('button:has-text("Delete")').click();
+
+    // Wait for custom confirm dialog to appear
+    const confirmDialog = page.locator('[data-testid="confirm-dialog"]');
+    await expect(confirmDialog).toBeVisible({ timeout: 5000 });
+
+    // Click cancel button to dismiss
+    await page.locator('[data-testid="confirm-cancel"]').click();
+
+    // Dialog should close
+    await expect(confirmDialog).not.toBeVisible({ timeout: 5000 });
 
     // Source should still be visible
     await expect(sourceCard).toBeVisible({ timeout: 5000 });
