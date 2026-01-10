@@ -38,7 +38,7 @@ Reduce cognitive load and improve testability by:
 
 ## Phase 1: Consolidate Test-Model Gating
 
-**Status:** Pending
+**Status:** Complete
 **Estimated Effort:** Low
 
 ### Problem
@@ -84,15 +84,33 @@ Result: API can accept a model that runtime rejects.
 4. Update `config/models.json`:
    - Remove gpt-mock and gpt-scripted entries (they're not real models)
 
+### Additional Changes (discovered during implementation)
+
+5. Update `jarvis.py`:
+   - Use `is_test_model()` to filter models from bootstrap endpoint
+   - Use `is_test_model()` in preferences validation
+
+6. Update `admin.py`:
+   - Use `is_test_model()` and `TEST_ONLY_MODELS` for test model configuration endpoint
+
+7. Update `agents.py`:
+   - Update `_validate_model_or_400()` to allow test models when TESTING=1
+   - Required because agents API validates models during creation
+
+8. Remove dead code from `models_config.py`:
+   - `_get_mock_model()` function
+   - `_LazyMock` class
+   - `MOCK_MODEL` constant
+
 ### Acceptance Criteria
 
-- [ ] Single source of truth for test models in `zerg/testing/test_models.py`
-- [ ] `jarvis_chat.py` uses consolidated check
-- [ ] `zerg_react_agent.py` uses consolidated check
-- [ ] No ZERG_TOOL_STUBS_PATH checks remain for model gating
-- [ ] `make test` passes
-- [ ] `make test-e2e` passes (with TESTING=1)
-- [ ] API rejects test models when TESTING!=1
+- [x] Single source of truth for test models in `zerg/testing/test_models.py`
+- [x] `jarvis_chat.py` uses consolidated check
+- [x] `zerg_react_agent.py` uses consolidated check
+- [x] No ZERG_TOOL_STUBS_PATH checks remain for model gating
+- [x] `make test` passes (1311 passed, 30 skipped)
+- [x] `make test-e2e` passes (139 passed, 188 skipped, 4 flaky passed on retry)
+- [x] API rejects test models when TESTING!=1
 
 ### Test Commands
 
@@ -312,7 +330,7 @@ Higher risk, needs stable test foundation first. Do after phases 1-4 proven.
 
 | Phase | Description | Status | Commit | Reviewed |
 |-------|-------------|--------|--------|----------|
-| 1 | Test-model gating | Pending | - | - |
+| 1 | Test-model gating | Complete | f84d026..fa7e714 | - |
 | 2 | Simplify models_config | Pending | - | - |
 | 3 | Core test suite | Pending | - | - |
 | 4 | Readiness contracts | Pending | - | - |
