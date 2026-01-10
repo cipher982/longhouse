@@ -464,13 +464,20 @@ const handleToolPointerDown = useCallback(
     return () => cancelAnimationFrame(frame);
   }, [nodes, reactFlowInstance]);
 
-  // Ready signal - indicates canvas is interactive (even if empty)
-  // Used by E2E tests and marketing screenshots
+  // Readiness Contract (see src/lib/readiness-contract.ts):
+  // - data-ready="true": Page is INTERACTIVE (can click, type)
+  // - data-screenshot-ready="true": Content loaded for marketing captures
   useEffect(() => {
     if (isWorkflowFetched) {
       document.body.setAttribute('data-ready', 'true');
+      // Canvas is screenshot-ready as soon as workflow is fetched
+      // (canvas renders even if empty)
+      document.body.setAttribute('data-screenshot-ready', 'true');
     }
-    return () => document.body.removeAttribute('data-ready');
+    return () => {
+      document.body.removeAttribute('data-ready');
+      document.body.removeAttribute('data-screenshot-ready');
+    };
   }, [isWorkflowFetched]);
 
   // Sync ref with latest execution for stable WebSocket handler
