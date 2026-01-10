@@ -9,7 +9,6 @@
       "TIER_2": "gpt-5-mini",
       "TIER_3": "gpt-5-nano"
     },
-    "mock": "gpt-mock",
     "models": {
       "gpt-5.2": {
         "displayName": "GPT-5.2",
@@ -28,18 +27,6 @@
         "provider": "openai",
         "tier": "TIER_3",
         "description": "Fast and cheap, basic capability"
-      },
-      "gpt-mock": {
-        "displayName": "Mock (testing)",
-        "provider": "openai",
-        "tier": null,
-        "description": "Mock model for unit tests"
-      },
-      "gpt-scripted": {
-        "displayName": "Scripted (E2E testing)",
-        "provider": "openai",
-        "tier": null,
-        "description": "Scripted model for deterministic E2E tests"
       }
     }
   },
