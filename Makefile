@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +361,8 @@ validate: ## Run all validation checks
 	@$(MAKE) validate-sse
 	@printf '\n3️⃣  Validating Makefile structure...\n'
 	@$(MAKE) validate-makefile
+	@printf '\n4️⃣  Checking for test anti-patterns...\n'
+	@$(MAKE) lint-test-patterns
 	@printf '\n✅ All validations passed\n'
 
 validate-ws: ## Check WebSocket code is in sync (for CI)
@@ -408,6 +410,9 @@ regen-sse: ## Regenerate SSE event contract code
 	@echo "🔄 Regenerating SSE code..."
 	@bash scripts/regen-sse-code.sh
 	@echo "✅ SSE code regenerated"
+
+lint-test-patterns: ## Check for test anti-patterns (window.confirm, alert, waitForTimeout)
+	@bash scripts/lint-test-patterns.sh
 
 # ---------------------------------------------------------------------------
 # Makefile Validation
