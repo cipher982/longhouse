@@ -195,17 +195,17 @@ test-all: ## Full suite including Playwright E2E
 
 test-chat-e2e: ## Run Jarvis chat E2E tests (inside unified SPA)
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test tests/unified-frontend.spec.ts
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
 test-e2e-single: ## Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
 test-e2e-ui: ## Run Playwright E2E tests with interactive UI
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --ui
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
 
 test-e2e-verbose: ## Run E2E tests with full verbose output (for debugging)
-	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test
+	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-e2e-errors: ## Show detailed errors from last E2E run
 	@if [ -f apps/zerg/e2e/test-results/errors.txt ]; then \
@@ -223,11 +223,11 @@ test-e2e-query: ## Query last E2E results (usage: make test-e2e-query Q='.failed
 
 test-e2e-grep: ## Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --grep "$(GREP)"
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "🧪 Running performance evaluation tests..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test tests/chat_performance_eval.spec.ts
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
 test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
@@ -241,7 +241,7 @@ test-frontend-unit: ## Run frontend unit tests only
 
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test
+	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-prompts: ## Run live prompt quality tests (requires backend running + --live-token)
 	@echo "🧪 Running prompt quality tests (requires backend running)..."
