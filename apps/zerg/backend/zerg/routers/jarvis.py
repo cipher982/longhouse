@@ -413,7 +413,9 @@ def jarvis_bootstrap(
         "servers": [{"name": s.get("name"), "purpose": s.get("purpose")} for s in ctx.get("servers", [])],
     }
 
-    # Get available models (exclude mock model)
+    # Get available models (exclude test models)
+    from zerg.testing.test_models import is_test_model
+
     all_models = get_all_models()
     available_models = [
         JarvisModelInfo(
@@ -422,7 +424,7 @@ def jarvis_bootstrap(
             description=m.description or "",
         )
         for m in all_models
-        if m.id != "gpt-mock"
+        if not is_test_model(m.id)
     ]
 
     available_model_ids = {m.id for m in available_models}
@@ -523,9 +525,11 @@ def jarvis_update_preferences(
     prefs = ctx.get("preferences", {}) or {}
 
     # Validate and update chat_model
+    from zerg.testing.test_models import is_test_model
+
     if update.chat_model is not None:
         model = get_model_by_id(update.chat_model)
-        if not model or update.chat_model == "gpt-mock":
+        if not model or is_test_model(update.chat_model):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid model: {update.chat_model}",

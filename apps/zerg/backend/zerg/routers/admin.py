@@ -720,12 +720,14 @@ async def configure_test_model(
             detail="Test model configuration requires TESTING=1. This endpoint is not available in production.",
         )
 
-    # Valid test models
-    valid_test_models = {"gpt-mock", "gpt-scripted"}
-    if request.model not in valid_test_models:
+    # Valid test models - use single source of truth
+    from zerg.testing.test_models import TEST_ONLY_MODELS
+    from zerg.testing.test_models import is_test_model
+
+    if not is_test_model(request.model):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid test model: {request.model}. Valid options: {valid_test_models}",
+            detail=f"Invalid test model: {request.model}. Valid options: {TEST_ONLY_MODELS}",
         )
 
     try:
