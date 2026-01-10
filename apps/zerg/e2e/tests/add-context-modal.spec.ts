@@ -196,8 +196,9 @@ test.describe('AddContextModal - Form Validation', () => {
     await navigateToKnowledgeSources(page);
     await openAddContextModal(page);
 
-    // Submit button should be disabled
+    // Submit button should be visible and disabled
     const submitBtn = page.locator('.modal-button-primary:has-text("Save Document")');
+    await expect(submitBtn).toBeVisible({ timeout: 5000 });
     await expect(submitBtn).toBeDisabled();
 
     console.log('✅ Submit button disabled when empty');
