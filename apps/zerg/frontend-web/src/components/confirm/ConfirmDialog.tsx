@@ -89,7 +89,7 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="confirm-overlay"
+      className="ui-confirm-overlay"
       onClick={(e) => {
         // Close on backdrop click
         if (e.target === e.currentTarget) {
@@ -103,20 +103,20 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-description"
-        className={`confirm-dialog confirm-dialog--${variant}`}
+        className={`ui-confirm-dialog ui-confirm-dialog--${variant}`}
         data-testid="confirm-dialog"
       >
-        <h2 id="confirm-dialog-title" className="confirm-dialog__title">
+        <h2 id="confirm-dialog-title" className="ui-confirm-dialog__title">
           {title}
         </h2>
-        <p id="confirm-dialog-description" className="confirm-dialog__message">
+        <p id="confirm-dialog-description" className="ui-confirm-dialog__message">
           {message}
         </p>
-        <div className="confirm-dialog__actions">
+        <div className="ui-confirm-dialog__actions">
           <button
             ref={cancelRef}
             type="button"
-            className="confirm-dialog__button confirm-dialog__button--cancel"
+            className="ui-confirm-dialog__button ui-confirm-dialog__button--cancel"
             onClick={onCancel}
             data-testid="confirm-cancel"
           >
@@ -124,7 +124,7 @@ export function ConfirmDialog({
           </button>
           <button
             type="button"
-            className={`confirm-dialog__button confirm-dialog__button--confirm confirm-dialog__button--${variant}`}
+            className={`ui-confirm-dialog__button ui-confirm-dialog__button--confirm ui-confirm-dialog__button--${variant}`}
             onClick={onConfirm}
             data-testid="confirm-confirm"
           >
