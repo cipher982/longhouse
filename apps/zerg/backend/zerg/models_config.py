@@ -117,12 +117,6 @@ def _get_tier(tier_name: str) -> str:
     return _TIERS[tier_name]  # type: ignore[index]
 
 
-def _get_mock_model() -> str:
-    """Get mock model ID with lazy loading."""
-    _ensure_loaded()
-    return _TEXT_CONFIG["mock"]  # type: ignore[index]
-
-
 # Tier properties as module-level callables for backwards compatibility
 # These are evaluated on access, not at import time
 class _LazyTier:
@@ -146,30 +140,12 @@ class _LazyTier:
         return hash(str(self))
 
 
-class _LazyMock:
-    """Lazy accessor for mock model constant."""
-
-    def __str__(self) -> str:
-        return _get_mock_model()
-
-    def __repr__(self) -> str:
-        return "_LazyMock()"
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, str):
-            return str(self) == other
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(str(self))
-
-
 # Model tiers by capability (change these in config/models.json to update everywhere)
 # These are lazy - config is loaded on first string conversion/comparison
 TIER_1 = _LazyTier("TIER_1")  # Best reasoning (gpt-5.2)
 TIER_2 = _LazyTier("TIER_2")  # Good, cheaper (gpt-5-mini)
 TIER_3 = _LazyTier("TIER_3")  # Basic, cheapest (gpt-5-nano)
-MOCK_MODEL = _LazyMock()  # For unit tests
+# Note: Test models (gpt-mock, gpt-scripted) are defined in zerg.testing.test_models
 
 # =============================================================================
 # USE CASE HELPERS - Get model by what you're doing
