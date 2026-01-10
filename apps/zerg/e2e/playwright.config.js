@@ -133,10 +133,27 @@ const config = {
   ],
 
   projects: [
+    // Core suite: Critical path tests only, no retries allowed
+    // Run with: make test-e2e-core or bunx playwright test --project=core
+    {
+      name: 'core',
+      testDir: './tests/core',
+      retries: 0,  // Core suite must pass on first try
+      use: { ...devices['Desktop Chrome'] },
+    },
+    // Full suite: All tests including core, with retries
+    // Run with: make test-e2e or bunx playwright test --project=full
+    {
+      name: 'full',
+      testDir: './tests',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    // Default: full suite (for backwards compatibility)
     {
       name: 'chromium',
+      testDir: './tests',
       use: { ...devices['Desktop Chrome'] },
-    }
+    },
   ],
 
   webServer: [
