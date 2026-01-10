@@ -223,13 +223,10 @@ python -c "from zerg.models_config import TIER_1, get_model_by_id; print(TIER_1,
        retries: 0,  // No retries for core suite
      },
      {
-       name: 'full',
+       name: 'chromium',
        testDir: './tests',
+       testIgnore: ['**/core/**'],
        // retries from global config
-     },
-     {
-       name: 'chromium',  // backwards compat
-       testDir: './tests',
      },
    ]
    ```
