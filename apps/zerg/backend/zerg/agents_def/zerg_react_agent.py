@@ -700,6 +700,8 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         """Execute a single tool call (blocking)."""
         import json
 
+        from langgraph.errors import GraphInterrupt
+
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_call_id = tool_call["id"]
@@ -712,6 +714,9 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         else:
             try:
                 observation = tool_to_call.invoke(tool_args)
+            except GraphInterrupt:
+                # Let interrupt bubble up to pause the graph (spawn_worker uses this)
+                raise
             except Exception as exc:  # noqa: BLE001
                 observation = f"<tool-error> {exc}"
                 logger.exception("Error executing tool %s", tool_name)
@@ -863,8 +868,38 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         start_time = datetime.now(timezone.utc)
 
-        # Execute tool in thread (unchanged behavior)
-        result = await asyncio.to_thread(_call_tool_sync, tool_call)
+        # Tools that use LangGraph's interrupt() MUST have async implementations.
+        # Running them in a thread breaks the interrupt context.
+        INTERRUPT_TOOLS = {"spawn_worker"}
+
+        # Execute tool - prefer async version if available (needed for interrupt() support)
+        # Tools like spawn_worker use LangGraph's interrupt() which requires running
+        # in the same context as the graph, not in a separate thread.
+        tool_to_call = tools_by_name.get(tool_name)
+
+        # Fail loudly if an interrupt tool is missing its async implementation
+        if tool_name in INTERRUPT_TOOLS and not getattr(tool_to_call, "coroutine", None):
+            raise RuntimeError(
+                f"Tool '{tool_name}' uses interrupt() and MUST have an async coroutine implementation. "
+                f"Check that StructuredTool.from_function() includes coroutine=<async_fn>."
+            )
+
+        if tool_to_call and getattr(tool_to_call, "coroutine", None):
+            # Tool has async implementation - call it directly
+            try:
+                from langgraph.errors import GraphInterrupt
+
+                observation = await tool_to_call.ainvoke(tool_args)
+                result = ToolMessage(content=str(observation), tool_call_id=tool_call_id, name=tool_name)
+            except GraphInterrupt:
+                # Let interrupt bubble up to pause the graph
+                raise
+            except Exception as exc:
+                result = ToolMessage(content=f"<tool-error> {exc}", tool_call_id=tool_call_id, name=tool_name)
+                logger.exception("Error executing async tool %s", tool_name)
+        else:
+            # Fallback to sync version in thread
+            result = await asyncio.to_thread(_call_tool_sync, tool_call)
         end_time = datetime.now(timezone.utc)
         duration_ms = int((end_time - start_time).total_seconds() * 1000)
 

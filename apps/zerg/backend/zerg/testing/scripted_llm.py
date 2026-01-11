@@ -126,7 +126,7 @@ class ScriptedChatLLM(BaseChatModel):
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "spawn_worker",
-                "args": {},
+                "args": {"task": "Check disk space on cube and identify what is using space"},
             }
             ai_message = AIMessage(content="", tool_calls=[tool_call])
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
