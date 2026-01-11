@@ -20,6 +20,7 @@ from datetime import timezone
 from typing import List
 
 from langchain_core.tools import StructuredTool
+from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
 from zerg.connectors.context import get_credential_resolver
@@ -142,6 +143,9 @@ async def spawn_worker_async(
                 return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
             raise
 
+    except GraphInterrupt:
+        # Let interrupt bubble up to pause the graph - this is expected behavior
+        raise
     except Exception as e:
         logger.exception(f"Failed to spawn worker for task: {task}")
         db.rollback()

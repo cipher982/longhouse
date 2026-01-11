@@ -283,3 +283,171 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
 
     # NOTE: When called outside the graph, we only enqueue the worker job.
     # Worker execution is handled by WorkerJobProcessor in a running backend.
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_interrupt_triggers_waiting_status(
+    db_session,
+    test_user,
+    credential_context,  # noqa: ARG001 - fixture activates resolver context
+    temp_artifact_path,  # noqa: ARG001 - ensures artifact store is writable if used
+):
+    """Test that spawn_worker properly triggers interrupt and WAITING status.
+
+    This catches regressions where:
+    - GraphInterrupt is accidentally caught (would result in SUCCESS instead of WAITING)
+    - Tools run in wrong context (thread instead of async, breaking interrupt)
+
+    The test uses ScriptedLLM to deterministically call spawn_worker,
+    then verifies the run transitions to WAITING (not SUCCESS or FAILED).
+    """
+    from unittest.mock import patch
+
+    from zerg.testing.scripted_llm import ScriptedChatLLM
+
+    service = SupervisorService(db_session)
+    agent = service.get_or_create_supervisor_agent(test_user.id)
+    thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+    # Create a run record
+    run = AgentRun(
+        agent_id=agent.id,
+        thread_id=thread.id,
+        status=RunStatus.RUNNING,
+        trigger=RunTrigger.API,
+    )
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+
+    # Use ScriptedChatLLM - it will call spawn_worker for "disk space on cube" prompts
+    scripted_llm = ScriptedChatLLM()
+
+    # Patch the LLM creation to use our scripted version
+    with patch("zerg.agents_def.zerg_react_agent._make_llm", return_value=scripted_llm):
+        # Run supervisor - should interrupt on spawn_worker
+        result = await service.run_supervisor(
+            owner_id=test_user.id,
+            task="check disk space on cube",
+            run_id=run.id,
+            timeout=30,
+        )
+
+        # KEY ASSERTION: Run should be WAITING, not SUCCESS or FAILED
+        # If GraphInterrupt was caught, status would be SUCCESS (old bug)
+        # If tools ran in wrong context, status would be SUCCESS (recent bug)
+        assert result.status == "waiting", (
+            f"Expected 'waiting' but got '{result.status}'. "
+            f"If 'success', GraphInterrupt is being caught somewhere. "
+            f"If 'failed', spawn_worker errored instead of interrupting."
+        )
+
+    # Verify database state matches
+    db_session.refresh(run)
+    assert run.status == RunStatus.WAITING, f"Run should be WAITING but is {run.status}"
+
+    # Verify worker job was created (spawn_worker ran before interrupt)
+    worker_job = (
+        db_session.query(WorkerJob)
+        .filter(WorkerJob.supervisor_run_id == run.id)
+        .first()
+    )
+    assert worker_job is not None, "Worker job should have been created before interrupt"
+    assert worker_job.status == "queued", "Worker job should be queued"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_resume_completes_interrupted_run(
+    db_session,
+    test_user,
+    credential_context,  # noqa: ARG001 - fixture activates resolver context
+    temp_artifact_path,  # noqa: ARG001 - ensures artifact store is writable if used
+):
+    """Test that resume_supervisor_with_worker_result completes an interrupted run.
+
+    This test:
+    1. Sets up a run in WAITING state (simulating post-interrupt)
+    2. Calls the REAL resume function with a mock runnable
+    3. Verifies the run completes with SUCCESS status and final response
+    """
+    from unittest.mock import patch
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import SystemMessage
+
+    from zerg.crud import crud
+    from zerg.services.worker_resume import resume_supervisor_with_worker_result
+
+    # Set up supervisor agent/thread
+    service = SupervisorService(db_session)
+    agent = service.get_or_create_supervisor_agent(test_user.id)
+    thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+    # Add a user message so conversation has content
+    crud.create_thread_message(
+        db=db_session,
+        thread_id=thread.id,
+        role="user",
+        content="check disk space on cube",
+        processed=True,
+    )
+
+    # Create a run in WAITING state (simulating interrupt happened)
+    import uuid
+
+    run = AgentRun(
+        agent_id=agent.id,
+        thread_id=thread.id,
+        status=RunStatus.WAITING,
+        trigger=RunTrigger.API,
+        assistant_message_id=str(uuid.uuid4()),
+    )
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+
+    # Create corresponding worker job
+    worker_job = WorkerJob(
+        owner_id=test_user.id,
+        supervisor_run_id=run.id,
+        task="Check disk space on cube",
+        model=TEST_WORKER_MODEL,
+        status="success",
+    )
+    db_session.add(worker_job)
+    db_session.commit()
+
+    # Mock runnable that returns a final response (simulating resumed graph)
+    class MockRunnable:
+        async def ainvoke(self, _input, _config):
+            # Return message history with final assistant response
+            return [
+                SystemMessage(content="You are Jarvis."),
+                HumanMessage(content="check disk space on cube"),
+                AIMessage(content="Cube is at 45% disk usage. Docker images are the largest consumer."),
+            ]
+
+    mock_runnable = MockRunnable()
+
+    # Call REAL resume function with mock runnable
+    with patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=mock_runnable):
+        result = await resume_supervisor_with_worker_result(
+            db=db_session,
+            run_id=run.id,
+            worker_result="Cube disk usage: 45% used. Docker images are largest.",
+        )
+
+    # Verify resume succeeded
+    assert result is not None, "Resume should return a result"
+    assert result.get("status") == "success", f"Resume should succeed but got {result}"
+
+    # Verify run is now SUCCESS
+    db_session.refresh(run)
+    assert run.status == RunStatus.SUCCESS, f"Run should be SUCCESS but is {run.status}"
+
+    # Verify final response was captured
+    final_result = result.get("result", "")
+    assert "45%" in final_result, f"Final response should contain '45%', got: {final_result}"
