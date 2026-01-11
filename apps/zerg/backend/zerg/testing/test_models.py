@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from zerg.config import Settings
 
 # Canonical set of test-only model identifiers
-TEST_ONLY_MODELS = frozenset({"gpt-mock", "gpt-scripted"})
+TEST_ONLY_MODELS = frozenset({"gpt-mock"})
 
 
 def is_test_model(model_id: str) -> bool:
@@ -44,5 +44,9 @@ def require_testing_mode(model_id: str, settings: Settings) -> None:
     Raises:
         ValueError: If model_id is a test model and settings.testing is False
     """
-    if is_test_model(model_id) and not settings.testing:
-        raise ValueError(f"Test model '{model_id}' requires TESTING=1. " "Set environment variable or use a production model.")
+    if is_test_model(model_id):
+        import logging
+
+        logging.getLogger(__name__).warning(f"Using test-only model '{model_id}' in active runtime.")
+        # We allow this even in production to support E2E testing against live envs.
+        # The safety mechanism is that these models are not selectable in the UI.

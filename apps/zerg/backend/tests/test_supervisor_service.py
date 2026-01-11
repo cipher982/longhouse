@@ -295,6 +295,55 @@ class TestWorkerSupervisorCorrelation:
         assert job is not None
         assert job.supervisor_run_id is None
 
+    @pytest.mark.asyncio
+    async def test_run_continuation_inherits_model(self, db_session, test_user):
+        """Test that run_continuation passes the original run's model to the new run."""
+        from unittest.mock import AsyncMock, patch
+        from zerg.models.enums import RunStatus, RunTrigger
+        from zerg.models.models import AgentRun
+
+        # Create supervisor agent and thread
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        # Create original run with specific model (different from default)
+        original_run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.DEFERRED,
+            trigger=RunTrigger.API,
+            model="gpt-4-custom",  # Specific model to test inheritance
+        )
+        db_session.add(original_run)
+        db_session.commit()
+        db_session.refresh(original_run)
+
+        # Mock run_supervisor to avoid actual execution
+        # We need to return a SupervisorRunResult
+        from zerg.services.supervisor_service import SupervisorRunResult
+        mock_result = SupervisorRunResult(
+            run_id=original_run.id + 1,
+            thread_id=thread.id,
+            status="success",
+        )
+
+        # Patch run_supervisor on the service instance
+        with patch.object(service, "run_supervisor", new_callable=AsyncMock) as mock_run_supervisor:
+            mock_run_supervisor.return_value = mock_result
+
+            await service.run_continuation(
+                original_run_id=original_run.id,
+                job_id=123,
+                worker_id="worker-1",
+                result_summary="Task completed",
+            )
+
+            # Verify run_supervisor was called with correct model_override
+            mock_run_supervisor.assert_called_once()
+            call_kwargs = mock_run_supervisor.call_args[1]
+            assert call_kwargs.get("model_override") == "gpt-4-custom"
+
 
 class TestRecentWorkerHistoryInjection:
     """Tests for v2.0 recent worker history auto-injection.
