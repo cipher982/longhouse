@@ -178,7 +178,7 @@ def get_active_run(
 ):
     """Get the user's currently running agent run (if any).
 
-    Returns the most recent RUNNING or DEFERRED run for the user's supervisor agent.
+    Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's supervisor agent.
     Returns 204 No Content if no active run exists.
 
     This endpoint enables run reconnection after page refresh.
@@ -205,6 +205,16 @@ def get_active_run(
         .order_by(AgentRun.created_at.desc())
         .first()
     )
+
+    if not active_run:
+        # WAITING runs are interrupted via spawn_worker (LangGraph interrupt/resume).
+        active_run = (
+            db.query(AgentRun)
+            .filter(AgentRun.agent_id == supervisor_agent.id)
+            .filter(AgentRun.status == RunStatus.WAITING)
+            .order_by(AgentRun.created_at.desc())
+            .first()
+        )
 
     if not active_run:
         from sqlalchemy import exists

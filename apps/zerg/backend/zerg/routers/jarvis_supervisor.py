@@ -259,6 +259,8 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
     event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)  # Timeout migration
+    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
@@ -367,6 +369,8 @@ async def _supervisor_event_generator(run_id: int, owner_id: int):
         event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)

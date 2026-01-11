@@ -38,6 +38,10 @@ channels:
         $ref: '#/components/messages/SupervisorCompleteEvent'
       SupervisorDeferredEvent:
         $ref: '#/components/messages/SupervisorDeferredEvent'
+      SupervisorWaitingEvent:
+        $ref: '#/components/messages/SupervisorWaitingEvent'
+      SupervisorResumedEvent:
+        $ref: '#/components/messages/SupervisorResumedEvent'
       ErrorEvent:
         $ref: '#/components/messages/ErrorEvent'
       WorkerSpawnedEvent:
@@ -131,6 +135,20 @@ components:
       payload:
         $ref: '#/components/schemas/SupervisorDeferredPayload'
       x-sse-event-type: supervisor_deferred
+
+    SupervisorWaitingEvent:
+      name: supervisor_waiting
+      summary: Supervisor interrupted waiting for worker completion
+      payload:
+        $ref: '#/components/schemas/SupervisorWaitingPayload'
+      x-sse-event-type: supervisor_waiting
+
+    SupervisorResumedEvent:
+      name: supervisor_resumed
+      summary: Supervisor resumed from interrupt after worker completion
+      payload:
+        $ref: '#/components/schemas/SupervisorResumedPayload'
+      x-sse-event-type: supervisor_resumed
 
     # Error handling
     ErrorEvent:
@@ -422,6 +440,53 @@ components:
           type: number
           minimum: 0
           description: Timeout that triggered deferral
+        run_id:
+          type: integer
+          minimum: 1
+        agent_id:
+          type: integer
+          minimum: 1
+        thread_id:
+          type: integer
+          minimum: 1
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message
+
+    SupervisorWaitingPayload:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          description: Waiting status message (e.g., worker spawned)
+        job_id:
+          type: integer
+          minimum: 1
+          description: Worker job ID (if applicable)
+        close_stream:
+          type: boolean
+          description: If false, keep SSE stream open while waiting
+        run_id:
+          type: integer
+          minimum: 1
+        agent_id:
+          type: integer
+          minimum: 1
+        thread_id:
+          type: integer
+          minimum: 1
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message
+
+    SupervisorResumedPayload:
+      type: object
+      required: [thread_id, message_id]
+      properties:
         run_id:
           type: integer
           minimum: 1

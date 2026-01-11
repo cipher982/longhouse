@@ -1,7 +1,13 @@
-"""Jarvis internal endpoints for run continuation and background completion.
+"""Jarvis internal endpoints for run resume and background completion.
 
 These endpoints are called internally by the backend (not exposed to public API)
-to handle run continuation when a supervisor times out and workers complete.
+to handle run resume when a supervisor is interrupted and workers complete.
+
+Uses LangGraph's interrupt/resume pattern:
+- Supervisor calls spawn_worker() which calls interrupt()
+- Run status becomes WAITING
+- Worker completes, calls resume endpoint
+- Command(resume=result) continues the graph
 """
 
 import logging
@@ -14,7 +20,6 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.crud import crud
 from zerg.database import get_db
 from zerg.dependencies.auth import require_internal_call
 from zerg.models.enums import RunStatus
@@ -39,34 +44,30 @@ class WorkerCompletionPayload(BaseModel):
     error: str | None = Field(None, description="Error message if failed")
 
 
-@router.post("/{run_id}/continue")
-async def continue_run(
+@router.post("/{run_id}/resume")
+async def resume_run(
     run_id: int,
     payload: WorkerCompletionPayload,
     db: Session = Depends(get_db),
 ):
-    """Continue a DEFERRED run when a worker completes.
+    """Resume a WAITING run when a worker completes.
 
-    Called internally when a worker completes while the supervisor run was DEFERRED.
-    This endpoint:
-    1. Finds the DEFERRED run
-    2. Injects the worker result as a tool message into the thread
-    3. Creates a new continuation run to synthesize the final answer
-    4. Emits events so connected SSE clients get notified
+    Called internally when a worker completes while the supervisor run was
+    WAITING (interrupted by spawn_worker). Uses LangGraph's Command(resume=...)
+    to continue the graph from where interrupt() was called.
 
     Args:
-        run_id: ID of the DEFERRED supervisor run
+        run_id: ID of the WAITING supervisor run
         payload: Worker completion data
         db: Database session
 
     Returns:
-        Dict with continuation run info
+        Dict with resumed run info
 
     Raises:
-        404: Run not found or not in DEFERRED status
-        500: Error creating continuation
+        404: Run not found
+        500: Error resuming run
     """
-    # Find the DEFERRED run
     run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
 
     if not run:
@@ -75,63 +76,56 @@ async def continue_run(
             detail=f"Run {run_id} not found",
         )
 
-    if run.status != RunStatus.DEFERRED:
+    if run.status != RunStatus.WAITING:
         # If run already completed or failed, this is a no-op (idempotent)
-        logger.info(f"Run {run_id} status is {run.status.value}, skipping continuation")
+        logger.info(f"Run {run_id} status is {run.status.value}, skipping resume")
         return {
             "status": "skipped",
-            "reason": f"Run is {run.status.value}, not DEFERRED",
+            "reason": f"Run is {run.status.value}, not WAITING",
             "run_id": run_id,
         }
 
-    # Get the agent and thread
-    agent = crud.get_agent(db, run.agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agent {run.agent_id} not found",
-        )
-
-    thread = crud.get_thread(db, run.thread_id)
-    if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Thread {run.thread_id} not found",
-        )
-
-    logger.info(f"Continuing run {run_id} after worker {payload.worker_id} completed with status {payload.status}")
+    logger.info(f"Resuming run {run_id} after worker {payload.worker_id} completed with status {payload.status}")
 
     try:
-        # Prepare result text for continuation
+        # Prepare result text for resume
         result_text = payload.result_summary or f"Worker job {payload.job_id} completed"
         if payload.status == "failed":
             result_text = f"Worker failed: {payload.error or 'Unknown error'}"
 
-        # Use SupervisorService.run_continuation which handles:
-        # 1. Injecting worker result as tool message
-        # 2. Creating continuation run
-        # 3. Running supervisor to synthesize final answer
-        # 4. Emitting all necessary events
-        from zerg.services.supervisor_service import SupervisorService
+        # Use resume_supervisor_with_worker_result which:
+        # 1. Loads the graph with the same thread_id
+        # 2. Calls Command(resume=result) to continue from interrupt()
+        # 3. Emits completion events
+        from zerg.services.worker_resume import resume_supervisor_with_worker_result
 
-        supervisor = SupervisorService(db)
-        result = await supervisor.run_continuation(
-            original_run_id=run_id,
-            job_id=payload.job_id,
-            worker_id=payload.worker_id,
-            result_summary=result_text,
+        result = await resume_supervisor_with_worker_result(
+            db=db,
+            run_id=run_id,
+            worker_result=result_text,
         )
 
         return {
-            "status": "continued",
+            "status": "resumed",
             "run_id": run_id,
-            "continuation_run_id": result.run_id,
-            "result_status": result.status,
+            "result_status": result.get("status") if result else "unknown",
         }
 
     except Exception as e:
-        logger.exception(f"Error continuing run {run_id}: {e}")
+        logger.exception(f"Error resuming run {run_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to continue run: {str(e)}",
+            detail=f"Failed to resume run: {str(e)}",
         )
+
+
+# Keep old endpoint for backwards compatibility during transition
+@router.post("/{run_id}/continue")
+async def continue_run(
+    run_id: int,
+    payload: WorkerCompletionPayload,
+    db: Session = Depends(get_db),
+):
+    """Deprecated: Use /resume instead. Kept for backwards compatibility."""
+    logger.warning(f"Deprecated /continue endpoint called for run {run_id}, redirecting to /resume")
+    return await resume_run(run_id, payload, db)

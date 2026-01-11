@@ -87,6 +87,25 @@ class SupervisorDeferredPayload(BaseModel):
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
 
+class SupervisorWaitingPayload(BaseModel):
+    """Payload for SupervisorWaitingPayload"""
+
+    message: str = Field(min_length=1, description='Waiting status message (e.g., worker spawned)')
+    job_id: Optional[int] = Field(default=None, ge=1, description='Worker job ID (if applicable)')
+    close_stream: Optional[bool] = Field(default=None, description='If false, keep SSE stream open while waiting')
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    thread_id: Optional[int] = Field(default=None, ge=1, description='')
+    message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
+
+class SupervisorResumedPayload(BaseModel):
+    """Payload for SupervisorResumedPayload"""
+
+    run_id: Optional[int] = Field(default=None, ge=1, description='')
+    agent_id: Optional[int] = Field(default=None, ge=1, description='')
+    thread_id: int = Field(ge=1, description='')
+    message_id: str = Field(description='Unique identifier for the assistant message')
+
 class ErrorPayload(BaseModel):
     """Payload for ErrorPayload"""
 
@@ -206,6 +225,8 @@ class SSEEventType(str, Enum):
     SUPERVISOR_TOKEN = "supervisor_token"
     SUPERVISOR_COMPLETE = "supervisor_complete"
     SUPERVISOR_DEFERRED = "supervisor_deferred"
+    SUPERVISOR_WAITING = "supervisor_waiting"
+    SUPERVISOR_RESUMED = "supervisor_resumed"
     ERROR = "error"
     WORKER_SPAWNED = "worker_spawned"
     WORKER_STARTED = "worker_started"

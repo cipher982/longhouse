@@ -38,9 +38,11 @@ def test_spawn_worker_success(credential_context, temp_artifact_path, db_session
     result = spawn_worker(task="What is 2+2?", model=TEST_WORKER_MODEL)
 
     # Verify result format - now queued instead of executed synchronously
+    # With interrupt/resume pattern, when called outside runnable context:
+    # "Worker job {id} queued successfully. Working on: {task}"
     assert "Worker job" in result
     assert "queued successfully" in result
-    assert "Task:" in result
+    assert "Working on:" in result  # Changed from "Task:" to match new format
 
     # Extract job_id from result
     import re

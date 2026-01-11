@@ -94,6 +94,28 @@ export interface SupervisorDeferredPayload {
   message_id?: string;
 }
 
+export interface SupervisorWaitingPayload {
+  /** Waiting status message (e.g., worker spawned) */
+  message: string;
+  /** Worker job ID (if applicable) */
+  job_id?: number;
+  /** If false, keep SSE stream open while waiting */
+  close_stream?: boolean;
+  run_id?: number;
+  agent_id?: number;
+  thread_id?: number;
+  /** Unique identifier for the assistant message */
+  message_id?: string;
+}
+
+export interface SupervisorResumedPayload {
+  run_id?: number;
+  agent_id?: number;
+  thread_id: number;
+  /** Unique identifier for the assistant message */
+  message_id: string;
+}
+
 export interface ErrorPayload {
   /** Error message */
   error?: string;
@@ -228,6 +250,8 @@ export const SSE_EVENT_TYPES = [
   "supervisor_token",
   "supervisor_complete",
   "supervisor_deferred",
+  "supervisor_waiting",
+  "supervisor_resumed",
   "error",
   "worker_spawned",
   "worker_started",
@@ -274,6 +298,8 @@ export type SSEPayloadFor<T extends SSEEventType> =
   T extends "supervisor_token" ? SupervisorTokenPayload :
   T extends "supervisor_complete" ? SupervisorCompletePayload :
   T extends "supervisor_deferred" ? SupervisorDeferredPayload :
+  T extends "supervisor_waiting" ? SupervisorWaitingPayload :
+  T extends "supervisor_resumed" ? SupervisorResumedPayload :
   T extends "error" ? ErrorPayload :
   T extends "worker_spawned" ? WorkerSpawnedPayload :
   T extends "worker_started" ? WorkerStartedPayload :

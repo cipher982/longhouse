@@ -263,12 +263,10 @@ class WorkerRunner:
                         },
                     )
 
-                    # Phase A: Check if supervisor run is DEFERRED and trigger continuation
-                    await self._trigger_continuation_if_deferred(
+                    # Resume supervisor if it was waiting for this worker (interrupt/resume pattern)
+                    await self._resume_supervisor_if_waiting(
                         db=db,
                         run_id=event_ctx["run_id"],
-                        job_id=job_id,
-                        worker_id=worker_id,
                         status="failed",
                         error=worker_context.critical_error_message,
                     )
@@ -326,12 +324,10 @@ class WorkerRunner:
                         },
                     )
 
-                # Phase A: Check if supervisor run is DEFERRED and trigger continuation
-                await self._trigger_continuation_if_deferred(
+                # Resume supervisor if it was waiting for this worker (interrupt/resume pattern)
+                await self._resume_supervisor_if_waiting(
                     db=db,
                     run_id=event_ctx["run_id"],
-                    job_id=job_id,
-                    worker_id=worker_id,
                     status="success",
                     result_summary=summary or result_text,
                 )
@@ -386,12 +382,10 @@ class WorkerRunner:
                     },
                 )
 
-                # Phase A: Check if supervisor run is DEFERRED and trigger continuation
-                await self._trigger_continuation_if_deferred(
+                # Resume supervisor if it was waiting for this worker (interrupt/resume pattern)
+                await self._resume_supervisor_if_waiting(
                     db=db,
                     run_id=event_ctx["run_id"],
-                    job_id=job_id,
-                    worker_id=worker_id,
                     status="failed",
                     error=error_msg,
                 )
@@ -806,34 +800,28 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 "error": str(e),
             }
 
-    async def _trigger_continuation_if_deferred(
+    async def _resume_supervisor_if_waiting(
         self,
         db: Session,
         run_id: int,
-        job_id: int,
-        worker_id: str,
         status: str,
         result_summary: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Trigger continuation if supervisor run is DEFERRED (NON-BLOCKING).
+        """Resume interrupted supervisor if waiting for worker (NON-BLOCKING).
 
-        Phase A: When a worker completes, check if the parent supervisor run is DEFERRED.
-        If so, schedule a continuation task in the background without blocking worker completion.
+        Uses LangGraph's Command(resume=...) pattern to continue the supervisor
+        from where interrupt() was called in spawn_worker.
 
         This is fire-and-forget to prevent worker "duration" from including supervisor synthesis time.
 
         Parameters
         ----------
         db
-            SQLAlchemy session (NOTE: This session belongs to worker_runner - continuation
+            SQLAlchemy session (NOTE: This session belongs to worker_runner - resume
             will need to create its own session)
         run_id
             Supervisor run ID
-        job_id
-            Worker job ID
-        worker_id
-            Worker artifact ID
         status
             Worker status: "success" or "failed"
         result_summary
@@ -842,28 +830,44 @@ Example: "Backup completed 157GB in 17s, no errors found"
             Error message if failed
         """
         try:
-            from zerg.models.enums import RunStatus
-            from zerg.models.models import AgentRun
 
-            # Check if supervisor run is DEFERRED
-            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-            if not run or run.status != RunStatus.DEFERRED:
-                # Not deferred - no need to continue
-                return
-
-            logger.info(f"Supervisor run {run_id} is DEFERRED, scheduling background continuation for worker {worker_id}")
-
-            # Fire-and-forget: schedule continuation in background task
-            # Create a new task that will get its own DB session
-            async def _run_continuation_async():
-                """Background task to run continuation with fresh DB session."""
+            async def _run_resume_async():
+                """Background task to resume with fresh DB session."""
                 from zerg.database import get_session_factory
-                from zerg.services.supervisor_service import SupervisorService
+                from zerg.models.enums import RunStatus
+                from zerg.models.models import AgentRun
+                from zerg.services.worker_resume import resume_supervisor_with_worker_result
 
-                # Create fresh DB session for continuation (worker's session is about to close)
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
                 try:
+                    # Race-safety: the worker may finish before the supervisor flips the run to WAITING.
+                    # Retry briefly so we don't miss resuming in that window.
+                    max_checks = 10
+                    check_sleep_s = 0.2
+
+                    for _ in range(max_checks):
+                        run = fresh_db.query(AgentRun).filter(AgentRun.id == run_id).first()
+                        if not run:
+                            return
+
+                        if run.status == RunStatus.WAITING:
+                            break
+
+                        # Terminal states - nothing to resume
+                        if run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED):
+                            return
+
+                        await asyncio.sleep(check_sleep_s)
+                        # Ensure we don't serve a cached status across retries
+                        fresh_db.expire_all()
+                    else:
+                        logger.info(
+                            "Supervisor run %s never entered WAITING after worker completion; skipping resume",
+                            run_id,
+                        )
+                        return
+
                     summary_text = result_summary
                     if not summary_text:
                         if status == "failed":
@@ -871,27 +875,22 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             summary_text = "(No result summary)"
 
-                    # Call SupervisorService directly (not router handler)
-                    supervisor = SupervisorService(fresh_db)
-                    await supervisor.run_continuation(
-                        original_run_id=run_id,
-                        job_id=job_id,
-                        worker_id=worker_id,
-                        result_summary=summary_text,
+                    # Resume using LangGraph's Command(resume=...)
+                    await resume_supervisor_with_worker_result(
+                        db=fresh_db,
+                        run_id=run_id,
+                        worker_result=summary_text,
                     )
                 except Exception as e:
-                    logger.exception(f"Background continuation failed for run {run_id}: {e}")
+                    logger.exception(f"Background resume failed for run {run_id}: {e}")
                 finally:
-                    # Ensure session cleanup
                     fresh_db.close()
 
-            # Schedule as background task (non-blocking)
-            asyncio.create_task(_run_continuation_async())
-            logger.debug(f"Continuation task scheduled for run {run_id}")
+            asyncio.create_task(_run_resume_async())
+            logger.debug(f"Resume task scheduled for run {run_id}")
 
         except Exception as e:
-            # Log error but don't fail worker completion
-            logger.exception(f"Failed to schedule continuation for run {run_id}: {e}")
+            logger.exception(f"Failed to schedule resume for run {run_id}: {e}")
 
 
 __all__ = ["WorkerRunner", "WorkerResult"]

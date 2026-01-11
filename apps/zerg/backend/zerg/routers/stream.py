@@ -158,6 +158,8 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
     event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
@@ -190,8 +192,8 @@ async def _replay_and_stream(
                 ),
             }
 
-        # 4. If run is complete (not RUNNING or DEFERRED), close stream
-        if status not in (RunStatus.RUNNING, RunStatus.DEFERRED):
+        # 4. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
+        if status not in (RunStatus.RUNNING, RunStatus.DEFERRED, RunStatus.WAITING):
             logger.debug(f"Stream closed: run {run_id} is {status.value}, not streamable")
             return
 
@@ -299,6 +301,8 @@ async def _replay_and_stream(
         event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
         event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)

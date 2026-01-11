@@ -5,6 +5,12 @@ disposable worker agents, retrieve their results, and drill into their artifacts
 
 The supervisor/worker pattern enables complex delegation scenarios where a supervisor
 can spawn multiple workers for parallel execution or break down complex tasks.
+
+Uses LangGraph's interrupt/resume pattern for async worker execution:
+- spawn_worker() creates job and calls interrupt()
+- Worker runs in background
+- Worker completion calls Command(resume=result)
+- interrupt() returns the result, tool continues
 """
 
 import logging
@@ -14,11 +20,13 @@ from datetime import timezone
 from typing import List
 
 from langchain_core.tools import StructuredTool
+from langgraph.types import interrupt
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
-from zerg.services.llm_decider import DecisionMode
 from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+# Note: DecisionMode and roundabout_monitor imports removed - replaced by interrupt/resume
 
 logger = logging.getLogger(__name__)
 
@@ -26,46 +34,26 @@ logger = logging.getLogger(__name__)
 async def spawn_worker_async(
     task: str,
     model: str | None = None,
-    wait: bool = False,
-    timeout_seconds: float = 300.0,
-    decision_mode: str = "heuristic",
 ) -> str:
-    """Spawn a worker agent to execute a task.
+    """Spawn a worker agent to execute a task and wait for completion.
 
-    The worker runs independently, persists all outputs to disk, and returns
-    a natural language result. Use this when you need to delegate work that
-    might involve multiple tool calls or generate verbose output.
-
-    By default, returns immediately after queuing (fire-and-forget). Set wait=True
-    to enter a "roundabout" monitoring loop that waits for worker completion.
+    The worker runs in the background. This tool uses LangGraph's interrupt/resume
+    pattern to pause execution until the worker completes, then returns the result.
 
     Args:
         task: Natural language description of what the worker should do
         model: LLM model for the worker (default: gpt-5-mini)
-        wait: If True, wait for worker completion with monitoring (roundabout).
-              If False (default), return immediately after queuing.
-        timeout_seconds: Maximum time to wait for completion when wait=True (default: 300s/5min)
-        decision_mode: How roundabout decisions are made when wait=True.
-              "heuristic" (default): Rules-based decisions only (fast, no cost)
-              "llm": LLM-based decisions (smarter but adds latency/cost)
-              "hybrid": Heuristic first, LLM for ambiguous cases
 
     Returns:
-        If wait=False: A summary indicating the job has been queued
-        If wait=True: The worker's result or error details
+        The worker's result after completion
 
     Example:
-        spawn_worker("Check disk usage on prod-web server via SSH")  # Returns immediately
-        spawn_worker("Research vacuums", wait=True)  # Waits for completion
-        spawn_worker("Long task", wait=True, timeout_seconds=600)  # 10 min timeout
-        spawn_worker("Complex task", wait=True, decision_mode="hybrid")  # LLM-assisted decisions
+        spawn_worker("Check disk usage on prod-web server via SSH")
+        spawn_worker("Research vacuums and recommend the best one")
     """
-    from zerg.config import get_settings
     from zerg.events import EventType
     from zerg.events import event_bus
     from zerg.models.models import WorkerJob
-    from zerg.services.roundabout_monitor import RoundaboutMonitor
-    from zerg.services.roundabout_monitor import format_roundabout_result
     from zerg.services.supervisor_context import get_supervisor_run_id
 
     # Get database session from credential resolver context
@@ -82,118 +70,92 @@ async def spawn_worker_async(
     # Use default worker model if not specified
     worker_model = model or DEFAULT_WORKER_MODEL_ID
 
-    # Create worker job record
     try:
-        worker_job = WorkerJob(
-            owner_id=owner_id,
-            supervisor_run_id=supervisor_run_id,  # Correlate with supervisor run
-            task=task,
-            model=worker_model,
-            status="queued",
-        )
-        db.add(worker_job)
-        db.commit()
-        db.refresh(worker_job)
-
-        # Emit WORKER_SPAWNED event for SSE streaming
-        # Include supervisor_run_id so SSE filter can pass it through
-        await event_bus.publish(
-            EventType.WORKER_SPAWNED,
-            {
-                "event_type": EventType.WORKER_SPAWNED,
-                "job_id": worker_job.id,
-                "task": task[:100],
-                "model": worker_model,
-                "owner_id": owner_id,
-                "run_id": supervisor_run_id,  # For SSE correlation
-            },
+        # IDEMPOTENCY: Check for existing job with same task for this supervisor run.
+        # This handles LangGraph replay after resume - we don't want duplicate jobs.
+        existing_job = (
+            db.query(WorkerJob)
+            .filter(
+                WorkerJob.supervisor_run_id == supervisor_run_id,
+                WorkerJob.task == task,
+                WorkerJob.owner_id == owner_id,
+            )
+            .first()
         )
 
-        # Security/Architecture Gate:
-        # Only allow wait=True if we are in testing mode OR the task is explicitly
-        # marked for eval waiting. This prevents the Supervisor from blocking
-        # in production (where Durable Runs handle background continuations).
-        is_testing = get_settings().testing
-        is_eval_wait = "[eval:wait]" in task
-        effective_wait = wait and (is_testing or is_eval_wait)
+        if existing_job:
+            worker_job = existing_job
+            logger.debug(f"Found existing worker job {worker_job.id} for task (idempotent replay)")
+        else:
+            # Create new worker job record
+            worker_job = WorkerJob(
+                owner_id=owner_id,
+                supervisor_run_id=supervisor_run_id,
+                task=task,
+                model=worker_model,
+                status="queued",
+            )
+            db.add(worker_job)
+            db.commit()
+            db.refresh(worker_job)
 
-        if not effective_wait:
-            # Fire and forget - return immediately
-            return (
-                f"Worker job {worker_job.id} queued successfully.\n\n"
-                f"Task: {task}\n"
-                f"Model: {worker_model}\n\n"
-                f"The worker will execute in the background. Use get_worker_metadata({worker_job.id}) "
-                f"to check status and read_worker_result('{worker_job.id}') to get results when complete."
+            # Emit WORKER_SPAWNED event for SSE streaming (only for new jobs)
+            await event_bus.publish(
+                EventType.WORKER_SPAWNED,
+                {
+                    "event_type": EventType.WORKER_SPAWNED,
+                    "job_id": worker_job.id,
+                    "task": task[:100],
+                    "model": worker_model,
+                    "owner_id": owner_id,
+                    "run_id": supervisor_run_id,
+                },
             )
 
-        # Enter roundabout - wait for completion with monitoring
-        # Parse decision mode string to enum
-        mode_map = {
-            "heuristic": DecisionMode.HEURISTIC,
-            "llm": DecisionMode.LLM,
-            "hybrid": DecisionMode.HYBRID,
-        }
-        parsed_mode = mode_map.get(decision_mode.lower(), DecisionMode.HEURISTIC)
+        # INTERRUPT: Pause execution and checkpoint state.
+        # The __interrupt__ payload tells the frontend what's happening.
+        # When worker completes, worker_runner calls Command(resume=result),
+        # and interrupt() returns that result.
+        #
+        # NOTE: interrupt() only works inside a LangGraph runnable context.
+        # When called directly (e.g., from tests), we fall back to fire-and-forget.
+        try:
+            worker_result = interrupt(
+                {
+                    "type": "worker_pending",
+                    "job_id": worker_job.id,
+                    "task": task[:100],
+                    "model": worker_model,
+                    "message": f"Worker job {worker_job.id} started. Working on: {task[:100]}",
+                }
+            )
 
-        logger.info(f"Entering roundabout for worker job {worker_job.id} (mode={parsed_mode.value})")
-        monitor = RoundaboutMonitor(
-            db=db,
-            job_id=worker_job.id,
-            owner_id=owner_id,
-            supervisor_run_id=supervisor_run_id,
-            timeout_seconds=timeout_seconds,
-            decision_mode=parsed_mode,
-        )
+            # AFTER RESUME: worker_result contains the worker's output
+            # This code only runs after Command(resume=...) is called
+            return f"Worker job {worker_job.id} completed:\n\n{worker_result}"
 
-        result = await monitor.wait_for_completion()
-        return format_roundabout_result(result)
+        except RuntimeError as e:
+            if "outside of a runnable context" in str(e):
+                # Called outside LangGraph graph execution (e.g., tests, direct API calls)
+                # Fall back to fire-and-forget: job is queued and will be picked up by WorkerJobProcessor.
+                logger.debug(f"spawn_worker called outside runnable context, returning queued response for job {worker_job.id}")
+                return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
+            raise
 
     except Exception as e:
-        logger.exception(f"Failed to queue worker job for task: {task}")
+        logger.exception(f"Failed to spawn worker for task: {task}")
         db.rollback()
-        return f"Error queuing worker job: {e}"
+        return f"Error spawning worker: {e}"
 
 
 def spawn_worker(
     task: str,
     model: str | None = None,
-    wait: bool = False,
-    timeout_seconds: float = 300.0,
-    decision_mode: str = "heuristic",
 ) -> str:
     """Sync wrapper for spawn_worker_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(spawn_worker_async(task, model, wait, timeout_seconds, decision_mode))
-
-
-async def spawn_worker_fire_and_forget_async(
-    task: str,
-    model: str | None = None,
-) -> str:
-    """Spawn a worker job (fire-and-forget).
-
-    This is the preferred Supervisor-facing entrypoint: it keeps the tool schema
-    minimal so the Supervisor doesn't block on "wait=True" (roundabout), which
-    is incompatible with the durable-runs model and can deadlock in TESTING/evals
-    where the background worker processor is intentionally disabled.
-    """
-    # Opt-in: allow evals to request a 'waiting' spawn so the supervisor
-    # can actually see the result and synthesize it into its response.
-    # Requires [eval:wait] in the task description.
-    wait = "[eval:wait]" in task
-    return await spawn_worker_async(task=task, model=model, wait=wait)
-
-
-def spawn_worker_fire_and_forget(
-    task: str,
-    model: str | None = None,
-) -> str:
-    """Sync wrapper for spawn_worker_fire_and_forget_async. Used for CLI/tests."""
-    from zerg.utils.async_utils import run_async_safely
-
-    return run_async_safely(spawn_worker_fire_and_forget_async(task=task, model=model))
+    return run_async_safely(spawn_worker_async(task, model))
 
 
 async def list_workers_async(
@@ -608,9 +570,9 @@ TOOLS: List[StructuredTool] = [
         func=spawn_worker,
         coroutine=spawn_worker_async,
         name="spawn_worker",
-        description="Spawn a worker agent to execute a task. "
-        "By default, returns immediately (fire-and-forget). "
-        "Set wait=True to wait for the worker to complete and return its results.",
+        description="Spawn a worker agent to execute a task and wait for completion. "
+        "The worker runs in the background and this tool returns when the worker finishes. "
+        "Use this to delegate complex tasks that require tool use or research.",
     ),
     StructuredTool.from_function(
         func=list_workers,
