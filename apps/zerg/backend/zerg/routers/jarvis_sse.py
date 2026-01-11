@@ -96,6 +96,8 @@ async def stream_run_events(
     event_bus.subscribe(EventType.SUPERVISOR_TOKEN, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
     event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
     event_bus.subscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
     event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
     event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
@@ -198,6 +200,8 @@ async def stream_run_events(
         event_bus.unsubscribe(EventType.SUPERVISOR_TOKEN, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
         event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
+        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
         event_bus.unsubscribe(EventType.SUPERVISOR_HEARTBEAT, event_handler)
         event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
