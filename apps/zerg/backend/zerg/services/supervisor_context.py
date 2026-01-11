@@ -43,6 +43,7 @@ class SupervisorContext:
     run_id: int
     db: "Session"
     owner_id: int
+    message_id: str  # UUID for the assistant message (stable across tokens/completion)
 
 
 # Context variable holding the current supervisor context
@@ -74,7 +75,7 @@ def get_supervisor_context() -> Optional[SupervisorContext]:
     return _supervisor_context_var.get()
 
 
-def set_supervisor_context(run_id: int, db: "Session", owner_id: int) -> tuple[contextvars.Token, contextvars.Token]:
+def set_supervisor_context(run_id: int, db: "Session", owner_id: int, message_id: str) -> tuple[contextvars.Token, contextvars.Token]:
     """Set the supervisor context for the current execution.
 
     Should be called by SupervisorService before invoking the agent.
@@ -84,11 +85,12 @@ def set_supervisor_context(run_id: int, db: "Session", owner_id: int) -> tuple[c
         run_id: The supervisor AgentRun ID
         db: SQLAlchemy database session
         owner_id: The owner's user ID
+        message_id: UUID for the assistant message
 
     Returns:
         Tuple of tokens for resetting via reset_supervisor_context()
     """
-    ctx = SupervisorContext(run_id=run_id, db=db, owner_id=owner_id)
+    ctx = SupervisorContext(run_id=run_id, db=db, owner_id=owner_id, message_id=message_id)
     token_ctx = _supervisor_context_var.set(ctx)
     # Also set legacy run_id var for backwards compatibility
     token_run_id = _supervisor_run_id_var.set(run_id)
@@ -104,6 +106,17 @@ def reset_supervisor_context(tokens: tuple[contextvars.Token, contextvars.Token]
     token_ctx, token_run_id = tokens
     _supervisor_context_var.reset(token_ctx)
     _supervisor_run_id_var.reset(token_run_id)
+
+
+def get_supervisor_message_id() -> Optional[str]:
+    """Get the current supervisor message_id from context.
+
+    Returns:
+        str if set (we're inside a supervisor run), None otherwise.
+        Used for including message_id in SSE events.
+    """
+    ctx = _supervisor_context_var.get()
+    return ctx.message_id if ctx else None
 
 
 # Legacy functions for backwards compatibility
@@ -184,6 +197,7 @@ __all__ = [
     "get_supervisor_context",
     "set_supervisor_context",
     "reset_supervisor_context",
+    "get_supervisor_message_id",
     # Legacy (for spawn_worker compatibility)
     "get_supervisor_run_id",
     "set_supervisor_run_id",

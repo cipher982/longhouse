@@ -4,7 +4,8 @@
  */
 
 import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react'
-import type { AppState, AppAction } from './types'
+import type { AppState, AppAction, ChatMessage } from './types'
+import { uuid } from '../../lib/uuid'
 
 /**
  * Initial application state
@@ -75,6 +76,51 @@ function appReducer(state: AppState, action: AppAction): AppState {
       if (idx === -1) return state
       const updated = [...state.messages]
       updated[idx] = { ...updated[idx], ...action.updates }
+      return { ...state, messages: updated }
+    }
+    case 'UPDATE_MESSAGE_BY_MESSAGE_ID': {
+      // Message IDs are backend-assigned and stable across a single supervisor run.
+      // This is the preferred lookup for streaming updates (supervisor_token, supervisor_complete).
+      const idx = state.messages.findIndex(
+        (m) => m.role === 'assistant' && m.messageId === action.messageId
+      )
+      if (idx === -1) {
+        // Message doesn't exist yet - this is a continuation run
+        // Guard: Don't create empty bubble if content is empty/undefined
+        // This prevents empty assistant bubbles from appearing before tokens arrive
+        if (!action.updates.content) {
+          return state
+        }
+        // Create a NEW assistant message with the given messageId
+        const newMessage: ChatMessage = {
+          id: uuid(),
+          role: 'assistant',
+          content: action.updates.content,
+          timestamp: action.updates.timestamp || new Date(),
+          messageId: action.messageId,
+          status: action.updates.status,
+          runId: action.updates.runId,
+          usage: action.updates.usage,
+        }
+        return { ...state, messages: [...state.messages, newMessage] }
+      }
+      const updated = [...state.messages]
+      updated[idx] = { ...updated[idx], ...action.updates }
+      return { ...state, messages: updated }
+    }
+    case 'BIND_MESSAGE_ID_TO_CORRELATION_ID': {
+      // On supervisor_started, bind the backend-assigned messageId to the existing placeholder
+      // found by correlationId. After this, all updates should use messageId for lookup.
+      const idx = state.messages.findIndex(
+        (m) => m.role === 'assistant' && m.correlationId === action.correlationId
+      )
+      if (idx === -1) return state
+      const updated = [...state.messages]
+      updated[idx] = {
+        ...updated[idx],
+        messageId: action.messageId,
+        runId: action.runId,
+      }
       return { ...state, messages: updated }
     }
     case 'SET_STREAMING_CONTENT':

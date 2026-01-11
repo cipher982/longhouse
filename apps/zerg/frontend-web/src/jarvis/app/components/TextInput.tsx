@@ -69,6 +69,7 @@ export function TextInput({
       <button
         className="send-button"
         type="button"
+        data-testid="send-message-btn"
         aria-label="Send message"
         onClick={handleSend}
         disabled={disabled || !value.trim()}

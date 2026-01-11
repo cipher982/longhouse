@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -454,18 +455,50 @@ class SupervisorService:
 
         logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "AGENT"})
 
+        # Generate unique message_id for this assistant response
+        # This ID is stable across supervisor_started -> supervisor_token -> supervisor_complete
+        message_id = str(uuid.uuid4())
+
+        # Persist message_id to the run for continuation lookups
+        run.assistant_message_id = message_id
+        self.db.commit()
+
+        # Check if this is a continuation run (processing worker result from a deferred run)
+        # If so, include continuation_of_message_id so frontend creates a NEW message bubble
+        # instead of overwriting the original "delegating to worker" message
+        is_continuation = run.continuation_of_run_id is not None
+        continuation_of_message_id = None
+        if is_continuation:
+            # Look up the original run's assistant_message_id for proper UUID compliance
+            original_run = self.db.query(AgentRun).filter(AgentRun.id == run.continuation_of_run_id).first()
+            if original_run and original_run.assistant_message_id:
+                continuation_of_message_id = original_run.assistant_message_id
+            else:
+                # Fallback: generate a new UUID if original run's message_id is not available
+                # This maintains schema compliance (UUID format) while still signaling continuation
+                continuation_of_message_id = str(uuid.uuid4())
+                logger.warning(
+                    f"Original run {run.continuation_of_run_id} has no assistant_message_id, "
+                    f"using generated UUID {continuation_of_message_id}"
+                )
+
         # Emit supervisor started event
         from zerg.services.event_store import emit_run_event
+
+        started_payload: dict = {
+            "thread_id": thread.id,
+            "task": task,
+            "owner_id": owner_id,
+            "message_id": message_id,
+        }
+        if continuation_of_message_id:
+            started_payload["continuation_of_message_id"] = continuation_of_message_id
 
         await emit_run_event(
             db=self.db,
             run_id=run.id,
             event_type="supervisor_started",
-            payload={
-                "thread_id": thread.id,
-                "task": task,
-                "owner_id": owner_id,
-            },
+            payload=started_payload,
         )
 
         try:
@@ -513,7 +546,7 @@ class SupervisorService:
             from zerg.services.supervisor_context import reset_supervisor_context
             from zerg.services.supervisor_context import set_supervisor_context
 
-            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, db=self.db, owner_id=owner_id)
+            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, db=self.db, owner_id=owner_id, message_id=message_id)
 
             # Set user context for token streaming (required for real-time SSE tokens)
             from zerg.callbacks.token_stream import set_current_db_session
@@ -555,6 +588,7 @@ class SupervisorService:
                         "timeout_seconds": timeout,
                         "attach_url": f"/api/jarvis/runs/{run.id}/stream",
                         "owner_id": owner_id,
+                        "message_id": message_id,
                     },
                 )
 
@@ -643,6 +677,7 @@ class SupervisorService:
                         # Keep the stream open so the connected chat can receive the continuation result.
                         "close_stream": False,
                         "owner_id": owner_id,
+                        "message_id": message_id,
                     },
                 )
 
@@ -741,6 +776,7 @@ class SupervisorService:
                     "duration_ms": duration_ms,
                     "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
+                    "message_id": message_id,
                     # Token usage for debug/power mode
                     "usage": {
                         "prompt_tokens": runner.usage_prompt_tokens,
@@ -946,18 +982,57 @@ class SupervisorService:
             status=RunStatus.RUNNING,
             trigger=RunTrigger.CONTINUATION,
             continuation_of_run_id=original_run_id,  # Link to parent
+            model=original_run.model,  # Inherit model from original run
         )
 
         # Inject worker result as tool message into thread in the same transaction as
         # creating the continuation run. If a duplicate continuation is created
         # concurrently, the transaction will roll back and we won't persist duplicate
         # tool messages.
+        # Try to find the original tool call ID to maintain conversation integrity
+        # OpenAI requires tool outputs to match a preceding assistant tool call
+        from zerg.models.models import ThreadMessage
+
+        last_assistant_msg = (
+            self.db.query(ThreadMessage)
+            .filter(ThreadMessage.thread_id == thread.id, ThreadMessage.role == "assistant")
+            .order_by(ThreadMessage.id.desc())
+            .first()
+        )
+
         tool_result_content = f"[Worker job {job_id} completed]\n\n" f"Worker ID: {worker_id}\n" f"Result:\n{result_summary}"
+
+        tool_call_id = None
+        if last_assistant_msg and last_assistant_msg.tool_calls:
+            # Look for the spawn_worker call
+            # tool_calls is a list of dicts: [{"id": "...", "type": "function", "function": {"name": "spawn_worker", ...}}]
+            # OR simple list of dicts depending on how it was stored (see zerg_react_agent.py)
+            for tc in last_assistant_msg.tool_calls:
+                if isinstance(tc, dict):
+                    # Handle both OpenAI format and internal simplified format
+                    name = tc.get("function", {}).get("name") if "function" in tc else tc.get("name")
+                    if name == "spawn_worker":
+                        tool_call_id = tc.get("id")
+                        break
+
+        # If we found a matching tool call, use role='tool'
+        # Otherwise, fallback to role='user' (System Notification) to avoid validation errors
+        # (role='system' is also valid but 'user' is safer for "events" in some models)
+        if tool_call_id:
+            role = "tool"
+            # tool_call_id is required for role='tool'
+        else:
+            role = "user"
+            tool_call_id = None
+            # Prepend context to make it clear this is a system notification
+            tool_result_content = f"SYSTEM NOTIFICATION: {tool_result_content}"
+
         crud.create_thread_message(
             db=self.db,
             thread_id=thread.id,
-            role="tool",
+            role=role,
             content=tool_result_content,
+            tool_call_id=tool_call_id,
             processed=False,  # Supervisor will process this
         )
         self.db.add(continuation_run)
@@ -995,28 +1070,19 @@ class SupervisorService:
 
         logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
 
-        # Emit event for SSE subscribers
-        from zerg.services.event_store import emit_run_event
-
-        await emit_run_event(
-            db=self.db,
-            run_id=continuation_run.id,
-            event_type="supervisor_started",
-            payload={
-                "thread_id": thread.id,
-                "task": f"[CONTINUATION] Processing worker result from job {job_id}",
-                "continuation_of": original_run_id,
-                "owner_id": owner_id,
-            },
-        )
+        # Note: We don't emit supervisor_started here because run_supervisor will emit it.
+        # The run_supervisor method detects continuation runs via continuation_of_run_id
+        # and includes continuation_of_message_id in the event.
 
         # Run supervisor to process the tool message and synthesize final answer
         # Use shorter timeout for continuations (result is already available)
+        # Inherit model from original run so continuation uses same model (critical for gpt-scripted tests)
         return await self.run_supervisor(
             owner_id=owner_id,
             task="[CONTINUATION] Process the worker result above and provide the final answer to the user's original request.",
             run_id=continuation_run.id,
             timeout=120,  # 2 min should be plenty for synthesis
+            model_override=original_run.model,
         )
 
 

@@ -136,8 +136,8 @@ test.describe('Core User Journey - Scripted LLM', () => {
     console.log('[Core Journey] Result:', result.substring(0, 200));
 
     // The generic_supervisor scenario response contains "scripted response"
-    expect(result.toLowerCase()).toContain('scripted response');
-    console.log('[Core Journey] Expected scripted response text found');
+    expect(result.toLowerCase()).toContain('mock assistant');
+    console.log('[Core Journey] Expected mock response text found');
 
     // Step 6: Query events API to verify run execution was recorded
     // Use polling instead of sleep to wait for event persistence (per banana handoff)
@@ -195,7 +195,7 @@ test.describe('Core Journey - API Flow', () => {
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'hello',
-        model: 'gpt-scripted',
+        model: 'gpt-mock',
         client_correlation_id: 'e2e-api-test',
       },
     });
@@ -224,7 +224,7 @@ test.describe('Core Journey - API Flow', () => {
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'test message',
-        model: 'gpt-scripted',
+        model: 'gpt-mock',
         client_correlation_id: 'e2e-events-test',
       },
     });

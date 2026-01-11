@@ -1,12 +1,27 @@
 /**
  * ChatContainer component - Message display area
+ *
+ * Uses timeline-based rendering: messages and tools are both events
+ * sorted by timestamp and rendered in chronological order.
+ * Each event renders exactly once - no duplication possible.
  */
 
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useMemo, useSyncExternalStore } from 'react'
 import { renderMarkdown } from '../../lib/markdown-renderer'
-import { supervisorToolStore } from '../../lib/supervisor-tool-store'
-import { ActivityStream } from './ActivityStream'
+import { supervisorToolStore, type SupervisorToolCall } from '../../lib/supervisor-tool-store'
+import { ToolCard } from './ToolCard'
+import { WorkerToolCard } from './WorkerToolCard'
 import type { ChatMessage } from '../context/types'
+
+// Timeline event types - messages and tools are both events in the conversation
+// sortOrder is used as a tie-breaker when timestamps are equal:
+//   0 = user message (first)
+//   1 = tool (middle)
+//   2 = assistant message (last)
+// This ensures: user msg → tools → assistant response
+type TimelineEvent =
+  | { type: 'message'; timestamp: number; sortOrder: number; data: ChatMessage }
+  | { type: 'tool'; timestamp: number; sortOrder: number; data: SupervisorToolCall }
 
 interface ChatContainerProps {
   messages: ChatMessage[]
@@ -16,7 +31,7 @@ interface ChatContainerProps {
 export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Subscribe to supervisor tool store for activity stream
+  // Subscribe to supervisor tool store
   const toolState = useSyncExternalStore(
     supervisorToolStore.subscribe.bind(supervisorToolStore),
     () => supervisorToolStore.getState()
@@ -75,11 +90,112 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     }
   }, [toolCount])
 
-  const hasContent = messages.length > 0 || userTranscriptPreview
+  // Build unified timeline of messages and tools, sorted by timestamp
+  // Each event renders exactly once - no runId matching, no duplication
+  const timeline = useMemo((): TimelineEvent[] => {
+    const events: TimelineEvent[] = []
+
+    // Add messages with sortOrder for tie-breaking
+    // User messages sort first (0), assistant messages sort last (2)
+    for (const msg of messages) {
+      const timestamp = msg.timestamp?.getTime()
+      events.push({
+        type: 'message',
+        // Use timestamp if valid, otherwise Infinity to put at end
+        timestamp: timestamp && Number.isFinite(timestamp) ? timestamp : Infinity,
+        // User=0 (first), Assistant=2 (last in ties)
+        sortOrder: msg.role === 'user' ? 0 : 2,
+        data: msg,
+      })
+    }
+
+    // Add tools with sortOrder=1 (middle, between user and assistant)
+    for (const tool of toolState.tools.values()) {
+      events.push({
+        type: 'tool',
+        timestamp: tool.startedAt,
+        sortOrder: 1,
+        data: tool,
+      })
+    }
+
+    // Sort by timestamp, then by sortOrder for ties
+    // This ensures: user message → tools → assistant response
+    return events.sort((a, b) => {
+      const timeDiff = a.timestamp - b.timestamp
+      if (timeDiff !== 0) return timeDiff
+      return a.sortOrder - b.sortOrder
+    })
+  }, [messages, toolState.tools])
+
+  // Check if any workers are actively running (for hiding typing dots)
+  const hasActiveWorkers = useMemo(() => {
+    return Array.from(toolState.tools.values()).some(tool => {
+      if (tool.toolName === 'spawn_worker') {
+        const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
+        return workerStatus === 'running' || workerStatus === 'spawned'
+      }
+      return tool.status === 'running'
+    })
+  }, [toolState.tools])
+
+  const hasContent = messages.length > 0 || toolState.tools.size > 0 || userTranscriptPreview
+
+  // Render a tool event
+  const renderTool = (tool: SupervisorToolCall) => {
+    if (tool.toolName === 'spawn_worker') {
+      const isDeferred = supervisorToolStore.isDeferred(tool.runId)
+      const workerStatus = (tool.result as Record<string, unknown>)?.workerStatus
+      const isDetached = isDeferred && (workerStatus === 'running' || workerStatus === 'spawned')
+      return <WorkerToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={0} />
+    }
+    return <ToolCard key={tool.toolCallId} tool={tool} />
+  }
+
+  // Render a message event
+  const renderMessage = (message: ChatMessage) => {
+    const isAssistant = message.role === 'assistant'
+    const hasMessageContent = message.content && message.content.length > 0
+    const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled'
+
+    // Hide thinking dots if workers are showing progress
+    const showTypingDots = isPending && !hasMessageContent && !hasActiveWorkers
+    const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
+    const usageLine = isAssistant ? buildUsageLine(message.usage) : null
+
+    return (
+      <div key={message.id} className="message-group">
+        <div
+          className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
+        >
+          <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
+            <div className="message-content">
+              {showTypingDots ? (
+                <div className="thinking-dots thinking-dots--in-chat">
+                  <span className="thinking-dot"></span>
+                  <span className="thinking-dot"></span>
+                  <span className="thinking-dot"></span>
+                </div>
+              ) : (
+                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+              )}
+            </div>
+            {isAssistant && usageTitle && usageLine && (
+              <div className="message-usage" aria-hidden="true">
+                <span className="message-usage-text" title={usageTitle}>
+                  {usageLine}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="chat-wrapper">
-      <div className="transcript" ref={containerRef}>
+      <div className="transcript" ref={containerRef} data-testid="messages-container">
         {!hasContent ? (
           <div className="status-message">
             <div className="status-text">System Ready</div>
@@ -87,68 +203,11 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
           </div>
         ) : (
           <>
-            {messages.map((message) => {
-              const isAssistant = message.role === 'assistant';
-              const hasContent = message.content && message.content.length > 0;
-              // Show typing dots for any pending assistant message without content
-              // This handles React batching where status jumps from queued -> streaming instantly
-              const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled';
-
-              // For any assistant message with a runId, render tools inline before the message
-              // This works for both pending (streaming) and finalized messages
-              const hasRunId = isAssistant && message.runId;
-              const inlineTools = hasRunId ? supervisorToolStore.getToolsForRun(message.runId!) : [];
-
-              // Check if there are active workers for this message
-              const hasActiveWorkers = inlineTools.some(tool => {
-                if (tool.toolName === 'spawn_worker') {
-                  const workerStatus = (tool.result as any)?.workerStatus;
-                  return workerStatus === 'running' || workerStatus === 'spawned';
-                }
-                return false;
-              });
-
-              // Hide thinking dots if workers are showing progress
-              const showTypingDots = isPending && !hasContent && !hasActiveWorkers;
-              const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
-              const usageLine = isAssistant ? buildUsageLine(message.usage) : null
-
-              return (
-                <div key={message.id} className="message-group">
-                  {/* Render completed tools BEFORE the assistant response */}
-                  {inlineTools.length > 0 && (
-                    <ActivityStream runId={message.runId!} />
-                  )}
-                  <div
-                    className={`message ${message.role}${message.skipAnimation ? ' no-animate' : ''}${showTypingDots ? ' typing' : ''}`}
-                  >
-                    <div className="message-bubble" tabIndex={isAssistant && usageTitle && usageLine ? 0 : undefined}>
-                      <div className="message-content">
-                        {showTypingDots ? (
-                          <div className="thinking-dots thinking-dots--in-chat">
-                            <span className="thinking-dot"></span>
-                            <span className="thinking-dot"></span>
-                            <span className="thinking-dot"></span>
-                          </div>
-                        ) : (
-                          <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
-                        )}
-                      </div>
-                      {isAssistant && usageTitle && usageLine && (
-                        <div className="message-usage" aria-hidden="true">
-                          <span className="message-usage-text" title={usageTitle}>
-                            {usageLine}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {/* Show supervisor tool activity stream only if no message is associated with this run yet */}
-            {toolState.currentRunId && toolState.isActive && !messages.some(m => m.runId === toolState.currentRunId) && (
-              <ActivityStream runId={toolState.currentRunId} />
+            {/* Render timeline events in chronological order */}
+            {timeline.map(event =>
+              event.type === 'tool'
+                ? renderTool(event.data)
+                : renderMessage(event.data)
             )}
             {/* Show live user voice transcript preview */}
             {userTranscriptPreview && (

@@ -318,15 +318,6 @@ def _make_llm(agent_row, tools, *, tool_choice: dict | str | bool | None = None)
             except TypeError:
                 return llm.bind_tools(tools)
 
-        # gpt-scripted
-        from zerg.testing.scripted_llm import ScriptedChatLLM
-
-        llm = ScriptedChatLLM()
-        try:
-            return llm.bind_tools(tools, tool_choice=tool_choice)
-        except TypeError:
-            return llm.bind_tools(tools)
-
     # Create LLM with basic parameters
     kwargs: dict = {
         "model": agent_row.model,

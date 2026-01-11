@@ -449,7 +449,18 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
           break
 
         case 'MESSAGE_FINALIZED':
-          if (event.message.correlationId) {
+          if (event.message.messageId) {
+            // Continuation run: Update by messageId or create if doesn't exist
+            dispatch({
+              type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
+              messageId: event.message.messageId,
+              updates: {
+                content: event.message.content,
+                status: 'final',
+                timestamp: event.message.timestamp,
+              },
+            })
+          } else if (event.message.correlationId) {
             dispatch({
               type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
               correlationId: event.message.correlationId,
@@ -474,6 +485,29 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
               ...(event.usage !== undefined ? { usage: event.usage } : {}),
               ...(event.runId !== undefined ? { runId: event.runId } : {}),
             },
+          })
+          break
+
+        case 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID':
+          dispatch({
+            type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
+            messageId: event.messageId,
+            updates: {
+              status: event.status as any,
+              ...(event.content !== undefined ? { content: event.content } : {}),
+              ...(event.usage !== undefined ? { usage: event.usage } : {}),
+              ...(event.runId !== undefined ? { runId: event.runId } : {}),
+            },
+          })
+          break
+
+        case 'BIND_MESSAGE_ID_TO_CORRELATION_ID':
+          // On supervisor_started, bind the backend-assigned messageId to the existing placeholder
+          dispatch({
+            type: 'BIND_MESSAGE_ID_TO_CORRELATION_ID',
+            correlationId: event.correlationId,
+            messageId: event.messageId,
+            runId: event.runId,
           })
           break
 
