@@ -522,12 +522,15 @@ class SupervisorService:
                 )
 
             # Add task as user message
+            # Continuation tasks are internal orchestration messages - they should be
+            # stored for LLM context but NOT shown to users in chat history
             crud.create_thread_message(
                 db=self.db,
                 thread_id=thread.id,
                 role="user",
                 content=task,
                 processed=False,
+                internal=is_continuation,  # Mark continuation prompts as internal
             )
             self.db.commit()
 
@@ -1018,12 +1021,18 @@ class SupervisorService:
         # If we found a matching tool call, use role='tool'
         # Otherwise, fallback to role='user' (System Notification) to avoid validation errors
         # (role='system' is also valid but 'user' is safer for "events" in some models)
+        #
+        # When falling back to role='user', mark the message as internal since it's
+        # an orchestration artifact (worker result notification) that should NOT be
+        # shown to users in chat history.
+        is_internal_notification = False
         if tool_call_id:
             role = "tool"
             # tool_call_id is required for role='tool'
         else:
             role = "user"
             tool_call_id = None
+            is_internal_notification = True
             # Prepend context to make it clear this is a system notification
             tool_result_content = f"SYSTEM NOTIFICATION: {tool_result_content}"
 
@@ -1034,6 +1043,7 @@ class SupervisorService:
             content=tool_result_content,
             tool_call_id=tool_call_id,
             processed=False,  # Supervisor will process this
+            internal=is_internal_notification,  # Mark system notifications as internal
         )
         self.db.add(continuation_run)
 

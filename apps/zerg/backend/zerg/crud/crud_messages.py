@@ -42,6 +42,7 @@ def create_thread_message(
     processed: bool = False,
     parent_id: Optional[int] = None,
     sent_at: Optional[datetime] = None,
+    internal: bool = False,
     *,
     commit: bool = True,
 ):
@@ -51,6 +52,9 @@ def create_thread_message(
     Args:
         sent_at: Optional client-provided send timestamp. If provided, must be within ±5 minutes
                  of server time, otherwise uses server time. Timezone-aware datetime in UTC.
+        internal: If True, marks this message as internal orchestration (continuation prompts,
+                  system notifications). Internal messages are needed for LLM context but should
+                  NOT be shown to users in chat history.
     """
     # Validate and normalize sent_at
     if sent_at is not None:
@@ -78,6 +82,7 @@ def create_thread_message(
         processed=processed,
         parent_id=parent_id,
         sent_at=sent_at,
+        internal=internal,
     )
     db.add(db_message)
 

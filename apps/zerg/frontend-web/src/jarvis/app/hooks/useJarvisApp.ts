@@ -254,15 +254,9 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       const messages = await supervisorChatRef.current.loadHistory(50)
 
       if (messages.length > 0) {
-        // Filter out internal system messages (used for LLM context, not user-facing)
-        const visibleMessages = messages.filter(msg => {
-          if (msg.role === 'user' && msg.content?.startsWith('SYSTEM NOTIFICATION:')) {
-            return false
-          }
-          return true
-        })
-
-        const history: ConversationTurn[] = visibleMessages.map(msg => ({
+        // Note: Internal orchestration messages are now filtered server-side via the
+        // `internal` column on ThreadMessage. The history API only returns user-facing messages.
+        const history: ConversationTurn[] = messages.map(msg => ({
           id: uuid(),
           timestamp: msg.timestamp,
           userTranscript: msg.role === 'user' ? msg.content : undefined,
@@ -295,7 +289,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         }
 
         dispatch({ type: 'SET_MESSAGES', messages: chatMessages })
-        logger.info(`[useJarvisApp] Loaded ${visibleMessages.length} messages from history (${messages.length - visibleMessages.length} internal filtered)`)
+        logger.info(`[useJarvisApp] Loaded ${messages.length} messages from history`)
         return history
       }
 
