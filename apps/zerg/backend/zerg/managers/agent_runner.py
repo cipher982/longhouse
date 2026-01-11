@@ -16,6 +16,7 @@ Design goals
    call the method directly don't break.  This wrapper simply delegates to
    the async implementation via ``asyncio.run`` and will be removed once all
    call-sites are async.
+4. Handle LangGraph interrupt/resume pattern for async tool execution (spawn_worker).
 """
 
 from __future__ import annotations
@@ -50,6 +51,19 @@ from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.services.thread_service import ThreadService
 
 logger = logging.getLogger(__name__)
+
+
+class AgentInterrupted(Exception):
+    """Raised when the agent execution is interrupted (waiting for external input).
+
+    This happens when spawn_worker() calls interrupt() - the graph checkpoints
+    and returns control. The caller should set the run status to WAITING.
+    """
+
+    def __init__(self, interrupt_value: dict):
+        self.interrupt_value = interrupt_value
+        super().__init__(f"Agent interrupted: {interrupt_value}")
+
 
 # ---------------------------------------------------------------------------
 # Local in-memory cache for compiled LangGraph runnables.
@@ -321,8 +335,102 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # Pass the messages list directly to the function
             # For Functional API, we use .ainvoke method with the config
             # The entrypoint function will return the full message history
-            updated_messages = await self._runnable.ainvoke(original_msgs, config)
-            logger.info(f"[AgentRunner] Runnable completed. Received {len(updated_messages)} total messages", extra={"tag": "AGENT"})
+            result = await self._runnable.ainvoke(original_msgs, config)
+
+            # ------------------------------------------------------------------
+            # Capture usage metadata (works for both normal completion + interrupt)
+            # ------------------------------------------------------------------
+            from zerg.agents_def.zerg_react_agent import get_llm_usage
+
+            ctx_usage = get_llm_usage()
+            logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
+
+            if ctx_usage:
+                p_sum = ctx_usage.get("prompt_tokens", 0) or 0
+                c_sum = ctx_usage.get("completion_tokens", 0) or 0
+                t_sum = ctx_usage.get("total_tokens", 0) or 0
+                r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
+
+                if p_sum or c_sum or t_sum or r_sum:
+                    self.usage_prompt_tokens = p_sum if p_sum else None
+                    self.usage_completion_tokens = c_sum if c_sum else None
+                    self.usage_total_tokens = t_sum if t_sum else None
+                    self.usage_reasoning_tokens = r_sum if r_sum else None
+                    logger.info(
+                        f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
+                        f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}",
+                        extra={"tag": "LLM"},
+                    )
+
+            # ------------------------------------------------------------------
+            # Handle LangGraph interrupt (spawn_worker uses interrupt() for async execution)
+            #
+            # When interrupt() is called, the graph returns {"__interrupt__": [...]} instead of messages.
+            # We still mark user messages processed so we don't re-run the same turn.
+            # ------------------------------------------------------------------
+            if isinstance(result, dict) and "__interrupt__" in result:
+                interrupts = result.get("__interrupt__") or []
+                interrupt_value = None
+                if interrupts:
+                    interrupt_info = interrupts[0]
+                    interrupt_value = getattr(interrupt_info, "value", interrupt_info)
+
+                # Best-effort persistence: if the graph returned message history, persist any new rows
+                # before surfacing the interrupt to the caller.
+                updated_messages_for_persist = result.get("messages") if isinstance(result.get("messages"), list) else None
+                if updated_messages_for_persist and len(updated_messages_for_persist) > messages_with_context:
+                    new_messages = updated_messages_for_persist[messages_with_context:]
+                    logger.debug(
+                        "[AgentRunner] Graph interrupted; persisting %s new message(s) before returning",
+                        len(new_messages),
+                        extra={"tag": "AGENT"},
+                    )
+                    created_rows = self.thread_service.save_new_messages(
+                        db,
+                        thread_id=thread.id,
+                        messages=new_messages,
+                        processed=True,
+                    )
+
+                    # Persist per-response token usage onto the *final* assistant message row (best-effort)
+                    usage_payload = {
+                        "prompt_tokens": self.usage_prompt_tokens,
+                        "completion_tokens": self.usage_completion_tokens,
+                        "total_tokens": self.usage_total_tokens,
+                        "reasoning_tokens": self.usage_reasoning_tokens,
+                    }
+                    if any(v is not None for v in usage_payload.values()):
+                        last_assistant_row = next((row for row in reversed(created_rows) if row.role == "assistant"), None)
+                        if last_assistant_row is not None:
+                            existing_meta = dict(last_assistant_row.message_metadata or {})
+                            existing_meta["usage"] = usage_payload
+                            last_assistant_row.message_metadata = existing_meta
+                            db.commit()
+
+                # Mark user messages processed even though the run is not complete yet.
+                # The graph checkpoint captures the continuation state.
+                self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
+                self.thread_service.touch_thread_timestamp(db, thread.id)
+
+                logger.info(f"[AgentRunner] Graph interrupted: {interrupt_value}", extra={"tag": "AGENT"})
+                raise AgentInterrupted(interrupt_value or {})
+
+            # Normal completion: result is a list of messages or a state dict with messages
+            if isinstance(result, dict):
+                updated_messages = result.get("messages")
+                if not isinstance(updated_messages, list):
+                    raise RuntimeError(f"Unexpected runnable result dict (no messages): {list(result.keys())}")
+            else:
+                updated_messages = result
+
+            logger.info(
+                f"[AgentRunner] Runnable completed. Received {len(updated_messages)} total messages",
+                extra={"tag": "AGENT"},
+            )
+
+        except AgentInterrupted:
+            # Interrupts are part of normal control flow for async tools (spawn_worker).
+            raise
         except Exception as e:
             logger.exception(f"[AgentRunner] Exception during runnable.ainvoke: {e}")
             raise
@@ -346,29 +454,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         new_messages = updated_messages[messages_with_context:]
         logger.debug(f"[AgentRunner] Extracted {len(new_messages)} new messages")
-
-        # Get accumulated usage from context variable (set during LLM calls)
-        from zerg.agents_def.zerg_react_agent import get_llm_usage
-
-        ctx_usage = get_llm_usage()
-        logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
-
-        if ctx_usage:
-            p_sum = ctx_usage.get("prompt_tokens", 0) or 0
-            c_sum = ctx_usage.get("completion_tokens", 0) or 0
-            t_sum = ctx_usage.get("total_tokens", 0) or 0
-            r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
-
-            if p_sum or c_sum or t_sum or r_sum:
-                self.usage_prompt_tokens = p_sum if p_sum else None
-                self.usage_completion_tokens = c_sum if c_sum else None
-                self.usage_total_tokens = t_sum if t_sum else None
-                self.usage_reasoning_tokens = r_sum if r_sum else None
-                logger.info(
-                    f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
-                    f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}",
-                    extra={"tag": "LLM"},
-                )
 
         # Log each new message for debugging
         for i, msg in enumerate(new_messages):

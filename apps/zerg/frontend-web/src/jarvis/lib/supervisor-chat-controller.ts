@@ -29,6 +29,8 @@ import {
   type SupervisorTokenPayload,
   type SupervisorCompletePayload,
   type SupervisorDeferredPayload,
+  type SupervisorWaitingPayload,
+  type SupervisorResumedPayload,
   type ErrorPayload,
   type WorkerSpawnedPayload,
   type WorkerStartedPayload,
@@ -645,6 +647,55 @@ export class SupervisorChatController {
             runId: this.currentRunId,
             message: deferredMsg,
             attachUrl: payload.attach_url,
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+
+      case 'supervisor_waiting': {
+        const payload = wrapper.payload as SupervisorWaitingPayload;
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Supervisor waiting (interrupt):', payload.job_id);
+
+        const waitingMsg = payload.message || 'Working on this in the background...';
+        const messageId = payload.message_id || this.currentMessageId;
+
+        // Update the existing assistant bubble with a stable "waiting" message.
+        // The final response will arrive later as supervisor_tokens/supervisor_complete for the same message_id.
+        if (messageId) {
+          stateManager.updateAssistantStatusByMessageId(messageId, 'final', waitingMsg, undefined, this.currentRunId ?? undefined);
+        } else if (correlationId) {
+          stateManager.updateAssistantStatus(correlationId, 'final', waitingMsg);
+        }
+
+        if (this.currentRunId) {
+          eventBus.emit('supervisor:waiting', {
+            runId: this.currentRunId,
+            jobId: payload.job_id,
+            message: waitingMsg,
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+
+      case 'supervisor_resumed': {
+        const payload = wrapper.payload as SupervisorResumedPayload;
+        this.petWatchdog(correlationId);
+        logger.debug('[SupervisorChat] Supervisor resumed (interrupt)');
+
+        const messageId = payload.message_id || this.currentMessageId;
+        if (messageId) {
+          // Set status back to typing; tokens will overwrite the waiting message as they stream in.
+          stateManager.updateAssistantStatusByMessageId(messageId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
+        } else if (correlationId) {
+          stateManager.updateAssistantStatus(correlationId, 'typing');
+        }
+
+        if (this.currentRunId) {
+          eventBus.emit('supervisor:resumed', {
+            runId: this.currentRunId,
             timestamp: Date.now(),
           });
         }

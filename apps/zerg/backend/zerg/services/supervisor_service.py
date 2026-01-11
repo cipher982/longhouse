@@ -21,9 +21,9 @@ from sqlalchemy.orm import Session
 
 from zerg.agents_def.zerg_react_agent import clear_evidence_mount_warning
 from zerg.crud import crud
+from zerg.managers.agent_runner import AgentInterrupted
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.enums import RunStatus
-from zerg.models.enums import RunTrigger
 from zerg.models.enums import ThreadType
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import AgentRun
@@ -627,6 +627,66 @@ class SupervisorService:
                 # Background mode: keep awaiting the original run_task to completion, then mark the run
                 # finished and persist the result (SSE streams can close on SUPERVISOR_DEFERRED).
                 created_messages = await run_task
+
+            except AgentInterrupted as interrupt:
+                # LangGraph interrupt (spawn_worker waiting for worker completion)
+                # The graph state is checkpointed - we'll resume when worker completes
+                end_time = datetime.now(timezone.utc)
+                duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+                # Update run status to WAITING
+                run.status = RunStatus.WAITING
+                run.duration_ms = duration_ms
+                self.db.commit()
+
+                # Extract interrupt payload
+                interrupt_value = interrupt.interrupt_value
+                job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
+                interrupt_message = (
+                    interrupt_value.get("message", "Working on this in the background...")
+                    if isinstance(interrupt_value, dict)
+                    else str(interrupt_value)
+                )
+
+                # Emit waiting event (similar to deferred but semantically different)
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="supervisor_waiting",
+                    payload={
+                        "agent_id": agent.id,
+                        "thread_id": thread.id,
+                        "job_id": job_id,
+                        "message": interrupt_message,
+                        "owner_id": owner_id,
+                        "message_id": message_id,
+                        "close_stream": False,  # Keep SSE open for resume
+                    },
+                )
+
+                await emit_run_event(
+                    db=self.db,
+                    run_id=run.id,
+                    event_type="run_updated",
+                    payload={
+                        "agent_id": agent.id,
+                        "status": "waiting",
+                        "thread_id": thread.id,
+                        "owner_id": owner_id,
+                    },
+                )
+
+                logger.info(f"Supervisor run {run.id} interrupted (WAITING for worker job {job_id})")
+
+                return SupervisorRunResult(
+                    run_id=run.id,
+                    thread_id=thread.id,
+                    status="waiting",
+                    result=interrupt_message,
+                    duration_ms=duration_ms,
+                    debug_url=f"/supervisor/{run.id}",
+                )
+
             finally:
                 # Always reset context even on timeout/deferred
                 reset_supervisor_context(_supervisor_ctx_tokens)
@@ -648,113 +708,9 @@ class SupervisorService:
             end_time = datetime.now(timezone.utc)
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-            # Durable runs (master/worker): if this supervisor spawned one or more workers in this run,
-            # treat this as an intermediate "ack" turn and defer completion until a continuation
-            # run synthesizes worker results.
-            #
-            # Without this, the supervisor often emits a "delegating..." assistant message and
-            # marks the run SUCCESS immediately, so worker completion never triggers a follow-up
-            # response (worker_runner only triggers continuations for DEFERRED runs).
-            from zerg.models.agent_run_event import AgentRunEvent
-
-            worker_job_count = self.db.query(WorkerJob).filter(WorkerJob.supervisor_run_id == run.id).count()
-            if worker_job_count > 0:
-                run.status = RunStatus.DEFERRED
-                run.duration_ms = duration_ms
-                # Store a short summary for the task inbox ("first response" behavior).
-                if result_text:
-                    run.summary = (result_text[:500] + "...") if len(result_text) > 500 else result_text
-                self.db.commit()
-
-                await emit_run_event(
-                    db=self.db,
-                    run_id=run.id,
-                    event_type="supervisor_deferred",
-                    payload={
-                        "agent_id": agent.id,
-                        "thread_id": thread.id,
-                        # Use the model's intermediate response as the "deferred message" shown in chat.
-                        "message": result_text or "Delegating this to a worker now. I'll report back when it finishes.",
-                        # Reason is important because not all DEFERRED runs should close their SSE streams.
-                        "reason": "waiting_for_worker",
-                        # Keep the stream open so the connected chat can receive the continuation result.
-                        "close_stream": False,
-                        "owner_id": owner_id,
-                        "message_id": message_id,
-                    },
-                )
-
-                await emit_run_event(
-                    db=self.db,
-                    run_id=run.id,
-                    event_type="run_updated",
-                    payload={
-                        "agent_id": agent.id,
-                        "status": "deferred",
-                        "thread_id": thread.id,
-                        "owner_id": owner_id,
-                    },
-                )
-
-                # Race-safety: if the worker finished before we flipped the run to DEFERRED,
-                # the worker runner couldn't trigger the continuation. If all workers already
-                # emitted worker_complete, schedule a continuation immediately (idempotent).
-                worker_complete_count = (
-                    self.db.query(AgentRunEvent)
-                    .filter(AgentRunEvent.run_id == run.id, AgentRunEvent.event_type == "worker_complete")
-                    .count()
-                )
-                if worker_complete_count >= worker_job_count:
-                    latest = (
-                        self.db.query(AgentRunEvent)
-                        .filter(
-                            AgentRunEvent.run_id == run.id,
-                            AgentRunEvent.event_type.in_(["worker_summary_ready", "worker_complete"]),
-                        )
-                        .order_by(AgentRunEvent.id.desc())
-                        .first()
-                    )
-                    if latest and isinstance(latest.payload, dict):
-                        job_id = latest.payload.get("job_id")
-                        worker_id = latest.payload.get("worker_id")
-                        summary = latest.payload.get("summary")
-                        status = latest.payload.get("status")
-                        error = latest.payload.get("error")
-
-                        if isinstance(job_id, int) and isinstance(worker_id, str):
-                            summary_text = summary
-                            if not isinstance(summary_text, str) or not summary_text.strip():
-                                if status == "failed":
-                                    summary_text = f"Worker failed: {error or 'Unknown error'}"
-                                else:
-                                    summary_text = "(Worker completed — no summary available)"
-
-                            async def _schedule_continuation() -> None:
-                                from zerg.database import get_session_factory
-
-                                session_factory = get_session_factory()
-                                fresh_db = session_factory()
-                                try:
-                                    supervisor = SupervisorService(fresh_db)
-                                    await supervisor.run_continuation(
-                                        original_run_id=run.id,
-                                        job_id=job_id,
-                                        worker_id=worker_id,
-                                        result_summary=summary_text,
-                                    )
-                                finally:
-                                    fresh_db.close()
-
-                            asyncio.create_task(_schedule_continuation())
-
-                return SupervisorRunResult(
-                    run_id=run.id,
-                    thread_id=thread.id,
-                    status="deferred",
-                    result=result_text or "Delegating to a worker…",
-                    duration_ms=duration_ms,
-                    debug_url=f"/supervisor/{run.id}",
-                )
+            # NOTE: Old "durable runs" code that checked for worker spawns after completion
+            # has been removed. With the interrupt/resume pattern, spawn_worker calls interrupt()
+            # which raises AgentInterrupted before we get here. See the AgentInterrupted handler above.
 
             # Update run status
             run.status = RunStatus.SUCCESS
@@ -914,186 +870,8 @@ class SupervisorService:
                 debug_url=f"/supervisor/{run.id}",
             )
 
-    async def run_continuation(
-        self,
-        original_run_id: int,
-        job_id: int,
-        worker_id: str,
-        result_summary: str,
-    ) -> SupervisorRunResult:
-        """Continue a deferred run after worker completion.
-
-        Durable runs v2.2 Phase 4: When a worker completes and the original
-        supervisor run was deferred (timeout migration), this method:
-        1. Injects the worker result as a tool message into the thread
-        2. Creates a NEW run linked to the original via continuation_of_run_id
-        3. Runs the supervisor to synthesize the final answer
-
-        This method is idempotent and race-safe:
-        - DB unique constraint on continuation_of_run_id prevents duplicate continuations
-        - IntegrityError is caught and existing continuation is returned
-        - Both concurrent callers get a valid response
-
-        Args:
-            original_run_id: The deferred run that spawned the worker
-            job_id: The completed worker job ID
-            worker_id: Worker ID for artifact lookup
-            result_summary: Summary of worker result
-
-        Returns:
-            SupervisorRunResult from the continuation run
-        """
-        # Get original run to find thread and owner
-        original_run = self.db.query(AgentRun).filter(AgentRun.id == original_run_id).first()
-        if not original_run:
-            raise ValueError(f"Original run {original_run_id} not found")
-
-        # Idempotency fast-path: if a continuation already exists, return it without
-        # injecting duplicate tool messages or attempting to create another run.
-        existing_continuation = (
-            self.db.query(AgentRun)
-            .filter(
-                AgentRun.continuation_of_run_id == original_run_id,
-                AgentRun.trigger == RunTrigger.CONTINUATION,
-            )
-            .first()
-        )
-        if existing_continuation:
-            return SupervisorRunResult(
-                run_id=existing_continuation.id,
-                thread_id=existing_continuation.thread_id,
-                status=existing_continuation.status.value,
-                result=f"Continuation already exists (run {existing_continuation.id})",
-                duration_ms=existing_continuation.duration_ms or 0,
-                debug_url=f"/supervisor/{existing_continuation.id}",
-            )
-
-        if original_run.status != RunStatus.DEFERRED:
-            raise ValueError(f"Original run {original_run_id} is {original_run.status.value}, not DEFERRED")
-
-        thread = original_run.thread
-        agent = original_run.agent
-        owner_id = agent.owner_id
-
-        logger.info(f"Starting continuation for deferred run {original_run_id} " f"(thread={thread.id}, job={job_id}, worker={worker_id})")
-
-        # Create NEW run (not reusing original run_id)
-        # Race-safe: DB unique constraint on continuation_of_run_id prevents duplicates
-        continuation_run = AgentRun(
-            agent_id=agent.id,
-            thread_id=thread.id,
-            status=RunStatus.RUNNING,
-            trigger=RunTrigger.CONTINUATION,
-            continuation_of_run_id=original_run_id,  # Link to parent
-            model=original_run.model,  # Inherit model from original run
-        )
-
-        # Inject worker result as tool message into thread in the same transaction as
-        # creating the continuation run. If a duplicate continuation is created
-        # concurrently, the transaction will roll back and we won't persist duplicate
-        # tool messages.
-        # Try to find the original tool call ID to maintain conversation integrity
-        # OpenAI requires tool outputs to match a preceding assistant tool call
-        from zerg.models.models import ThreadMessage
-
-        last_assistant_msg = (
-            self.db.query(ThreadMessage)
-            .filter(ThreadMessage.thread_id == thread.id, ThreadMessage.role == "assistant")
-            .order_by(ThreadMessage.id.desc())
-            .first()
-        )
-
-        tool_result_content = f"[Worker job {job_id} completed]\n\n" f"Worker ID: {worker_id}\n" f"Result:\n{result_summary}"
-
-        tool_call_id = None
-        if last_assistant_msg and last_assistant_msg.tool_calls:
-            # Look for the spawn_worker call
-            # tool_calls is a list of dicts: [{"id": "...", "type": "function", "function": {"name": "spawn_worker", ...}}]
-            # OR simple list of dicts depending on how it was stored (see zerg_react_agent.py)
-            for tc in last_assistant_msg.tool_calls:
-                if isinstance(tc, dict):
-                    # Handle both OpenAI format and internal simplified format
-                    name = tc.get("function", {}).get("name") if "function" in tc else tc.get("name")
-                    if name == "spawn_worker":
-                        tool_call_id = tc.get("id")
-                        break
-
-        # If we found a matching tool call, use role='tool'
-        # Otherwise, fallback to role='user' (System Notification) to avoid validation errors
-        # (role='system' is also valid but 'user' is safer for "events" in some models)
-        #
-        # When falling back to role='user', mark the message as internal since it's
-        # an orchestration artifact (worker result notification) that should NOT be
-        # shown to users in chat history.
-        is_internal_notification = False
-        if tool_call_id:
-            role = "tool"
-            # tool_call_id is required for role='tool'
-        else:
-            role = "user"
-            tool_call_id = None
-            is_internal_notification = True
-            # Prepend context to make it clear this is a system notification
-            tool_result_content = f"SYSTEM NOTIFICATION: {tool_result_content}"
-
-        crud.create_thread_message(
-            db=self.db,
-            thread_id=thread.id,
-            role=role,
-            content=tool_result_content,
-            tool_call_id=tool_call_id,
-            processed=False,  # Supervisor will process this
-            internal=is_internal_notification,  # Mark system notifications as internal
-        )
-        self.db.add(continuation_run)
-
-        try:
-            self.db.commit()
-            self.db.refresh(continuation_run)
-        except Exception as e:
-            from sqlalchemy.exc import IntegrityError
-
-            if isinstance(e, IntegrityError):
-                self.db.rollback()
-
-                existing_continuation = (
-                    self.db.query(AgentRun)
-                    .filter(
-                        AgentRun.continuation_of_run_id == original_run_id,
-                        AgentRun.trigger == RunTrigger.CONTINUATION,
-                    )
-                    .first()
-                )
-
-                if existing_continuation:
-                    return SupervisorRunResult(
-                        run_id=existing_continuation.id,
-                        thread_id=existing_continuation.thread_id,
-                        status=existing_continuation.status.value,
-                        result=f"Continuation already exists (run {existing_continuation.id})",
-                        duration_ms=existing_continuation.duration_ms or 0,
-                        debug_url=f"/supervisor/{existing_continuation.id}",
-                    )
-
-            # Not a duplicate continuation error - re-raise
-            raise
-
-        logger.info(f"Created continuation run {continuation_run.id} for deferred run {original_run_id}")
-
-        # Note: We don't emit supervisor_started here because run_supervisor will emit it.
-        # The run_supervisor method detects continuation runs via continuation_of_run_id
-        # and includes continuation_of_message_id in the event.
-
-        # Run supervisor to process the tool message and synthesize final answer
-        # Use shorter timeout for continuations (result is already available)
-        # Inherit model from original run so continuation uses same model (critical for gpt-scripted tests)
-        return await self.run_supervisor(
-            owner_id=owner_id,
-            task="[CONTINUATION] Process the worker result above and provide the final answer to the user's original request.",
-            run_id=continuation_run.id,
-            timeout=120,  # 2 min should be plenty for synthesis
-            model_override=original_run.model,
-        )
+    # NOTE: run_continuation() removed - replaced by LangGraph interrupt/resume pattern
+    # See worker_resume.py for the new implementation using Command(resume=...)
 
 
 __all__ = ["SupervisorService", "SupervisorRunResult", "SUPERVISOR_THREAD_TYPE"]
