@@ -250,12 +250,15 @@ def jarvis_history(
     agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
     thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
 
-    # Query messages from thread (user and assistant only)
+    # Query messages from thread (user and assistant only, excluding internal orchestration messages)
+    # Internal messages (continuation prompts, system notifications) are stored for LLM context
+    # but should NOT be shown to users in chat history.
     query = (
         db.query(ThreadMessage)
         .filter(
             ThreadMessage.thread_id == thread.id,
             ThreadMessage.role.in_(["user", "assistant"]),
+            ThreadMessage.internal.is_(False),  # Exclude internal orchestration messages
         )
         .order_by(ThreadMessage.sent_at.asc())
     )
@@ -479,6 +482,7 @@ def get_supervisor_thread(
     thread = service.get_or_create_supervisor_thread(current_user.id, agent)
 
     # Count messages using proper count query (not limited to 100)
+    # Exclude internal orchestration messages from the count shown to users
     from sqlalchemy import func
 
     from zerg.models.thread import ThreadMessage
@@ -488,6 +492,7 @@ def get_supervisor_thread(
         .filter(
             ThreadMessage.thread_id == thread.id,
             ThreadMessage.role.in_(["user", "assistant"]),  # Only count user/assistant messages
+            ThreadMessage.internal.is_(False),  # Exclude internal orchestration messages
         )
         .scalar()
         or 0

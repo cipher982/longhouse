@@ -99,17 +99,24 @@ async def test_concurrent_continuation_creates_only_one(db_session, test_user):
     assert len(continuations) == 1
     assert continuations[0].id == result1.run_id
 
-    # Tool message should only be injected once (same transaction as the run insert).
-    tool_msgs = (
+    # Worker result message should only be injected once (same transaction as the run insert).
+    # The message can be either role='tool' (if tool_call_id was found) or role='user' with
+    # internal=True (system notification fallback when no tool_call_id is available).
+    from sqlalchemy import or_
+
+    worker_result_msgs = (
         db_session.query(ThreadMessage)
         .filter(
             ThreadMessage.thread_id == thread.id,
-            ThreadMessage.role == "tool",
             ThreadMessage.content.contains("[Worker job"),
+            or_(
+                ThreadMessage.role == "tool",
+                (ThreadMessage.role == "user") & (ThreadMessage.internal.is_(True)),
+            ),
         )
         .all()
     )
-    assert len(tool_msgs) == 1
+    assert len(worker_result_msgs) == 1
 
 
 @pytest.mark.asyncio
@@ -175,17 +182,24 @@ async def test_continuation_idempotency_sequential(db_session, test_user):
 
     assert len(continuations) == 1
 
-    # Tool message should only be injected once.
-    tool_msgs = (
+    # Worker result message should only be injected once.
+    # The message can be either role='tool' (if tool_call_id was found) or role='user' with
+    # internal=True (system notification fallback when no tool_call_id is available).
+    from sqlalchemy import or_
+
+    worker_result_msgs = (
         db_session.query(ThreadMessage)
         .filter(
             ThreadMessage.thread_id == thread.id,
-            ThreadMessage.role == "tool",
             ThreadMessage.content.contains("[Worker job"),
+            or_(
+                ThreadMessage.role == "tool",
+                (ThreadMessage.role == "user") & (ThreadMessage.internal.is_(True)),
+            ),
         )
         .all()
     )
-    assert len(tool_msgs) == 1
+    assert len(worker_result_msgs) == 1
 
 
 @pytest.mark.asyncio

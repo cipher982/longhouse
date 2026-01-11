@@ -57,6 +57,9 @@ class ThreadMessage(Base):
     processed = Column(Boolean, default=False, nullable=False)  # Track if message has been processed by agent
     message_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)  # Store additional metadata
     parent_id = Column(Integer, ForeignKey("thread_messages.id"), nullable=True)
+    # Internal messages are orchestration artifacts (continuations, system notifications)
+    # that should NOT be shown to users in chat history, but are needed for LLM context
+    internal = Column(Boolean, default=False, nullable=False, server_default="false")
 
     # Define relationship with Thread
     thread = relationship("Thread", back_populates="messages")
