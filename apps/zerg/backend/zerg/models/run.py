@@ -41,6 +41,14 @@ class AgentRun(Base):
     # Phase 1: Correlation ID for tracing requests end-to-end (chat-observability-eval)
     correlation_id = Column(String, nullable=True, index=True)
 
+    # Model used for this run (for continuation inheritance)
+    model = Column(String(100), nullable=True)
+
+    # Message ID (UUID) assigned to the assistant message in supervisor_started event.
+    # Used by continuation runs to look up the original message's ID for
+    # continuation_of_message_id (schema requires UUID, not sentinel string).
+    assistant_message_id = Column(String(36), nullable=True)
+
     # Lifecycle ----------------------------------------------------------
     status = Column(
         SAEnum(RunStatus, native_enum=False, name="run_status_enum"),

@@ -42,6 +42,10 @@ export interface SupervisorStartedPayload {
   thread_id: number;
   /** User's task/question */
   task: string;
+  /** Unique identifier for the assistant message (stable across tokens/completion) */
+  message_id: string;
+  /** For continuation runs, the message_id of the original run's message */
+  continuation_of_message_id?: string;
 }
 
 export interface SupervisorThinkingPayload {
@@ -55,13 +59,15 @@ export interface SupervisorTokenPayload {
   token: string;
   run_id?: number;
   thread_id?: number;
+  /** Unique identifier for the assistant message */
+  message_id?: string;
 }
 
 export interface SupervisorCompletePayload {
   /** Final supervisor result */
   result: string;
-  /** Completion status (always 'success' for this event) */
-  status: "success";
+  /** Completion status ('success' for normal completion, 'cancelled' for user-initiated cancellation) */
+  status: "success" | "cancelled";
   /** Execution duration in milliseconds */
   duration_ms?: number;
   usage?: UsageData;
@@ -70,6 +76,8 @@ export interface SupervisorCompletePayload {
   thread_id?: number;
   /** URL for debug/inspection */
   debug_url?: string;
+  /** Unique identifier for the assistant message */
+  message_id?: string;
 }
 
 export interface SupervisorDeferredPayload {
@@ -82,6 +90,8 @@ export interface SupervisorDeferredPayload {
   run_id?: number;
   agent_id?: number;
   thread_id?: number;
+  /** Unique identifier for the assistant message */
+  message_id?: string;
 }
 
 export interface ErrorPayload {

@@ -19,6 +19,8 @@ export interface ConversationState {
   streamingMessageId: string | null;
   streamingText: string;
   currentCorrelationId: string | null;
+  currentMessageId: string | null; // Backend-assigned message ID for continuation runs
+  currentRunId: number | undefined; // Run ID for continuation messages
 }
 
 export type ConversationEvent =
@@ -34,6 +36,8 @@ export class ConversationController {
     streamingMessageId: null,
     streamingText: '',
     currentCorrelationId: null,
+    currentMessageId: null,
+    currentRunId: undefined,
   };
 
   private listeners: Set<ConversationListener> = new Set();
@@ -107,6 +111,41 @@ export class ConversationController {
   }
 
   /**
+   * Start a streaming response for a continuation run (uses messageId instead of correlationId)
+   * This creates a NEW message bubble for the continuation response.
+   */
+  startStreamingWithMessageId(messageId: string, runId?: number): void {
+    logger.debug(`Starting streaming response with messageId: ${messageId}, runId: ${runId}`);
+
+    // Create streaming message ID
+    this.state.streamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.state.streamingText = '';
+    this.state.currentMessageId = messageId;
+    this.state.currentRunId = runId;
+    this.state.currentCorrelationId = null; // Not using correlationId for continuations
+
+    this.emit({ type: 'streamingStart' });
+  }
+
+  /**
+   * Append text to streaming response using messageId (for continuation runs)
+   */
+  appendStreamingByMessageId(messageId: string, delta: string): void {
+    if (!this.state.streamingMessageId) {
+      // Start streaming if not already started
+      this.startStreamingWithMessageId(messageId);
+    }
+
+    this.state.streamingText += delta;
+
+    // Notify React via stateManager
+    stateManager.setStreamingText(this.state.streamingText);
+
+    // Update the message by messageId
+    stateManager.updateAssistantStatusByMessageId(messageId, 'streaming', this.state.streamingText, undefined, this.state.currentRunId);
+  }
+
+  /**
    * Finalize streaming response
    */
   async finalizeStreaming(): Promise<void> {
@@ -114,16 +153,22 @@ export class ConversationController {
 
     const finalText = this.state.streamingText;
     const correlationId = this.state.currentCorrelationId;
+    const messageId = this.state.currentMessageId;
     logger.streamingResponse(finalText, true);
 
     // Clean up streaming state
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
     this.state.currentCorrelationId = null;
+    this.state.currentMessageId = null;
+    this.state.currentRunId = undefined;
 
     // Clear streaming text and notify React of finalized message
     stateManager.setStreamingText('');
-    if (correlationId) {
+    if (messageId) {
+      // Continuation run - finalize by messageId
+      stateManager.finalizeMessage(finalText, undefined, messageId);
+    } else if (correlationId) {
       stateManager.finalizeMessage(finalText, correlationId);
     } else {
       stateManager.finalizeMessage(finalText);
@@ -152,6 +197,9 @@ export class ConversationController {
   clear(): void {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
+    this.state.currentCorrelationId = null;
+    this.state.currentMessageId = null;
+    this.state.currentRunId = undefined;
     stateManager.setStreamingText('');
   }
 

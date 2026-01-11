@@ -38,6 +38,31 @@ class MockChatLLM(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         """Generate a chat response synchronously."""
+        import uuid
+
+        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import ToolMessage
+
+        # Check for tool results first (continuation)
+        has_tool_result = any(isinstance(m, ToolMessage) for m in messages)
+        if has_tool_result:
+            ai_message = AIMessage(content="Task completed successfully via worker.")
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
+        # Check last user message for triggers
+        last_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+        content = str(last_msg.content) if last_msg else ""
+
+        if "TRIGGER_WORKER" in content:
+            # Emit spawn_worker tool call
+            tool_call = {
+                "id": f"call_{uuid.uuid4().hex[:8]}",
+                "name": "spawn_worker",
+                "args": {"task": "Test worker task", "model": "gpt-mock", "wait": False},
+            }
+            ai_message = AIMessage(content="Spawning worker...", tool_calls=[tool_call])
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
+
         # Simple mock response
         response_text = "Hello! I'm a mock assistant. I received your message and I'm responding appropriately."
 

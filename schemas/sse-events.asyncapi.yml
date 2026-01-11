@@ -320,7 +320,7 @@ components:
     # ---------------------------------------------------------------------------
     SupervisorStartedPayload:
       type: object
-      required: [task, thread_id]
+      required: [task, thread_id, message_id]
       properties:
         run_id:
           type: integer
@@ -334,6 +334,14 @@ components:
           type: string
           minLength: 1
           description: User's task/question
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message (stable across tokens/completion)
+        continuation_of_message_id:
+          type: string
+          format: uuid
+          description: For continuation runs, the message_id of the original run's message
 
     SupervisorThinkingPayload:
       type: object
@@ -360,6 +368,10 @@ components:
         thread_id:
           type: integer
           minimum: 1
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message
 
     SupervisorCompletePayload:
       type: object
@@ -370,8 +382,8 @@ components:
           description: Final supervisor result
         status:
           type: string
-          const: success
-          description: Completion status (always 'success' for this event)
+          enum: [success, cancelled]
+          description: Completion status ('success' for normal completion, 'cancelled' for user-initiated cancellation)
         duration_ms:
           type: integer
           minimum: 0
@@ -390,6 +402,10 @@ components:
         debug_url:
           type: string
           description: URL for debug/inspection
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message
 
     SupervisorDeferredPayload:
       type: object
@@ -415,6 +431,10 @@ components:
         thread_id:
           type: integer
           minimum: 1
+        message_id:
+          type: string
+          format: uuid
+          description: Unique identifier for the assistant message
 
     # ---------------------------------------------------------------------------
     # Error Payloads

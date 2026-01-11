@@ -64,9 +64,12 @@ export class SupervisorChatController {
   private config: SupervisorChatConfig;
   private currentAbortController: AbortController | null = null;
   private currentRunId: number | null = null;
+  private currentMessageId: string | null = null; // Backend-assigned message ID for the current run
   private lastCorrelationId: string | null = null;
+  private lastMessageId: string | null = null; // Track messageId for cancellation (messageId-first pattern)
   private watchdogTimer: number | null = null;
   private isStreaming: boolean = false; // Track if we're receiving real tokens
+  private isContinuationRun: boolean = false; // Track if current run is a continuation (prevents UI reset)
   private readonly WATCHDOG_TIMEOUT_MS = 60000;
   private onAnySseEventOnce: (() => void) | null = null;
   private lastEventId: number = 0; // Track last received event ID for resumption
@@ -135,13 +138,18 @@ export class SupervisorChatController {
 
     // Cancel any previous stream
     if (this.currentAbortController) {
-      if (this.lastCorrelationId) {
+      // Use messageId-first pattern for cancellation
+      if (this.lastMessageId) {
+        stateManager.updateAssistantStatusByMessageId(this.lastMessageId, 'canceled');
+      } else if (this.lastCorrelationId) {
+        // Fallback: Use correlationId if messageId not available (legacy behavior)
         stateManager.updateAssistantStatus(this.lastCorrelationId, 'canceled');
       }
       this.currentAbortController.abort();
     }
 
     this.lastCorrelationId = clientCorrelationId || null;
+    this.lastMessageId = null; // Reset for new message (will be set on supervisor_started)
 
     // Create new abort controller for this request
     this.currentAbortController = new AbortController();
@@ -171,6 +179,8 @@ export class SupervisorChatController {
       // Only clear if this was the correlation ID we were tracking for this call
       if (this.lastCorrelationId === clientCorrelationId) {
         this.lastCorrelationId = null;
+        // Also clear lastMessageId since the request is complete
+        this.lastMessageId = null;
       }
     }
   }
@@ -438,14 +448,37 @@ export class SupervisorChatController {
       case 'supervisor_started': {
         const payload = wrapper.payload as SupervisorStartedPayload;
         this.petWatchdog(correlationId);
-        logger.debug('[SupervisorChat] Supervisor started');
+        logger.debug('[SupervisorChat] Supervisor started, message_id:', payload.message_id);
         if (payload.run_id) {
           this.currentRunId = payload.run_id;
         }
-        if (correlationId) {
-          // Pass runId early so tools render inline with the pending message
+
+        // Store message_id for subsequent events (supervisor_token, supervisor_complete)
+        this.currentMessageId = payload.message_id;
+        this.lastMessageId = payload.message_id; // Track for cancellation (messageId-first pattern)
+
+        // Check if this is a continuation run (worker result being processed)
+        // continuation_of_message_id indicates the original message's ID
+        const isContinuation = !!payload.continuation_of_message_id;
+        this.isContinuationRun = isContinuation;
+
+        if (isContinuation) {
+          // Continuation: Create a NEW message bubble for the continuation response
+          // This prevents overwriting the "delegating to worker" message
+          logger.debug('[SupervisorChat] Continuation run detected, will create new message on first token');
+          // Note: The new message will be created when the first token arrives.
+          // We don't create it here to avoid an empty bubble appearing before content.
+        } else if (correlationId && payload.message_id) {
+          // Normal run: Bind messageId to the existing placeholder (found by correlationId)
+          // After this, all updates should use messageId for lookup (messageId-first pattern)
+          stateManager.bindMessageIdToCorrelationId(correlationId, payload.message_id, this.currentRunId ?? undefined);
+          // Also set status to 'typing'
+          stateManager.updateAssistantStatusByMessageId(payload.message_id, 'typing', undefined, undefined, this.currentRunId ?? undefined);
+        } else if (correlationId) {
+          // Fallback: no messageId available, use correlationId (legacy behavior)
           stateManager.updateAssistantStatus(correlationId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
         }
+
         // Emit supervisor started event for progress UI
         if (this.currentRunId) {
           eventBus.emit('supervisor:started', {
@@ -462,7 +495,12 @@ export class SupervisorChatController {
         this.petWatchdog(correlationId);
         logger.debug('[SupervisorChat] Supervisor thinking:', payload.message);
         if (correlationId) {
-          stateManager.updateAssistantStatus(correlationId, 'typing');
+          // If this is a continuation run, do NOT reset status to 'typing'
+          // because 'typing' with no content wipes the existing message bubble.
+          // The tokens will simply append when they arrive.
+          if (!this.isContinuationRun) {
+            stateManager.updateAssistantStatus(correlationId, 'typing');
+          }
         }
         if (payload.message && this.currentRunId) {
           // Emit thinking event for progress UI
@@ -479,14 +517,37 @@ export class SupervisorChatController {
         // Real-time token streaming from LLM
         this.petWatchdog(correlationId);
         const token = payload.token;
+
+        // Use message_id from the event if available, otherwise fall back to controller's stored value
+        const messageId = payload.message_id || this.currentMessageId;
+
         if (token !== undefined && token !== null) {
           // Start streaming if not already
           if (!this.isStreaming) {
             this.isStreaming = true;
-            conversationController.startStreaming(correlationId);
+
+            if (this.isContinuationRun && messageId) {
+              // Continuation: Create a NEW message with the message_id
+              // This happens on first token of the continuation run
+              logger.debug('[SupervisorChat] Starting streaming for continuation, messageId:', messageId);
+              conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
+            } else if (messageId) {
+              // Normal run with messageId: Use messageId-first pattern (messageId was bound on supervisor_started)
+              logger.debug('[SupervisorChat] Starting streaming with messageId:', messageId);
+              conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
+            } else {
+              // Fallback: Use correlationId to find the placeholder (legacy behavior)
+              conversationController.startStreaming(correlationId);
+            }
           }
-          // Append token immediately (no artificial delay)
-          conversationController.appendStreaming(token, correlationId);
+
+          // Append token to the streaming message using messageId-first pattern
+          if (messageId) {
+            conversationController.appendStreamingByMessageId(messageId, token);
+          } else {
+            // Fallback: Use correlationId (legacy behavior)
+            conversationController.appendStreaming(token, correlationId);
+          }
         }
         break;
       }
@@ -499,6 +560,9 @@ export class SupervisorChatController {
         const wasStreaming = this.isStreaming;
         this.isStreaming = false; // Reset for next message
 
+        // Use message_id from the event if available
+        const messageId = payload.message_id || this.currentMessageId;
+
         if (result) {
           if (wasStreaming) {
             // Real tokens were streamed - just finalize the message
@@ -508,12 +572,23 @@ export class SupervisorChatController {
             // Fallback: No real tokens received (LLM_TOKEN_STREAM disabled?)
             // Stream the result in chunks for smooth UX
             logger.debug('[SupervisorChat] Fallback: simulating streaming for response');
-            conversationController.startStreaming(correlationId);
+
+            // Use messageId-first pattern for ALL runs
+            if (messageId) {
+              conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
+            } else {
+              // Fallback: Use correlationId (legacy behavior)
+              conversationController.startStreaming(correlationId);
+            }
 
             const chunkSize = 10; // characters per chunk
             for (let i = 0; i < result.length; i += chunkSize) {
               const chunk = result.substring(i, i + chunkSize);
-              conversationController.appendStreaming(chunk, correlationId);
+              if (messageId) {
+                conversationController.appendStreamingByMessageId(messageId, chunk);
+              } else {
+                conversationController.appendStreaming(chunk, correlationId);
+              }
               // Small delay for visual effect
               await new Promise(resolve => setTimeout(resolve, 10));
             }
@@ -521,7 +596,11 @@ export class SupervisorChatController {
             await conversationController.finalizeStreaming();
           }
 
-          if (correlationId) {
+          // Update the message status to final using messageId-first pattern
+          if (messageId) {
+            stateManager.updateAssistantStatusByMessageId(messageId, 'final', result, payload.usage, this.currentRunId ?? undefined);
+          } else if (correlationId) {
+            // Fallback: Use correlationId (legacy behavior)
             stateManager.updateAssistantStatus(correlationId, 'final', result, payload.usage, this.currentRunId ?? undefined);
           }
         }
@@ -537,6 +616,10 @@ export class SupervisorChatController {
             usage: payload.usage,
           });
         }
+
+        // Reset continuation flag for next run
+        this.isContinuationRun = false;
+        this.currentMessageId = null;
         break;
       }
 

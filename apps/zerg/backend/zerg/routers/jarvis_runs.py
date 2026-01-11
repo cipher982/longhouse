@@ -38,6 +38,7 @@ class JarvisRunSummary(BaseModel):
     agent_name: str
     status: str
     summary: Optional[str] = None
+    continuation_of_run_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
@@ -92,6 +93,7 @@ def list_jarvis_runs(
                 agent_name=agent_name,
                 status=run.status.value if hasattr(run.status, "value") else str(run.status),
                 summary=summary,
+                continuation_of_run_id=getattr(run, "continuation_of_run_id", None),
                 created_at=run.created_at,
                 updated_at=run.updated_at,
                 completed_at=run.finished_at,
