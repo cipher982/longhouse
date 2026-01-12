@@ -13,6 +13,10 @@ from zerg.generated.sse_events import SSEEventType
 
 logger = logging.getLogger(__name__)
 
+# Backpressure: max events to buffer per client before closing stream
+# Client should reconnect with Last-Event-ID for resumable replay
+SSE_QUEUE_MAX_SIZE = 1000
+
 
 def _json_default(value):  # type: ignore[no-untyped-def]
     """Fallback serializer for SSE payloads.
@@ -36,11 +40,17 @@ async def stream_run_events(
 
     Subscribes to all supervisor and worker events filtered by run_id.
     This is used for both initial chat and re-attaching to an in-progress run.
+
+    Backpressure: The queue is bounded to SSE_QUEUE_MAX_SIZE events. If a slow
+    client causes overflow, the stream closes gracefully. The client should reconnect
+    with Last-Event-ID to resume from the durable event store.
     """
-    queue: asyncio.Queue = asyncio.Queue()
+    # Bounded queue for backpressure - overflow triggers graceful stream closure
+    queue: asyncio.Queue = asyncio.Queue(maxsize=SSE_QUEUE_MAX_SIZE)
     pending_workers = 0
     supervisor_done = False
     continuation_cache: dict[int, bool] = {}
+    overflow = False  # Track if queue has overflowed
 
     def _is_direct_continuation(candidate_run_id: int) -> bool:
         """Return True if candidate_run_id is a continuation of run_id.
@@ -66,7 +76,11 @@ async def stream_run_events(
             return False
 
     async def event_handler(event):
-        """Filter and queue relevant events."""
+        """Filter and queue relevant events (non-blocking)."""
+        nonlocal overflow
+        if overflow:
+            return  # Already overflowed, drop subsequent events
+
         # Security: only emit events for this owner
         if event.get("owner_id") != owner_id:
             return
@@ -88,7 +102,17 @@ async def stream_run_events(
                 logger.warning(f"Tool event missing run_id, dropping: {event_type}")
                 return
 
-        await queue.put(event)
+        # Non-blocking put with overflow handling
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            overflow = True
+            logger.warning(f"SSE queue overflow for run {run_id}, signaling client to reconnect")
+            # Push overflow sentinel (make room by being already full, try once)
+            try:
+                queue.put_nowait({"_overflow": True})
+            except asyncio.QueueFull:
+                pass  # Stream will timeout and close anyway
 
     # Subscribe to all relevant events
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
@@ -130,6 +154,22 @@ async def stream_run_events(
         while not complete:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                # Handle overflow sentinel - close stream gracefully
+                if event.get("_overflow"):
+                    logger.warning(f"SSE overflow for run {run_id}, closing (client should reconnect)")
+                    yield {
+                        "event": "overflow",
+                        "data": json.dumps(
+                            {
+                                "type": "overflow",
+                                "message": "Stream buffer full, please reconnect",
+                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            },
+                            default=_json_default,
+                        ),
+                    }
+                    return
 
                 event_type = event.get("event_type") or event.get("type") or "event"
                 # SUPERVISOR_TOKEN is emitted per-token and will spam logs when DEBUG is enabled.
