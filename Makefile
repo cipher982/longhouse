@@ -231,13 +231,24 @@ test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
 
 test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
-	@echo "🧪 Running Zerg unit tests..."
-	cd apps/zerg/backend && ./run_backend_tests.sh
-	cd apps/zerg/frontend-web && bun run test
+	@if [ "$(MINIMAL)" = "1" ]; then \
+		echo "🧪 Running Zerg unit tests (minimal)..."; \
+		(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header); \
+		(cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent); \
+	else \
+		echo "🧪 Running Zerg unit tests..."; \
+		(cd apps/zerg/backend && ./run_backend_tests.sh); \
+		(cd apps/zerg/frontend-web && bun run test); \
+	fi
 
 test-frontend-unit: ## Run frontend unit tests only
-	@echo "🧪 Running frontend unit tests..."
-	cd apps/zerg/frontend-web && bun run test
+	@if [ "$(MINIMAL)" = "1" ]; then \
+		echo "🧪 Running frontend unit tests (minimal)..."; \
+		cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent; \
+	else \
+		echo "🧪 Running frontend unit tests..."; \
+		cd apps/zerg/frontend-web && bun run test; \
+	fi
 
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."

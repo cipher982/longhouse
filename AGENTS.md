@@ -231,13 +231,14 @@ docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.
 
 ## Testing Infrastructure
 
-**CRITICAL:** ALWAYS use Make targets for testing. Never run pytest/bun commands directly (they miss env vars, wrong CWD, no parallelism).
+**CRITICAL:** ALWAYS use Make targets for testing. Never run pytest/bun commands directly (they miss env vars, wrong CWD, no test isolation).
 
 ### Test Commands
 
 | Command | What It Runs | Notes |
 |---------|--------------|-------|
 | `make test` | Unit tests (backend + frontend) | ~50 lines output |
+| `make test MINIMAL=1` | Unit tests (compact mode) | **Recommended for Agents** (~10 lines) |
 | `make test-e2e` | Playwright E2E tests | **Minimal output** (~10 lines pass, ~30 lines fail) |
 | `make test-all` | Unit + E2E combined | Runs both suites |
 | `make test-e2e-single TEST=<spec>` | Single E2E test file | Most useful for iteration |
