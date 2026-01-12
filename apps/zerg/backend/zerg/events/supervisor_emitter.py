@@ -3,6 +3,10 @@
 This class replaces the contextvar-based event emission pattern. The emitter's
 identity (supervisor) is fixed at construction time, so it always emits the
 correct event type regardless of contextvar state.
+
+Key design principle: The emitter does NOT hold a DB session. Event emission
+uses append_run_event() which opens its own short-lived session. This prevents
+DB sessions from crossing async/thread boundaries via contextvars.
 """
 
 from __future__ import annotations
@@ -11,10 +15,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ class SupervisorEmitter:
     This eliminates the contextvar leakage bug where worker events could
     contaminate supervisor event emission.
 
+    Key principle: No DB session stored. Event emission uses append_run_event()
+    which opens its own short-lived session per event.
+
     Attributes
     ----------
     run_id
@@ -35,14 +38,11 @@ class SupervisorEmitter:
         User ID that owns this supervisor agent
     message_id
         UUID for the assistant message (stable across tokens/completion)
-    db
-        Database session for event persistence
     """
 
     run_id: int
     owner_id: int
     message_id: str
-    db: "Session"
 
     @property
     def is_worker(self) -> bool:
@@ -65,11 +65,10 @@ class SupervisorEmitter:
 
         Always emits supervisor_tool_started - identity is fixed at construction.
         """
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="supervisor_tool_started",
                 payload={
@@ -96,14 +95,13 @@ class SupervisorEmitter:
 
         Always emits supervisor_tool_completed - identity is fixed at construction.
         """
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
             # Truncate result for storage
             raw_result = result[:2000] if result and len(result) > 2000 else result
 
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="supervisor_tool_completed",
                 payload={
@@ -130,11 +128,10 @@ class SupervisorEmitter:
 
         Always emits supervisor_tool_failed - identity is fixed at construction.
         """
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="supervisor_tool_failed",
                 payload={

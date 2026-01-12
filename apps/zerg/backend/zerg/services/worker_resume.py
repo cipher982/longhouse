@@ -142,11 +142,11 @@ async def resume_supervisor_with_worker_result(
     # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
     # This is critical for resume - without this, leaked WorkerContext could cause
     # supervisor tool events to emit as worker_tool_* events
+    # Note: Emitter does NOT hold a DB session - event emission opens its own session
     _supervisor_emitter = SupervisorEmitter(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
-        db=db,
     )
     _emitter_token = set_emitter(_supervisor_emitter)
 

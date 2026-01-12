@@ -160,12 +160,12 @@ class WorkerRunner:
 
         # Set up injected emitter for event emission (Phase 2 of emitter refactor)
         # WorkerEmitter always emits worker_tool_* events regardless of contextvar state
+        # Note: Emitter does NOT hold a DB session - event emission opens its own session
         worker_emitter = WorkerEmitter(
             worker_id=worker_id,
             owner_id=owner_for_events,
             run_id=event_ctx.get("run_id"),
             job_id=job_id,
-            db=db,
         )
         emitter_token = set_emitter(worker_emitter)
 
