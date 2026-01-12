@@ -6,13 +6,14 @@ Tests the EventEmitter protocol and its implementations:
 - NullEmitter: No-op emitter for testing
 
 Key property: Emitter identity is baked in at construction and cannot change.
+Note: Emitters no longer hold DB sessions - event emission uses append_run_event()
+which opens its own short-lived session.
 """
 
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
@@ -36,7 +37,6 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
         assert emitter.is_worker is True
         assert emitter.is_supervisor is False
@@ -48,23 +48,20 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
         assert isinstance(emitter, EventEmitter)
 
     @pytest.mark.asyncio
     async def test_emit_tool_started_emits_worker_event(self):
         """emit_tool_started always emits worker_tool_started."""
-        mock_db = MagicMock()
         emitter = WorkerEmitter(
             worker_id="test-worker",
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("test_tool", "call_123", "args preview")
 
             mock_emit.assert_called_once()
@@ -77,16 +74,14 @@ class TestWorkerEmitter:
     @pytest.mark.asyncio
     async def test_emit_tool_completed_emits_worker_event(self):
         """emit_tool_completed always emits worker_tool_completed."""
-        mock_db = MagicMock()
         emitter = WorkerEmitter(
             worker_id="test-worker",
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_completed("test_tool", "call_123", 500, "result preview")
 
             mock_emit.assert_called_once()
@@ -97,16 +92,14 @@ class TestWorkerEmitter:
     @pytest.mark.asyncio
     async def test_emit_tool_failed_emits_worker_event(self):
         """emit_tool_failed always emits worker_tool_failed."""
-        mock_db = MagicMock()
         emitter = WorkerEmitter(
             worker_id="test-worker",
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_failed("test_tool", "call_123", 100, "error message")
 
             mock_emit.assert_called_once()
@@ -122,10 +115,9 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=None,  # No run_id
             job_id=50,
-            db=MagicMock(),
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("test_tool", "call_123", "args preview")
             mock_emit.assert_not_called()
 
@@ -136,7 +128,6 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
 
         # Record tool start
@@ -157,7 +148,6 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
 
         assert emitter.has_critical_error is False
@@ -175,7 +165,6 @@ class TestSupervisorEmitter:
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=MagicMock(),
         )
         assert emitter.is_supervisor is True
         assert emitter.is_worker is False
@@ -186,22 +175,19 @@ class TestSupervisorEmitter:
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=MagicMock(),
         )
         assert isinstance(emitter, EventEmitter)
 
     @pytest.mark.asyncio
     async def test_emit_tool_started_emits_supervisor_event(self):
         """emit_tool_started always emits supervisor_tool_started."""
-        mock_db = MagicMock()
         emitter = SupervisorEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("spawn_worker", "call_456", "task preview")
 
             mock_emit.assert_called_once()
@@ -213,15 +199,13 @@ class TestSupervisorEmitter:
     @pytest.mark.asyncio
     async def test_emit_tool_completed_emits_supervisor_event(self):
         """emit_tool_completed always emits supervisor_tool_completed."""
-        mock_db = MagicMock()
         emitter = SupervisorEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_completed("spawn_worker", "call_456", 1000, "result preview")
 
             mock_emit.assert_called_once()
@@ -232,15 +216,13 @@ class TestSupervisorEmitter:
     @pytest.mark.asyncio
     async def test_emit_tool_failed_emits_supervisor_event(self):
         """emit_tool_failed always emits supervisor_tool_failed."""
-        mock_db = MagicMock()
         emitter = SupervisorEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=mock_db,
         )
 
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_failed("spawn_worker", "call_456", 100, "worker failed")
 
             mock_emit.assert_called_once()
@@ -293,7 +275,6 @@ class TestEmitterContext:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
 
         token = set_emitter(worker_emitter)
@@ -313,7 +294,6 @@ class TestEmitterContext:
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=MagicMock(),
         )
 
         token = set_emitter(worker_emitter)
@@ -337,7 +317,6 @@ class TestEmitterContext:
                 owner_id=1,
                 run_id=100,
                 job_id=50,
-                db=MagicMock(),
             )
 
             token = set_emitter(worker_emitter)
@@ -358,17 +337,15 @@ class TestEmitterIdentityGuarantee:
     @pytest.mark.asyncio
     async def test_worker_emitter_always_emits_worker_events(self):
         """WorkerEmitter ALWAYS emits worker_* events, even if confused."""
-        mock_db = MagicMock()
         emitter = WorkerEmitter(
             worker_id="test-worker",
             owner_id=1,
             run_id=100,
             job_id=50,
-            db=mock_db,
         )
 
         # Call all emit methods multiple times
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("a", "b", "c")
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
@@ -381,16 +358,14 @@ class TestEmitterIdentityGuarantee:
     @pytest.mark.asyncio
     async def test_supervisor_emitter_always_emits_supervisor_events(self):
         """SupervisorEmitter ALWAYS emits supervisor_* events, even if confused."""
-        mock_db = MagicMock()
         emitter = SupervisorEmitter(
             run_id=100,
             owner_id=1,
             message_id="msg-123",
-            db=mock_db,
         )
 
         # Call all emit methods multiple times
-        with patch("zerg.services.event_store.emit_run_event", new_callable=AsyncMock) as mock_emit:
+        with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
             await emitter.emit_tool_started("a", "b", "c")
             await emitter.emit_tool_completed("a", "b", 1, "c")
             await emitter.emit_tool_failed("a", "b", 1, "c")
