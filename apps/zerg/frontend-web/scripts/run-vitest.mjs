@@ -5,19 +5,11 @@ import { createRequire } from "node:module";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Preflight: verify single React installation
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const verifyScript = resolve(__dirname, "../../../../scripts/verify-single-react.mjs");
-const verifyResult = spawnSync(process.execPath, [verifyScript], { stdio: "inherit" });
-if (verifyResult.status !== 0) {
-  console.error("\nReact verification failed. Fix React duplication before running tests.");
-  process.exit(1);
-}
-
 const rawArgs = process.argv.slice(2);
 const vitestArgs = [];
 let shouldForceSingleThread = false;
 let hasRunFlag = false;
+let isSilent = false;
 
 for (const arg of rawArgs) {
   if (arg === "--runInBand") {
@@ -27,7 +19,20 @@ for (const arg of rawArgs) {
   if (arg === "--run") {
     hasRunFlag = true;
   }
+  if (arg === "--silent") {
+    isSilent = true;
+  }
   vitestArgs.push(arg);
+}
+
+// Preflight: verify single React installation
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const verifyScript = resolve(__dirname, "../../../../scripts/verify-single-react.mjs");
+const verifyArgs = isSilent ? ["--quiet"] : [];
+const verifyResult = spawnSync(process.execPath, [verifyScript, ...verifyArgs], { stdio: "inherit" });
+if (verifyResult.status !== 0) {
+  console.error("\nReact verification failed. Fix React duplication before running tests.");
+  process.exit(1);
 }
 
 if (shouldForceSingleThread) {
