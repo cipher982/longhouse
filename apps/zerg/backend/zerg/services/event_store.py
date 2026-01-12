@@ -37,19 +37,83 @@ def _json_default(obj):
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
+async def append_run_event(
+    run_id: int,
+    event_type: str,
+    payload: Dict[str, Any],
+) -> int:
+    """Emit a run event with durable storage, opening its own DB session.
+
+    This is the preferred way to emit run events. The function owns its DB
+    lifecycle - it opens a short-lived session, persists the event, commits,
+    and closes the session before returning.
+
+    This pattern:
+    - Eliminates DB session crossing async/thread boundaries
+    - Prevents session leakage in contextvars
+    - Ensures clean transaction boundaries per event
+
+    Args:
+        run_id: Run identifier
+        event_type: Event type (supervisor_started, worker_complete, etc.)
+        payload: Event data (must be JSON-serializable)
+
+    Returns:
+        event_id: Database ID of the persisted event
+
+    Raises:
+        ValueError: If payload is not JSON-serializable
+    """
+    from zerg.database import db_session
+
+    # 1. Validate JSON serializability (fail fast)
+    try:
+        json_payload = jsonable_encoder(payload)
+        json.dumps(json_payload, default=_json_default)
+    except (TypeError, ValueError, RecursionError) as e:
+        logger.error(f"Event payload not JSON-serializable for {event_type}: {e}")
+        raise ValueError(f"Invalid event payload for {event_type}: {e}") from e
+
+    # 2. Insert into database using a SHORT-LIVED session
+    event_id: int
+    with db_session() as db:
+        event = AgentRunEvent(
+            run_id=run_id,
+            event_type=event_type,
+            payload=json_payload,
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+        event_id = event.id
+    # Session is now closed - no lingering DB connections
+
+    # 3. Publish to live subscribers
+    publish_payload = {**json_payload, "run_id": run_id, "event_type": event_type, "event_id": event_id}
+    try:
+        await event_bus.publish(EventType(event_type), publish_payload)
+    except ValueError:
+        logger.warning(f"Event type {event_type} not in EventType enum, skipping event_bus publish")
+
+    if event_type != "supervisor_token":
+        logger.debug(f"Emitted {event_type} (id={event_id}) for run {run_id}")
+
+    return event_id
+
+
 async def emit_run_event(
     db: Session,
     run_id: int,
     event_type: str,
     payload: Dict[str, Any],
 ) -> int:
-    """Emit a run event with durable storage.
+    """Emit a run event with durable storage (legacy - uses provided session).
 
-    This is the ONLY way to emit run events. All supervisor/worker code should
-    call this function instead of directly calling event_bus.publish().
+    DEPRECATED: Prefer append_run_event() which manages its own DB session.
+    This function is kept for backwards compatibility during migration.
 
     Args:
-        db: Database session
+        db: Database session (DEPRECATED - will be removed)
         run_id: Run identifier
         event_type: Event type (supervisor_started, worker_complete, etc.)
         payload: Event data (must be JSON-serializable)

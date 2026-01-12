@@ -553,6 +553,7 @@ class SupervisorService:
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)
             # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
+            # Note: Emitter does NOT hold a DB session - event emission opens its own session
             from zerg.events import SupervisorEmitter
             from zerg.events import reset_emitter
             from zerg.events import set_emitter
@@ -561,7 +562,6 @@ class SupervisorService:
                 run_id=run.id,
                 owner_id=owner_id,
                 message_id=message_id,
-                db=self.db,
             )
             _emitter_token = set_emitter(_supervisor_emitter)
 

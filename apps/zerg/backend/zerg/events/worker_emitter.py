@@ -3,6 +3,10 @@
 This class replaces the contextvar-based event emission pattern. The emitter's
 identity (worker) is fixed at construction time, so it always emits the correct
 event type regardless of contextvar state.
+
+Key design principle: The emitter does NOT hold a DB session. Event emission
+uses append_run_event() which opens its own short-lived session. This prevents
+DB sessions from crossing async/thread boundaries via contextvars.
 """
 
 from __future__ import annotations
@@ -12,11 +16,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
-from typing import TYPE_CHECKING
 from typing import Any
-
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,9 @@ class WorkerEmitter:
     This eliminates the contextvar leakage bug where supervisor events
     could be misclassified as worker events.
 
+    Key principle: No DB session stored. Event emission uses append_run_event()
+    which opens its own short-lived session per event.
+
     Attributes
     ----------
     worker_id
@@ -53,8 +56,6 @@ class WorkerEmitter:
         Run ID for correlating events (supervisor run ID)
     job_id
         WorkerJob ID for roundabout event correlation (critical!)
-    db
-        Database session for event persistence
     tool_calls
         List of tool calls made during this worker run (for activity log)
     has_critical_error
@@ -67,7 +68,6 @@ class WorkerEmitter:
     owner_id: int | None
     run_id: int | None
     job_id: int | None
-    db: "Session"
 
     # Tool tracking (existing WorkerContext functionality)
     tool_calls: list[ToolCall] = field(default_factory=list)
@@ -131,15 +131,14 @@ class WorkerEmitter:
 
         Always emits worker_tool_started - identity is fixed at construction.
         """
-        if not self.run_id or not self.db:
-            logger.debug("Skipping emit_tool_started: no run_id or db")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_started: no run_id")
             return
 
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="worker_tool_started",
                 payload={
@@ -167,15 +166,14 @@ class WorkerEmitter:
 
         Always emits worker_tool_completed - identity is fixed at construction.
         """
-        if not self.run_id or not self.db:
-            logger.debug("Skipping emit_tool_completed: no run_id or db")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_completed: no run_id")
             return
 
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="worker_tool_completed",
                 payload={
@@ -203,15 +201,14 @@ class WorkerEmitter:
 
         Always emits worker_tool_failed - identity is fixed at construction.
         """
-        if not self.run_id or not self.db:
-            logger.debug("Skipping emit_tool_failed: no run_id or db")
+        if not self.run_id:
+            logger.debug("Skipping emit_tool_failed: no run_id")
             return
 
-        from zerg.services.event_store import emit_run_event
+        from zerg.services.event_store import append_run_event
 
         try:
-            await emit_run_event(
-                db=self.db,
+            await append_run_event(
                 run_id=self.run_id,
                 event_type="worker_tool_failed",
                 payload={
