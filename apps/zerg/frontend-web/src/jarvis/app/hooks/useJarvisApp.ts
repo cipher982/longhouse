@@ -383,9 +383,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
         await loadSupervisorHistory()
       }
 
-      // 6. Set up event listeners
+      // 6. Set up voice listeners (streaming listeners are set up in a separate effect)
       setupVoiceListeners()
-      setupStreamingListeners()
 
       updateState({ initialized: true })
       logger.info('[useJarvisApp] Initialization complete')
@@ -452,7 +451,7 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
 
         case 'MESSAGE_FINALIZED':
           if (event.message.messageId) {
-            // Continuation run: Update by messageId or create if doesn't exist
+            // Update by messageId or create if doesn't exist
             dispatch({
               type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
               messageId: event.message.messageId,
@@ -462,32 +461,9 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
                 timestamp: event.message.timestamp,
               },
             })
-          } else if (event.message.correlationId) {
-            dispatch({
-              type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
-              correlationId: event.message.correlationId,
-              updates: {
-                content: event.message.content,
-                status: 'final',
-                timestamp: event.message.timestamp,
-              },
-            })
           } else {
             dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
           }
-          break
-
-        case 'ASSISTANT_STATUS_CHANGED':
-          dispatch({
-            type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
-            correlationId: event.correlationId,
-            updates: {
-              status: event.status as any,
-              ...(event.content !== undefined ? { content: event.content } : {}),
-              ...(event.usage !== undefined ? { usage: event.usage } : {}),
-              ...(event.runId !== undefined ? { runId: event.runId } : {}),
-            },
-          })
           break
 
         case 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID':
@@ -500,16 +476,6 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
               ...(event.usage !== undefined ? { usage: event.usage } : {}),
               ...(event.runId !== undefined ? { runId: event.runId } : {}),
             },
-          })
-          break
-
-        case 'BIND_MESSAGE_ID_TO_CORRELATION_ID':
-          // On supervisor_started, bind the backend-assigned messageId to the existing placeholder
-          dispatch({
-            type: 'BIND_MESSAGE_ID_TO_CORRELATION_ID',
-            correlationId: event.correlationId,
-            messageId: event.messageId,
-            runId: event.runId,
           })
           break
 
@@ -721,17 +687,17 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
 
   const sendText = useCallback(async (
     text: string,
-    correlationId?: string,
+    messageId?: string,
     options?: { model?: string; reasoning_effort?: string }
   ) => {
     if (!supervisorChatRef.current) {
       throw new Error('Supervisor chat not initialized')
     }
 
-    const cid = correlationId || uuid()
+    const msgId = messageId || uuid()
 
-    // Set correlation ID for timeline tracking
-    timelineLogger.setCorrelationId(cid)
+    // Set message ID for timeline tracking
+    timelineLogger.setMessageId(msgId)
 
     // Emit text_channel:sent event for timeline tracking
     eventBus.emit('text_channel:sent', {
@@ -744,8 +710,8 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
     const model = options?.model || prefs.chat_model
     const reasoning_effort = options?.reasoning_effort || prefs.reasoning_effort
 
-    logger.info(`[useJarvisApp] Sending text, model: ${model}, correlationId: ${cid}`)
-    await supervisorChatRef.current.sendMessage(text, cid, { model, reasoning_effort })
+    logger.info(`[useJarvisApp] Sending text, model: ${model}, messageId: ${msgId}`)
+    await supervisorChatRef.current.sendMessage(text, msgId, { model, reasoning_effort })
   }, [state.bootstrap])
 
   const clearHistory = useCallback(async () => {
@@ -781,6 +747,15 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
   }, [])
 
   // ============= Effects =============
+
+  // Set up streaming listeners IMMEDIATELY on mount (before any messages can be sent)
+  // This must run before initialize() completes to avoid race conditions where
+  // useTextChannel sends a message before listeners are registered, causing events
+  // like BIND_MESSAGE_ID_TO_CORRELATION_ID to be lost.
+  useEffect(() => {
+    const cleanup = setupStreamingListeners()
+    return cleanup
+  }, [setupStreamingListeners])
 
   // Initialize on mount
   useEffect(() => {

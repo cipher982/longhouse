@@ -8,26 +8,27 @@
 
 ## Executive Summary
 
-Runs are now **durable** - they survive client disconnects, timeouts, and network blips. Timeouts stop *waiting*, not kill *work*. When background work completes, the supervisor is notified and resume automatically. The dashboard stays in sync via real-time WebSocket updates.
+Runs are now **durable** - they survive client disconnects, timeouts, and network blips. Timeouts stop *waiting*, not kill *work*. When background work completes, the supervisor is notified and resumes automatically using LangGraph's native interrupt/resume pattern. The dashboard stays in sync via real-time WebSocket updates.
 
 ### Durability Scope (v2.2)
 
 **What's durable in this version:**
 - Client disconnects (SSE drops, tab closes, network blips)
 - Client-side timeouts (watchdog, user impatience)
-- Server-side wait timeouts (supervisor stops blocking, work continues)
+- Server-side wait timeouts (supervisor stops blocking, work continues as `DEFERRED`)
+- **Worker Coordination**: Supervisor `WAITING` state while worker executes; resumes same run upon completion.
 - **Status Visibility**: Runs are tracked in the database and updated in real-time on the dashboard via WebSockets.
 - **Re-attachment**: Clients can poll/query run status and get current results after re-connecting.
 
 **What's NOT durable yet (future work):**
-- Backend process restarts (DEFERRED runs would be orphaned)
+- Backend process restarts (DEFERRED/WAITING runs would be orphaned)
 - Server crashes (would need persistent job queue + "resume pending on boot")
 - True SSE streaming re-attach (currently returns status snapshots to avoid infinite blocking in ASGI test environments)
 
 ---
 
 This spec aligns Zerg's execution model with:
-- **LangGraph** native semantics (threads + runs + join)
+- **LangGraph** native semantics (threads + runs + interrupts + resume)
 - **Temporal** durable execution (heartbeats, timeouts as semantics)
 - **AWS Step Functions** callback token pattern (pause → resume)
 - **Airflow** deferrable operators (suspend without killing)
@@ -82,7 +83,7 @@ User sent: "check disk space on cube"
 | **Join** | LangGraph, Celery | Block until run/task completes |
 | **Heartbeat** | Temporal | Progress signal during LLM thinking (not just tools) |
 | **Watch/Monitor** | Akka DeathWatch | Supervisor lifecycle notifications |
-| **Callback Token** | AWS Step Functions | Resume trigger on completion |
+| **Interrupt/Resume** | LangGraph | Pause workflow for worker, resume with result |
 | **Chord** | Celery | Multi-worker join + callback |
 | **Saga** | Garcia-Molina 1987 | Multi-step orchestration with compensation |
 | **Shield** | asyncio | Prevent timeout from cancelling task |
@@ -97,7 +98,7 @@ User sent: "check disk space on cube"
 
 **Airflow Deferrable Operators**: "Suspend itself and free the worker, hand waiting to Triggerer, resume when ready." Exactly timeout migration.
 
-**LangGraph**: Thread = durable state, Run = execution attempt. `runs.create()` returns immediately, `runs.join()` blocks with timeout. Timeout stops waiting, doesn't kill run. Webhook for completion notification.
+**LangGraph**: Thread = durable state, Run = execution attempt. `runs.create()` returns immediately, `runs.join()` blocks with timeout. Timeout stops waiting, doesn't kill run. Native `interrupt()` and `resume` for coordination.
 
 ---
 
@@ -115,17 +116,17 @@ A timeout means "I've waited long enough, I'll check back later" - not "kill eve
                     ┌─────────────────────────────────────┐
                     │           (re-attach)               │
                     ▼                                     │
-QUEUED → RUNNING → DEFERRED → RUNNING → COMPLETED ───────┤
-            │         │                     │            │
-            │         │                     └── webhook ─┘
-            │         │                     (triggers continuation)
-            │         │
-            └─────────┴──→ FAILED
+QUEUED → RUNNING ─┬─→ DEFERRED (timeout) ──→ RUNNING ─┬─→ COMPLETED
+                  │                                   │
+                  └─→ WAITING (interrupt) ──→ RUNNING ─┘
+                                                │
+                                                └──→ FAILED
 
 State Definitions:
 - QUEUED: Created, waiting for executor
 - RUNNING: Actively executing (supervisor or worker)
 - DEFERRED: Timeout migration - still running, but caller stopped waiting
+- WAITING: Interrupted - waiting for worker completion (LangGraph interrupt)
 - COMPLETED: Finished successfully
 - FAILED: Finished with error
 ```
@@ -134,19 +135,21 @@ State Definitions:
 
 ```
 Lifecycle Events:
-- run:created        {run_id, thread_id, task}
-- run:started        {run_id}
-- run:heartbeat      {run_id, activity: "llm_thinking"|"llm_streaming"|"tool_executing"}
-- run:deferred       {run_id, reason: "timeout", continue_url}
-- run:completed      {run_id, result, duration_ms}
-- run:failed         {run_id, error}
+- run:created          {run_id, thread_id, task}
+- run:started          {run_id}
+- run:heartbeat        {run_id, activity: "llm_thinking"|"llm_streaming"|"tool_executing"}
+- run:deferred         {run_id, reason: "timeout", attach_url}
+- run:waiting          {run_id, job_id, message}
+- run:resumed         {run_id}
+- run:completed        {run_id, result, duration_ms}
+- run:failed           {run_id, error}
 
 Worker Events:
-- worker:spawned     {job_id, run_id, task}
-- worker:started     {job_id, worker_id}
-- worker:heartbeat   {job_id, activity}
-- worker:tool_*      {job_id, tool_name, ...}
-- worker:completed   {job_id, status, result_summary}
+- worker:spawned       {job_id, run_id, task}
+- worker:started       {job_id, worker_id}
+- worker:heartbeat     {job_id, activity}
+- worker:tool_*        {job_id, tool_name, ...}
+- worker:completed     {job_id, status, result_summary}
 ```
 
 ### Foreground vs Background Execution
@@ -171,44 +174,40 @@ run_id = await supervisor.run_async(task)
 # 1. Run state → DEFERRED (not FAILED)
 # 2. Run continues executing
 # 3. Caller gets: {status: "deferred", run_id, attach_url}
-# 4. On completion: webhook fires, continuation triggered
+# 4. On completion: supervisor resumes (via resume handler)
 ```
 
-### Completion Notifications (Webhooks)
+### Completion Notifications (LangGraph Interrupt/Resume)
 
-When a background/deferred run completes:
+When a background/deferred run reaches a point where it needs external work (e.g., spawning a worker), it uses LangGraph's native `interrupt()` pattern.
 
-1. **Worker completes** → saves result to artifact store
-2. **Emit `worker:completed`** event
-3. **POST webhook** to continuation endpoint:
+1. **Supervisor spawns worker** → calls `interrupt({"job_id": job_id, "message": "..."})`
+2. **Run state → WAITING** (checkpointed in LangGraph thread)
+3. **Worker completes** → saves result to artifact store
+4. **Resumer** (see `worker_resume.py`) fetches the worker result
+5. **Resume call**:
+   ```python
+   # Bridges worker completion back into the supervisor graph
+   await runnable.ainvoke(Command(resume=worker_result), config)
    ```
-   POST /api/internal/runs/{supervisor_run_id}/continue
-   {
-     "trigger": "worker_complete",
-     "job_id": 2,
-     "worker_id": "2025-12-24T00-34-30_check-disk",
-     "status": "success",
-     "result_summary": "Disk check complete. 45% used on /dev/sda1..."
-   }
-   ```
-4. **Continuation handler**:
-   - Injects tool result message into supervisor thread
-   - Triggers new supervisor run (same `thread_id`, **new** `run_id`)
-   - Links runs via `continuation_of_run_id` for traceability
-   - Supervisor synthesizes final answer from worker result
-5. **User notified** via SSE (if connected) or stored for later
+6. **Continuation**:
+   - LangGraph resumes from the `interrupt()` point
+   - Injects `worker_result` as the return value of the tool call
+   - Supervisor synthesizes final answer or spawns next worker
+7. **User notified** via SSE (if connected) or stored for later
 
-**Run Identity Model:**
+**Run Identity Model (v2.2):**
 ```
 Thread 1 (conversation)
-  ├── Run 28 (original, status=DEFERRED)
-  │     └── spawned Worker Job 2
-  └── Run 29 (continuation, continuation_of=28, status=SUCCESS)
-        └── processed Worker Job 2 result
+  └── Run 28 (durable execution attempt)
+        ├── status=RUNNING
+        ├── status=WAITING (spawned Worker Job 2)
+        ├── status=RUNNING (resumed with Job 2 result)
+        └── status=SUCCESS (final answer)
 ```
-- `thread_id` = durable conversation state (same across continuations)
-- `run_id` = single execution attempt (new for each continuation)
-- `continuation_of_run_id` = links attempts for debugging/tracing
+- `thread_id` = durable conversation state
+- `run_id` = single durable execution attempt (persists through interrupts)
+- **Traceability**: All events and messages from the same attempt share the same `run_id`.
 
 ### SSE Re-attach
 
@@ -318,7 +317,7 @@ except asyncio.TimeoutError:
     )
 ```
 
-#### Task 1.2: Add DEFERRED status
+#### Task 1.2: Add DEFERRED and WAITING status
 
 **File**: `apps/zerg/backend/zerg/models/enums.py`
 
@@ -326,6 +325,7 @@ except asyncio.TimeoutError:
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING = "waiting"   # NEW: Interrupted waiting for worker completion
     DEFERRED = "deferred"  # NEW: timeout migration, still executing
     SUCCESS = "success"
     FAILED = "failed"

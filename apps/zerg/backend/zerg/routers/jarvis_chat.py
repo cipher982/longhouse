@@ -1,7 +1,6 @@
 """Jarvis text chat endpoint with streaming responses."""
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from datetime import timezone
@@ -33,7 +32,7 @@ class JarvisChatRequest(BaseModel):
     """Request for text chat with Supervisor."""
 
     message: str = Field(..., description="User message text")
-    client_correlation_id: Optional[str] = Field(None, description="Client-generated correlation ID")
+    message_id: str = Field(..., description="Client-generated message ID (UUID)")
     model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.2)")
     reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
 
@@ -42,7 +41,7 @@ async def _chat_stream_generator(
     run_id: int,
     owner_id: int,
     message: str,
-    client_correlation_id: Optional[str] = None,
+    message_id: str,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
 ):
@@ -50,6 +49,9 @@ async def _chat_stream_generator(
 
     Subscribes to supervisor events and streams assistant responses.
     The background task is started from within this generator to avoid race conditions.
+
+    IMPORTANT: We must not start the supervisor before the SSE stream has subscribed
+    to events, otherwise early events (e.g. supervisor_started) can be missed.
     """
     task_handle: Optional[asyncio.Task] = None
 
@@ -65,6 +67,7 @@ async def _chat_stream_generator(
                     owner_id=owner_id,
                     task=message,
                     run_id=run_id,
+                    message_id=message_id,
                     timeout=600,  # 10 min safety net; deferred state kicks in before this
                     model_override=model,
                     reasoning_effort=reasoning_effort,
@@ -85,26 +88,17 @@ async def _chat_stream_generator(
         finally:
             await _pop_supervisor_task(run_id)
 
-    # Send initial connection event
-    yield {
-        "event": "connected",
-        "data": json.dumps(
-            {
-                "message": "Chat stream connected",
-                "run_id": run_id,
-                "client_correlation_id": client_correlation_id,
-            }
-        ),
-    }
-
-    # NOW start the background task - after subscriptions are ready and connected event sent
-    logger.info(f"Chat SSE: starting background supervisor for run {run_id}", extra={"tag": "JARVIS"})
-    task_handle = asyncio.create_task(run_supervisor_background())
-    await _register_supervisor_task(run_id, task_handle)
-
-    # Delegate to shared generator for event streaming
-    async for event in stream_run_events(run_id, owner_id, client_correlation_id):
+    # Stream events, and only start the supervisor AFTER the stream generator has
+    # yielded its first event (which implies subscriptions are registered).
+    started_background = False
+    async for event in stream_run_events(run_id, owner_id):
         yield event
+
+        if not started_background:
+            started_background = True
+            logger.info(f"Chat SSE: starting background supervisor for run {run_id}", extra={"tag": "JARVIS"})
+            task_handle = asyncio.create_task(run_supervisor_background())
+            await _register_supervisor_task(run_id, task_handle)
 
 
 @router.post("/chat")
@@ -204,7 +198,7 @@ async def jarvis_chat(
             thread_id=thread.id,
             status=RunStatus.RUNNING,
             trigger=RunTrigger.API,
-            correlation_id=request.client_correlation_id,  # Phase 1: Store correlation ID
+            assistant_message_id=request.message_id,  # Client-generated message ID
             model=request.model,  # Store model for continuation inheritance
         )
         db.add(run)
@@ -256,7 +250,7 @@ async def jarvis_chat(
             run_id,
             current_user.id,
             request.message,
-            request.client_correlation_id,
+            request.message_id,
             model=model_to_use,
             reasoning_effort=reasoning_effort,
         )

@@ -45,11 +45,6 @@ current_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.Context
     default=None,
 )
 
-# DB session context for token event persistence (Resumable SSE v1)
-current_db_session_var: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(  # noqa: E501
-    "current_db_session_var",
-    default=None,
-)
 
 # ---------------------------------------------------------------------------
 # Callback implementation
@@ -216,22 +211,9 @@ def set_current_user_id(user_id: int | None):  # noqa: D401 – tiny setter help
     return current_user_id_var.set(int(user_id))
 
 
-def set_current_db_session(db_session: Any):  # noqa: D401 – tiny setter helper
-    """Set *db_session* as the active context for token event persistence.
-
-    Returns the *Token* object from ``ContextVar.set`` so callers can restore
-    the previous value via ``ContextVar.reset`` if desired.
-
-    This is used for Resumable SSE v1 to persist token events to the database.
-    """
-    return current_db_session_var.set(db_session)
-
-
 __all__ = [
     "WsTokenCallback",
     "current_thread_id_var",
-    "current_db_session_var",
-    "set_current_db_session",
     "current_user_id_var",
     "set_current_thread_id",
     "reset_current_thread_id",

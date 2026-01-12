@@ -18,8 +18,7 @@ export interface ConversationState {
   conversationId: string | null;
   streamingMessageId: string | null;
   streamingText: string;
-  currentCorrelationId: string | null;
-  currentMessageId: string | null; // Backend-assigned message ID for continuation runs
+  currentMessageId: string | null; // Message ID for streaming updates
   currentRunId: number | undefined; // Run ID for continuation messages
 }
 
@@ -35,7 +34,6 @@ export class ConversationController {
     conversationId: null,
     streamingMessageId: null,
     streamingText: '',
-    currentCorrelationId: null,
     currentMessageId: null,
     currentRunId: undefined,
   };
@@ -76,43 +74,20 @@ export class ConversationController {
   // ============= Streaming Response Management =============
 
   /**
-   * Start a streaming response
+   * Start a streaming response (legacy - for OpenAI Realtime)
    */
-  startStreaming(correlationId?: string): void {
-    logger.debug(`Starting streaming response, correlationId: ${correlationId}`);
+  startStreaming(): void {
+    logger.debug('Starting streaming response');
 
     // Create streaming message ID
     this.state.streamingMessageId = `streaming-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.state.streamingText = '';
-    this.state.currentCorrelationId = correlationId || null;
 
     this.emit({ type: 'streamingStart' });
   }
 
   /**
-   * Append text to streaming response
-   */
-  appendStreaming(delta: string, correlationId?: string): void {
-    if (!this.state.streamingMessageId) {
-      // Start streaming if not already started
-      this.startStreaming(correlationId);
-    }
-
-    this.state.streamingText += delta;
-
-    // Notify React via stateManager
-    stateManager.setStreamingText(this.state.streamingText);
-
-    // If we have a correlationId, update that specific bubble too
-    const activeCorrelationId = correlationId || this.state.currentCorrelationId;
-    if (activeCorrelationId) {
-      stateManager.updateAssistantStatus(activeCorrelationId, 'streaming', this.state.streamingText);
-    }
-  }
-
-  /**
-   * Start a streaming response for a continuation run (uses messageId instead of correlationId)
-   * This creates a NEW message bubble for the continuation response.
+   * Start a streaming response with messageId
    */
   startStreamingWithMessageId(messageId: string, runId?: number): void {
     logger.debug(`Starting streaming response with messageId: ${messageId}, runId: ${runId}`);
@@ -122,7 +97,6 @@ export class ConversationController {
     this.state.streamingText = '';
     this.state.currentMessageId = messageId;
     this.state.currentRunId = runId;
-    this.state.currentCorrelationId = null; // Not using correlationId for continuations
 
     this.emit({ type: 'streamingStart' });
   }
@@ -152,27 +126,18 @@ export class ConversationController {
     if (!this.state.streamingMessageId) return;
 
     const finalText = this.state.streamingText;
-    const correlationId = this.state.currentCorrelationId;
     const messageId = this.state.currentMessageId;
     logger.streamingResponse(finalText, true);
 
     // Clean up streaming state
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
-    this.state.currentCorrelationId = null;
     this.state.currentMessageId = null;
     this.state.currentRunId = undefined;
 
     // Clear streaming text and notify React of finalized message
     stateManager.setStreamingText('');
-    if (messageId) {
-      // Continuation run - finalize by messageId
-      stateManager.finalizeMessage(finalText, undefined, messageId);
-    } else if (correlationId) {
-      stateManager.finalizeMessage(finalText, correlationId);
-    } else {
-      stateManager.finalizeMessage(finalText);
-    }
+    stateManager.finalizeMessage(finalText, messageId ?? undefined);
 
     this.emit({ type: 'streamingStop' });
   }
@@ -197,7 +162,6 @@ export class ConversationController {
   clear(): void {
     this.state.streamingMessageId = null;
     this.state.streamingText = '';
-    this.state.currentCorrelationId = null;
     this.state.currentMessageId = null;
     this.state.currentRunId = undefined;
     stateManager.setStreamingText('');

@@ -47,8 +47,8 @@ describe('TimelineLogger', () => {
   })
 
   it('should capture text_channel:sent event', () => {
-    const correlationId = 'test-123'
-    logger.setCorrelationId(correlationId)
+    const messageId = 'test-123'
+    logger.setMessageId(messageId)
 
     // Emit text_channel:sent event
     eventBus.emit('text_channel:sent', {
@@ -63,8 +63,8 @@ describe('TimelineLogger', () => {
   })
 
   it('should capture supervisor lifecycle events', () => {
-    const correlationId = 'test-123'
-    logger.setCorrelationId(correlationId)
+    const messageId = 'test-123'
+    logger.setMessageId(messageId)
 
     const now = Date.now()
 
@@ -94,8 +94,8 @@ describe('TimelineLogger', () => {
   })
 
   it('should output timeline on supervisor:complete', () => {
-    const correlationId = 'test-123'
-    logger.setCorrelationId(correlationId)
+    const messageId = 'test-123'
+    logger.setMessageId(messageId)
 
     const now = Date.now()
 
@@ -122,8 +122,8 @@ describe('TimelineLogger', () => {
   })
 
   it('should calculate T+offset from first event', () => {
-    const correlationId = 'test-123'
-    logger.setCorrelationId(correlationId)
+    const messageId = 'test-123'
+    logger.setMessageId(messageId)
 
     const now = Date.now()
 
@@ -150,8 +150,8 @@ describe('TimelineLogger', () => {
   })
 
   it('should capture worker and tool events', () => {
-    const correlationId = 'test-123'
-    logger.setCorrelationId(correlationId)
+    const messageId = 'test-123'
+    logger.setMessageId(messageId)
 
     const now = Date.now()
 

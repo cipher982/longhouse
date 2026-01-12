@@ -46,8 +46,8 @@ class TestSupervisorE2EFlow:
         assert "status" in data
         assert "stream_url" in data
 
-        # Stream URL should point to events endpoint
-        assert f"/api/jarvis/supervisor/events?run_id={data['run_id']}" in data["stream_url"]
+        # Stream URL should point to unified stream endpoint
+        assert f"/api/stream/runs/{data['run_id']}" in data["stream_url"]
 
     @pytest.mark.xdist_group(name="supervisor")
     def test_supervisor_creates_one_brain_per_user(self, client, db_session, test_user, temp_artifact_path):
@@ -93,7 +93,7 @@ class TestSupervisorE2EFlow:
         # Connect to SSE stream (this is synchronous in TestClient)
         # Note: TestClient doesn't fully support SSE streaming, so we test
         # that the endpoint is reachable
-        with client.stream("GET", f"/api/jarvis/supervisor/events?run_id={run_id}") as sse_response:
+        with client.stream("GET", f"/api/stream/runs/{run_id}") as sse_response:
             assert sse_response.status_code == 200
 
             # Read first event (should be "connected")

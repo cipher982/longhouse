@@ -51,12 +51,11 @@ export interface ChatMessage {
   itemId?: string
   /** New fields for Option C (Jarvis Typing Indicator) */
   status?: AssistantStatus
-  correlationId?: string
   /**
-   * Unique identifier for the assistant message from the backend.
-   * This is stable across supervisor_started -> supervisor_token -> supervisor_complete.
-   * Used to update the correct message during streaming (instead of correlationId which
-   * is request-scoped and can map to multiple messages in continuation scenarios).
+   * Unique identifier for the assistant message.
+   * For normal runs: Client-generated upfront (no binding step needed).
+   * For continuation runs: Backend-generated, received in supervisor_started event.
+   * Stable across supervisor_started -> supervisor_token -> supervisor_complete.
    */
   messageId?: string
   /** Supervisor run ID for associating tool calls with this message */
@@ -135,9 +134,7 @@ export type AppAction =
   | { type: 'SET_MESSAGES'; messages: ChatMessage[] }
   | { type: 'ADD_MESSAGE'; message: ChatMessage }
   | { type: 'UPDATE_MESSAGE'; itemId: string; content: string }
-  | { type: 'UPDATE_MESSAGE_BY_CORRELATION_ID'; correlationId: string; updates: Partial<ChatMessage> }
   | { type: 'UPDATE_MESSAGE_BY_MESSAGE_ID'; messageId: string; updates: Partial<ChatMessage> }
-  | { type: 'BIND_MESSAGE_ID_TO_CORRELATION_ID'; correlationId: string; messageId: string; runId?: number }
   | { type: 'SET_STREAMING_CONTENT'; content: string }
   | { type: 'SET_USER_TRANSCRIPT_PREVIEW'; text: string }
   | { type: 'SET_CONVERSATION_ID'; id: string | null }

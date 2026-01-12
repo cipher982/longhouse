@@ -17,7 +17,7 @@ async def debug_chat_flow():
         payload = {
             "message": "check health of my server", # Should trigger worker
             "model": "gpt-5.2", # Use default model
-            "client_correlation_id": "debug-cli-001"
+            "message_id": "debug-cli-001"  # Client-generated message ID
         }
 
         try:

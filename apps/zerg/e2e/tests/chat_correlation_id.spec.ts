@@ -30,7 +30,7 @@ test.describe('Chat Correlation ID Flow', () => {
         if (postData) {
           try {
             const body = JSON.parse(postData);
-            capturedCorrelationId = body.client_correlation_id;
+            capturedCorrelationId = body.message_id;
           } catch (e) {
             // Ignore parse errors
           }
@@ -84,8 +84,8 @@ test.describe('Chat Correlation ID Flow', () => {
         if (postData) {
           try {
             const body = JSON.parse(postData);
-            if (body.client_correlation_id) {
-              correlationIds.push(body.client_correlation_id);
+            if (body.message_id) {
+              correlationIds.push(body.message_id);
             }
           } catch (e) {
             // Ignore
@@ -94,23 +94,23 @@ test.describe('Chat Correlation ID Flow', () => {
       }
     });
 
-    // Send first message and wait for API response
+    // Send first message and wait for API request
     const inputSelector = '.text-input-container textarea, .text-input-container input[type="text"]';
     await page.locator(inputSelector).fill('first message');
-    const sendButton = page.locator('button.send-button').first();
+    const sendButton = page.locator('button.send-button, button[aria-label*="Send"], button:has-text("Send")').first();
 
-    // Wait for the API request to complete
-    const [firstResponse] = await Promise.all([
-      page.waitForResponse(r => r.url().includes('/api/jarvis/chat') && r.status() === 200, { timeout: 15000 }),
-      sendButton.click(),
-    ]);
+    const requestPromise1 = page.waitForRequest(r => r.url().includes('/api/jarvis/chat') && r.method() === 'POST');
+    await sendButton.click();
+    await requestPromise1;
 
-    // Send second message and wait for API response
+    // Wait a moment for UI to reset (clear input)
+    await page.waitForTimeout(500);
+
+    // Send second message and wait for API request
+    const requestPromise2 = page.waitForRequest(r => r.url().includes('/api/jarvis/chat') && r.method() === 'POST');
     await page.locator(inputSelector).fill('second message');
-    const [secondResponse] = await Promise.all([
-      page.waitForResponse(r => r.url().includes('/api/jarvis/chat') && r.status() === 200, { timeout: 15000 }),
-      sendButton.click(),
-    ]);
+    await sendButton.click();
+    await requestPromise2;
 
     // Verify we captured two different correlation IDs
     expect(correlationIds.length).toBeGreaterThanOrEqual(2);

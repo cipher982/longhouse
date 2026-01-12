@@ -8,8 +8,6 @@ Prior to consolidation, this module had its own streaming implementation with
 ~150 lines of duplicated logic. Now it delegates to stream_run_events_live().
 """
 
-from typing import Optional
-
 from zerg.routers.stream import stream_run_events_live
 
 __all__ = ["stream_run_events"]
@@ -18,7 +16,6 @@ __all__ = ["stream_run_events"]
 async def stream_run_events(
     run_id: int,
     owner_id: int,
-    client_correlation_id: Optional[str] = None,
 ):
     """Generate SSE events for a specific run (live-only, no replay).
 
@@ -31,10 +28,9 @@ async def stream_run_events(
     Args:
         run_id: Run identifier
         owner_id: Owner ID for security filtering
-        client_correlation_id: Optional client correlation ID for tracking
 
     Yields:
         SSE events in format: {"event": str, "data": str}
     """
-    async for event in stream_run_events_live(run_id, owner_id, client_correlation_id):
+    async for event in stream_run_events_live(run_id, owner_id):
         yield event

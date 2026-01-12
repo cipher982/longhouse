@@ -147,14 +147,12 @@ class WorkerRunner:
         # This context is read by zerg_react_agent._call_tool_async to emit
         # WORKER_TOOL_STARTED/COMPLETED/FAILED events
         # job_id is critical for roundabout event correlation
-        # db_session is for Resumable SSE v1 event persistence
         worker_context = WorkerContext(
             worker_id=worker_id,
             owner_id=owner_for_events,
             run_id=event_ctx.get("run_id"),
             job_id=job_id,
             task=task[:100],
-            db_session=db,
         )
         context_token = set_worker_context(worker_context)
 

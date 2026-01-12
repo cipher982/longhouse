@@ -71,8 +71,6 @@ class WorkerContext:
         Flag indicating a critical tool error occurred (fail-fast)
     critical_error_message
         Human-readable error message for the critical error
-    db_session
-        Optional DB session for event persistence (Resumable SSE v1)
     """
 
     worker_id: str
@@ -83,7 +81,6 @@ class WorkerContext:
     tool_calls: list[ToolCall] = field(default_factory=list)
     has_critical_error: bool = False
     critical_error_message: str | None = None
-    db_session: Any | None = None
 
     def record_tool_start(
         self,

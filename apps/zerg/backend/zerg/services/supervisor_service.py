@@ -382,6 +382,7 @@ class SupervisorService:
         owner_id: int,
         task: str,
         run_id: int | None = None,
+        message_id: str | None = None,
         timeout: int = 60,
         model_override: str | None = None,
         reasoning_effort: str | None = None,
@@ -400,6 +401,7 @@ class SupervisorService:
             owner_id: User ID
             task: The task/question from the user
             run_id: Optional existing run ID (avoids duplicate run creation)
+            message_id: Client-generated message ID (UUID). If None, one will be generated.
             timeout: Maximum execution time in seconds
             model_override: Optional model to use instead of agent's default
             reasoning_effort: Optional reasoning effort (none, low, medium, high)
@@ -455,13 +457,15 @@ class SupervisorService:
 
         logger.info(f"Starting supervisor run {run.id} for user {owner_id}, task: {task[:50]}...", extra={"tag": "AGENT"})
 
-        # Generate unique message_id for this assistant response
+        # Use client-provided message_id or generate one (for direct API calls / tests)
         # This ID is stable across supervisor_started -> supervisor_token -> supervisor_complete
-        message_id = str(uuid.uuid4())
+        if message_id is None:
+            message_id = str(uuid.uuid4())
 
-        # Persist message_id to the run for continuation lookups
-        run.assistant_message_id = message_id
-        self.db.commit()
+        # Persist message_id to the run if not already set (jarvis_chat.py sets it on AgentRun creation)
+        if run.assistant_message_id != message_id:
+            run.assistant_message_id = message_id
+            self.db.commit()
 
         # Check if this is a continuation run (processing worker result from a deferred run)
         # If so, include continuation_of_message_id so frontend creates a NEW message bubble
@@ -549,7 +553,7 @@ class SupervisorService:
             from zerg.services.supervisor_context import reset_supervisor_context
             from zerg.services.supervisor_context import set_supervisor_context
 
-            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, db=self.db, owner_id=owner_id, message_id=message_id)
+            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, owner_id=owner_id, message_id=message_id)
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)
             # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
@@ -566,11 +570,9 @@ class SupervisorService:
             _emitter_token = set_emitter(_supervisor_emitter)
 
             # Set user context for token streaming (required for real-time SSE tokens)
-            from zerg.callbacks.token_stream import set_current_db_session
             from zerg.callbacks.token_stream import set_current_user_id
 
             _user_ctx_token = set_current_user_id(owner_id)
-            _db_ctx_token = set_current_db_session(self.db)
 
             # Run the agent with timeout (shielded so timeout doesn't cancel work)
             runner = AgentRunner(agent, model_override=model_override, reasoning_effort=reasoning_effort)
@@ -706,11 +708,9 @@ class SupervisorService:
                 reset_supervisor_context(_supervisor_ctx_tokens)
                 reset_emitter(_emitter_token)
                 # Reset user context
-                from zerg.callbacks.token_stream import current_db_session_var
                 from zerg.callbacks.token_stream import current_user_id_var
 
                 current_user_id_var.reset(_user_ctx_token)
-                current_db_session_var.reset(_db_ctx_token)
 
             # Extract final result (last assistant message)
             result_text = None

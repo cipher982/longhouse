@@ -55,8 +55,7 @@ class SupervisorClient:
         grace_period = 0.5  # Drain trailing events for 0.5s after completion
 
         with requests.get(
-            f"{self.base_url}/api/jarvis/supervisor/events",
-            params={"run_id": run_id},
+            f"{self.base_url}/api/stream/runs/{run_id}",
             headers=self.headers,
             stream=True,
             timeout=timeout,
@@ -107,8 +106,7 @@ class SupervisorClient:
         event_type = None
 
         with requests.get(
-            f"{self.base_url}/api/jarvis/supervisor/events",
-            params={"run_id": run_id},
+            f"{self.base_url}/api/stream/runs/{run_id}",
             headers=self.headers,
             stream=True,
             timeout=timeout,

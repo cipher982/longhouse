@@ -360,7 +360,6 @@ async def attach_to_run_stream(
             stream_run_events(
                 run_id=run_id_val,
                 owner_id=current_user.id,
-                client_correlation_id=None,
             )
         )
     else:

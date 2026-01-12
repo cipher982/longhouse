@@ -52,8 +52,6 @@ async def spawn_worker_async(
         spawn_worker("Check disk usage on prod-web server via SSH")
         spawn_worker("Research vacuums and recommend the best one")
     """
-    from zerg.events import EventType
-    from zerg.events import event_bus
     from zerg.models.models import WorkerJob
     from zerg.services.supervisor_context import get_supervisor_run_id
 
@@ -100,18 +98,21 @@ async def spawn_worker_async(
             db.commit()
             db.refresh(worker_job)
 
-            # Emit WORKER_SPAWNED event for SSE streaming (only for new jobs)
-            await event_bus.publish(
-                EventType.WORKER_SPAWNED,
-                {
-                    "event_type": EventType.WORKER_SPAWNED,
-                    "job_id": worker_job.id,
-                    "task": task[:100],
-                    "model": worker_model,
-                    "owner_id": owner_id,
-                    "run_id": supervisor_run_id,
-                },
-            )
+            # Emit WORKER_SPAWNED event durably (replays on reconnect)
+            # Only persist if we have a supervisor run_id (test mocks may not have one)
+            if supervisor_run_id is not None:
+                from zerg.services.event_store import append_run_event
+
+                await append_run_event(
+                    run_id=supervisor_run_id,
+                    event_type="worker_spawned",
+                    payload={
+                        "job_id": worker_job.id,
+                        "task": task[:100],
+                        "model": worker_model,
+                        "owner_id": owner_id,
+                    },
+                )
 
         # INTERRUPT: Pause execution and checkpoint state.
         # The __interrupt__ payload tells the frontend what's happening.

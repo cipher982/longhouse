@@ -111,7 +111,6 @@ async def _replay_and_stream(
     *,
     include_replay: bool = True,
     allow_continuation_runs: bool = False,
-    client_correlation_id: str | None = None,
 ):
     """Generator that optionally replays historical events, then streams live.
 
@@ -139,7 +138,6 @@ async def _replay_and_stream(
         include_tokens: Whether to include SUPERVISOR_TOKEN events
         include_replay: If True, replay historical events before streaming live
         allow_continuation_runs: If True, also stream events from continuation runs
-        client_correlation_id: Optional client correlation ID for tracking
 
     Yields:
         SSE events in format: {"id": str, "event": str, "data": str}
@@ -150,7 +148,7 @@ async def _replay_and_stream(
     last_sent_event_id = 0
     pending_workers = 0
     supervisor_done = False
-    overflow = False  # Track if queue has overflowed
+    overflow_event = asyncio.Event()  # Signal overflow without queue sentinel
     continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
 
     def _is_direct_continuation(candidate_run_id: int) -> bool:
@@ -178,8 +176,7 @@ async def _replay_and_stream(
 
     async def event_handler(event):
         """Filter and queue relevant events (non-blocking)."""
-        nonlocal overflow
-        if overflow:
+        if overflow_event.is_set():
             return  # Already overflowed, drop subsequent events
 
         # Security: only emit events for this owner
@@ -210,13 +207,8 @@ async def _replay_and_stream(
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            overflow = True
+            overflow_event.set()  # Signal overflow via Event (no sentinel needed)
             logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")
-            # Push overflow sentinel (make room by being already full, try once)
-            try:
-                queue.put_nowait({"_overflow": True})
-            except asyncio.QueueFull:
-                pass  # Stream will timeout and close anyway
 
     # Subscribe to all relevant events
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
@@ -270,8 +262,6 @@ async def _replay_and_stream(
                 "run_id": run_id,
                 "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
-            if client_correlation_id:
-                connected_payload["client_correlation_id"] = client_correlation_id
             yield {
                 "event": "connected",
                 "data": json.dumps(connected_payload, default=_json_default),
@@ -300,24 +290,24 @@ async def _replay_and_stream(
         # Stream live events until supervisor completes or errors
         complete = False
         while not complete:
+            # Check overflow signal (set by event_handler when queue is full)
+            if overflow_event.is_set():
+                logger.warning(f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)")
+                yield {
+                    "event": "overflow",
+                    "data": json.dumps(
+                        {
+                            "type": "overflow",
+                            "message": "Stream buffer full, please reconnect",
+                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        },
+                        default=_json_default,
+                    ),
+                }
+                return
+
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
-
-                # Handle overflow sentinel - close stream gracefully
-                if event.get("_overflow"):
-                    logger.warning(f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)")
-                    yield {
-                        "event": "overflow",
-                        "data": json.dumps(
-                            {
-                                "type": "overflow",
-                                "message": "Stream buffer full, please reconnect",
-                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                            },
-                            default=_json_default,
-                        ),
-                    }
-                    return
 
                 event_type = event.get("event_type") or event.get("type") or "event"
 
@@ -365,16 +355,16 @@ async def _replay_and_stream(
                 if event_id:
                     last_sent_event_id = event_id
 
+                # Build SSE data payload
+                sse_data: dict = {
+                    "type": event_type,
+                    "payload": payload,
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+
                 sse_event = {
                     "event": event_type,
-                    "data": json.dumps(
-                        {
-                            "type": event_type,
-                            "payload": payload,
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        },
-                        default=_json_default,
-                    ),
+                    "data": json.dumps(sse_data, default=_json_default),
                 }
                 # Only include id field when event_id exists (omit for id=null)
                 if event_id:
@@ -421,7 +411,6 @@ async def _replay_and_stream(
 async def stream_run_events_live(
     run_id: int,
     owner_id: int,
-    client_correlation_id: str | None = None,
 ):
     """Stream live run events without replay (for Jarvis chat).
 
@@ -434,7 +423,6 @@ async def stream_run_events_live(
     Args:
         run_id: Run identifier
         owner_id: Owner ID for security filtering
-        client_correlation_id: Optional client correlation ID for tracking
 
     Yields:
         SSE events in format: {"event": str, "data": str}
@@ -449,7 +437,6 @@ async def stream_run_events_live(
         include_tokens=True,
         include_replay=False,
         allow_continuation_runs=True,
-        client_correlation_id=client_correlation_id,
     ):
         yield event
 
