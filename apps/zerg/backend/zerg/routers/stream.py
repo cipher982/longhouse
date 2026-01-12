@@ -97,6 +97,11 @@ def _load_historical_events(
     return events
 
 
+# Backpressure: max events to buffer per client before closing stream
+# Client should reconnect with Last-Event-ID for resumable replay
+STREAM_QUEUE_MAX_SIZE = 1000
+
+
 async def _replay_and_stream(
     run_id: int,
     owner_id: int,
@@ -117,6 +122,10 @@ async def _replay_and_stream(
     Historical events are loaded into memory first, then the DB session is closed
     before any SSE events are yielded.
 
+    Backpressure: The queue is bounded to STREAM_QUEUE_MAX_SIZE events. If a slow
+    client causes overflow, the stream closes gracefully. The client should reconnect
+    with Last-Event-ID to resume from the durable event store.
+
     Args:
         run_id: Run identifier
         owner_id: Owner ID for security filtering
@@ -128,13 +137,19 @@ async def _replay_and_stream(
         SSE events in format: {"id": str, "event": str, "data": str}
     """
     # 1. Subscribe to live events FIRST (before replaying) to avoid race condition
-    queue: asyncio.Queue = asyncio.Queue()
+    # Bounded queue for backpressure - overflow triggers graceful stream closure
+    queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAX_SIZE)
     last_sent_event_id = 0
     pending_workers = 0
     supervisor_done = False
+    overflow = False  # Track if queue has overflowed
 
     async def event_handler(event):
-        """Filter and queue relevant events."""
+        """Filter and queue relevant events (non-blocking)."""
+        nonlocal overflow
+        if overflow:
+            return  # Already overflowed, drop subsequent events
+
         # Security: only emit events for this owner
         if event.get("owner_id") != owner_id:
             return
@@ -150,7 +165,17 @@ async def _replay_and_stream(
                 logger.warning(f"Tool event missing run_id, dropping: {event_type}")
                 return
 
-        await queue.put(event)
+        # Non-blocking put with overflow handling
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            overflow = True
+            logger.warning(f"Stream queue overflow for run {run_id}, signaling client to reconnect")
+            # Push overflow sentinel (make room by being already full, try once)
+            try:
+                queue.put_nowait({"_overflow": True})
+            except asyncio.QueueFull:
+                pass  # Stream will timeout and close anyway
 
     # Subscribe to all relevant events
     event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
@@ -217,6 +242,22 @@ async def _replay_and_stream(
         while not complete:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
+
+                # Handle overflow sentinel - close stream gracefully
+                if event.get("_overflow"):
+                    logger.warning(f"Stream overflow for run {run_id}, closing (client should reconnect with Last-Event-ID)")
+                    yield {
+                        "event": "overflow",
+                        "data": json.dumps(
+                            {
+                                "type": "overflow",
+                                "message": "Stream buffer full, please reconnect",
+                                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            },
+                            default=_json_default,
+                        ),
+                    }
+                    return
 
                 event_type = event.get("event_type") or event.get("type") or "event"
 
