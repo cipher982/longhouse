@@ -29,7 +29,7 @@ export class TimelineLogger {
   private enabled: boolean = false;
   private events: TimelineEvent[] = [];
   private startTime: number | null = null;
-  private currentCorrelationId: string | null = null;
+  private currentMessageId: string | null = null;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -179,7 +179,7 @@ export class TimelineLogger {
   private outputTimeline(): void {
     if (!this.enabled || this.events.length === 0) return;
 
-    const correlationId = this.currentCorrelationId || 'unknown';
+    const messageId = this.currentMessageId || 'unknown';
     const lines: string[] = [];
 
     for (const event of this.events) {
@@ -208,13 +208,13 @@ export class TimelineLogger {
     }
 
     // Output as grouped console log for dev readability
-    console.groupCollapsed(`[Timeline] ${correlationId} (${this.events.length} events)`);
+    console.groupCollapsed(`[Timeline] ${messageId} (${this.events.length} events)`);
     console.log(lines.join('\n'));
     console.groupEnd();
 
     // Also output plain log lines for E2E test capture (console.groupCollapsed isn't
     // reliably captured by Playwright's page.on('console'))
-    console.log(`[Timeline] correlationId=${correlationId}`);
+    console.log(`[Timeline] messageId=${messageId}`);
     for (const line of lines) {
       console.log(line);
     }
@@ -229,14 +229,14 @@ export class TimelineLogger {
   private reset(): void {
     this.events = [];
     this.startTime = null;
-    this.currentCorrelationId = null;
+    this.currentMessageId = null;
   }
 
   /**
-   * Set correlation ID for current timeline
+   * Set message ID for current timeline
    */
-  setCorrelationId(correlationId: string): void {
-    this.currentCorrelationId = correlationId;
+  setMessageId(messageId: string): void {
+    this.currentMessageId = messageId;
   }
 
   /**

@@ -316,7 +316,8 @@ On failure, shows first 10 failed tests with guidance:
 - BFF endpoints: Served by zerg-backend at `/api/jarvis/*`
 
 The Jarvis code lives in `src/jarvis/` with this structure:
-- `app/` — React components, hooks, context
+- `app/` — React components, hooks
+- `contexts/` — React contexts
 - `lib/` — Utilities (voice, session, audio controllers)
 - `core/` — Core utilities (logger, API client)
 - `data/` — IndexedDB storage

@@ -1,7 +1,6 @@
-"""Jarvis supervisor endpoints - dispatch, events, cancel."""
+"""Jarvis supervisor endpoints - dispatch and cancel."""
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from datetime import timezone
@@ -15,17 +14,14 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
-from sse_starlette.sse import EventSourceResponse
 
 from zerg.database import get_db
 from zerg.events import EventType
 from zerg.events.event_bus import event_bus
-from zerg.generated.sse_events import SSEEventType
 from zerg.models.models import Agent
 from zerg.models.models import AgentRun
 from zerg.routers.jarvis_auth import _is_tool_enabled
 from zerg.routers.jarvis_auth import get_current_jarvis_user
-from zerg.services.supervisor_context import get_next_seq
 from zerg.services.supervisor_context import reset_seq
 
 logger = logging.getLogger(__name__)
@@ -140,7 +136,7 @@ async def jarvis_supervisor(
             "run_id": 456,
             "thread_id": 789,
             "status": "running",
-            "stream_url": "/api/jarvis/supervisor/events?run_id=456"
+            "stream_url": "/api/stream/runs/456"
         }
     """
     from zerg.services.supervisor_service import SupervisorService
@@ -184,7 +180,7 @@ async def jarvis_supervisor(
             run_id=run.id,
             thread_id=thread.id,
             status="running",
-            stream_url=f"/api/jarvis/supervisor/events?run_id={run.id}",
+            stream_url=f"/api/stream/runs/{run.id}",
         )
 
     # Start supervisor execution in background
@@ -217,230 +213,8 @@ async def jarvis_supervisor(
         run_id=run.id,
         thread_id=thread.id,
         status="running",
-        stream_url=f"/api/jarvis/supervisor/events?run_id={run.id}",
+        stream_url=f"/api/stream/runs/{run.id}",
     )
-
-
-async def _supervisor_event_generator(run_id: int, owner_id: int):
-    """Generate SSE events for a specific supervisor run.
-
-    Subscribes to supervisor and worker events filtered by run_id/owner_id.
-    All events include a monotonically increasing `seq` for idempotent reconnect handling.
-
-    Args:
-        run_id: The supervisor run ID to track
-        owner_id: Owner ID for security filtering
-    """
-    queue: asyncio.Queue = asyncio.Queue()
-    pending_workers = 0
-    supervisor_done = False
-
-    async def event_handler(event):
-        """Filter and queue relevant events."""
-        # Security: only emit events for this owner
-        if event.get("owner_id") != owner_id:
-            return
-
-        # For supervisor events, filter by run_id
-        if "run_id" in event and event.get("run_id") != run_id:
-            return
-
-        # Tool events MUST have run_id to prevent leaking across runs
-        event_type = event.get("event_type") or event.get("type")
-        if event_type in ("worker_tool_started", "worker_tool_completed", "worker_tool_failed"):
-            if "run_id" not in event:
-                logger.warning(f"Tool event missing run_id, dropping: {event_type}")
-                return
-
-        await queue.put(event)
-
-    # Subscribe to supervisor/worker events
-    event_bus.subscribe(EventType.SUPERVISOR_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_THINKING, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_DEFERRED, event_handler)  # Timeout migration
-    event_bus.subscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-    event_bus.subscribe(EventType.WORKER_SPAWNED, event_handler)
-    event_bus.subscribe(EventType.WORKER_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_COMPLETE, event_handler)
-    event_bus.subscribe(EventType.WORKER_SUMMARY_READY, event_handler)
-    event_bus.subscribe(EventType.ERROR, event_handler)
-    # Subscribe to worker tool events (Phase 2: Activity Ticker)
-    event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-    # Subscribe to supervisor tool events (inline tool cards)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
-    event_bus.subscribe(EventType.SUPERVISOR_TOOL_PROGRESS, event_handler)
-
-    try:
-        # Send initial connection event with seq
-        yield {
-            "event": SSEEventType.CONNECTED.value,
-            "data": json.dumps(
-                {
-                    "message": "Supervisor SSE stream connected",
-                    "run_id": run_id,
-                    "seq": get_next_seq(run_id),
-                }
-            ),
-        }
-
-        # Stream events until supervisor completes or errors
-        complete = False
-        while not complete:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-
-                # Determine event type
-                event_type = event.get("event_type") or event.get("type") or "event"
-
-                # Track worker lifecycle so we don't close the stream until workers finish
-                if event_type == "worker_spawned":
-                    pending_workers += 1
-                elif event_type == "worker_complete" and pending_workers > 0:
-                    pending_workers -= 1
-                elif event_type == "worker_summary_ready" and pending_workers > 0:
-                    # In rare cases worker_complete may be dropped; treat summary_ready as completion
-                    pending_workers -= 1
-                elif event_type == "supervisor_complete":
-                    supervisor_done = True
-                elif event_type == "supervisor_deferred":
-                    # v2.2: Timeout migration default is to close the stream, but some
-                    # DEFERRED states (e.g., waiting for worker continuations) should
-                    # keep the stream open so the connected client receives the final answer.
-                    if event.get("close_stream", True):
-                        complete = True
-                elif event_type == "error":
-                    complete = True
-
-                # Close once supervisor is done AND all workers for this run have finished
-                if supervisor_done and pending_workers == 0:
-                    complete = True
-
-                # Format payload (remove internal fields) - extract event_id before filtering
-                event_id = event.get("event_id")
-                payload = {k: v for k, v in event.items() if k not in {"event_type", "type", "owner_id", "event_id"}}
-
-                # Add monotonically increasing seq for idempotent reconnect handling
-                seq = get_next_seq(run_id)
-
-                sse_event = {
-                    "event": event_type,
-                    "data": json.dumps(
-                        {
-                            "type": event_type,
-                            "payload": payload,
-                            "seq": seq,
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
-                    ),
-                }
-
-                # Add id field if event_id is present
-                if event_id is not None:
-                    sse_event["id"] = str(event_id)
-
-                yield sse_event
-
-            except asyncio.TimeoutError:
-                # Send heartbeat with seq
-                yield {
-                    "event": SSEEventType.HEARTBEAT.value,
-                    "data": json.dumps(
-                        {
-                            "seq": get_next_seq(run_id),
-                            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        }
-                    ),
-                }
-
-        # Run reached terminal state; clear sequence counter to avoid leaks
-        reset_seq(run_id)
-
-    except asyncio.CancelledError:
-        logger.info(f"Supervisor SSE stream disconnected for run {run_id}")
-    finally:
-        # Unsubscribe from all events
-        event_bus.unsubscribe(EventType.SUPERVISOR_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_THINKING, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_DEFERRED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_WAITING, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.SUPERVISOR_RESUMED, event_handler)  # Interrupt/resume pattern
-        event_bus.unsubscribe(EventType.WORKER_SPAWNED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_COMPLETE, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_SUMMARY_READY, event_handler)
-        event_bus.unsubscribe(EventType.ERROR, event_handler)
-        # Unsubscribe from worker tool events
-        event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
-        # Unsubscribe from supervisor tool events
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
-        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_PROGRESS, event_handler)
-
-
-@router.get("/supervisor/events")
-async def jarvis_supervisor_events(
-    run_id: int,
-    current_user=Depends(get_current_jarvis_user),
-) -> EventSourceResponse:
-    """SSE stream for supervisor run progress.
-
-    Provides real-time updates for a specific supervisor run including:
-    - supervisor_started: Run has begun
-    - supervisor_thinking: Supervisor is analyzing
-    - worker_spawned: Worker job queued
-    - worker_started: Worker execution began
-    - worker_complete: Worker finished (success/failed)
-    - worker_summary_ready: Worker summary extracted
-    - supervisor_complete: Final result ready
-    - error: Something went wrong
-    - heartbeat: Keep-alive (every 30s)
-
-    The stream automatically closes when the supervisor completes or errors.
-
-    Args:
-        run_id: The supervisor run ID to track
-        current_user: Authenticated user
-
-    Returns:
-        EventSourceResponse streaming supervisor events
-
-    Raises:
-        HTTPException 404: If run not found or doesn't belong to user
-    """
-    from zerg.database import db_session
-
-    # CRITICAL: Use SHORT-LIVED session for security check
-    # Don't use Depends(get_db) - it holds the session open for the entire
-    # SSE stream duration, blocking TRUNCATE during E2E resets.
-    with db_session() as db:
-        # Validate run exists and belongs to user
-        run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-        if not run:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Run {run_id} not found",
-            )
-
-        # Check ownership via the run's agent
-        agent = db.query(Agent).filter(Agent.id == run.agent_id).first()
-        if not agent or agent.owner_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Run {run_id} not found",  # Don't reveal existence to other users
-            )
-    # Session is now closed - no DB connection held during streaming
-
-    return EventSourceResponse(_supervisor_event_generator(run_id, current_user.id))
 
 
 @router.post("/supervisor/{run_id}/cancel", response_model=JarvisCancelResponse)

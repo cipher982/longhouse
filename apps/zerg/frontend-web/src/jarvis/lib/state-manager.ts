@@ -88,10 +88,8 @@ export type StateChangeEvent =
   | { type: 'VOICE_STATUS_CHANGED'; status: VoiceStatus }
   | { type: 'CONNECTION_ERROR'; error: Error }
   | { type: 'TOAST'; message: string; variant: 'success' | 'error' | 'info' }
-  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date; skipAnimation?: boolean; correlationId?: string; messageId?: string } }
-  | { type: 'ASSISTANT_STATUS_CHANGED'; correlationId: string; status: string; content?: string; usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null }; runId?: number }
+  | { type: 'MESSAGE_FINALIZED'; message: { id: string; role: 'assistant'; content: string; timestamp: Date; skipAnimation?: boolean; messageId?: string } }
   | { type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID'; messageId: string; status: string; content?: string; usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null }; runId?: number }
-  | { type: 'BIND_MESSAGE_ID_TO_CORRELATION_ID'; correlationId: string; messageId: string; runId?: number }
   | { type: 'USER_VOICE_COMMITTED'; itemId: string }
   | { type: 'USER_VOICE_TRANSCRIPT'; itemId: string; transcript: string }
   | { type: 'HISTORY_LOADED'; history: unknown[] }
@@ -209,36 +207,23 @@ export class StateManager {
   /**
    * Notify that a message has been finalized (streaming complete)
    */
-  finalizeMessage(content: string, correlationId?: string, messageId?: string): void {
+  finalizeMessage(content: string, messageId?: string): void {
     const message = {
       id: uuid(),
       role: 'assistant' as const,
       content,
       timestamp: new Date(),
       skipAnimation: true, // Skip fade-in since user already saw it streaming
-      correlationId,
       messageId,
     };
     this.notifyListeners({ type: 'MESSAGE_FINALIZED', message });
   }
 
   /**
-   * Update assistant message status via correlationId
-   */
-  updateAssistantStatus(
-    correlationId: string,
-    status: string,
-    content?: string,
-    usage?: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null; reasoning_tokens?: number | null },
-    runId?: number
-  ): void {
-    this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED', correlationId, status, content, usage, runId });
-  }
-
-  /**
-   * Update assistant message status via messageId (preferred for streaming updates)
-   * This is more reliable than correlationId for continuation scenarios where
-   * one user request can spawn multiple supervisor runs with different messages.
+   * Update assistant message status via messageId
+   * This is the primary method for updating assistant messages during streaming.
+   * For normal runs: messageId is client-generated upfront.
+   * For continuation runs: messageId is backend-generated, received in supervisor_started.
    */
   updateAssistantStatusByMessageId(
     messageId: string,
@@ -248,15 +233,6 @@ export class StateManager {
     runId?: number
   ): void {
     this.notifyListeners({ type: 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID', messageId, status, content, usage, runId });
-  }
-
-  /**
-   * Bind a backend-assigned messageId to an existing placeholder found by correlationId.
-   * Called on supervisor_started to establish the messageId for subsequent updates.
-   * After this binding, all updates should use messageId for lookup (messageId-first pattern).
-   */
-  bindMessageIdToCorrelationId(correlationId: string, messageId: string, runId?: number): void {
-    this.notifyListeners({ type: 'BIND_MESSAGE_ID_TO_CORRELATION_ID', correlationId, messageId, runId });
   }
 
   /**
