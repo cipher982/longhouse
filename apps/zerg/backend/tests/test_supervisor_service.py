@@ -10,10 +10,10 @@ from zerg.connectors.resolver import CredentialResolver
 from zerg.models.enums import RunStatus
 from zerg.models.models import AgentRun
 from zerg.services.supervisor_context import get_next_seq
-from zerg.services.supervisor_context import get_supervisor_run_id
+from zerg.services.supervisor_context import get_supervisor_context
 from zerg.services.supervisor_context import reset_seq
-from zerg.services.supervisor_context import reset_supervisor_run_id
-from zerg.services.supervisor_context import set_supervisor_run_id
+from zerg.services.supervisor_context import reset_supervisor_context
+from zerg.services.supervisor_context import set_supervisor_context
 from zerg.services.supervisor_service import SUPERVISOR_THREAD_TYPE
 from zerg.services.supervisor_service import SupervisorService
 
@@ -157,36 +157,46 @@ class TestSupervisorContext:
 
     def test_supervisor_context_default_is_none(self):
         """Test that supervisor context defaults to None."""
-        assert get_supervisor_run_id() is None
+        assert get_supervisor_context() is None
 
     def test_supervisor_context_set_and_get(self):
-        """Test setting and getting supervisor run_id."""
-        token = set_supervisor_run_id(123)
+        """Test setting and getting supervisor context."""
+        token = set_supervisor_context(run_id=123, owner_id=1, message_id="test-msg-1")
         try:
-            assert get_supervisor_run_id() == 123
+            ctx = get_supervisor_context()
+            assert ctx is not None
+            assert ctx.run_id == 123
+            assert ctx.owner_id == 1
+            assert ctx.message_id == "test-msg-1"
         finally:
-            reset_supervisor_run_id(token)
+            reset_supervisor_context(token)
 
         # After reset, should be back to default
-        assert get_supervisor_run_id() is None
+        assert get_supervisor_context() is None
 
     def test_supervisor_context_reset_restores_previous(self):
         """Test that reset restores previous value."""
         # Set first value
-        token1 = set_supervisor_run_id(100)
-        assert get_supervisor_run_id() == 100
+        token1 = set_supervisor_context(run_id=100, owner_id=1, message_id="msg-100")
+        ctx1 = get_supervisor_context()
+        assert ctx1 is not None
+        assert ctx1.run_id == 100
 
         # Set second value
-        token2 = set_supervisor_run_id(200)
-        assert get_supervisor_run_id() == 200
+        token2 = set_supervisor_context(run_id=200, owner_id=1, message_id="msg-200")
+        ctx2 = get_supervisor_context()
+        assert ctx2 is not None
+        assert ctx2.run_id == 200
 
         # Reset second - should restore first
-        reset_supervisor_run_id(token2)
-        assert get_supervisor_run_id() == 100
+        reset_supervisor_context(token2)
+        ctx_after = get_supervisor_context()
+        assert ctx_after is not None
+        assert ctx_after.run_id == 100
 
         # Reset first - should restore None
-        reset_supervisor_run_id(token1)
-        assert get_supervisor_run_id() is None
+        reset_supervisor_context(token1)
+        assert get_supervisor_context() is None
 
     def test_seq_counter_starts_at_one(self):
         """Test that seq counter starts at 1 for a new run_id."""
@@ -264,7 +274,7 @@ class TestWorkerSupervisorCorrelation:
         db_session.refresh(run)
 
         # Set supervisor context with real run_id
-        token = set_supervisor_run_id(run.id)
+        token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
         try:
             result = spawn_worker(task="Test task", model=TEST_WORKER_MODEL)
             assert "queued successfully" in result
@@ -274,7 +284,7 @@ class TestWorkerSupervisorCorrelation:
             assert job is not None
             assert job.supervisor_run_id == run.id
         finally:
-            reset_supervisor_run_id(token)
+            reset_supervisor_context(token)
 
     def test_spawn_worker_without_context_has_null_supervisor_run_id(
         self, db_session, test_user, credential_context, temp_artifact_path
@@ -285,7 +295,7 @@ class TestWorkerSupervisorCorrelation:
         from zerg.tools.builtin.supervisor_tools import spawn_worker
 
         # Ensure no supervisor context
-        assert get_supervisor_run_id() is None
+        assert get_supervisor_context() is None
 
         result = spawn_worker(task="Standalone task", model=TEST_WORKER_MODEL)
         assert "queued successfully" in result

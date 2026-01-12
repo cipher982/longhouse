@@ -129,7 +129,7 @@ async def resume_supervisor_with_worker_result(
     )
 
     # Set up contexts (mirrors SupervisorService.run_supervisor)
-    _supervisor_ctx_tokens = set_supervisor_context(
+    _supervisor_ctx_token = set_supervisor_context(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
@@ -374,7 +374,7 @@ async def resume_supervisor_with_worker_result(
 
     finally:
         # Reset all contexts and emitter
-        reset_supervisor_context(_supervisor_ctx_tokens)
+        reset_supervisor_context(_supervisor_ctx_token)
         reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
         reset_current_thread_id(_thread_ctx_token)

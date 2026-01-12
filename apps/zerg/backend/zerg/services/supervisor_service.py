@@ -553,7 +553,7 @@ class SupervisorService:
             from zerg.services.supervisor_context import reset_supervisor_context
             from zerg.services.supervisor_context import set_supervisor_context
 
-            _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, owner_id=owner_id, message_id=message_id)
+            _supervisor_ctx_token = set_supervisor_context(run_id=run.id, owner_id=owner_id, message_id=message_id)
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)
             # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
@@ -705,7 +705,7 @@ class SupervisorService:
 
             finally:
                 # Always reset context and emitter even on timeout/deferred
-                reset_supervisor_context(_supervisor_ctx_tokens)
+                reset_supervisor_context(_supervisor_ctx_token)
                 reset_emitter(_emitter_token)
                 # Reset user context
                 from zerg.callbacks.token_stream import current_user_id_var
