@@ -108,15 +108,20 @@ async def _replay_and_stream(
     status: RunStatus,
     after_event_id: int,
     include_tokens: bool,
+    *,
+    include_replay: bool = True,
+    allow_continuation_runs: bool = False,
+    client_correlation_id: str | None = None,
 ):
-    """Generator that replays historical events, then streams live.
+    """Generator that optionally replays historical events, then streams live.
 
-    This is the core of Resumable SSE v1. It:
-    1. Subscribes to live events FIRST (don't miss any while replaying)
-    2. Loads historical events using a SHORT-LIVED DB session
-    3. Yields historical events with SSE id: field
-    4. If run is complete, closes stream
-    5. Otherwise, streams live events (filtering out already-replayed ones)
+    This is the unified SSE streaming implementation used by both:
+    - /api/stream/runs/{run_id} - resumable SSE with replay
+    - /api/jarvis/chat - live-only SSE for initial chat
+
+    The function can operate in two modes:
+    1. Replay + Live (include_replay=True): Load historical events, then stream live
+    2. Live-only (include_replay=False): Stream live events only (jarvis chat)
 
     IMPORTANT: This function does NOT hold a DB connection open during streaming.
     Historical events are loaded into memory first, then the DB session is closed
@@ -132,6 +137,9 @@ async def _replay_and_stream(
         status: Current run status (RUNNING, DEFERRED, SUCCESS, etc.)
         after_event_id: Resume from this event ID (0 = from start)
         include_tokens: Whether to include SUPERVISOR_TOKEN events
+        include_replay: If True, replay historical events before streaming live
+        allow_continuation_runs: If True, also stream events from continuation runs
+        client_correlation_id: Optional client correlation ID for tracking
 
     Yields:
         SSE events in format: {"id": str, "event": str, "data": str}
@@ -143,6 +151,30 @@ async def _replay_and_stream(
     pending_workers = 0
     supervisor_done = False
     overflow = False  # Track if queue has overflowed
+    continuation_cache: dict[int, bool] = {}  # Cache for continuation run lookups
+
+    def _is_direct_continuation(candidate_run_id: int) -> bool:
+        """Return True if candidate_run_id is a continuation of run_id.
+
+        This allows a single client SSE stream to receive the follow-up supervisor
+        synthesis that happens in a new run (durable runs v2.2).
+        """
+        if candidate_run_id in continuation_cache:
+            return continuation_cache[candidate_run_id]
+
+        try:
+            from zerg.database import db_session
+            from zerg.models.models import AgentRun
+
+            with db_session() as db:
+                candidate = db.query(AgentRun).filter(AgentRun.id == candidate_run_id).first()
+                is_cont = bool(candidate and candidate.continuation_of_run_id == run_id)
+                continuation_cache[candidate_run_id] = is_cont
+                return is_cont
+        except Exception:
+            # Best-effort only; if lookup fails, do not leak events across runs.
+            continuation_cache[candidate_run_id] = False
+            return False
 
     async def event_handler(event):
         """Filter and queue relevant events (non-blocking)."""
@@ -154,9 +186,18 @@ async def _replay_and_stream(
         if event.get("owner_id") != owner_id:
             return
 
-        # Filter by run_id
+        # Filter by run_id, with optional continuation run support
         if "run_id" in event and event.get("run_id") != run_id:
-            return
+            if allow_continuation_runs:
+                candidate_run_id = event.get("run_id")
+                if isinstance(candidate_run_id, int) and _is_direct_continuation(candidate_run_id):
+                    # Alias continuation run_id back to the original for UI stability
+                    event = dict(event)
+                    event["run_id"] = run_id
+                else:
+                    return
+            else:
+                return
 
         # Tool events MUST have run_id to prevent leaking across runs
         event_type = event.get("event_type") or event.get("type")
@@ -194,27 +235,46 @@ async def _replay_and_stream(
     event_bus.subscribe(EventType.WORKER_TOOL_STARTED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
     event_bus.subscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+    # Supervisor tool events (for chat UI tool activity display)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
+    event_bus.subscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
 
     try:
-        # 2. Load historical events using a SHORT-LIVED DB session
-        # This ensures we don't hold a DB connection during streaming
-        historical_events = _load_historical_events(run_id, after_event_id, include_tokens)
+        # 2. Optionally load and replay historical events
+        if include_replay:
+            # Load historical events using a SHORT-LIVED DB session
+            # This ensures we don't hold a DB connection during streaming
+            historical_events = _load_historical_events(run_id, after_event_id, include_tokens)
 
-        # 3. Yield historical events with SSE id: field
-        for event_id, event_type, payload, timestamp_str in historical_events:
-            last_sent_event_id = event_id
+            # Yield historical events with SSE id: field
+            for event_id, event_type, payload, timestamp_str in historical_events:
+                last_sent_event_id = event_id
 
+                yield {
+                    "id": str(event_id),  # SSE last-event-id for resumption
+                    "event": event_type,
+                    "data": json.dumps(
+                        {
+                            "type": event_type,
+                            "payload": payload,
+                            "timestamp": timestamp_str,
+                        },
+                        default=_json_default,
+                    ),
+                }
+        else:
+            # Live-only mode: emit connected event for Jarvis chat
+            connected_payload = {
+                "type": "connected",
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+            if client_correlation_id:
+                connected_payload["client_correlation_id"] = client_correlation_id
             yield {
-                "id": str(event_id),  # SSE last-event-id for resumption
-                "event": event_type,
-                "data": json.dumps(
-                    {
-                        "type": event_type,
-                        "payload": payload,
-                        "timestamp": timestamp_str,
-                    },
-                    default=_json_default,
-                ),
+                "event": "connected",
+                "data": json.dumps(connected_payload, default=_json_default),
             }
 
         # 4. If run is complete (not RUNNING / DEFERRED / WAITING), close stream
@@ -353,6 +413,45 @@ async def _replay_and_stream(
         event_bus.unsubscribe(EventType.WORKER_TOOL_STARTED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_COMPLETED, event_handler)
         event_bus.unsubscribe(EventType.WORKER_TOOL_FAILED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_STARTED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_COMPLETED, event_handler)
+        event_bus.unsubscribe(EventType.SUPERVISOR_TOOL_FAILED, event_handler)
+
+
+async def stream_run_events_live(
+    run_id: int,
+    owner_id: int,
+    client_correlation_id: str | None = None,
+):
+    """Stream live run events without replay (for Jarvis chat).
+
+    This is a convenience wrapper around _replay_and_stream for the Jarvis chat
+    use case. It:
+    - Streams live events only (no replay from DB)
+    - Supports continuation run aliasing (follow-up supervisor runs)
+    - Emits a "connected" event on start
+
+    Args:
+        run_id: Run identifier
+        owner_id: Owner ID for security filtering
+        client_correlation_id: Optional client correlation ID for tracking
+
+    Yields:
+        SSE events in format: {"event": str, "data": str}
+    """
+    # For live-only, we use RUNNING status to allow streaming
+    # The status check happens later if the run completes during streaming
+    async for event in _replay_and_stream(
+        run_id=run_id,
+        owner_id=owner_id,
+        status=RunStatus.RUNNING,  # Assume running for live streaming
+        after_event_id=0,
+        include_tokens=True,
+        include_replay=False,
+        allow_continuation_runs=True,
+        client_correlation_id=client_correlation_id,
+    ):
+        yield event
 
 
 @router.get("/runs/{run_id}")
