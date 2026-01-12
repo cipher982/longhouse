@@ -48,7 +48,7 @@ class CredentialResolver:
             webhook_url = creds.get("webhook_url")
     """
 
-    def __init__(self, agent_id: int, db: Session, *, owner_id: int | None = None):
+    def __init__(self, agent_id: int, db: Session, *, owner_id: int | None = None, prefetch: bool = True):
         """Initialize resolver for a specific agent.
 
         Args:
@@ -61,6 +61,72 @@ class CredentialResolver:
         self.owner_id = owner_id
         self.db = db
         self._cache: dict[str, CacheEntry] = {}
+        self._prefetch_enabled = bool(prefetch)
+
+        # Concurrency safety: tools may run in threads (asyncio.to_thread) and inherit
+        # this resolver via contextvars. SQLAlchemy Sessions are not thread-safe, so
+        # in normal operation we prefetch all credentials once (in the caller thread)
+        # and then serve lookups from the in-memory cache without touching `self.db`.
+        if self._prefetch_enabled:
+            self._prefetch_all()
+
+    def _prefetch_all(self) -> None:
+        """Populate the cache with all configured credentials (best-effort).
+
+        This avoids hitting `self.db` during tool execution, which may run in
+        background threads and/or concurrently.
+        """
+        from zerg.models.models import AccountConnectorCredential
+        from zerg.models.models import ConnectorCredential
+
+        if self.db is None:
+            self._prefetch_enabled = False
+            return
+
+        # Agent-level overrides first.
+        try:
+            agent_creds = self.db.query(ConnectorCredential).filter(ConnectorCredential.agent_id == self.agent_id).all()
+        except Exception:
+            logger.warning("Failed to prefetch agent connector credentials", exc_info=True)
+            self._prefetch_enabled = False
+            return
+
+        for cred in agent_creds:
+            try:
+                decrypted = decrypt(cred.encrypted_value)
+                value = json.loads(decrypted)
+                self._cache[cred.connector_type] = (value, "agent")
+            except Exception:
+                logger.warning(
+                    "Failed to decrypt agent credential agent_id=%d connector=%s during prefetch",
+                    self.agent_id,
+                    cred.connector_type,
+                    exc_info=True,
+                )
+
+        # Account-level fallbacks (only for types not overridden at agent level).
+        if self.owner_id is not None:
+            try:
+                account_creds = self.db.query(AccountConnectorCredential).filter(AccountConnectorCredential.owner_id == self.owner_id).all()
+            except Exception:
+                logger.warning("Failed to prefetch account connector credentials", exc_info=True)
+                self._prefetch_enabled = False
+                return
+
+            for cred in account_creds:
+                if cred.connector_type in self._cache:
+                    continue
+                try:
+                    decrypted = decrypt(cred.encrypted_value)
+                    value = json.loads(decrypted)
+                    self._cache[cred.connector_type] = (value, "account")
+                except Exception:
+                    logger.warning(
+                        "Failed to decrypt account credential owner_id=%d connector=%s during prefetch",
+                        self.owner_id,
+                        cred.connector_type,
+                        exc_info=True,
+                    )
 
     def get(self, connector_type: ConnectorType | str) -> dict[str, Any] | None:
         """Get decrypted credential for a connector type.
@@ -84,6 +150,11 @@ class CredentialResolver:
         if type_str in self._cache:
             cached_value, _source = self._cache[type_str]
             return cached_value
+
+        # If we've prefetched, never touch the DB again. Negative-cache the miss.
+        if self._prefetch_enabled:
+            self._cache[type_str] = (None, "none")
+            return None
 
         # Try agent-level override first
         value, source = self._resolve_agent_credential(type_str)
@@ -204,6 +275,11 @@ class CredentialResolver:
             cached_value, _source = self._cache[type_str]
             return cached_value is not None
 
+        # If we've prefetched, never touch the DB again. Negative-cache the miss.
+        if self._prefetch_enabled:
+            self._cache[type_str] = (None, "none")
+            return False
+
         # Check agent-level first (count query avoids decryption)
         agent_count = (
             self.db.query(ConnectorCredential)
@@ -238,6 +314,9 @@ class CredentialResolver:
         Returns:
             List of unique connector type strings that have credentials configured
         """
+        if self._prefetch_enabled:
+            return [connector_type for connector_type, (value, _source) in self._cache.items() if value is not None]
+
         from zerg.models.models import AccountConnectorCredential
         from zerg.models.models import ConnectorCredential
 
@@ -280,6 +359,8 @@ class CredentialResolver:
         Useful if credentials may have been updated during the request.
         """
         self._cache.clear()
+        if self._prefetch_enabled:
+            self._prefetch_all()
 
 
 def create_resolver(agent_id: int, db: Session, *, owner_id: int | None = None) -> CredentialResolver:

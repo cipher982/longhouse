@@ -19,6 +19,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.crud import runner_crud
+from zerg.database import db_session
 from zerg.schemas.runner_schemas import RunnerResponse
 
 
@@ -51,12 +52,12 @@ def runner_list() -> Dict[str, Any]:
     if not resolver:
         return {"ok": False, "error": {"type": "execution_error", "message": "No credential context available"}}
 
-    db = resolver.db
     owner_id = resolver.owner_id
 
-    runners = runner_crud.get_runners(db=db, owner_id=owner_id, limit=200)
-    data = [RunnerResponse.model_validate(r).model_dump() for r in runners]
-    return {"ok": True, "data": {"runners": data}}
+    with db_session() as db:
+        runners = runner_crud.get_runners(db=db, owner_id=owner_id, limit=200)
+        data = [RunnerResponse.model_validate(r).model_dump() for r in runners]
+        return {"ok": True, "data": {"runners": data}}
 
 
 def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
@@ -68,14 +69,14 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
     if not resolver:
         return {"ok": False, "error": {"type": "execution_error", "message": "No credential context available"}}
 
-    db = resolver.db
     owner_id = resolver.owner_id
 
-    token_record, plaintext_token = runner_crud.create_enroll_token(
-        db=db,
-        owner_id=owner_id,
-        ttl_minutes=max(1, min(int(ttl_minutes), 60)),
-    )
+    with db_session() as db:
+        token_record, plaintext_token = runner_crud.create_enroll_token(
+            db=db,
+            owner_id=owner_id,
+            ttl_minutes=max(1, min(int(ttl_minutes), 60)),
+        )
 
     swarmlet_url = _swarmlet_api_url()
     runner_image = _runner_docker_image()

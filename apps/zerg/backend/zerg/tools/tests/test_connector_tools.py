@@ -1,9 +1,15 @@
 """Tests for connector meta-tools."""
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
 from zerg.tools.builtin.connector_tools import refresh_connector_status
+
+
+@contextmanager
+def _fake_db_session():
+    yield MagicMock()
 
 
 class TestRefreshConnectorStatus:
@@ -21,7 +27,6 @@ class TestRefreshConnectorStatus:
     def test_returns_connector_status_when_resolver_available(self):
         """Should return connector status when resolver context is available."""
         mock_resolver = MagicMock()
-        mock_resolver.db = MagicMock()
         mock_resolver.owner_id = 1
         mock_resolver.agent_id = 42
 
@@ -31,8 +36,9 @@ class TestRefreshConnectorStatus:
         }
 
         with patch("zerg.tools.builtin.connector_tools.get_credential_resolver", return_value=mock_resolver):
-            with patch("zerg.tools.builtin.connector_tools.build_connector_status", return_value=mock_status):
-                result = refresh_connector_status()
+            with patch("zerg.tools.builtin.connector_tools.db_session", _fake_db_session):
+                with patch("zerg.tools.builtin.connector_tools.build_connector_status", return_value=mock_status):
+                    result = refresh_connector_status()
 
         assert result["ok"] is True
         assert result["data"] == mock_status
@@ -42,16 +48,16 @@ class TestRefreshConnectorStatus:
     def test_returns_error_on_build_exception(self):
         """Should return error if build_connector_status raises exception."""
         mock_resolver = MagicMock()
-        mock_resolver.db = MagicMock()
         mock_resolver.owner_id = 1
         mock_resolver.agent_id = 42
 
         with patch("zerg.tools.builtin.connector_tools.get_credential_resolver", return_value=mock_resolver):
-            with patch(
-                "zerg.tools.builtin.connector_tools.build_connector_status",
-                side_effect=Exception("DB connection failed"),
-            ):
-                result = refresh_connector_status()
+            with patch("zerg.tools.builtin.connector_tools.db_session", _fake_db_session):
+                with patch(
+                    "zerg.tools.builtin.connector_tools.build_connector_status",
+                    side_effect=Exception("DB connection failed"),
+                ):
+                    result = refresh_connector_status()
 
         assert result["ok"] is False
         assert result["error_type"] == "execution_error"

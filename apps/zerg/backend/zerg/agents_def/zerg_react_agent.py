@@ -804,67 +804,34 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         tool_args = tool_call.get("args", {})
         tool_call_id = tool_call.get("id")
 
-        # Get worker context (None if not running as a worker)
+        # Get worker context for tool tracking (Phase 3: still used for record_tool_start/complete)
         ctx = get_worker_context()
         tool_record = None
 
-        # Get supervisor context (for supervisor tool events when not in worker)
-        from zerg.services.supervisor_context import get_supervisor_context
+        # Get emitter for event emission (Phase 3: emitter handles correct event type)
+        from zerg.events import get_emitter
 
-        sup_ctx = get_supervisor_context() if not ctx else None
+        emitter = get_emitter()
 
         # Redact sensitive fields from args for event emission
         safe_args = redact_sensitive_args(tool_args)
 
-        # Emit STARTED event if in worker context
+        # Tool tracking (worker context) - kept during Phase 3 transition
         if ctx:
             tool_record = ctx.record_tool_start(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 args=safe_args,  # Redacted args (secrets masked)
             )
-            # Use durable event store (Resumable SSE v1)
-            if ctx.run_id and ctx.db_session:
-                try:
-                    from zerg.services.event_store import emit_run_event
 
-                    await emit_run_event(
-                        db=ctx.db_session,
-                        run_id=ctx.run_id,
-                        event_type="worker_tool_started",
-                        payload={
-                            "worker_id": ctx.worker_id,
-                            "owner_id": ctx.owner_id,
-                            "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "tool_args_preview": safe_preview(str(safe_args)),
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.warning("Failed to emit WORKER_TOOL_STARTED event", exc_info=True)
-
-        # Emit STARTED event if in supervisor context (not worker)
-        elif sup_ctx:
-            try:
-                from zerg.services.event_store import emit_run_event
-
-                await emit_run_event(
-                    db=sup_ctx.db,
-                    run_id=sup_ctx.run_id,
-                    event_type="supervisor_tool_started",
-                    payload={
-                        "owner_id": sup_ctx.owner_id,
-                        "tool_name": tool_name,
-                        "tool_call_id": tool_call_id,
-                        "tool_args_preview": safe_preview(str(safe_args)),
-                        "tool_args": safe_args,  # Full args for persistence/raw view
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-            except Exception:
-                logger.warning("Failed to emit SUPERVISOR_TOOL_STARTED event", exc_info=True)
+        # Emit STARTED event via emitter (Phase 3: emitter handles worker vs supervisor automatically)
+        if emitter:
+            await emitter.emit_tool_started(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_args_preview=safe_preview(str(safe_args)),
+                tool_args=safe_args,  # Full args for persistence/raw view
+            )
 
         start_time = datetime.now(timezone.utc)
 
@@ -938,7 +905,7 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 # Telemetry logging is best-effort - don't fail the worker
                 pass
 
-        # Emit appropriate event if in worker context
+        # Tool tracking (worker context) - kept during Phase 3 transition
         if ctx and tool_record:
             if is_error:
                 ctx.record_tool_complete(tool_record, success=False, error=error_msg)
@@ -949,96 +916,26 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                     critical_msg = _format_critical_error(tool_name, error_msg or result_content)
                     ctx.mark_critical_error(critical_msg)
                     logger.error(f"Critical tool error in worker {ctx.worker_id}: {critical_msg}")
-
-                # Use durable event store (Resumable SSE v1)
-                if ctx.run_id and ctx.db_session:
-                    try:
-                        from zerg.services.event_store import emit_run_event
-
-                        await emit_run_event(
-                            db=ctx.db_session,
-                            run_id=ctx.run_id,
-                            event_type="worker_tool_failed",
-                            payload={
-                                "worker_id": ctx.worker_id,
-                                "owner_id": ctx.owner_id,
-                                "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_call_id,
-                                "duration_ms": duration_ms,
-                                "error": safe_preview(error_msg or result_content, 500),
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                    except Exception:
-                        logger.warning("Failed to emit WORKER_TOOL_FAILED event", exc_info=True)
             else:
                 ctx.record_tool_complete(tool_record, success=True)
-                # Use durable event store (Resumable SSE v1)
-                if ctx.run_id and ctx.db_session:
-                    try:
-                        from zerg.services.event_store import emit_run_event
 
-                        await emit_run_event(
-                            db=ctx.db_session,
-                            run_id=ctx.run_id,
-                            event_type="worker_tool_completed",
-                            payload={
-                                "worker_id": ctx.worker_id,
-                                "owner_id": ctx.owner_id,
-                                "job_id": ctx.job_id,  # Critical for roundabout event correlation
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_call_id,
-                                "duration_ms": duration_ms,
-                                "result_preview": safe_preview(result_content),
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                    except Exception:
-                        logger.warning("Failed to emit WORKER_TOOL_COMPLETED event", exc_info=True)
-
-        # Emit appropriate event if in supervisor context (not worker)
-        elif sup_ctx:
+        # Emit COMPLETED/FAILED event via emitter (Phase 3: emitter handles worker vs supervisor automatically)
+        if emitter:
             if is_error:
-                try:
-                    from zerg.services.event_store import emit_run_event
-
-                    await emit_run_event(
-                        db=sup_ctx.db,
-                        run_id=sup_ctx.run_id,
-                        event_type="supervisor_tool_failed",
-                        payload={
-                            "owner_id": sup_ctx.owner_id,
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "duration_ms": duration_ms,
-                            "error": safe_preview(error_msg or result_content, 500),
-                            "error_details": {"raw_error": error_msg or result_content},
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.warning("Failed to emit SUPERVISOR_TOOL_FAILED event", exc_info=True)
+                await emitter.emit_tool_failed(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    duration_ms=duration_ms,
+                    error=safe_preview(error_msg or result_content, 500),
+                )
             else:
-                try:
-                    from zerg.services.event_store import emit_run_event
-
-                    await emit_run_event(
-                        db=sup_ctx.db,
-                        run_id=sup_ctx.run_id,
-                        event_type="supervisor_tool_completed",
-                        payload={
-                            "owner_id": sup_ctx.owner_id,
-                            "tool_name": tool_name,
-                            "tool_call_id": tool_call_id,
-                            "duration_ms": duration_ms,
-                            "result_preview": safe_preview(result_content),
-                            "result": {"raw": result_content[:2000] if len(result_content) > 2000 else result_content},
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                except Exception:
-                    logger.warning("Failed to emit SUPERVISOR_TOOL_COMPLETED event", exc_info=True)
+                await emitter.emit_tool_completed(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    duration_ms=duration_ms,
+                    result_preview=safe_preview(result_content),
+                    result=result_content,
+                )
 
         return result
 
