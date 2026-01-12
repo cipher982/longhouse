@@ -551,6 +551,20 @@ class SupervisorService:
 
             _supervisor_ctx_tokens = set_supervisor_context(run_id=run.id, db=self.db, owner_id=owner_id, message_id=message_id)
 
+            # Set up injected emitter for event emission (Phase 2 of emitter refactor)
+            # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
+            from zerg.events import SupervisorEmitter
+            from zerg.events import reset_emitter
+            from zerg.events import set_emitter
+
+            _supervisor_emitter = SupervisorEmitter(
+                run_id=run.id,
+                owner_id=owner_id,
+                message_id=message_id,
+                db=self.db,
+            )
+            _emitter_token = set_emitter(_supervisor_emitter)
+
             # Set user context for token streaming (required for real-time SSE tokens)
             from zerg.callbacks.token_stream import set_current_db_session
             from zerg.callbacks.token_stream import set_current_user_id
@@ -688,8 +702,9 @@ class SupervisorService:
                 )
 
             finally:
-                # Always reset context even on timeout/deferred
+                # Always reset context and emitter even on timeout/deferred
                 reset_supervisor_context(_supervisor_ctx_tokens)
+                reset_emitter(_emitter_token)
                 # Reset user context
                 from zerg.callbacks.token_stream import current_db_session_var
                 from zerg.callbacks.token_stream import current_user_id_var
