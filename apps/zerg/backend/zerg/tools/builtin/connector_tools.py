@@ -10,6 +10,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.connectors.status_builder import build_connector_status
+from zerg.database import db_session
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
@@ -51,13 +52,15 @@ def refresh_connector_status() -> dict[str, Any]:
             "Unable to check connector status - no credential context available.",
         )
 
-    # Use resolver's db session and IDs to query fresh status
+    # NOTE: Tool execution may run in a background thread (asyncio.to_thread).
+    # Avoid using request-scoped sessions from contextvars; open a fresh session here.
     try:
-        status = build_connector_status(
-            db=resolver.db,
-            owner_id=resolver.owner_id,
-            agent_id=resolver.agent_id,
-        )
+        with db_session() as db:
+            status = build_connector_status(
+                db=db,
+                owner_id=resolver.owner_id,
+                agent_id=resolver.agent_id,
+            )
         return tool_success(status)
     except Exception as e:
         return tool_error(

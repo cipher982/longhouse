@@ -69,6 +69,9 @@ async def resume_supervisor_with_worker_result(
     from zerg.connectors.context import reset_credential_resolver
     from zerg.connectors.context import set_credential_resolver
     from zerg.connectors.resolver import CredentialResolver
+    from zerg.events import SupervisorEmitter
+    from zerg.events import reset_emitter
+    from zerg.events import set_emitter
     from zerg.services.event_store import emit_run_event
     from zerg.services.supervisor_context import reset_supervisor_context
     from zerg.services.supervisor_context import set_supervisor_context
@@ -134,6 +137,19 @@ async def resume_supervisor_with_worker_result(
         owner_id=owner_id,
         message_id=message_id,
     )
+
+    # Set up injected emitter for event emission (Phase 2 of emitter refactor)
+    # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
+    # This is critical for resume - without this, leaked WorkerContext could cause
+    # supervisor tool events to emit as worker_tool_* events
+    _supervisor_emitter = SupervisorEmitter(
+        run_id=run.id,
+        owner_id=owner_id,
+        message_id=message_id,
+        db=db,
+    )
+    _emitter_token = set_emitter(_supervisor_emitter)
+
     _user_ctx_token = set_current_user_id(owner_id)
     _db_ctx_token = set_current_db_session(db)
     _thread_ctx_token = set_current_thread_id(thread.id)
@@ -361,8 +377,9 @@ async def resume_supervisor_with_worker_result(
         return {"status": "error", "error": str(e)}
 
     finally:
-        # Reset all contexts
+        # Reset all contexts and emitter
         reset_supervisor_context(_supervisor_ctx_tokens)
+        reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
         current_db_session_var.reset(_db_ctx_token)
         reset_current_thread_id(_thread_ctx_token)

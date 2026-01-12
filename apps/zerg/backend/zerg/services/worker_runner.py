@@ -27,6 +27,9 @@ from zerg.context import WorkerContext
 from zerg.context import reset_worker_context
 from zerg.context import set_worker_context
 from zerg.crud import crud
+from zerg.events import WorkerEmitter
+from zerg.events import reset_emitter
+from zerg.events import set_emitter
 from zerg.managers.agent_runner import AgentRunner
 from zerg.models.models import Agent as AgentModel
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
@@ -154,6 +157,17 @@ class WorkerRunner:
             db_session=db,
         )
         context_token = set_worker_context(worker_context)
+
+        # Set up injected emitter for event emission (Phase 2 of emitter refactor)
+        # WorkerEmitter always emits worker_tool_* events regardless of contextvar state
+        worker_emitter = WorkerEmitter(
+            worker_id=worker_id,
+            owner_id=owner_for_events,
+            run_id=event_ctx.get("run_id"),
+            job_id=job_id,
+            db=db,
+        )
+        emitter_token = set_emitter(worker_emitter)
 
         # Set up metrics collector for performance tracking
         from zerg.worker_metrics import MetricsCollector
@@ -406,8 +420,9 @@ class WorkerRunner:
             finally:
                 reset_metrics_collector()
 
-            # Always reset worker context to prevent leaking to other calls
+            # Always reset worker context and emitter to prevent leaking to other calls
             reset_worker_context(context_token)
+            reset_emitter(emitter_token)
 
             # Ensure temporary agents are not left behind on failure paths
             if temp_agent and agent:
@@ -886,7 +901,23 @@ Example: "Backup completed 157GB in 17s, no errors found"
                 finally:
                     fresh_db.close()
 
-            asyncio.create_task(_run_resume_async())
+            # IMPORTANT: create_task() captures current contextvars.
+            #
+            # WorkerRunner.run_worker() sets WorkerContext via contextvars so that worker tool calls
+            # emit WORKER_TOOL_* events. If we schedule the supervisor resume task while that context
+            # is still set, the resume execution inherits it and the supervisor's tool calls can be
+            # misclassified/emitted as WORKER_TOOL_* (e.g., a replayed spawn_worker showing up as a
+            # nested tool inside the spawn_worker card).
+            import contextvars
+
+            coro = _run_resume_async()
+            try:
+                asyncio.create_task(coro, context=contextvars.Context())
+            except Exception:
+                # If scheduling fails, close the coroutine to avoid
+                # "coroutine was never awaited" RuntimeWarnings.
+                coro.close()
+                raise
             logger.debug(f"Resume task scheduled for run {run_id}")
 
         except Exception as e:
