@@ -1,5 +1,4 @@
 from datetime import datetime
-from enum import Enum
 from typing import Any
 from typing import Dict
 from typing import List
@@ -13,6 +12,7 @@ from pydantic import ConfigDict
 
 from zerg.models.enums import AgentStatus
 from zerg.models.enums import RunStatus
+from zerg.models.enums import RunTrigger
 from zerg.schemas.workflow import WorkflowData
 
 
@@ -256,14 +256,6 @@ class Trigger(TriggerBase):
 
 
 # RunStatus moved to models.enums for single source of truth
-
-
-class RunTrigger(str, Enum):
-    manual = "manual"
-    schedule = "schedule"
-    chat = "chat"
-    webhook = "webhook"
-    api = "api"
 
 
 class AgentRunOut(BaseModel):

@@ -92,7 +92,7 @@ def test_supervisor_dispatch(base_url: str, headers: dict, task: str) -> dict:
 
 
 def test_supervisor_events(base_url: str, headers: dict, run_id: int, timeout: int = 60) -> list:
-    """Test GET /api/jarvis/supervisor/events SSE stream.
+    """Test GET /api/stream/runs/{run_id} SSE stream.
 
     Args:
         base_url: Server base URL
@@ -112,8 +112,7 @@ def test_supervisor_events(base_url: str, headers: dict, run_id: int, timeout: i
 
     try:
         response = requests.get(
-            f"{base_url}/api/jarvis/supervisor/events",
-            params={"run_id": run_id},
+            f"{base_url}/api/stream/runs/{run_id}",
             headers=headers,
             stream=True,
             timeout=timeout,

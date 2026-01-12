@@ -8,7 +8,7 @@ the SupervisorService sets the context before invocation and spawn_worker reads 
 
 Usage in SupervisorService.run_supervisor:
     from zerg.services.supervisor_context import set_supervisor_context
-    token = set_supervisor_context(run_id=run.id, db=db, owner_id=owner_id)
+    token = set_supervisor_context(run_id=run.id, owner_id=owner_id, message_id=msg_id)
     # ... invoke agent ...
     reset_supervisor_context(token)  # cleanup
 
@@ -16,7 +16,7 @@ Usage in spawn_worker / tool event emission:
     from zerg.services.supervisor_context import get_supervisor_context
     ctx = get_supervisor_context()  # Returns SupervisorContext or None
     if ctx:
-        run_id, db, owner_id = ctx.run_id, ctx.db, ctx.owner_id
+        run_id, owner_id = ctx.run_id, ctx.owner_id
 
 Sequence Counter:
     Each supervisor run has a monotonically increasing sequence counter for SSE events.
@@ -28,12 +28,8 @@ from __future__ import annotations
 import contextvars
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 from typing import Dict
 from typing import Optional
-
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
 
 
 @dataclass
@@ -41,7 +37,6 @@ class SupervisorContext:
     """Context data for supervisor run correlation and event emission."""
 
     run_id: int
-    db: "Session"
     owner_id: int
     message_id: str  # UUID for the assistant message (stable across tokens/completion)
 
@@ -70,12 +65,12 @@ def get_supervisor_context() -> Optional[SupervisorContext]:
 
     Returns:
         SupervisorContext if set (we're inside a supervisor run), None otherwise.
-        Contains run_id, db session, and owner_id for event emission.
+        Contains run_id, owner_id, and message_id for event correlation.
     """
     return _supervisor_context_var.get()
 
 
-def set_supervisor_context(run_id: int, db: "Session", owner_id: int, message_id: str) -> tuple[contextvars.Token, contextvars.Token]:
+def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> tuple[contextvars.Token, contextvars.Token]:
     """Set the supervisor context for the current execution.
 
     Should be called by SupervisorService before invoking the agent.
@@ -83,14 +78,13 @@ def set_supervisor_context(run_id: int, db: "Session", owner_id: int, message_id
 
     Args:
         run_id: The supervisor AgentRun ID
-        db: SQLAlchemy database session
         owner_id: The owner's user ID
         message_id: UUID for the assistant message
 
     Returns:
         Tuple of tokens for resetting via reset_supervisor_context()
     """
-    ctx = SupervisorContext(run_id=run_id, db=db, owner_id=owner_id, message_id=message_id)
+    ctx = SupervisorContext(run_id=run_id, owner_id=owner_id, message_id=message_id)
     token_ctx = _supervisor_context_var.set(ctx)
     # Also set legacy run_id var for backwards compatibility
     token_run_id = _supervisor_run_id_var.set(run_id)

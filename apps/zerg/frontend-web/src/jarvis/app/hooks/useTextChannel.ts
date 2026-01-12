@@ -68,7 +68,8 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       const trimmedText = text.trim()
       setIsSending(true)
 
-      const correlationId = uuid()
+      // Generate messageId upfront (client-generated, no binding step needed)
+      const messageId = uuid()
 
       // Create user message
       const userMessage: ChatMessage = {
@@ -78,14 +79,14 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         timestamp: new Date(),
       }
 
-      // Create assistant placeholder (queued)
+      // Create assistant placeholder with messageId (no separate correlationId)
       const assistantPlaceholder: ChatMessage = {
         id: uuid(),
         role: 'assistant',
         content: '',
         status: 'queued',
         timestamp: new Date(),
-        correlationId,
+        messageId,  // Use messageId directly
       }
 
       // Add to messages
@@ -97,10 +98,10 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
       setLastError(null)
 
       try {
-        logger.info(`[useTextChannel] Sending message, correlationId: ${correlationId}`)
+        logger.info(`[useTextChannel] Sending message, messageId: ${messageId}`)
 
-        // Set correlation ID for timeline tracking
-        timelineLogger.setCorrelationId(correlationId)
+        // Set message ID for timeline tracking
+        timelineLogger.setMessageId(messageId)
 
         // Emit text_channel:sent event for timeline tracking
         eventBus.emit('text_channel:sent', {
@@ -113,7 +114,7 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
 
         // Send to backend via SupervisorChatController
-        await supervisorChatRef.current.sendMessage(trimmedText, correlationId, {
+        await supervisorChatRef.current.sendMessage(trimmedText, messageId, {
           model: preferences.chat_model,
           reasoning_effort: preferences.reasoning_effort,
         })
@@ -124,8 +125,8 @@ export function useTextChannel(options: UseTextChannelOptions = {}) {
 
         // Update assistant bubble to error state
         dispatch({
-          type: 'UPDATE_MESSAGE_BY_CORRELATION_ID',
-          correlationId,
+          type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
+          messageId,
           updates: { status: 'error' },
         })
 

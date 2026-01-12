@@ -257,7 +257,7 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
     db_session.refresh(run)
 
     # Set supervisor context (normally done by supervisor_service)
-    tokens = set_supervisor_context(run_id=run.id, db=db_session, owner_id=test_user.id, message_id="test-message-id")
+    tokens = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
 
     try:
         # Call spawn_worker directly (outside LangGraph context)

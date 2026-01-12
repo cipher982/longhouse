@@ -221,7 +221,9 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id and/or thread_type
+         * @description Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+         *
+         *     If `title` is provided, returns threads matching that title.
          */
         get: operations["read_threads_api_threads_get"];
         put?: never;
@@ -245,7 +247,9 @@ export interface paths {
         };
         /**
          * Read Threads
-         * @description Get all threads, optionally filtered by agent_id and/or thread_type
+         * @description Get all threads, optionally filtered by agent_id, thread_type, and/or title.
+         *
+         *     If `title` is provided, returns threads matching that title.
          */
         get: operations["read_threads_api_threads__get"];
         put?: never;
@@ -435,6 +439,28 @@ export interface paths {
          * @description Directly fix the missing updated_at column issue.
          */
         post: operations["fix_database_schema_api_admin_fix_database_schema_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/debug/db-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Debug Db Schema
+         * @description Debug endpoint: returns current_schema + search_path for this request.
+         *
+         *     TESTING-only. Useful to validate Postgres schema routing (X-Test-Worker).
+         */
+        get: operations["debug_db_schema_api_admin_debug_db_schema_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1117,6 +1143,8 @@ export interface paths {
         /**
          * Read Workflows
          * @description Return all workflows owned by current user.
+         *
+         *     If `name` is provided, filters to workflows matching that name.
          */
         get: operations["read_workflows_api_workflows__get"];
         put?: never;
@@ -1182,7 +1210,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Workflow By Id
+         * @description Get a specific workflow by ID.
+         */
+        get: operations["get_workflow_by_id_api_workflows__workflow_id__get"];
         put?: never;
         post?: never;
         /** Delete Workflow */
@@ -1941,6 +1973,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jarvis/runs/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Active Run
+         * @description Get the user's currently running agent run (if any).
+         *
+         *     Returns the most recent RUNNING, WAITING, or DEFERRED run for the user's supervisor agent.
+         *     Returns 204 No Content if no active run exists.
+         *
+         *     This endpoint enables run reconnection after page refresh.
+         *
+         *     Args:
+         *         db: Database session
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         JSONResponse with run details if found, or 204 No Content
+         */
+        get: operations["get_active_run_api_jarvis_runs_active_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -1986,14 +2050,89 @@ export interface paths {
          * Attach To Run Stream
          * @description Attach to an existing run's event stream.
          *
-         *     For MVP: Returns the current status and result if available.
-         *     If run is complete, returns final result as JSON.
-         *     If run is in progress, returns current status (streaming not implemented yet).
+         *     For RUNNING runs: Streams events via SSE as they occur.
+         *     For completed runs: Returns a single completion event and closes.
          *
-         *     Future enhancement: Stream remaining events for in-progress runs.
-         *     Note: Infinite SSE streams in tests currently cause timeouts with httpx/ASGITransport.
+         *     This enables run reconnection after page refresh.
+         *
+         *     Args:
+         *         run_id: ID of the run to attach to
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         EventSourceResponse for SSE streaming
          */
         get: operations["attach_to_run_stream_api_jarvis_runs__run_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Events
+         * @description Get events for a specific run.
+         *
+         *     Returns events stored during run execution, optionally filtered by type.
+         *     This endpoint is useful for E2E testing to verify tool calls and lifecycle events.
+         *
+         *     Args:
+         *         run_id: ID of the run to query
+         *         event_type: Optional filter by event type (e.g., "supervisor_tool_started")
+         *         limit: Maximum number of events to return (default 100)
+         *         db: Database session
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         List of events for the run
+         *
+         *     Raises:
+         *         HTTPException: 404 if run not found or not owned by user
+         */
+        get: operations["get_run_events_api_jarvis_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jarvis/runs/{run_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Timeline
+         * @description Get timing timeline for a specific run.
+         *
+         *     Returns structured timing data with phase-based events and summary statistics.
+         *     This endpoint powers performance profiling and observability for Jarvis chat.
+         *
+         *     Args:
+         *         run_id: ID of the run to query
+         *         db: Database session
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         Timeline with events and timing summary
+         *
+         *     Raises:
+         *         HTTPException: 404 if run not found or not owned by user
+         */
+        get: operations["get_run_timeline_api_jarvis_runs__run_id__timeline_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2078,54 +2217,10 @@ export interface paths {
          *             "run_id": 456,
          *             "thread_id": 789,
          *             "status": "running",
-         *             "stream_url": "/api/jarvis/supervisor/events?run_id=456"
+         *             "stream_url": "/api/stream/runs/456"
          *         }
          */
         post: operations["jarvis_supervisor_api_jarvis_supervisor_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jarvis/supervisor/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Jarvis Supervisor Events
-         * @description SSE stream for supervisor run progress.
-         *
-         *     Provides real-time updates for a specific supervisor run including:
-         *     - supervisor_started: Run has begun
-         *     - supervisor_thinking: Supervisor is analyzing
-         *     - worker_spawned: Worker job queued
-         *     - worker_started: Worker execution began
-         *     - worker_complete: Worker finished (success/failed)
-         *     - worker_summary_ready: Worker summary extracted
-         *     - supervisor_complete: Final result ready
-         *     - error: Something went wrong
-         *     - heartbeat: Keep-alive (every 30s)
-         *
-         *     The stream automatically closes when the supervisor completes or errors.
-         *
-         *     Args:
-         *         run_id: The supervisor run ID to track
-         *         db: Database session
-         *         current_user: Authenticated user
-         *
-         *     Returns:
-         *         EventSourceResponse streaming supervisor events
-         *
-         *     Raises:
-         *         HTTPException 404: If run not found or doesn't belong to user
-         */
-        get: operations["jarvis_supervisor_events_api_jarvis_supervisor_events_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2185,7 +2280,6 @@ export interface paths {
          *
          *     Args:
          *         request: Chat request with user message
-         *         db: Database session
          *         current_user: Authenticated user
          *
          *     Returns:
@@ -2342,6 +2436,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jarvis/supervisor/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Supervisor Thread
+         * @description Get the supervisor thread for the current user.
+         *
+         *     Returns basic information about the user's supervisor thread.
+         */
+        get: operations["get_supervisor_thread_api_jarvis_supervisor_thread_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/preferences": {
         parameters: {
             query?: never;
@@ -2413,6 +2529,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/internal/runs/{run_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Run
+         * @description Resume a WAITING run when a worker completes.
+         *
+         *     Called internally when a worker completes while the supervisor run was
+         *     WAITING (interrupted by spawn_worker). Uses LangGraph's Command(resume=...)
+         *     to continue the graph from where interrupt() was called.
+         *
+         *     Args:
+         *         run_id: ID of the WAITING supervisor run
+         *         payload: Worker completion data
+         *         db: Database session
+         *
+         *     Returns:
+         *         Dict with resumed run info
+         *
+         *     Raises:
+         *         404: Run not found
+         *         500: Error resuming run
+         */
+        post: operations["resume_run_api_internal_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/runs/{run_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Run
+         * @description Deprecated: Use /resume instead. Kept for backwards compatibility.
+         */
+        post: operations["continue_run_api_internal_runs__run_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jarvis/sync/push": {
         parameters: {
             query?: never;
@@ -2469,6 +2641,65 @@ export interface paths {
          *         PullResponse with operations and next cursor
          */
         get: operations["pull_sync_operations_api_jarvis_sync_pull_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stream/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Run Replay
+         * @description Stream run events with replay support (Resumable SSE v1).
+         *
+         *     This endpoint enables clients to reconnect and catch up on missed events by:
+         *     1. Replaying historical events from the database
+         *     2. Continuing with live events via EventBus
+         *
+         *     For completed runs: Replays all events and closes the stream.
+         *     For active runs (RUNNING/DEFERRED): Replays historical + streams live events.
+         *
+         *     Args:
+         *         run_id: Run identifier
+         *         request: HTTP request (for Last-Event-ID header)
+         *         after_event_id: Resume from this event ID (0 = from start)
+         *         include_tokens: Whether to include SUPERVISOR_TOKEN events (default: true)
+         *         current_user: Authenticated user (multi-tenant filtered)
+         *
+         *     Returns:
+         *         EventSourceResponse for SSE streaming
+         *
+         *     Raises:
+         *         HTTPException: 404 if run not found or not owned by user
+         *
+         *     SSE Format:
+         *         id: {event.id}
+         *         event: {event.event_type}
+         *         data: {"type": "...", "payload": {...}, "timestamp": "..."}
+         *
+         *     Examples:
+         *         # Start from beginning
+         *         GET /api/stream/runs/123
+         *
+         *         # Resume from last-event-id (standard SSE reconnect)
+         *         GET /api/stream/runs/123
+         *         Last-Event-ID: 456
+         *
+         *         # Resume from specific event ID
+         *         GET /api/stream/runs/123?after_event_id=456
+         *
+         *         # Skip token events (for bandwidth optimization)
+         *         GET /api/stream/runs/123?include_tokens=false
+         */
+        get: operations["stream_run_replay_api_stream_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3724,10 +3955,10 @@ export interface components {
              */
             message: string;
             /**
-             * Client Correlation Id
-             * @description Client-generated correlation ID
+             * Message Id
+             * @description Client-generated message ID (UUID)
              */
-            client_correlation_id?: string | null;
+            message_id: string;
             /**
              * Model
              * @description Model to use for this request (e.g., gpt-5.2)
@@ -3865,6 +4096,8 @@ export interface components {
             status: string;
             /** Summary */
             summary?: string | null;
+            /** Continuation Of Run Id */
+            continuation_of_run_id?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -4277,10 +4510,39 @@ export interface components {
          */
         ResetType: "clear_data" | "full_rebuild";
         /**
+         * RunEvent
+         * @description Single event from a run.
+         */
+        RunEvent: {
+            /** Id */
+            id: number;
+            /** Event Type */
+            event_type: string;
+            /** Payload */
+            payload: Record<string, never>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * RunEventsResponse
+         * @description Response for run events query.
+         */
+        RunEventsResponse: {
+            /** Run Id */
+            run_id: number;
+            /** Events */
+            events: components["schemas"]["RunEvent"][];
+            /** Total */
+            total: number;
+        };
+        /**
          * RunStatus
          * @enum {string}
          */
-        RunStatus: "queued" | "running" | "deferred" | "success" | "failed" | "cancelled";
+        RunStatus: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
         /**
          * RunStatusResponse
          * @description Detailed status of a specific run.
@@ -4477,6 +4739,27 @@ export interface components {
             requires_password: boolean;
         };
         /**
+         * SupervisorThreadInfo
+         * @description Supervisor thread information.
+         */
+        SupervisorThreadInfo: {
+            /**
+             * Thread Id
+             * @description Thread ID
+             */
+            thread_id: number;
+            /**
+             * Title
+             * @description Thread title
+             */
+            title: string;
+            /**
+             * Message Count
+             * @description Number of messages in thread
+             */
+            message_count: number;
+        };
+        /**
          * SyncOp
          * @description A single sync operation.
          */
@@ -4649,6 +4932,47 @@ export interface components {
         TimeSeriesResponse: {
             /** Series */
             series: components["schemas"]["OpsSeriesPoint"][];
+        };
+        /**
+         * TimelineEvent
+         * @description Single event in a timeline with timing information.
+         */
+        TimelineEvent: {
+            /** Phase */
+            phase: string;
+            /** Timestamp */
+            timestamp: string;
+            /** Offset Ms */
+            offset_ms: number;
+            /** Metadata */
+            metadata?: Record<string, never> | null;
+        };
+        /**
+         * TimelineResponse
+         * @description Full timeline response for a run.
+         */
+        TimelineResponse: {
+            /** Correlation Id */
+            correlation_id: string | null;
+            /** Run Id */
+            run_id: number;
+            /** Events */
+            events: components["schemas"]["TimelineEvent"][];
+            summary: components["schemas"]["TimelineSummary"];
+        };
+        /**
+         * TimelineSummary
+         * @description Timing summary for a run.
+         */
+        TimelineSummary: {
+            /** Total Duration Ms */
+            total_duration_ms: number;
+            /** Supervisor Thinking Ms */
+            supervisor_thinking_ms?: number | null;
+            /** Worker Execution Ms */
+            worker_execution_ms?: number | null;
+            /** Tool Execution Ms */
+            tool_execution_ms?: number | null;
         };
         /**
          * TokenBreakdown
@@ -4872,6 +5196,37 @@ export interface components {
             y: number;
             /** Zoom */
             zoom: number;
+        };
+        /**
+         * WorkerCompletionPayload
+         * @description Payload for worker completion webhook.
+         */
+        WorkerCompletionPayload: {
+            /**
+             * Job Id
+             * @description Worker job ID
+             */
+            job_id: number;
+            /**
+             * Worker Id
+             * @description Worker artifact ID
+             */
+            worker_id: string;
+            /**
+             * Status
+             * @description Worker status: success or failed
+             */
+            status: string;
+            /**
+             * Result Summary
+             * @description Brief summary of worker result
+             */
+            result_summary?: string | null;
+            /**
+             * Error
+             * @description Error message if failed
+             */
+            error?: string | null;
         };
         /** Workflow */
         Workflow: {
@@ -5617,6 +5972,7 @@ export interface operations {
             query?: {
                 agent_id?: number | null;
                 thread_type?: string | null;
+                title?: string | null;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -5687,6 +6043,7 @@ export interface operations {
             query?: {
                 agent_id?: number | null;
                 thread_type?: string | null;
+                title?: string | null;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -6025,7 +6382,9 @@ export interface operations {
             query?: {
                 session_factory?: unknown;
             };
-            header?: never;
+            header?: {
+                "X-Test-Worker"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6092,6 +6451,39 @@ export interface operations {
                 session_factory?: unknown;
             };
             header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    debug_db_schema_api_admin_debug_db_schema_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: {
+                "X-Test-Worker"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7240,6 +7632,7 @@ export interface operations {
     read_workflows_api_workflows__get: {
         parameters: {
             query?: {
+                name?: string | null;
                 skip?: number;
                 limit?: number;
                 session_factory?: unknown;
@@ -7350,6 +7743,39 @@ export interface operations {
                 "application/json": components["schemas"]["CanvasUpdate"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_by_id_api_workflows__workflow_id__get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                workflow_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -8732,6 +9158,39 @@ export interface operations {
             };
         };
     };
+    get_active_run_api_jarvis_runs_active_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_run_status_api_jarvis_runs__run_id__get: {
         parameters: {
             query?: {
@@ -8770,6 +9229,43 @@ export interface operations {
     attach_to_run_stream_api_jarvis_runs__run_id__stream_get: {
         parameters: {
             query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_events_api_jarvis_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                event_type?: string | null;
+                limit?: number;
                 session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
@@ -8788,7 +9284,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RunEventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_timeline_api_jarvis_runs__run_id__timeline_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelineResponse"];
                 };
             };
             /** @description Validation Error */
@@ -8876,40 +9407,6 @@ export interface operations {
             };
         };
     };
-    jarvis_supervisor_events_api_jarvis_supervisor_events_get: {
-        parameters: {
-            query: {
-                run_id: number;
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     jarvis_supervisor_cancel_api_jarvis_supervisor__run_id__cancel_post: {
         parameters: {
             query?: {
@@ -8948,9 +9445,9 @@ export interface operations {
     jarvis_chat_api_jarvis_chat_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
+                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -9149,6 +9646,39 @@ export interface operations {
             };
         };
     };
+    get_supervisor_thread_api_jarvis_supervisor_thread_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupervisorThreadInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     jarvis_update_preferences_api_jarvis_preferences_patch: {
         parameters: {
             query?: {
@@ -9285,6 +9815,80 @@ export interface operations {
             };
         };
     };
+    resume_run_api_internal_runs__run_id__resume_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerCompletionPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_run_api_internal_runs__run_id__continue_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerCompletionPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     push_sync_operations_api_jarvis_sync_push_post: {
         parameters: {
             query?: {
@@ -9344,6 +9948,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_run_replay_api_stream_runs__run_id__get: {
+        parameters: {
+            query?: {
+                after_event_id?: number;
+                include_tokens?: boolean;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10002,7 +10643,9 @@ export interface operations {
             query?: {
                 session_factory?: unknown;
             };
-            header?: never;
+            header?: {
+                "X-Test-Worker"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

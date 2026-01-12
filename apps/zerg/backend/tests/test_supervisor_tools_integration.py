@@ -56,7 +56,12 @@ def supervisor_agent(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
-    """Test that a supervisor agent can use spawn_worker tool (queues job)."""
+    """Test that a supervisor agent can use spawn_worker tool (queues job).
+
+    spawn_worker uses LangGraph's interrupt/resume pattern, so calling it triggers
+    AgentInterrupted. We verify the interrupt payload and that the job was queued.
+    """
+    from zerg.managers.agent_runner import AgentInterrupted
     from zerg.models.models import WorkerJob
 
     # Create a thread for the supervisor
@@ -82,34 +87,23 @@ async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, t
     set_credential_resolver(resolver)
 
     try:
-        # Run the supervisor agent
+        # Run the supervisor agent - spawn_worker triggers interrupt
         runner = AgentRunner(supervisor_agent)
-        messages = await runner.run_thread(db_session, thread)
+        try:
+            await runner.run_thread(db_session, thread)
+            pytest.fail("Expected AgentInterrupted to be raised")
+        except AgentInterrupted as e:
+            # Verify interrupt payload indicates worker_pending
+            assert e.interrupt_value.get("type") == "worker_pending", "Interrupt should be worker_pending"
+            assert "job_id" in e.interrupt_value, "Interrupt should include job_id"
 
-        # Verify the supervisor called spawn_worker
-        # Look for tool calls in the messages
-        tool_calls_found = False
-        spawn_worker_called = False
-
-        for msg in messages:
-            if msg.role == "assistant" and msg.tool_calls:
-                tool_calls_found = True
-                for tool_call in msg.tool_calls:
-                    if tool_call.get("name") == "spawn_worker":
-                        spawn_worker_called = True
-                        break
-
-        assert tool_calls_found, "Supervisor should have called tools"
-        assert spawn_worker_called, "Supervisor should have called spawn_worker"
-
-        # Verify a worker JOB was queued (not executed synchronously)
+        # Verify a worker JOB was queued
         jobs = db_session.query(WorkerJob).filter(WorkerJob.owner_id == test_user.id).all()
         assert len(jobs) >= 1, "At least one worker job should have been queued"
 
         # Verify job is queued
         job = jobs[0]
         assert job.status == "queued", "Worker job should be queued"
-        # Note: task may include system context injection, just verify it's not empty
         assert len(job.task) > 0, "Worker job should have a task"
 
     finally:

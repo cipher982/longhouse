@@ -60,10 +60,8 @@ async def resume_supervisor_with_worker_result(
     from zerg.agents_def import zerg_react_agent
     from zerg.agents_def.zerg_react_agent import get_llm_usage
     from zerg.agents_def.zerg_react_agent import reset_llm_usage
-    from zerg.callbacks.token_stream import current_db_session_var
     from zerg.callbacks.token_stream import current_user_id_var
     from zerg.callbacks.token_stream import reset_current_thread_id
-    from zerg.callbacks.token_stream import set_current_db_session
     from zerg.callbacks.token_stream import set_current_thread_id
     from zerg.callbacks.token_stream import set_current_user_id
     from zerg.connectors.context import reset_credential_resolver
@@ -133,7 +131,6 @@ async def resume_supervisor_with_worker_result(
     # Set up contexts (mirrors SupervisorService.run_supervisor)
     _supervisor_ctx_tokens = set_supervisor_context(
         run_id=run.id,
-        db=db,
         owner_id=owner_id,
         message_id=message_id,
     )
@@ -151,7 +148,6 @@ async def resume_supervisor_with_worker_result(
     _emitter_token = set_emitter(_supervisor_emitter)
 
     _user_ctx_token = set_current_user_id(owner_id)
-    _db_ctx_token = set_current_db_session(db)
     _thread_ctx_token = set_current_thread_id(thread.id)
     _cred_ctx_token = set_credential_resolver(
         CredentialResolver(
@@ -381,7 +377,6 @@ async def resume_supervisor_with_worker_result(
         reset_supervisor_context(_supervisor_ctx_tokens)
         reset_emitter(_emitter_token)
         current_user_id_var.reset(_user_ctx_token)
-        current_db_session_var.reset(_db_ctx_token)
         reset_current_thread_id(_thread_ctx_token)
         reset_credential_resolver(_cred_ctx_token)
 
