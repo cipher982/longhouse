@@ -257,7 +257,7 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
     db_session.refresh(run)
 
     # Set supervisor context (normally done by supervisor_service)
-    tokens = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
+    token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
 
     try:
         # Call spawn_worker directly (outside LangGraph context)
@@ -279,7 +279,7 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
 
     finally:
         from zerg.services.supervisor_context import reset_supervisor_context
-        reset_supervisor_context(tokens)
+        reset_supervisor_context(token)
 
     # NOTE: When called outside the graph, we only enqueue the worker job.
     # Worker execution is handled by WorkerJobProcessor in a running backend.

@@ -115,12 +115,12 @@ class WsTokenCallback(AsyncCallbackHandler):
                 self._warned_no_context = True
             return
 
-        # Get supervisor run_id and message_id for SSE correlation (may be None for non-supervisor calls)
-        from zerg.services.supervisor_context import get_supervisor_message_id
-        from zerg.services.supervisor_context import get_supervisor_run_id
+        # Get supervisor context for SSE correlation (may be None for non-supervisor calls)
+        from zerg.services.supervisor_context import get_supervisor_context
 
-        run_id = get_supervisor_run_id()
-        message_id = get_supervisor_message_id()
+        ctx = get_supervisor_context()
+        run_id = ctx.run_id if ctx else None
+        message_id = ctx.message_id if ctx else None
 
         # Publish to event bus for SSE consumers (Jarvis chat)
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.

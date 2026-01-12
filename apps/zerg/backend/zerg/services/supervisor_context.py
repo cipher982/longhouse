@@ -48,13 +48,6 @@ _supervisor_context_var: contextvars.ContextVar[Optional[SupervisorContext]] = c
     default=None,
 )
 
-# Legacy: Keep run_id only var for backwards compatibility with spawn_worker
-# TODO: Migrate spawn_worker to use get_supervisor_context() and remove this
-_supervisor_run_id_var: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
-    "_supervisor_run_id_var",
-    default=None,
-)
-
 # Sequence counters per run_id - thread-safe dict with lock
 _sequence_counters: Dict[int, int] = {}
 _sequence_lock = threading.Lock()
@@ -70,11 +63,11 @@ def get_supervisor_context() -> Optional[SupervisorContext]:
     return _supervisor_context_var.get()
 
 
-def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> tuple[contextvars.Token, contextvars.Token]:
+def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> contextvars.Token:
     """Set the supervisor context for the current execution.
 
     Should be called by SupervisorService before invoking the agent.
-    Returns tokens that can be used to reset the context.
+    Returns a token that can be used to reset the context.
 
     Args:
         run_id: The supervisor AgentRun ID
@@ -82,24 +75,19 @@ def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> tuple
         message_id: UUID for the assistant message
 
     Returns:
-        Tuple of tokens for resetting via reset_supervisor_context()
+        Token for resetting via reset_supervisor_context()
     """
     ctx = SupervisorContext(run_id=run_id, owner_id=owner_id, message_id=message_id)
-    token_ctx = _supervisor_context_var.set(ctx)
-    # Also set legacy run_id var for backwards compatibility
-    token_run_id = _supervisor_run_id_var.set(run_id)
-    return (token_ctx, token_run_id)
+    return _supervisor_context_var.set(ctx)
 
 
-def reset_supervisor_context(tokens: tuple[contextvars.Token, contextvars.Token]) -> None:
+def reset_supervisor_context(token: contextvars.Token) -> None:
     """Reset the supervisor context to its previous value.
 
     Args:
-        tokens: Tuple of tokens returned by set_supervisor_context()
+        token: Token returned by set_supervisor_context()
     """
-    token_ctx, token_run_id = tokens
-    _supervisor_context_var.reset(token_ctx)
-    _supervisor_run_id_var.reset(token_run_id)
+    _supervisor_context_var.reset(token)
 
 
 def get_supervisor_message_id() -> Optional[str]:
@@ -111,47 +99,6 @@ def get_supervisor_message_id() -> Optional[str]:
     """
     ctx = _supervisor_context_var.get()
     return ctx.message_id if ctx else None
-
-
-# Legacy functions for backwards compatibility
-def get_supervisor_run_id() -> Optional[int]:
-    """Get the current supervisor run ID from context.
-
-    Returns:
-        int if set (we're inside a supervisor run), None otherwise.
-        spawn_worker uses this to correlate workers with the supervisor run.
-
-    Note: Prefer get_supervisor_context() for new code.
-    """
-    return _supervisor_run_id_var.get()
-
-
-def set_supervisor_run_id(run_id: Optional[int]) -> contextvars.Token:
-    """Set the supervisor run ID for the current context.
-
-    Should be called by SupervisorService before invoking the agent.
-    Returns a token that can be used to reset the context.
-
-    Args:
-        run_id: The supervisor AgentRun ID, or None to clear
-
-    Returns:
-        Token for resetting the context via reset_supervisor_run_id()
-
-    Note: Prefer set_supervisor_context() for new code.
-    """
-    return _supervisor_run_id_var.set(run_id)
-
-
-def reset_supervisor_run_id(token: contextvars.Token) -> None:
-    """Reset the supervisor run ID to its previous value.
-
-    Args:
-        token: Token returned by set_supervisor_run_id()
-
-    Note: Prefer reset_supervisor_context() for new code.
-    """
-    _supervisor_run_id_var.reset(token)
 
 
 def get_next_seq(run_id: int) -> int:
@@ -186,17 +133,11 @@ def reset_seq(run_id: int) -> None:
 
 
 __all__ = [
-    # New API
     "SupervisorContext",
     "get_supervisor_context",
     "set_supervisor_context",
     "reset_supervisor_context",
     "get_supervisor_message_id",
-    # Legacy (for spawn_worker compatibility)
-    "get_supervisor_run_id",
-    "set_supervisor_run_id",
-    "reset_supervisor_run_id",
-    # Sequence counter
     "get_next_seq",
     "reset_seq",
 ]

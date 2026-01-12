@@ -467,10 +467,11 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             from zerg.context import get_worker_context
             from zerg.events import EventType
             from zerg.events import event_bus
-            from zerg.services.supervisor_context import get_supervisor_run_id
+            from zerg.services.supervisor_context import get_supervisor_context
 
             ctx = get_worker_context()
-            supervisor_run_id = get_supervisor_run_id()
+            sup_ctx = get_supervisor_context()
+            supervisor_run_id = sup_ctx.run_id if sup_ctx else None
 
             try:
                 while not heartbeat_cancelled.is_set():
@@ -530,9 +531,10 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Phase 2: Evidence Mounting for Supervisor Runs
         # If we're in a supervisor context, wrap the LLM with evidence mounting
-        from zerg.services.supervisor_context import get_supervisor_run_id
+        from zerg.services.supervisor_context import get_supervisor_context
 
-        supervisor_run_id = get_supervisor_run_id()
+        _sup_ctx = get_supervisor_context()
+        supervisor_run_id = _sup_ctx.run_id if _sup_ctx else None
         if supervisor_run_id is not None:
             # We're in a supervisor run - wrap LLM for evidence mounting
             from zerg.services.evidence_mounting_llm import EvidenceMountingLLM

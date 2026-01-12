@@ -53,7 +53,7 @@ async def spawn_worker_async(
         spawn_worker("Research vacuums and recommend the best one")
     """
     from zerg.models.models import WorkerJob
-    from zerg.services.supervisor_context import get_supervisor_run_id
+    from zerg.services.supervisor_context import get_supervisor_context
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -64,7 +64,8 @@ async def spawn_worker_async(
     owner_id = resolver.owner_id
 
     # Get supervisor run_id from context (for SSE event correlation)
-    supervisor_run_id = get_supervisor_run_id()
+    ctx = get_supervisor_context()
+    supervisor_run_id = ctx.run_id if ctx else None
 
     # Use default worker model if not specified
     worker_model = model or DEFAULT_WORKER_MODEL_ID
@@ -82,10 +83,33 @@ async def spawn_worker_async(
             .first()
         )
 
+        worker_job = None
         if existing_job:
-            worker_job = existing_job
-            logger.debug(f"Found existing worker job {worker_job.id} for task (idempotent replay)")
-        else:
+            if existing_job.status == "failed":
+                # Don't reuse failed jobs - create new one for retry
+                logger.debug(f"Existing job {existing_job.id} failed, creating new job")
+                # Fall through to create new job
+            elif existing_job.status == "success":
+                # Already completed - return cached result immediately (no interrupt)
+                # This prevents 3ms "phantom" workers on LangGraph replay
+                logger.debug(f"Existing job {existing_job.id} already succeeded, returning cached result")
+                if existing_job.worker_id:
+                    try:
+                        artifact_store = WorkerArtifactStore()
+                        result = artifact_store.get_worker_result(existing_job.worker_id)
+                        return f"Worker job {existing_job.id} completed:\n\n{result}"
+                    except FileNotFoundError:
+                        # Result artifact not available, treat as if job doesn't exist
+                        logger.warning(f"Job {existing_job.id} SUCCESS but no result artifact, creating new job")
+                else:
+                    logger.warning(f"Job {existing_job.id} SUCCESS but no worker_id, creating new job")
+                # Fall through to create new job
+            else:
+                # queued or running - reuse and wait via interrupt
+                worker_job = existing_job
+                logger.debug(f"Reusing existing worker job {worker_job.id} (status: {existing_job.status})")
+
+        if worker_job is None:
             # Create new worker job record
             worker_job = WorkerJob(
                 owner_id=owner_id,
