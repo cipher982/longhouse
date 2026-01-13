@@ -136,3 +136,23 @@ async def test_concurrent_resume_only_runs_once(db_session, test_user):
     assert statuses.count("success") == 1
     assert statuses.count("skipped") == 1
     assert fake_runnable.calls == 1
+
+    # Verify no duplicate tool messages were created (regression test for Jan 2026 bug)
+    # The bug was in worker_resume.py where ToolMessages could be saved twice
+    from collections import Counter
+
+    from zerg.models.models import ThreadMessage
+
+    tool_msgs = (
+        db_session.query(ThreadMessage)
+        .filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.role == "tool",
+        )
+        .all()
+    )
+    if tool_msgs:
+        contents = [m.content for m in tool_msgs]
+        content_counts = Counter(contents)
+        duplicates = {k[:40]: v for k, v in content_counts.items() if v > 1}
+        assert not duplicates, f"DUPLICATE TOOL MESSAGES: Found {duplicates}"

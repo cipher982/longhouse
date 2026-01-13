@@ -70,7 +70,8 @@ def _get_config_path() -> Path:
     # Default: Find config relative to this file
     # Local monorepo: zerg/backend/zerg/models_config.py -> config/models.json
     # Docker: /app/zerg/models_config.py -> /app/../config/models.json
-    return Path(__file__).parent.parent.parent.parent.parent / "config" / "models.json"
+    # Note: .resolve() normalizes paths with .. segments (needed when imported via symlink-like paths)
+    return Path(__file__).resolve().parent.parent.parent.parent.parent / "config" / "models.json"
 
 
 def _load_config() -> dict:
