@@ -41,8 +41,19 @@ function getToolIcon(toolName: string): string {
   return TOOL_ICONS[toolName] || '🔧';
 }
 
-function formatDuration(ms: number | undefined, startedAt: number): string {
-  const duration = ms ?? Date.now() - startedAt;
+function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
+  // Only use live calculation (Date.now()) for running tools
+  // Completed/failed tools should have durationMs set; if not, show "—" to avoid ticking
+  let duration: number;
+  if (ms !== undefined) {
+    duration = ms;
+  } else if (status === 'running') {
+    duration = Date.now() - startedAt;
+  } else {
+    // Completed/failed without durationMs - don't use Date.now() or timer will "tick"
+    return '—';
+  }
+
   if (duration < 1000) {
     return `${duration}ms`;
   }
@@ -79,7 +90,7 @@ export function ToolCard({ tool }: ToolCardProps): React.ReactElement {
 
   const icon = getToolIcon(tool.toolName);
   const statusIcon = getStatusIcon(tool.status);
-  const duration = formatDuration(tool.durationMs, tool.startedAt);
+  const duration = formatDuration(tool.durationMs, tool.startedAt, tool.status);
 
   // Format args preview for display
   const argsDisplay = useMemo(() => {

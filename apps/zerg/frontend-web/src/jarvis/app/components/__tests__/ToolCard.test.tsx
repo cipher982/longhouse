@@ -43,9 +43,20 @@ describe('ToolCard', () => {
     });
 
     it('displays live duration for running tools', () => {
-      const { container } = render(<ToolCard tool={baseToolCall} />);
+      // Mock Date.now() to ensure consistent timing
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(now);
+
+      const tool: SupervisorToolCall = {
+        ...baseToolCall,
+        startedAt: now - 5000, // Exactly 5 seconds ago
+      };
+
+      const { container } = render(<ToolCard tool={tool} />);
       // Should show duration in seconds (5.0s)
       expect(container).toHaveTextContent(/5\.0s/);
+
+      vi.restoreAllMocks();
     });
 
     it('displays duration in milliseconds for sub-second durations', () => {
