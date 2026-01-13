@@ -33,10 +33,19 @@ interface WorkerProgressProps {
 }
 
 /**
- * Get elapsed time since start
+ * Get elapsed time since start (only for running tools)
  */
-function getElapsedTime(startedAt: number): string {
-  const elapsed = Date.now() - startedAt;
+function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
+  // Use captured duration for completed/failed tools to avoid "ticking" on re-render
+  let elapsed: number;
+  if (durationMs !== undefined) {
+    elapsed = durationMs;
+  } else if (status === 'running') {
+    elapsed = Date.now() - startedAt;
+  } else {
+    return '—';
+  }
+
   if (elapsed < 1000) {
     return `${elapsed}ms`;
   }
@@ -90,7 +99,7 @@ function WorkerStatusIcon({ status }: { status: string }) {
  */
 function ToolCallItem({ tool }: { tool: ToolCall }) {
   const statusClass = `tool-status-${tool.status}`;
-  const duration = tool.durationMs ? `${tool.durationMs}ms` : getElapsedTime(tool.startedAt);
+  const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
 
   // Show args preview if running, result/error preview if done
   let preview = '';

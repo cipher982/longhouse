@@ -45,16 +45,35 @@ interface WorkerState {
   nestedTools: NestedToolCall[];
 }
 
-function formatDuration(ms: number | undefined, startedAt: number): string {
-  const duration = ms != null ? ms : Date.now() - startedAt;
+function formatDuration(ms: number | undefined, startedAt: number, status: string): string {
+  // Only use live calculation (Date.now()) for running tools
+  // Completed/failed tools should have durationMs set; if not, show "—" to avoid ticking
+  let duration: number;
+  if (ms != null) {
+    duration = ms;
+  } else if (status === 'running' || status === 'spawned') {
+    duration = Date.now() - startedAt;
+  } else {
+    return '—';
+  }
+
   if (duration < 1000) {
     return `${duration}ms`;
   }
   return `${(duration / 1000).toFixed(1)}s`;
 }
 
-function getElapsedTime(startedAt: number): string {
-  const elapsed = Date.now() - startedAt;
+function getElapsedTime(startedAt: number, status: string, durationMs?: number): string {
+  // Only use live calculation for running tools
+  let elapsed: number;
+  if (durationMs != null) {
+    elapsed = durationMs;
+  } else if (status === 'running') {
+    elapsed = Date.now() - startedAt;
+  } else {
+    return '—';
+  }
+
   if (elapsed < 1000) {
     return `${elapsed}ms`;
   }
@@ -101,7 +120,7 @@ function ToolStatusIcon({ status }: { status: NestedToolCall['status'] }) {
  */
 function NestedToolItem({ tool }: { tool: NestedToolCall }) {
   const statusClass = `nested-tool-status-${tool.status}`;
-  const duration = tool.durationMs != null ? `${tool.durationMs}ms` : getElapsedTime(tool.startedAt);
+  const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
 
   // Show args preview if running, error preview if failed
   let preview = '';
@@ -143,7 +162,7 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
     return task.length > 60 ? task.slice(0, 57) + '...' : task;
   }, [tool.args]);
 
-  const duration = formatDuration(tool.durationMs, tool.startedAt);
+  const duration = formatDuration(tool.durationMs, tool.startedAt, workerState.status);
   const hasNestedTools = workerState.nestedTools.length > 0;
 
   const containerClass = `worker-tool-card worker-tool-card--${workerState.status} ${isDetached ? 'worker-tool-card--detached' : ''}`;
