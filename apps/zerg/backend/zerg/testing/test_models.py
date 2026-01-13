@@ -4,19 +4,15 @@ Test models (gpt-mock, gpt-scripted) are used for deterministic testing:
 - gpt-mock: Unit tests - returns canned responses immediately
 - gpt-scripted: E2E tests - follows scripted tool call sequences
 
-These models MUST NOT be used in production. The require_testing_mode()
-function enforces this constraint at runtime.
+These models are allowed in production to support E2E testing against
+live environments. The safety mechanism is that they are not selectable
+in the UI.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from zerg.config import Settings
-
 # Canonical set of test-only model identifiers
-TEST_ONLY_MODELS = frozenset({"gpt-mock"})
+TEST_ONLY_MODELS = frozenset({"gpt-mock", "gpt-scripted"})
 
 
 def is_test_model(model_id: str) -> bool:
@@ -31,22 +27,17 @@ def is_test_model(model_id: str) -> bool:
     return model_id in TEST_ONLY_MODELS
 
 
-def require_testing_mode(model_id: str, settings: Settings) -> None:
-    """Raise if test model used outside testing mode.
+def warn_if_test_model(model_id: str) -> None:
+    """Log a warning if a test model is used in active runtime.
 
-    This enforces that test models are only used when TESTING=1.
-    Call this before instantiating any LLM with a test model.
+    Test models (gpt-mock, gpt-scripted) are allowed in production
+    to support E2E testing against live environments. The safety
+    mechanism is that these models are not selectable in the UI.
 
     Args:
         model_id: The model identifier being used
-        settings: Application settings (must have .testing attribute)
-
-    Raises:
-        ValueError: If model_id is a test model and settings.testing is False
     """
     if is_test_model(model_id):
         import logging
 
         logging.getLogger(__name__).warning(f"Using test-only model '{model_id}' in active runtime.")
-        # We allow this even in production to support E2E testing against live envs.
-        # The safety mechanism is that these models are not selectable in the UI.
