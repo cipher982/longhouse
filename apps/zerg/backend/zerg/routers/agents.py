@@ -49,22 +49,18 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_model_or_400(model_id: str) -> None:
-    """Raise 400 if *model_id* not in registry (or not a test model in testing mode)."""
-    from zerg.config import get_settings
+    """Raise 400 if *model_id* not in registry. Test models are always allowed (with warning)."""
     from zerg.models_config import MODELS_BY_ID
     from zerg.testing.test_models import is_test_model
-    from zerg.testing.test_models import require_testing_mode
+    from zerg.testing.test_models import warn_if_test_model
 
     if not model_id or model_id.strip() == "":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="'model' must be a non-empty string")
 
-    # Allow test models when TESTING=1
+    # Allow test models (logs warning but doesn't block)
     if is_test_model(model_id):
-        try:
-            require_testing_mode(model_id, get_settings())
-            return  # Test model is valid in testing mode
-        except ValueError as e:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        warn_if_test_model(model_id)
+        return  # Test model is valid
 
     # Production models must be in the registry
     if model_id not in MODELS_BY_ID:

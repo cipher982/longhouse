@@ -20,7 +20,7 @@ mkdir -p "$XDG_CACHE_HOME" "$TMPDIR"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Run unit tests (excluding integration tests which require real API credentials)
-# To run integration tests: pytest tests/integration/ -v
+# Run tests (excluding live connector tests which require real API credentials)
+# To run live connector tests: uv run pytest tests/integration/test_connectors_live.py -v
 # -n auto: parallel execution using all CPU cores (requires pytest-xdist)
-uv run pytest tests/ --ignore=tests/integration/ -n "${PYTEST_XDIST_WORKERS:-auto}" -p no:warnings --tb=short "$@"
+uv run pytest tests/ --ignore=tests/integration/test_connectors_live.py -n "${PYTEST_XDIST_WORKERS:-auto}" -p no:warnings --tb=short "$@"
