@@ -26,6 +26,7 @@ from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from .agent import Agent  # noqa: F401
 from .agent import AgentMessage  # noqa: F401
 from .connector import Connector  # noqa: F401
+from .llm_audit import LLMAuditLog  # noqa: F401
 from .run import AgentRun  # noqa: F401
 from .thread import Thread  # noqa: F401
 from .thread import ThreadMessage  # noqa: F401

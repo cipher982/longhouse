@@ -556,10 +556,24 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # Log the full request payload for debugging
         # Import explicitly to avoid scoping issues with nested function
         from zerg.context import get_worker_context as _get_ctx
+        from zerg.services.llm_audit import audit_logger
+        from zerg.services.supervisor_context import get_supervisor_context
 
         _ctx = _get_ctx()
         _worker_id = _ctx.worker_id if _ctx else None
         _log_llm_request(messages, agent_row.model, phase, _worker_id)
+
+        # Audit Log (DB)
+        _sup_ctx = get_supervisor_context()
+        _audit_run_id = _sup_ctx.run_id if _sup_ctx else None
+        _audit_correlation_id = await audit_logger.log_request(
+            run_id=_audit_run_id,
+            worker_id=_worker_id,
+            owner_id=getattr(agent_row, "owner_id", None),
+            phase=phase,
+            model=agent_row.model,
+            messages=messages,
+        )
 
         # Phase 2: Evidence Mounting for Supervisor Runs
         # If we're in a supervisor context, wrap the LLM with evidence mounting
@@ -625,6 +639,23 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
                 # CRITICAL: Always use the wrapped LLM (with evidence mounting) even when not streaming
                 # Using _call_model_sync would bypass the EvidenceMountingLLM wrapper
                 result = await llm_with_tools.ainvoke(messages)
+        except Exception as e:
+            # Audit Log (DB) - Error
+            try:
+                _error_duration = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+                await audit_logger.log_response(
+                    correlation_id=_audit_correlation_id,
+                    content=None,
+                    tool_calls=None,
+                    input_tokens=None,
+                    output_tokens=None,
+                    reasoning_tokens=None,
+                    duration_ms=_error_duration,
+                    error=str(e),
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log audit error: {log_err}")
+            raise
         finally:
             # Phase 6: Stop heartbeat task after LLM call completes
             heartbeat_cancelled.set()
@@ -643,6 +674,29 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
 
         # Log the response for debugging
         _log_llm_response(result, agent_row.model, phase, duration_ms, _worker_id)
+
+        # Audit Log (DB) - Response
+        try:
+            _audit_content = None
+            _audit_tool_calls = None
+            _audit_usage = None
+
+            if isinstance(result, AIMessage):
+                _audit_content = result.content
+                _audit_tool_calls = result.tool_calls
+                _audit_usage = getattr(result, "usage_metadata", {}) or {}
+
+            await audit_logger.log_response(
+                correlation_id=_audit_correlation_id,
+                content=_audit_content,
+                tool_calls=_audit_tool_calls,
+                input_tokens=_audit_usage.get("input_tokens") if _audit_usage else None,
+                output_tokens=_audit_usage.get("output_tokens") if _audit_usage else None,
+                reasoning_tokens=_audit_usage.get("output_token_details", {}).get("reasoning") if _audit_usage else None,
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log audit response: {e}")
 
         # Extract and accumulate token usage (always, for AgentRunner)
         # With langchain-core 1.2.5+, usage_metadata is the canonical location for usage
