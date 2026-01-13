@@ -375,17 +375,35 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                     interrupt_info = interrupts[0]
                     interrupt_value = getattr(interrupt_info, "value", interrupt_info)
 
-                # CRITICAL FIX: LangGraph functional API doesn't include messages in interrupt result.
-                # Reconstruct the AIMessage from interrupt payload and persist it to thread DB.
-                # This ensures that on resume, the thread has the full context including the tool call.
-                if isinstance(interrupt_value, dict) and interrupt_value.get("tool_call_id"):
+                # CRITICAL: Persist the AIMessage with tool_calls BEFORE returning interrupt.
+                # Without this, subsequent runs will see orphaned ToolMessages and OpenAI will reject.
+                #
+                # Strategy:
+                # 1. FIRST: Try to get the actual AIMessage from context variable (set by zerg_react_agent)
+                # 2. FALLBACK: Reconstruct from interrupt payload if context var is empty
+                from zerg.agents_def.zerg_react_agent import clear_pending_ai_message
+                from zerg.agents_def.zerg_react_agent import get_pending_ai_message
+
+                pending_msg = get_pending_ai_message()
+                logger.info(f"[INTERRUPT DEBUG] pending_msg={pending_msg}, type={type(pending_msg) if pending_msg else None}")
+                if pending_msg and hasattr(pending_msg, "tool_calls") and pending_msg.tool_calls:
+                    # Use the actual AIMessage from context (most accurate)
+                    logger.info(f"[INTERRUPT] Persisting AIMessage from context var with {len(pending_msg.tool_calls)} tool call(s)")
+                    self.thread_service.save_new_messages(
+                        db,
+                        thread_id=thread.id,
+                        messages=[pending_msg],
+                        processed=True,
+                    )
+                    clear_pending_ai_message()
+                elif isinstance(interrupt_value, dict) and interrupt_value.get("tool_call_id"):
+                    # Fallback: Reconstruct from interrupt payload
                     from langchain_core.messages import AIMessage
 
                     tool_call_id = interrupt_value["tool_call_id"]
                     task = interrupt_value.get("task", "")
                     model = interrupt_value.get("model")
 
-                    # Reconstruct the AIMessage with spawn_worker tool call
                     reconstructed_ai_msg = AIMessage(
                         content="",
                         tool_calls=[
