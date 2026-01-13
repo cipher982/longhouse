@@ -38,6 +38,109 @@ When running, you have live access to:
 - **Playwright MCP** — take screenshots, click elements, run browser code
 - **API calls** — `curl localhost:30080/api/health` or WebFetch tool
 - **Logs** — `make logs` to tail all services
+- **LangGraph Debug Pipeline** — see dedicated section below
+
+## LangGraph Debug Pipeline
+
+Three-layer debugging infrastructure for investigating LLM behavior in supervisor/worker runs.
+
+### Quick Reference
+
+| Question | Tool | Command |
+|----------|------|---------|
+| "What messages are in the thread?" | Thread Inspector | `make debug-thread THREAD_ID=1` |
+| "Are there duplicate messages?" | Validator | `make debug-validate THREAD_ID=1` |
+| "What's the LangGraph checkpoint state?" | Inspector | `make debug-inspect THREAD_ID=1` |
+| "What did the LLM see/respond?" | Audit Log | `uv run python scripts/debug_run_audit.py --run-id 82` |
+| "Can I replay with different prompts?" | Replay Harness | `uv run python scripts/replay_run.py <run_id>` |
+
+### Layer 1: Thread Inspector (`debug_langgraph.py`)
+
+Inspect DB state (ThreadMessage table) and LangGraph checkpoints.
+
+```bash
+cd apps/zerg/backend
+
+# View messages in a thread (compact JSON)
+make debug-thread THREAD_ID=1
+
+# Validate message integrity (duplicates, ordering, tool response counts)
+make debug-validate THREAD_ID=1
+
+# Inspect LangGraph checkpoint state
+make debug-inspect THREAD_ID=1
+
+# Batch queries (minimal tokens for AI agents)
+echo '{"queries":[{"op":"thread","thread_id":1,"limit":5},{"op":"validate","thread_id":"1"}]}' | make debug-batch
+```
+
+**Validation rules:**
+- No duplicate messages (same role + content)
+- Messages ordered by sent_at
+- Each AIMessage tool_call has exactly one ToolMessage response
+- No duplicate tool response content
+
+### Layer 2: LLM Audit Log (`llm_audit_log` table)
+
+Every LLM request/response is stored in the database for postmortem debugging.
+
+```bash
+cd apps/zerg/backend
+
+# View LLM interactions for a run
+uv run python scripts/debug_run_audit.py --run-id 82
+
+# Include full message arrays
+uv run python scripts/debug_run_audit.py --run-id 82 --show-messages
+```
+
+**What's captured:**
+- Full messages array sent to LLM (serialized)
+- Response content and tool_calls
+- Token counts (input, output, reasoning)
+- Duration, phase, model
+- Correlation to run_id, worker_id, thread_id
+
+**Query directly:**
+```sql
+SELECT phase, model, message_count, duration_ms,
+       LEFT(response_content, 100) as response_preview
+FROM llm_audit_log
+WHERE run_id = 82
+ORDER BY created_at;
+```
+
+### Layer 3: Replay Harness (`replay_run.py`)
+
+Re-run a supervisor with mocked tool results to test prompt changes.
+
+```bash
+cd apps/zerg/backend
+
+# List recent runs
+uv run python scripts/replay_run.py --list-recent 20
+
+# Dry run (preview what would happen)
+uv run python scripts/replay_run.py <run_id> --dry-run
+
+# Full replay (real LLM, mocked spawn_worker)
+uv run python scripts/replay_run.py <run_id>
+
+# With options
+uv run python scripts/replay_run.py <run_id> --match-threshold 0.8 --max-context-messages 50
+```
+
+**What's mocked:** `spawn_worker` returns cached results from original run
+**What's real:** LLM calls (that's what you're testing)
+**Safe by default:** Unsafe tools (send_email, http_request) are blocked unless `--allow-all-tools`
+
+### Debugging Workflow
+
+1. **User reports issue** → Get the run_id from logs or dashboard
+2. **Check thread state** → `make debug-validate THREAD_ID=<id>` — any integrity issues?
+3. **View LLM interactions** → `uv run python scripts/debug_run_audit.py --run-id <id>` — what did LLM see?
+4. **Reproduce locally** → `uv run python scripts/replay_run.py <id>` — can you trigger the bug?
+5. **Fix prompt** → Edit supervisor/worker prompt, replay again to verify
 
 **Playwright MCP Best Practices (Token-Optimized):**
 
@@ -140,8 +243,11 @@ make generate-sdk  # OpenAPI types
 make regen-ws      # WebSocket contract code
 make regen-sse     # SSE event contract code
 
-# Prompt Iteration & Debugging
-cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>  # Replay a "golden run" with mocked tools
+# LangGraph Debugging (see "LangGraph Debug Pipeline" section for full docs)
+make debug-thread THREAD_ID=1      # View thread messages
+make debug-validate THREAD_ID=1   # Check message integrity
+cd apps/zerg/backend && uv run python scripts/debug_run_audit.py --run-id <id>  # LLM audit trail
+cd apps/zerg/backend && uv run python scripts/replay_run.py <run_id>            # Replay with mocked tools
 
 # Seeding (local dev data)
 make seed-agents       # Seed Jarvis agents
