@@ -165,3 +165,166 @@ async def test_async_generate():
 
     assert isinstance(ai_msg, AIMessage)
     assert ai_msg.tool_calls
+
+
+class TestSequencedResponses:
+    """Test sequenced response functionality for LangGraph replay simulation."""
+
+    def test_sequenced_response_on_first_call(self):
+        """Test that sequenced response is returned on first matching call."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "disk",
+                    "call_number": 0,
+                    "response": AIMessage(
+                        content="",
+                        tool_calls=[{"id": "seq-call-1", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                    ),
+                },
+            ]
+        )
+
+        messages = [HumanMessage(content="check disk usage")]
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        assert ai_msg.tool_calls[0]["id"] == "seq-call-1"
+        assert ai_msg.tool_calls[0]["args"]["task"] == "Check disk space"
+
+    def test_sequenced_response_returns_different_on_replay(self):
+        """Test that different response is returned on second call (replay simulation)."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "disk",
+                    "call_number": 0,
+                    "response": AIMessage(
+                        content="",
+                        tool_calls=[{"id": "call-first", "name": "spawn_worker", "args": {"task": "Check disk space"}}],
+                    ),
+                },
+                {
+                    "prompt_pattern": "disk",
+                    "call_number": 1,
+                    "response": AIMessage(
+                        content="",
+                        tool_calls=[{"id": "call-second", "name": "spawn_worker", "args": {"task": "Check disk usage"}}],
+                    ),
+                },
+            ]
+        )
+
+        messages = [HumanMessage(content="check disk on server")]
+
+        # First call
+        result1 = llm._generate(messages)
+        ai_msg1 = result1.generations[0].message
+        assert ai_msg1.tool_calls[0]["id"] == "call-first"
+        assert ai_msg1.tool_calls[0]["args"]["task"] == "Check disk space"
+
+        # Second call (replay) - should get different response
+        result2 = llm._generate(messages)
+        ai_msg2 = result2.generations[0].message
+        assert ai_msg2.tool_calls[0]["id"] == "call-second"
+        assert ai_msg2.tool_calls[0]["args"]["task"] == "Check disk usage"
+
+    def test_falls_back_to_default_when_no_sequence_match(self):
+        """Test fallback to default behavior when no sequence matches."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "specific_keyword",  # Won't match
+                    "call_number": 0,
+                    "response": AIMessage(content="sequenced response"),
+                },
+            ]
+        )
+        llm = llm.bind_tools([])
+
+        messages = [
+            SystemMessage(content="Short system prompt"),
+            HumanMessage(content="random request"),  # Doesn't contain "specific_keyword"
+        ]
+
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        # Should fall through to default behavior (generic "ok" response)
+        assert ai_msg.content == "ok"
+
+    def test_reset_call_counts(self):
+        """Test that call counts can be reset for fresh test runs."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "disk",
+                    "call_number": 0,
+                    "response": AIMessage(content="first"),
+                },
+                {
+                    "prompt_pattern": "disk",
+                    "call_number": 1,
+                    "response": AIMessage(content="second"),
+                },
+            ]
+        )
+
+        messages = [HumanMessage(content="check disk")]
+
+        # First call
+        result1 = llm._generate(messages)
+        assert result1.generations[0].message.content == "first"
+
+        # Second call
+        result2 = llm._generate(messages)
+        assert result2.generations[0].message.content == "second"
+
+        # Reset
+        llm.reset_call_counts()
+
+        # Should start from first sequence again
+        result3 = llm._generate(messages)
+        assert result3.generations[0].message.content == "first"
+
+    def test_bind_tools_preserves_sequences(self):
+        """Test that bind_tools preserves sequence configuration."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "test",
+                    "call_number": 0,
+                    "response": AIMessage(content="sequenced"),
+                },
+            ]
+        )
+
+        bound = llm.bind_tools(["tool1", "tool2"])
+
+        messages = [HumanMessage(content="test message")]
+        result = bound._generate(messages)
+
+        assert result.generations[0].message.content == "sequenced"
+
+    def test_dict_response_format(self):
+        """Test that dict format responses are converted to AIMessage."""
+        llm = ScriptedChatLLM(
+            sequences=[
+                {
+                    "prompt_pattern": "test",
+                    "call_number": 0,
+                    "response": {
+                        "content": "dict response",
+                        "tool_calls": [{"id": "dict-call", "name": "some_tool", "args": {}}],
+                    },
+                },
+            ]
+        )
+
+        messages = [HumanMessage(content="test message")]
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        assert isinstance(ai_msg, AIMessage)
+        assert ai_msg.content == "dict response"
+        assert ai_msg.tool_calls[0]["id"] == "dict-call"

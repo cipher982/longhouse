@@ -164,12 +164,51 @@ async def resume_supervisor_with_worker_result(
         db_messages = thread_service.get_thread_messages_as_langchain(db, thread.id)
         conversation_msgs = [m for m in db_messages if getattr(m, "type", None) != "system"]
 
-        # Resume the graph - Command(resume=...) makes interrupt() return this value inside spawn_worker.
+        # CRITICAL FIX: Check if the last message is an AIMessage with pending tool calls.
+        # If so, we should NOT use Command(resume=...) which replays the graph.
+        # Instead, add the tool result and invoke with fresh messages to skip the LLM call.
+        from langchain_core.messages import AIMessage
+        from langchain_core.messages import ToolMessage
+
+        last_conv_msg = conversation_msgs[-1] if conversation_msgs else None
+        use_fresh_messages = False
+
+        if isinstance(last_conv_msg, AIMessage) and last_conv_msg.tool_calls:
+            # Check if tool call already has a response
+            tool_call_ids = {tc["id"] for tc in last_conv_msg.tool_calls}
+            responded_ids = {m.tool_call_id for m in conversation_msgs if isinstance(m, ToolMessage)}
+            pending_ids = tool_call_ids - responded_ids
+
+            if pending_ids:
+                # We have pending tool calls - add the worker result as ToolMessage
+                logger.info("[RESUME] Found pending tool calls, using fresh messages path")
+                tool_call_id = list(pending_ids)[0]
+                tool_msg = ToolMessage(
+                    content=f"Worker completed:\n\n{worker_result}",
+                    tool_call_id=tool_call_id,
+                    name="spawn_worker",
+                )
+                # Add tool message to thread
+                thread_service.save_new_messages(
+                    db,
+                    thread_id=thread.id,
+                    messages=[tool_msg],
+                    processed=True,
+                )
+                use_fresh_messages = True
+
         runnable = zerg_react_agent.get_runnable(agent)
         config = {"configurable": {"thread_id": str(thread.id)}}
-
         reset_llm_usage()
-        result = await runnable.ainvoke(Command(resume=worker_result), config)
+
+        if use_fresh_messages:
+            # Reload messages with the tool result and invoke directly
+            # This skips the LangGraph replay and goes straight to the LLM with full context
+            db_messages = thread_service.get_thread_messages_as_langchain(db, thread.id)
+            result = await runnable.ainvoke(db_messages, config)
+        else:
+            # Normal resume path
+            result = await runnable.ainvoke(Command(resume=worker_result), config)
 
         # Handle interrupt (supervisor can spawn another worker after resume)
         if isinstance(result, dict) and result.get("__interrupt__"):

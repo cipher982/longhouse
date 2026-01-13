@@ -18,10 +18,10 @@ import type { ChatMessage } from '../context/types'
 //   0 = user message (first)
 //   1 = tool (middle)
 //   2 = assistant message (last)
-// This ensures: user msg → tools → assistant response
+// This ensures: user msg → tools → assistant response within the same run
 type TimelineEvent =
-  | { type: 'message'; timestamp: number; sortOrder: number; data: ChatMessage }
-  | { type: 'tool'; timestamp: number; sortOrder: number; data: SupervisorToolCall }
+  | { type: 'message'; id: string; timestamp: number; sortOrder: number; runId: number; data: ChatMessage }
+  | { type: 'tool'; id: string; timestamp: number; sortOrder: number; runId: number; data: SupervisorToolCall }
 
 interface ChatContainerProps {
   messages: ChatMessage[]
@@ -90,21 +90,25 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     }
   }, [toolCount])
 
-  // Build unified timeline of messages and tools, sorted by timestamp
-  // Each event renders exactly once - no runId matching, no duplication
+  // Build unified timeline of messages and tools
+  // Sort by runId first (to keep related items together), then by logical order
+  // This ensures: user message → tools → assistant response within each run
   const timeline = useMemo((): TimelineEvent[] => {
     const events: TimelineEvent[] = []
 
-    // Add messages with sortOrder for tie-breaking
+    // Add messages with sortOrder for logical ordering within a run
     // User messages sort first (0), assistant messages sort last (2)
     for (const msg of messages) {
       const timestamp = msg.timestamp?.getTime()
       events.push({
         type: 'message',
+        id: msg.id,
         // Use timestamp if valid, otherwise Infinity to put at end
         timestamp: timestamp && Number.isFinite(timestamp) ? timestamp : Infinity,
-        // User=0 (first), Assistant=2 (last in ties)
+        // User=0 (first), Assistant=2 (last)
         sortOrder: msg.role === 'user' ? 0 : 2,
+        // runId for grouping (0 if not set)
+        runId: msg.runId ?? 0,
         data: msg,
       })
     }
@@ -113,18 +117,40 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
     for (const tool of toolState.tools.values()) {
       events.push({
         type: 'tool',
-        timestamp: tool.startedAt,
+        id: tool.toolCallId,
+        timestamp: Number.isFinite(tool.startedAt) ? tool.startedAt : Infinity,
         sortOrder: 1,
+        runId: tool.runId ?? 0,
         data: tool,
       })
     }
 
-    // Sort by timestamp, then by sortOrder for ties
-    // This ensures: user message → tools → assistant response
+    // Sort strategy:
+    // 1. Different runIds: sort by timestamp (chronological order of runs)
+    // 2. Same runId: sort by sortOrder (user → tools → assistant)
+    // This fixes the visual "jumping" issue where tools appeared after assistant
     return events.sort((a, b) => {
+      const stableIdDiff = a.id.localeCompare(b.id)
+
+      // If same run, use logical ordering
+      if (a.runId !== 0 && b.runId !== 0 && a.runId === b.runId) {
+        const orderDiff = a.sortOrder - b.sortOrder
+        if (orderDiff !== 0) return orderDiff
+
+        // Same sortOrder (e.g., multiple tools): sort chronologically, then stably by id
+        const timeDiff = a.timestamp - b.timestamp
+        if (timeDiff !== 0) return timeDiff
+        return stableIdDiff
+      }
+
+      // Different runs (or runId=0): sort by timestamp
       const timeDiff = a.timestamp - b.timestamp
       if (timeDiff !== 0) return timeDiff
-      return a.sortOrder - b.sortOrder
+
+      // Same timestamp across runs: preserve logical order, then stably by id
+      const orderDiff = a.sortOrder - b.sortOrder
+      if (orderDiff !== 0) return orderDiff
+      return stableIdDiff
     })
   }, [messages, toolState.tools])
 

@@ -375,6 +375,36 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                     interrupt_info = interrupts[0]
                     interrupt_value = getattr(interrupt_info, "value", interrupt_info)
 
+                # CRITICAL FIX: LangGraph functional API doesn't include messages in interrupt result.
+                # Reconstruct the AIMessage from interrupt payload and persist it to thread DB.
+                # This ensures that on resume, the thread has the full context including the tool call.
+                if isinstance(interrupt_value, dict) and interrupt_value.get("tool_call_id"):
+                    from langchain_core.messages import AIMessage
+
+                    tool_call_id = interrupt_value["tool_call_id"]
+                    task = interrupt_value.get("task", "")
+                    model = interrupt_value.get("model")
+
+                    # Reconstruct the AIMessage with spawn_worker tool call
+                    reconstructed_ai_msg = AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "spawn_worker",
+                                "args": {"task": task, "model": model},
+                                "id": tool_call_id,
+                                "type": "tool_call",
+                            }
+                        ],
+                    )
+                    logger.info(f"[INTERRUPT] Persisting reconstructed AIMessage with tool_call_id={tool_call_id}")
+                    self.thread_service.save_new_messages(
+                        db,
+                        thread_id=thread.id,
+                        messages=[reconstructed_ai_msg],
+                        processed=True,
+                    )
+
                 # Best-effort persistence: if the graph returned message history, persist any new rows
                 # before surfacing the interrupt to the caller.
                 updated_messages_for_persist = result.get("messages") if isinstance(result.get("messages"), list) else None

@@ -50,6 +50,26 @@ def clear_evidence_mount_warning(run_id: int) -> None:
 # This is needed because LangGraph streaming doesn't preserve usage metadata on AIMessage objects
 _llm_usage_var: contextvars.ContextVar[Dict] = contextvars.ContextVar("llm_usage", default={})
 
+# Context variable to store pending AIMessage that needs to be persisted on interrupt
+# When LLM returns tool_calls, we store the AIMessage here before executing tools.
+# If interrupt() is called during tool execution, agent_runner reads this and persists it.
+_pending_ai_message_var: contextvars.ContextVar[Optional[AIMessage]] = contextvars.ContextVar("pending_ai_message", default=None)
+
+
+def set_pending_ai_message(msg: AIMessage) -> None:
+    """Store an AIMessage that should be persisted if interrupt occurs."""
+    _pending_ai_message_var.set(msg)
+
+
+def get_pending_ai_message() -> Optional[AIMessage]:
+    """Get the pending AIMessage (for agent_runner to persist on interrupt)."""
+    return _pending_ai_message_var.get()
+
+
+def clear_pending_ai_message() -> None:
+    """Clear the pending AIMessage (after tools complete or after persisting)."""
+    _pending_ai_message_var.set(None)
+
 
 def reset_llm_usage() -> None:
     """Reset the accumulated LLM usage data. Call before starting a new agent run."""
@@ -858,7 +878,17 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             try:
                 from langgraph.errors import GraphInterrupt
 
-                observation = await tool_to_call.ainvoke(tool_args)
+                # IDEMPOTENCY: For spawn_worker, call coroutine directly to pass _tool_call_id
+                # The StructuredTool.ainvoke() method uses the schema which doesn't include internal params
+                if tool_name == "spawn_worker" and tool_call_id:
+                    coro = tool_to_call.coroutine
+                    observation = await coro(
+                        task=tool_args.get("task", ""),
+                        model=tool_args.get("model"),
+                        _tool_call_id=tool_call_id,
+                    )
+                else:
+                    observation = await tool_to_call.ainvoke(tool_args)
                 result = ToolMessage(content=str(observation), tool_call_id=tool_call_id, name=tool_name)
             except GraphInterrupt:
                 # Let interrupt bubble up to pause the graph
@@ -973,8 +1003,47 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
         # direct unit-tests).
         current_messages = messages or previous or []
 
-        # Start by calling the model with the current context
-        llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
+        # --------------------------------------------------------------
+        # RESUME HANDLING: Detect pending tool calls from interrupted state
+        # --------------------------------------------------------------
+        # If the last message is an AIMessage with tool_calls but no ToolMessage
+        # response, we're resuming from an interrupt. Execute the pending tools
+        # first instead of calling the LLM again (which would cause duplicate spawns).
+        # --------------------------------------------------------------
+        if current_messages:
+            last_msg = current_messages[-1]
+            if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
+                # Check if there's already a ToolMessage response for these tool calls
+                pending_tool_ids = {tc["id"] for tc in last_msg.tool_calls}
+                responded_tool_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
+                unresponded = pending_tool_ids - responded_tool_ids
+
+                if unresponded:
+                    # Resuming from interrupt - execute pending tools, skip initial LLM call
+                    import asyncio
+
+                    logger.info(f"Resuming with {len(unresponded)} pending tool call(s), executing tools first")
+                    pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
+                    coro_list = [_call_tool_async(tc) for tc in pending_calls]
+                    tool_results = await asyncio.gather(*coro_list, return_exceptions=False)
+                    current_messages = add_messages(current_messages, list(tool_results))
+
+                    # Now call model with tool results - this becomes the "initial" call for this resume
+                    llm_response = await _call_model_async(current_messages, enable_token_stream, phase="resume_synthesis")
+
+                    # Skip the normal initial call and go straight to the tool loop
+                    # (llm_response is already set, so we'll enter the while loop if needed)
+                    # Jump to tool loop handling below
+                    pass
+                else:
+                    # All tool calls have responses, proceed normally
+                    llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
+            else:
+                # No pending tool calls, proceed normally
+                llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
+        else:
+            # Start by calling the model with the current context
+            llm_response = await _call_model_async(current_messages, enable_token_stream, phase="initial")
 
         # Robustness: some model/provider combinations can occasionally return an empty
         # assistant message with no tool calls. That produces "successful" but useless
@@ -1056,11 +1125,25 @@ def get_runnable(agent_row):  # noqa: D401 – matches public API naming
             # LLM can reason about in the next turn.
             # --------------------------------------------------------------
 
+            # CRITICAL: Add AIMessage to history BEFORE executing tools.
+            # This ensures the checkpoint captures the tool call if interrupt() is raised.
+            # Without this, resume would see only [system, human] and re-call the LLM,
+            # causing duplicate worker spawns.
+            current_messages = add_messages(current_messages, [llm_response])
+
+            # Store the AIMessage in context var so agent_runner can persist it if interrupt occurs.
+            # LangGraph's functional API doesn't include messages in interrupt result, so we need
+            # this mechanism to ensure the AIMessage with tool_calls gets saved to thread DB.
+            set_pending_ai_message(llm_response)
+
             coro_list = [_call_tool_async(tc) for tc in llm_response.tool_calls]
             tool_results = await asyncio.gather(*coro_list, return_exceptions=False)
 
-            # Update message history with the model response and tool results
-            current_messages = add_messages(current_messages, [llm_response] + list(tool_results))
+            # Tools completed without interrupt - clear the pending message
+            clear_pending_ai_message()
+
+            # Add tool results to history
+            current_messages = add_messages(current_messages, list(tool_results))
 
             # Phase 6: Check for critical errors and fail fast
             # If a critical tool error occurred, stop execution immediately
