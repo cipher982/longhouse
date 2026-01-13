@@ -110,11 +110,11 @@ async def test_supervisor_worker_interrupt_resume_flow(
     async def fake_run_thread_with_interrupt(_self, _db, _thread):
         """Simulate supervisor calling spawn_worker which triggers interrupt."""
         # Raise AgentInterrupted to simulate the interrupt() call inside spawn_worker
+        # Note: No "message" field - frontend shows typing indicator, worker card shows task
         raise AgentInterrupted({
             "type": "worker_pending",
             "job_id": worker_job.id,
             "task": "Check disk space on cube",
-            "message": f"Worker job {worker_job.id} started. Working on: Check disk space on cube",
         })
 
     # Test Phase 1: Supervisor run should become WAITING when interrupted
@@ -451,3 +451,121 @@ async def test_resume_completes_interrupted_run(
     # Verify final response was captured
     final_result = result.get("result", "")
     assert "45%" in final_result, f"Final response should contain '45%', got: {final_result}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_double_worker_spawn_on_resume_bug(
+    db_session,
+    test_user,
+    credential_context,
+    temp_artifact_path,
+):
+    """REGRESSION TEST: Reproduce the bug where LLM spawns a SECOND worker on resume.
+
+    From Docker logs (2026-01-13 01:58):
+    1. User: "check disk space on cube real quick"
+    2. LLM call 1: spawn_worker("Check disk space on cube")
+    3. Graph interrupts, worker executes, completes
+    4. Resume supervisor
+    5. LLM call 2 (on resume): spawn_worker("Check disk space on cube real quick")
+       ^^^ THIS IS THE BUG - should synthesize result, not spawn again
+    6. TWO workers created for ONE user request
+
+    This test directly calls spawn_worker_async twice with the task strings
+    from the real bug scenario to verify idempotency works.
+    """
+    import json
+    import os
+
+    from zerg.services.supervisor_context import reset_supervisor_context
+    from zerg.services.worker_artifact_store import WorkerArtifactStore
+    from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+
+    # Set up supervisor agent/thread
+    service = SupervisorService(db_session)
+    agent = service.get_or_create_supervisor_agent(test_user.id)
+    thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+    # Create run
+    run = AgentRun(
+        agent_id=agent.id,
+        thread_id=thread.id,
+        status=RunStatus.RUNNING,
+        trigger=RunTrigger.API,
+    )
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+
+    # Set supervisor context for spawn_worker tool
+    sup_token = set_supervisor_context(
+        run_id=run.id,
+        owner_id=test_user.id,
+        message_id="test-msg-1",
+    )
+
+    try:
+        # Phase 1: First spawn_worker call - creates the worker
+        # Task: "Check disk space on cube" (what the LLM said first)
+        result1 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
+        assert "queued successfully" in result1, f"First spawn should create job, got: {result1}"
+
+        # Verify first worker was created
+        workers = db_session.query(WorkerJob).filter(
+            WorkerJob.supervisor_run_id == run.id
+        ).all()
+        assert len(workers) == 1, f"Phase 1: Expected 1 worker, got {len(workers)}"
+        first_worker = workers[0]
+        assert first_worker.task == "Check disk space on cube"
+
+        # Mark first worker as complete WITH artifacts (simulating real worker completion)
+        first_worker.status = "success"
+        first_worker.worker_id = "test-worker-resume-001"
+        db_session.commit()
+
+        # Create artifact files (required for idempotency to return cached result)
+        artifact_store = WorkerArtifactStore()
+        worker_dir = artifact_store._get_worker_dir("test-worker-resume-001")
+        os.makedirs(worker_dir, exist_ok=True)
+
+        with open(worker_dir / "result.txt", "w") as f:
+            f.write("Disk usage on cube: 45% used. Docker images are the largest consumer.")
+        with open(worker_dir / "metadata.json", "w") as f:
+            json.dump({
+                "worker_id": "test-worker-resume-001",
+                "status": "success",
+                "summary": "Cube is at 45% disk usage, Docker is largest consumer.",
+                "owner_id": test_user.id,
+            }, f)
+
+        # Phase 2: Second spawn_worker call - the LLM rephrases on resume
+        # Task: "Check disk space on cube real quick" (what the LLM said on resume)
+        # THIS IS THE BUG SCENARIO - the idempotency should catch this
+        result2 = await spawn_worker_async("Check disk space on cube real quick", model=TEST_WORKER_MODEL)
+
+        # Count workers AFTER second spawn
+        db_session.expire_all()  # Force refresh
+        workers_after = db_session.query(WorkerJob).filter(
+            WorkerJob.supervisor_run_id == run.id
+        ).all()
+
+        # THE KEY ASSERTION - This catches the bug
+        # If idempotency is broken, we'll have 2 workers
+        # The prefix matching should detect "Check disk space on cube" is a prefix of
+        # "Check disk space on cube real quick" and return the cached result
+        assert len(workers_after) == 1, (
+            f"BUG REPRODUCED: {len(workers_after)} workers created!\n"
+            f"Workers: {[(w.task, w.status) for w in workers_after]}\n"
+            f"First spawn result: {result1}\n"
+            f"Second spawn result: {result2}\n"
+            f"Expected idempotency to catch the rephrased task."
+        )
+
+        # Second call should return the cached result
+        assert "completed" in result2.lower(), (
+            f"Second spawn should return cached result, got: {result2}"
+        )
+
+    finally:
+        reset_supervisor_context(sup_token)

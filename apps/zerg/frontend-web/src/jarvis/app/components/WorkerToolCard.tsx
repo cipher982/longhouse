@@ -154,7 +154,12 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
   } : undefined;
 
   return (
-    <div className={containerClass} style={detachedStyle}>
+    <div
+      className={containerClass}
+      style={detachedStyle}
+      data-testid="worker-tool-card"
+      data-tool-call-id={tool.toolCallId}
+    >
       {/* Header - always visible */}
       <div
         className="worker-tool-card__header"

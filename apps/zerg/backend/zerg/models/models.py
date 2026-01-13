@@ -6,10 +6,12 @@ from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
+from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
+from sqlalchemy import text
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import relationship
@@ -372,6 +374,10 @@ class WorkerJob(Base):
     # ON DELETE SET NULL: if supervisor run is deleted, worker job remains but loses correlation
     supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
+    # Tool call idempotency - prevents duplicate workers from LangGraph interrupt/resume replay
+    # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
+    tool_call_id = Column(String(64), nullable=True, index=True)
+
     # Job specification
     task = Column(Text, nullable=False)
     model = Column(String(100), nullable=False, default=DEFAULT_WORKER_MODEL_ID)
@@ -391,6 +397,18 @@ class WorkerJob(Base):
 
     # Relationships
     owner = relationship("User", backref="worker_jobs")
+
+    # Unique constraint for idempotency - prevents duplicate workers from LangGraph replay
+    # Uses partial index: only enforce when both fields are non-null
+    __table_args__ = (
+        Index(
+            "ix_worker_jobs_idempotency",
+            "supervisor_run_id",
+            "tool_call_id",
+            unique=True,
+            postgresql_where=text("supervisor_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

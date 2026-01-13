@@ -185,10 +185,15 @@ def get_checkpointer(engine: Engine = None) -> BaseCheckpointSaver:
     except Exception:
         db_url = str(getattr(engine, "url", ""))
 
-    # For tests, always use MemorySaver for speed (checkpointer init is slow)
+    # For tests, check if we should use real PostgresSaver for integration tests
     import os
 
-    if os.environ.get("TESTING") == "1":
+    # TESTING_WITH_POSTGRES=1 enables real PostgresSaver in tests for interrupt/resume validation
+    # This is slower but validates the full LangGraph checkpoint behavior
+    if os.environ.get("TESTING_WITH_POSTGRES") == "1" and "postgresql" in db_url.lower():
+        logger.debug("Using PostgresSaver for integration test (TESTING_WITH_POSTGRES=1)")
+        # Fall through to PostgreSQL handling below
+    elif os.environ.get("TESTING") == "1":
         logger.debug("Using MemorySaver for test environment")
         return MemorySaver()
 
