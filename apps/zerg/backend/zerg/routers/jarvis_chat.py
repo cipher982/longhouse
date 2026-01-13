@@ -145,23 +145,16 @@ async def jarvis_chat(
     ctx = current_user.context or {}
     saved_prefs = (ctx.get("preferences", {}) or {}) if isinstance(ctx, dict) else {}
 
-    from zerg.config import get_settings
     from zerg.models_config import get_default_model_id_str
     from zerg.models_config import get_model_by_id
     from zerg.testing.test_models import is_test_model
-    from zerg.testing.test_models import require_testing_mode
+    from zerg.testing.test_models import warn_if_test_model
 
     model_to_use = request.model or saved_prefs.get("chat_model") or get_default_model_id_str()
 
-    # Validate model: test models require TESTING=1, production models must exist in config
+    # Allow test models (logs warning but doesn't block)
     if is_test_model(model_to_use):
-        try:
-            require_testing_mode(model_to_use, get_settings())
-        except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e),
-            )
+        warn_if_test_model(model_to_use)
     else:
         model_config = get_model_by_id(model_to_use)
         if not model_config:
@@ -199,7 +192,7 @@ async def jarvis_chat(
             status=RunStatus.RUNNING,
             trigger=RunTrigger.API,
             assistant_message_id=request.message_id,  # Client-generated message ID
-            model=request.model,  # Store model for continuation inheritance
+            model=model_to_use,  # Store resolved model for continuation inheritance
         )
         db.add(run)
         db.commit()

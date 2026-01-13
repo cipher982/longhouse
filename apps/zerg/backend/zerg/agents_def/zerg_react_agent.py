@@ -320,19 +320,31 @@ def _make_llm(agent_row, tools, *, tool_choice: dict | str | bool | None = None)
     # module import still take effect.
 
     from zerg.testing.test_models import is_test_model
-    from zerg.testing.test_models import require_testing_mode
+    from zerg.testing.test_models import warn_if_test_model
 
     settings = get_settings()
     enable_token_stream = settings.llm_token_stream
 
-    # Handle mock/scripted models for testing (requires TESTING=1)
+    # Handle mock/scripted models for testing
     if is_test_model(agent_row.model):
-        require_testing_mode(agent_row.model, settings)
+        warn_if_test_model(agent_row.model)
 
         if agent_row.model == "gpt-mock":
             from zerg.testing.mock_llm import MockChatLLM
 
             llm = MockChatLLM()
+            try:
+                return llm.bind_tools(tools, tool_choice=tool_choice)
+            except TypeError:
+                return llm.bind_tools(tools)
+
+        if agent_row.model == "gpt-scripted":
+            from zerg.testing.scripted_llm import ScriptedChatLLM
+
+            # ScriptedChatLLM uses sequences from agent_row.config["scripted_sequences"]
+            cfg = getattr(agent_row, "config", {}) or {}
+            sequences = cfg.get("scripted_sequences", [])
+            llm = ScriptedChatLLM(sequences=sequences)
             try:
                 return llm.bind_tools(tools, tool_choice=tool_choice)
             except TypeError:
