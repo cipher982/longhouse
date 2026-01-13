@@ -210,3 +210,6 @@ data/llm_requests/
 apps/zerg/backend/evals/results/*.json
 apps/zerg/backend/evals/results/.tmp/
 apps/zerg/backend/data/
+
+# Work-in-progress docs
+apps/zerg/backend/docs/work/
