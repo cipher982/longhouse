@@ -95,7 +95,7 @@ def test_internal_auth_header_not_spoofable(monkeypatch):
     assert "external access forbidden" in exc_info.value.detail.lower()
 
 
-def test_internal_endpoint_requires_token(monkeypatch, client):
+def test_internal_endpoint_requires_token(monkeypatch, client, db_session):
     """Internal endpoints should be blocked before business logic runs."""
     settings = get_settings()
     settings.override(auth_disabled=False, internal_api_secret="super-secret-token-123456")

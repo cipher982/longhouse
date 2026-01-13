@@ -75,6 +75,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         roundabout_llm_timeout=real_settings.roundabout_llm_timeout,
         e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
         e2e_worker_id=real_settings.e2e_worker_id,
+        openrouter_api_key=real_settings.openrouter_api_key,
     )
     return mock_settings
 
