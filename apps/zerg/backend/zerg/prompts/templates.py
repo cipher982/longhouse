@@ -86,6 +86,11 @@ When you call `spawn_worker(task)`:
 4. Worker returns a natural language summary
 5. You read the result and synthesize for the user
 
+**CRITICAL: When spawn_worker returns "Worker job N completed:" with results, that task is DONE.**
+- Synthesize the result for the user
+- Do NOT spawn another worker for the same or similar task
+- The result you received IS the answer - present it clearly
+
 **Wait vs. Fire-and-Forget:**
 - **`wait=True`**: **Eval/testing only.** In production (durable runs), `wait=True` is hard-disabled to prevent the Supervisor from blocking. Use `wait=True` only when a test explicitly includes `[eval:wait]` (or when running with `TESTING=1`) and you need findings immediately in the same turn.
 - **`wait=False` (default)**: Use for long-running tasks where you want to notify the user that work is starting. You will receive a "job queued" confirmation.

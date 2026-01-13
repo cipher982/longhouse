@@ -72,6 +72,7 @@ class Settings:  # noqa: D401 – simple data container
     environment: Any
     allowed_cors_origins: str
     openai_api_key: Any
+    openrouter_api_key: Any
     # Public URL --------------------------------------------------------
     app_public_url: str | None
     runner_docker_image: str
@@ -237,6 +238,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         environment=os.getenv("ENVIRONMENT"),
         allowed_cors_origins=os.getenv("ALLOWED_CORS_ORIGINS", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
         app_public_url=os.getenv("APP_PUBLIC_URL"),
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/zerg-runner:latest"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),

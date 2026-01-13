@@ -609,20 +609,20 @@ export class SupervisorChatController {
         this.petWatchdog();
         logger.debug('[SupervisorChat] Supervisor waiting (interrupt):', payload.job_id);
 
-        const waitingMsg = payload.message || 'Working on this in the background...';
         const messageId = payload.message_id || this.currentMessageId;
 
-        // Update the existing assistant bubble with a stable "waiting" message.
-        // The final response will arrive later as supervisor_tokens/supervisor_complete for the same message_id.
+        // Keep assistant bubble in 'typing' state while waiting for worker.
+        // Don't show the interrupt message - the worker card displays task details.
+        // Final response arrives later via supervisor_tokens/supervisor_complete.
         if (messageId) {
-          stateManager.updateAssistantStatusByMessageId(messageId, 'final', waitingMsg, undefined, this.currentRunId ?? undefined);
+          stateManager.updateAssistantStatusByMessageId(messageId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
         }
 
         if (this.currentRunId) {
           eventBus.emit('supervisor:waiting', {
             runId: this.currentRunId,
             jobId: payload.job_id,
-            message: waitingMsg,
+            message: payload.message,  // Keep for event bus consumers (progress UI)
             timestamp: Date.now(),
           });
         }

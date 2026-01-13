@@ -31,10 +31,18 @@ from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
+_COMPLETED_TASK_PREFIX_LEN = 50
+
+
+def _task_prefix(task: str, length: int = _COMPLETED_TASK_PREFIX_LEN) -> str:
+    return (task or "")[:length]
+
 
 async def spawn_worker_async(
     task: str,
     model: str | None = None,
+    *,
+    _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
 ) -> str:
     """Spawn a worker agent to execute a task and wait for completion.
 
@@ -71,31 +79,86 @@ async def spawn_worker_async(
     worker_model = model or DEFAULT_WORKER_MODEL_ID
 
     try:
-        # IDEMPOTENCY: Check for existing job with same task for this supervisor run.
-        # This handles LangGraph replay after resume - we don't want duplicate jobs.
-        existing_job = (
-            db.query(WorkerJob)
-            .filter(
-                WorkerJob.supervisor_run_id == supervisor_run_id,
-                WorkerJob.task == task,
-                WorkerJob.owner_id == owner_id,
-            )
-            .first()
-        )
+        # IDEMPOTENCY: Handle LangGraph replay after resume.
+        #
+        # Primary strategy: Use tool_call_id (unique per LLM response) for exact idempotency.
+        # Fallback strategy: Prefix matching on task string (handles cases without tool_call_id).
+        #
+        # This prevents replay duplicates while allowing legitimate multi-worker scenarios.
 
         worker_job = None
+        existing_job = None
+
+        # PRIMARY: Check for existing job with same tool_call_id (most reliable)
+        if _tool_call_id and supervisor_run_id:
+            existing_job = (
+                db.query(WorkerJob)
+                .filter(
+                    WorkerJob.supervisor_run_id == supervisor_run_id,
+                    WorkerJob.tool_call_id == _tool_call_id,
+                )
+                .first()
+            )
+            if existing_job:
+                logger.info(f"[IDEMPOTENT] Found existing job {existing_job.id} for tool_call_id={_tool_call_id}")
+
+        # FALLBACK: Check for completed/in-progress workers using task matching
+        # (only if tool_call_id lookup didn't find anything)
+        if existing_job is None:
+            completed_jobs = (
+                db.query(WorkerJob)
+                .filter(
+                    WorkerJob.supervisor_run_id == supervisor_run_id,
+                    WorkerJob.owner_id == owner_id,
+                    WorkerJob.status == "success",
+                )
+                .order_by(WorkerJob.created_at.desc())
+                .limit(20)
+                .all()
+            )
+
+            if completed_jobs:
+                # First try exact match (safest)
+                for job in completed_jobs:
+                    if job.task == task:
+                        existing_job = job
+                        break
+                # Then try prefix CONTAINMENT match - handles LLM rephrasing on replay
+                if existing_job is None:
+                    prefix_len = _COMPLETED_TASK_PREFIX_LEN
+                    task_pfx = _task_prefix(task, prefix_len)
+                    prefix_matches = [j for j in completed_jobs if (task.startswith(j.task[:prefix_len]) or j.task.startswith(task_pfx))]
+                    if len(prefix_matches) == 1:
+                        existing_job = prefix_matches[0]
+                        logger.debug(f"Reusing job {existing_job.id} via prefix containment match")
+
+        if existing_job is None:
+            # No completed match - check for in-progress job with EXACT task match
+            existing_job = (
+                db.query(WorkerJob)
+                .filter(
+                    WorkerJob.supervisor_run_id == supervisor_run_id,
+                    WorkerJob.task == task,
+                    WorkerJob.owner_id == owner_id,
+                    WorkerJob.status.in_(["queued", "running"]),
+                )
+                .first()
+            )
+
         if existing_job:
-            if existing_job.status == "failed":
-                # Don't reuse failed jobs - create new one for retry
-                logger.debug(f"Existing job {existing_job.id} failed, creating new job")
-                # Fall through to create new job
-            elif existing_job.status == "success":
+            if existing_job.status == "success":
                 # Already completed - return cached result immediately (no interrupt)
                 # This prevents 3ms "phantom" workers on LangGraph replay
                 logger.debug(f"Existing job {existing_job.id} already succeeded, returning cached result")
                 if existing_job.worker_id:
                     try:
                         artifact_store = WorkerArtifactStore()
+                        # Use summary-first approach (consistent with resume path)
+                        metadata = artifact_store.get_worker_metadata(existing_job.worker_id)
+                        summary = metadata.get("summary")
+                        if summary:
+                            return f"Worker job {existing_job.id} completed:\n\n{summary}"
+                        # Fall back to full result if no summary
                         result = artifact_store.get_worker_result(existing_job.worker_id)
                         return f"Worker job {existing_job.id} completed:\n\n{result}"
                     except FileNotFoundError:
@@ -110,10 +173,11 @@ async def spawn_worker_async(
                 logger.debug(f"Reusing existing worker job {worker_job.id} (status: {existing_job.status})")
 
         if worker_job is None:
-            # Create new worker job record
+            # Create new worker job record with tool_call_id for idempotency
             worker_job = WorkerJob(
                 owner_id=owner_id,
                 supervisor_run_id=supervisor_run_id,
+                tool_call_id=_tool_call_id,  # Enables idempotency on LangGraph replay
                 task=task,
                 model=worker_model,
                 status="queued",
@@ -121,6 +185,7 @@ async def spawn_worker_async(
             db.add(worker_job)
             db.commit()
             db.refresh(worker_job)
+            logger.info(f"[SPAWN] Created worker job {worker_job.id} with tool_call_id={_tool_call_id}")
 
             # Emit WORKER_SPAWNED event durably (replays on reconnect)
             # Only persist if we have a supervisor run_id (test mocks may not have one)
@@ -152,7 +217,9 @@ async def spawn_worker_async(
                     "job_id": worker_job.id,
                     "task": task[:100],
                     "model": worker_model,
-                    "message": f"Worker job {worker_job.id} started. Working on: {task[:100]}",
+                    "tool_call_id": _tool_call_id,  # For AIMessage reconstruction on persist
+                    # No "message" field - let frontend show typing indicator
+                    # The worker card displays task details
                 }
             )
 

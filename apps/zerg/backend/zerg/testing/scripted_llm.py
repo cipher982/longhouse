@@ -85,18 +85,87 @@ def get_scenario_evidence_keyword(prompt: str, role: str) -> str | None:
 
 
 class ScriptedChatLLM(BaseChatModel):
-    """A deterministic chat model driven by simple prompt scenarios."""
+    """A deterministic chat model driven by simple prompt scenarios.
+
+    Supports both static scenarios (default behavior) and sequenced responses
+    for testing LangGraph replay behavior where the LLM might produce different
+    outputs on subsequent calls.
+
+    Usage with sequences:
+        llm = ScriptedChatLLM(sequences=[
+            {
+                "prompt_pattern": "disk",
+                "call_number": 0,
+                "response": AIMessage(content="", tool_calls=[...])
+            },
+            {
+                "prompt_pattern": "disk",
+                "call_number": 1,
+                "response": AIMessage(content="Rephrased response")
+            },
+        ])
+    """
 
     model_name: str = "gpt-scripted"
 
-    def __init__(self, **kwargs: Any):
+    def __init__(self, sequences: List[Dict[str, Any]] | None = None, **kwargs: Any):
         super().__init__(**kwargs)
         self._tools: list[Any] = []
+        self._sequences: List[Dict[str, Any]] = sequences or []
+        self._call_counts: Dict[str, int] = {}
 
     def bind_tools(self, tools):  # noqa: ANN001 - signature mirrors LangChain
-        bound = ScriptedChatLLM()
+        bound = ScriptedChatLLM(sequences=self._sequences)
         bound._tools = list(tools)
+        bound._call_counts = self._call_counts  # Share call counts across bindings
         return bound
+
+    def _get_sequenced_response(self, prompt: str) -> Optional[AIMessage]:
+        """Return a sequenced response if one matches the prompt and call count.
+
+        This enables testing LangGraph replay behavior where the LLM might
+        return different responses on subsequent calls (e.g., slightly
+        rephrased task descriptions).
+
+        Args:
+            prompt: The prompt text to match against
+
+        Returns:
+            AIMessage if a sequence matches, None to fall back to default behavior
+        """
+        if not self._sequences:
+            return None
+
+        prompt_lower = prompt.lower()
+
+        # Find matching sequences
+        for seq in self._sequences:
+            pattern = seq.get("prompt_pattern", "")
+            if not pattern or pattern.lower() not in prompt_lower:
+                continue
+
+            # Track call count per pattern
+            call_count = self._call_counts.get(pattern, 0)
+            expected_call = seq.get("call_number", 0)
+
+            if call_count == expected_call:
+                # Increment call count for this pattern
+                self._call_counts[pattern] = call_count + 1
+                response = seq.get("response")
+                if isinstance(response, AIMessage):
+                    return response
+                elif isinstance(response, dict):
+                    # Allow dict format for convenience
+                    return AIMessage(
+                        content=response.get("content", ""),
+                        tool_calls=response.get("tool_calls", []),
+                    )
+
+        return None
+
+    def reset_call_counts(self):
+        """Reset call counts for a fresh test run."""
+        self._call_counts.clear()
 
     def _generate(
         self,
@@ -108,6 +177,11 @@ class ScriptedChatLLM(BaseChatModel):
         role = detect_role_from_messages(messages)
         last_user = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
         prompt = str(last_user.content) if last_user else ""
+
+        # Check for sequenced response first (enables replay behavior testing)
+        sequenced_response = self._get_sequenced_response(prompt)
+        if sequenced_response is not None:
+            return ChatResult(generations=[ChatGeneration(message=sequenced_response)])
 
         # If tool results are present, emit final synthesis (no more tool calls).
         tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)

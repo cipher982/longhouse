@@ -11,6 +11,7 @@ The key invariant is ONE supervisor thread per user that persists across session
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from dataclasses import dataclass
@@ -655,7 +656,7 @@ class SupervisorService:
                 run.duration_ms = duration_ms
                 self.db.commit()
 
-                # Extract interrupt payload
+                # Extract interrupt payload (needed for job_id check below)
                 interrupt_value = interrupt.interrupt_value
                 job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
                 interrupt_message = (
@@ -663,6 +664,26 @@ class SupervisorService:
                     if isinstance(interrupt_value, dict)
                     else str(interrupt_value)
                 )
+
+                # RACE SAFETY: Check if worker already completed while we were setting up.
+                # This handles the case where worker finished before WAITING was committed,
+                # and its retry loop gave up. We immediately trigger resume if so.
+                if job_id:
+                    worker_job = self.db.query(WorkerJob).filter(WorkerJob.id == job_id).first()
+                    if worker_job and worker_job.status in ("success", "failed"):
+                        logger.info(
+                            f"Worker job {job_id} already completed ({worker_job.status}) "
+                            f"while supervisor was setting up - scheduling immediate resume"
+                        )
+                        # Schedule resume in background (don't block)
+                        # Use empty context to avoid leaking supervisor context vars
+                        asyncio.create_task(
+                            self._trigger_immediate_resume(
+                                run_id=run.id,
+                                worker_job=worker_job,
+                            ),
+                            context=contextvars.Context(),
+                        )
 
                 # Emit waiting event (similar to deferred but semantically different)
                 await emit_run_event(
@@ -884,6 +905,86 @@ class SupervisorService:
                 duration_ms=duration_ms,
                 debug_url=f"/supervisor/{run.id}",
             )
+
+    async def _trigger_immediate_resume(self, run_id: int, worker_job: WorkerJob) -> None:
+        """Trigger immediate resume when worker completed before supervisor entered WAITING.
+
+        This handles the race condition where:
+        1. Worker finishes fast (before supervisor commits WAITING)
+        2. Worker's retry loop gives up after 2 seconds
+        3. Supervisor commits WAITING
+        4. → We detect completed worker and trigger resume immediately
+
+        Parameters
+        ----------
+        run_id
+            Supervisor run ID
+        worker_job
+            The completed WorkerJob record
+        """
+        from zerg.database import get_session_factory
+        from zerg.services.worker_resume import resume_supervisor_with_worker_result
+
+        try:
+
+            def _extract_summary_from_result(result: str, max_chars: int = 400) -> str | None:
+                text = (result or "").strip()
+                if not text:
+                    return None
+                first_para = text.split("\n\n", 1)[0].strip()
+                summary = first_para or text
+                if len(summary) > max_chars:
+                    return summary[:max_chars].rstrip() + "…"
+                return summary
+
+            def _truncate_result(result: str, max_chars: int = 2000) -> str:
+                text = result or ""
+                if len(text) <= max_chars:
+                    return text
+                return text[:max_chars].rstrip() + "\n\n… (truncated)"
+
+            # Prefer the same "summary-first" resume payload used by the normal path.
+            artifact_store = WorkerArtifactStore()
+            result_text: str
+
+            if worker_job.status == "failed":
+                result_text = f"Worker failed: {worker_job.error or 'Unknown error'}"
+            elif not worker_job.worker_id:
+                result_text = f"Worker job {worker_job.id} completed ({worker_job.status})"
+            else:
+                summary = None
+                try:
+                    metadata = artifact_store.get_worker_metadata(worker_job.worker_id, owner_id=worker_job.owner_id)
+                    summary = metadata.get("summary")
+                except Exception:
+                    summary = None
+
+                if summary:
+                    result_text = str(summary)
+                else:
+                    try:
+                        full_result = artifact_store.get_worker_result(worker_job.worker_id)
+                    except FileNotFoundError:
+                        result_text = f"Worker completed but result not found (worker_id: {worker_job.worker_id})"
+                    else:
+                        extracted = _extract_summary_from_result(full_result)
+                        result_text = extracted or _truncate_result(full_result)
+
+            # Resume with fresh DB session
+            session_factory = get_session_factory()
+            fresh_db = session_factory()
+            try:
+                await resume_supervisor_with_worker_result(
+                    db=fresh_db,
+                    run_id=run_id,
+                    worker_result=result_text,
+                )
+                logger.info(f"Immediate resume completed for run {run_id}")
+            finally:
+                fresh_db.close()
+
+        except Exception as e:
+            logger.exception(f"Failed to trigger immediate resume for run {run_id}: {e}")
 
     # NOTE: run_continuation() removed - replaced by LangGraph interrupt/resume pattern
     # See worker_resume.py for the new implementation using Command(resume=...)
