@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +232,12 @@ test-perf: ## Run performance evaluation tests (chat latency profiling)
 
 test-zerg-unit: ## Run Zerg unit tests (backend + frontend)
 	@if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running Zerg unit tests (minimal)..."; \
-		(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header); \
+		echo "🧪 Running Zerg unit tests (minimal)..." && \
+		(cd apps/zerg/backend && ./run_backend_tests.sh -q --no-header) && \
 		(cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent); \
 	else \
-		echo "🧪 Running Zerg unit tests..."; \
-		(cd apps/zerg/backend && ./run_backend_tests.sh); \
+		echo "🧪 Running Zerg unit tests..." && \
+		(cd apps/zerg/backend && ./run_backend_tests.sh) && \
 		(cd apps/zerg/frontend-web && bun run test); \
 	fi
 
@@ -515,3 +515,21 @@ perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects
 	@echo "   - gpu-dashboard-report.md: Human-readable summary"
 	@echo "   - gpu-dashboard-summary.json: Stats per variant"
 	@echo "   - gpu-dashboard-samples.json: Raw sample data"
+
+# ---------------------------------------------------------------------------
+# LangGraph Debug Commands (AI-optimized, minimal tokens)
+# ---------------------------------------------------------------------------
+debug-thread: ## Inspect DB ThreadMessages (usage: make debug-thread THREAD_ID=1)
+	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-thread THREAD_ID=<id>" && exit 1)
+	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py thread $(THREAD_ID)
+
+debug-validate: ## Validate message integrity (usage: make debug-validate THREAD_ID=1)
+	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-validate THREAD_ID=<id>" && exit 1)
+	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py validate $(THREAD_ID)
+
+debug-inspect: ## Inspect LangGraph checkpoint state (usage: make debug-inspect THREAD_ID=1)
+	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-inspect THREAD_ID=<id>" && exit 1)
+	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py inspect $(THREAD_ID)
+
+debug-batch: ## Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
+	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py batch --stdin
