@@ -195,6 +195,10 @@ async def resume_supervisor_with_worker_result(
                     messages=[tool_msg],
                     processed=True,
                 )
+                # CRITICAL: Update conversation_msgs to include the ToolMessage we just saved.
+                # This ensures the offset calculation at line 287 is correct and we don't
+                # save the ToolMessage a second time at line 299.
+                conversation_msgs = conversation_msgs + [tool_msg]
                 use_fresh_messages = True
 
         runnable = zerg_react_agent.get_runnable(agent)
