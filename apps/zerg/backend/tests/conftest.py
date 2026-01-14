@@ -377,16 +377,13 @@ _eval_mode = _os.environ.get("EVAL_MODE", "hermetic")
 if _eval_mode != "live":
     langchain_openai.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 
-    # Ensure already-imported agent definition module uses the stub as well.  If
-    # zerg.agents_def.zerg_react_agent was imported *before* this patch it will
-    # still hold a reference to the real ChatOpenAI class.  We overwrite it here
-    # defensively so no test ever triggers an external network call.
-
+    # Ensure already-imported supervisor engine uses the stub as well.
+    # We overwrite it here defensively so no test ever triggers an external network call.
     import sys as _sys
 
-    _zr_module = _sys.modules.get("zerg.agents_def.zerg_react_agent")
-    if _zr_module is not None:  # pragma: no cover – depends on import order
-        _zr_module.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
+    _sre_module = _sys.modules.get("zerg.services.supervisor_react_engine")
+    if _sre_module is not None:  # pragma: no cover – depends on import order
+        _sre_module.ChatOpenAI = _StubChatOpenAI  # type: ignore[attr-defined]
 
 # Don't mock AgentRunner globally - let individual tests mock it if needed
 

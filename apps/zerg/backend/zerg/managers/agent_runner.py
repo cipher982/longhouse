@@ -4,7 +4,7 @@ This class bridges:
 
 • Agent ORM row (system instructions, model name, …)
 • ThreadService for DB persistence
-• ReAct execution loop (LangGraph-free by default, LangGraph for rollback)
+• ReAct execution loop (LangGraph-free)
 
 Design goals
 ------------
@@ -12,11 +12,7 @@ Design goals
    ever propagate.
 2. Keep DB interactions synchronous for now (SQLAlchemy sync API).  These DB
    calls run inside FastAPI's request thread so they remain thread-safe.
-3. Provide a thin synchronous wrapper ``run_thread_sync`` so legacy tests that
-   call the method directly don't break.  This wrapper simply delegates to
-   the async implementation via ``asyncio.run`` and will be removed once all
-   call-sites are async.
-4. Handle interrupt/resume pattern for async tool execution (spawn_worker).
+3. Handle interrupt/resume pattern for async tool execution (spawn_worker).
 """
 
 from __future__ import annotations
@@ -25,13 +21,10 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Any
-from typing import Dict
 from typing import Sequence
-from typing import Tuple
 
 from sqlalchemy.orm import Session
 
-from zerg.agents_def import zerg_react_agent
 from zerg.callbacks.token_stream import set_current_thread_id
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
@@ -43,44 +36,19 @@ from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.services.thread_service import ThreadService
 
-# Feature flag: Use LangGraph runnable for initial supervisor run (rollback path)
-# Default is False (use new LangGraph-free engine)
-USE_LANGGRAPH_RUN_THREAD = os.getenv("USE_LANGGRAPH_RUN_THREAD", "0") == "1"
-
 logger = logging.getLogger(__name__)
 
 
 class AgentInterrupted(Exception):
     """Raised when the agent execution is interrupted (waiting for external input).
 
-    This happens when spawn_worker() calls interrupt() - the graph checkpoints
-    and returns control. The caller should set the run status to WAITING.
+    This happens when spawn_worker raises AgentInterrupted. The caller should
+    set the run status to WAITING.
     """
 
     def __init__(self, interrupt_value: dict):
         self.interrupt_value = interrupt_value
         super().__init__(f"Agent interrupted: {interrupt_value}")
-
-
-# ---------------------------------------------------------------------------
-# Local in-memory cache for compiled LangGraph runnables.
-# Keyed by (agent_id, agent_updated_at, stream_flag, model, reasoning_effort) so that any edit to the
-# agent definition automatically busts the cache.  The cache is deliberately
-# **process-local** – workers in a multi-process Gunicorn deployment will each
-# compile their own runnable once on first use which is acceptable given the
-# small cost (~100 ms).
-# ---------------------------------------------------------------------------
-
-_RUNNABLE_CACHE: Dict[Tuple[int, str, bool, str, str], Any] = {}
-
-
-def _normalize_reasoning_effort(value: str | None) -> str:
-    if not value:
-        return ""
-    v = value.strip().lower()
-    if v in ("", "none"):
-        return ""
-    return v
 
 
 @dataclass(frozen=True)
@@ -143,30 +111,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         from zerg.config import get_settings
 
         self.enable_token_stream = get_settings().llm_token_stream
-
-        # ------------------------------------------------------------------
-        # Lazily compile (or fetch from cache) the LangGraph runnable.  Using
-        # a small in-process cache avoids the expensive graph compilation on
-        # every single run (~100 ms) while still picking up changes whenever
-        # the Agent row is modified (updated_at changes).
-        # ------------------------------------------------------------------
-
-        updated_at_str = agent_row.updated_at.isoformat() if getattr(agent_row, "updated_at", None) else "0"
-        cache_key = (
-            agent_row.id,
-            updated_at_str,
-            self.enable_token_stream,
-            self.agent.model,
-            _normalize_reasoning_effort(self.agent.config.get("reasoning_effort")),
-        )
-
-        if cache_key in _RUNNABLE_CACHE:
-            self._runnable = _RUNNABLE_CACHE[cache_key]
-            logger.debug("AgentRunner: using cached runnable for agent %s", agent_row.id)
-        else:
-            self._runnable = zerg_react_agent.get_runnable(self.agent)
-            _RUNNABLE_CACHE[cache_key] = self._runnable
-            logger.debug("AgentRunner: compiled & cached runnable for agent %s", agent_row.id)
 
     # ------------------------------------------------------------------
     # Public API – asynchronous
@@ -259,14 +203,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             logger.info("No unprocessed messages for thread %s", thread.id, extra={"tag": "AGENT"})
             return []  # Return empty list if no work
 
-        # Configuration for thread persistence
-        config = {
-            "configurable": {
-                "thread_id": str(thread.id),
-            }
-        }
-        logger.debug(f"[AgentRunner] LangGraph config: {config}")
-
         # ------------------------------------------------------------------
         # Token-streaming context handling: set the *current* thread so the
         # ``WsTokenCallback`` can resolve the correct topic when forwarding
@@ -321,123 +257,84 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 logger.info(f"[DEBUG] Full LLM input written to: {debug_file}")
 
             # ------------------------------------------------------------------
-            # Execute supervisor loop: LangGraph-free (default) or LangGraph (rollback)
+            # Execute supervisor loop (LangGraph-free)
             # ------------------------------------------------------------------
-            if USE_LANGGRAPH_RUN_THREAD:
-                # LEGACY PATH: Use LangGraph runnable
-                logger.info("[AgentRunner] Using LangGraph runnable (USE_LANGGRAPH_RUN_THREAD=1)")
+            from zerg.services.supervisor_react_engine import get_llm_usage
+            from zerg.services.supervisor_react_engine import reset_llm_usage
+            from zerg.services.supervisor_react_engine import run_supervisor_loop
+            from zerg.tools.unified_access import get_tool_resolver
 
-                # Reset LLM usage tracking before invoking
-                from zerg.agents_def.zerg_react_agent import reset_llm_usage
+            # Get tools for this agent (use DB-loaded agent_row for fresh allowed_tools)
+            resolver = get_tool_resolver()
+            tools = resolver.filter_by_allowlist(agent_row.allowed_tools)
 
-                reset_llm_usage()
+            reset_llm_usage()
 
-                result = await self._runnable.ainvoke(original_msgs, config)
-            else:
-                # NEW PATH: Use LangGraph-free supervisor_react_engine
-                logger.info("[AgentRunner] Using LangGraph-free engine")
+            # Get run_id from supervisor context if available (set by SupervisorService)
+            from zerg.services.supervisor_context import get_supervisor_context
 
-                from zerg.services.supervisor_react_engine import reset_llm_usage
-                from zerg.services.supervisor_react_engine import run_supervisor_loop
-                from zerg.tools.unified_access import get_tool_resolver
+            ctx = get_supervisor_context()
+            run_id = ctx.run_id if ctx else None
 
-                # Get tools for this agent (use DB-loaded agent_row for fresh allowed_tools)
-                resolver = get_tool_resolver()
-                tools = resolver.filter_by_allowlist(agent_row.allowed_tools)
+            # Run the supervisor loop
+            loop_result = await run_supervisor_loop(
+                messages=original_msgs,
+                agent_row=self.agent,
+                tools=tools,
+                run_id=run_id,
+                owner_id=self.agent.owner_id,
+                enable_token_stream=self.enable_token_stream,
+            )
 
-                reset_llm_usage()
+            # Capture usage from the engine
+            engine_usage = get_llm_usage()
+            if engine_usage:
+                # Use explicit None check to preserve legitimate 0 values
+                self.usage_prompt_tokens = engine_usage.get("prompt_tokens")
+                self.usage_completion_tokens = engine_usage.get("completion_tokens")
+                self.usage_total_tokens = engine_usage.get("total_tokens")
+                self.usage_reasoning_tokens = engine_usage.get("reasoning_tokens")
 
-                # Get run_id from supervisor context if available (set by SupervisorService)
-                from zerg.services.supervisor_context import get_supervisor_context
-
-                ctx = get_supervisor_context()
-                run_id = ctx.run_id if ctx else None
-
-                # Run the supervisor loop
-                loop_result = await run_supervisor_loop(
-                    messages=original_msgs,
-                    agent_row=self.agent,
-                    tools=tools,
-                    run_id=run_id,
-                    owner_id=self.agent.owner_id,
-                    enable_token_stream=self.enable_token_stream,
-                )
-
-                # Capture usage from the new engine
-                from zerg.services.supervisor_react_engine import get_llm_usage
-
-                engine_usage = get_llm_usage()
-                if engine_usage:
-                    # Use explicit None check to preserve legitimate 0 values
-                    self.usage_prompt_tokens = engine_usage.get("prompt_tokens")
-                    self.usage_completion_tokens = engine_usage.get("completion_tokens")
-                    self.usage_total_tokens = engine_usage.get("total_tokens")
-                    self.usage_reasoning_tokens = engine_usage.get("reasoning_tokens")
-
-                # Handle interrupt from new engine
-                if loop_result.interrupted:
-                    # Persist new messages before raising interrupt
-                    if len(loop_result.messages) > messages_with_context:
-                        new_messages = loop_result.messages[messages_with_context:]
-                        # Filter out SystemMessages (ephemeral, not persisted)
-                        new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
-                        if new_messages:
-                            created_rows = self.thread_service.save_new_messages(
-                                db,
-                                thread_id=thread.id,
-                                messages=new_messages,
-                                processed=True,
+            # Handle interrupt (spawn_worker was called)
+            if loop_result.interrupted:
+                # Persist new messages before raising interrupt
+                if len(loop_result.messages) > messages_with_context:
+                    new_messages = loop_result.messages[messages_with_context:]
+                    # Filter out SystemMessages (ephemeral, not persisted)
+                    new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
+                    if new_messages:
+                        created_rows = self.thread_service.save_new_messages(
+                            db,
+                            thread_id=thread.id,
+                            messages=new_messages,
+                            processed=True,
+                        )
+                        # Persist usage on last assistant message
+                        usage_payload = {
+                            "prompt_tokens": self.usage_prompt_tokens,
+                            "completion_tokens": self.usage_completion_tokens,
+                            "total_tokens": self.usage_total_tokens,
+                            "reasoning_tokens": self.usage_reasoning_tokens,
+                        }
+                        if any(v is not None for v in usage_payload.values()):
+                            last_assistant_row = next(
+                                (row for row in reversed(created_rows) if row.role == "assistant"),
+                                None,
                             )
-                            # Persist usage on last assistant message
-                            usage_payload = {
-                                "prompt_tokens": self.usage_prompt_tokens,
-                                "completion_tokens": self.usage_completion_tokens,
-                                "total_tokens": self.usage_total_tokens,
-                                "reasoning_tokens": self.usage_reasoning_tokens,
-                            }
-                            if any(v is not None for v in usage_payload.values()):
-                                last_assistant_row = next(
-                                    (row for row in reversed(created_rows) if row.role == "assistant"),
-                                    None,
-                                )
-                                if last_assistant_row is not None:
-                                    existing_meta = dict(last_assistant_row.message_metadata or {})
-                                    existing_meta["usage"] = usage_payload
-                                    last_assistant_row.message_metadata = existing_meta
-                                    db.commit()
+                            if last_assistant_row is not None:
+                                existing_meta = dict(last_assistant_row.message_metadata or {})
+                                existing_meta["usage"] = usage_payload
+                                last_assistant_row.message_metadata = existing_meta
+                                db.commit()
 
-                    # Mark user messages processed
-                    self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
-                    self.thread_service.touch_thread_timestamp(db, thread.id)
+                # Mark user messages processed
+                self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
+                self.thread_service.touch_thread_timestamp(db, thread.id)
 
-                    logger.info(f"[AgentRunner] Supervisor interrupted: {loop_result.interrupt_value}", extra={"tag": "AGENT"})
-                    raise AgentInterrupted(loop_result.interrupt_value or {})
+                logger.info(f"[AgentRunner] Supervisor interrupted: {loop_result.interrupt_value}", extra={"tag": "AGENT"})
+                raise AgentInterrupted(loop_result.interrupt_value or {})
 
-                # Convert SupervisorResult to expected format for downstream processing
-                result = loop_result.messages
-
-            # ------------------------------------------------------------------
-            # Capture usage metadata (LangGraph path only - new engine captures above)
-            # ------------------------------------------------------------------
-            if USE_LANGGRAPH_RUN_THREAD:
-                from zerg.agents_def.zerg_react_agent import get_llm_usage
-
-                ctx_usage = get_llm_usage()
-                logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
-
-                if ctx_usage:
-                    p_sum = ctx_usage.get("prompt_tokens", 0) or 0
-                    c_sum = ctx_usage.get("completion_tokens", 0) or 0
-                    t_sum = ctx_usage.get("total_tokens", 0) or 0
-                    r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
-
-                    if p_sum or c_sum or t_sum or r_sum:
-                        self.usage_prompt_tokens = p_sum if p_sum else None
-                        self.usage_completion_tokens = c_sum if c_sum else None
-                        self.usage_total_tokens = t_sum if t_sum else None
-                        self.usage_reasoning_tokens = r_sum if r_sum else None
-
-            # Log usage (both paths)
+            # Log usage
             if self.usage_total_tokens is not None:
                 logger.info(
                     f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
@@ -445,112 +342,8 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                     extra={"tag": "LLM"},
                 )
 
-            # ------------------------------------------------------------------
-            # Handle LangGraph interrupt (only for LangGraph path)
-            # The new engine handles interrupts above and raises AgentInterrupted directly.
-            # ------------------------------------------------------------------
-            if USE_LANGGRAPH_RUN_THREAD and isinstance(result, dict) and "__interrupt__" in result:
-                interrupts = result.get("__interrupt__") or []
-                interrupt_value = None
-                if interrupts:
-                    interrupt_info = interrupts[0]
-                    interrupt_value = getattr(interrupt_info, "value", interrupt_info)
-
-                # CRITICAL: Persist the AIMessage with tool_calls BEFORE returning interrupt.
-                # Without this, subsequent runs will see orphaned ToolMessages and OpenAI will reject.
-                #
-                # Strategy:
-                # 1. FIRST: Try to get the actual AIMessage from context variable (set by zerg_react_agent)
-                # 2. FALLBACK: Reconstruct from interrupt payload if context var is empty
-                from zerg.agents_def.zerg_react_agent import clear_pending_ai_message
-                from zerg.agents_def.zerg_react_agent import get_pending_ai_message
-
-                pending_msg = get_pending_ai_message()
-                logger.info(f"[INTERRUPT DEBUG] pending_msg={pending_msg}, type={type(pending_msg) if pending_msg else None}")
-                if pending_msg and hasattr(pending_msg, "tool_calls") and pending_msg.tool_calls:
-                    # Use the actual AIMessage from context (most accurate)
-                    logger.info(f"[INTERRUPT] Persisting AIMessage from context var with {len(pending_msg.tool_calls)} tool call(s)")
-                    self.thread_service.save_new_messages(
-                        db,
-                        thread_id=thread.id,
-                        messages=[pending_msg],
-                        processed=True,
-                    )
-                    clear_pending_ai_message()
-                elif isinstance(interrupt_value, dict) and interrupt_value.get("tool_call_id"):
-                    # Fallback: Reconstruct from interrupt payload
-                    from langchain_core.messages import AIMessage
-
-                    tool_call_id = interrupt_value["tool_call_id"]
-                    task = interrupt_value.get("task", "")
-                    model = interrupt_value.get("model")
-
-                    reconstructed_ai_msg = AIMessage(
-                        content="",
-                        tool_calls=[
-                            {
-                                "name": "spawn_worker",
-                                "args": {"task": task, "model": model},
-                                "id": tool_call_id,
-                                "type": "tool_call",
-                            }
-                        ],
-                    )
-                    logger.info(f"[INTERRUPT] Persisting reconstructed AIMessage with tool_call_id={tool_call_id}")
-                    self.thread_service.save_new_messages(
-                        db,
-                        thread_id=thread.id,
-                        messages=[reconstructed_ai_msg],
-                        processed=True,
-                    )
-
-                # Best-effort persistence: if the graph returned message history, persist any new rows
-                # before surfacing the interrupt to the caller.
-                updated_messages_for_persist = result.get("messages") if isinstance(result.get("messages"), list) else None
-                if updated_messages_for_persist and len(updated_messages_for_persist) > messages_with_context:
-                    new_messages = updated_messages_for_persist[messages_with_context:]
-                    logger.debug(
-                        "[AgentRunner] Graph interrupted; persisting %s new message(s) before returning",
-                        len(new_messages),
-                        extra={"tag": "AGENT"},
-                    )
-                    created_rows = self.thread_service.save_new_messages(
-                        db,
-                        thread_id=thread.id,
-                        messages=new_messages,
-                        processed=True,
-                    )
-
-                    # Persist per-response token usage onto the *final* assistant message row (best-effort)
-                    usage_payload = {
-                        "prompt_tokens": self.usage_prompt_tokens,
-                        "completion_tokens": self.usage_completion_tokens,
-                        "total_tokens": self.usage_total_tokens,
-                        "reasoning_tokens": self.usage_reasoning_tokens,
-                    }
-                    if any(v is not None for v in usage_payload.values()):
-                        last_assistant_row = next((row for row in reversed(created_rows) if row.role == "assistant"), None)
-                        if last_assistant_row is not None:
-                            existing_meta = dict(last_assistant_row.message_metadata or {})
-                            existing_meta["usage"] = usage_payload
-                            last_assistant_row.message_metadata = existing_meta
-                            db.commit()
-
-                # Mark user messages processed even though the run is not complete yet.
-                # The graph checkpoint captures the continuation state.
-                self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
-                self.thread_service.touch_thread_timestamp(db, thread.id)
-
-                logger.info(f"[AgentRunner] Graph interrupted: {interrupt_value}", extra={"tag": "AGENT"})
-                raise AgentInterrupted(interrupt_value or {})
-
-            # Normal completion: result is a list of messages or a state dict with messages
-            if isinstance(result, dict):
-                updated_messages = result.get("messages")
-                if not isinstance(updated_messages, list):
-                    raise RuntimeError(f"Unexpected runnable result dict (no messages): {list(result.keys())}")
-            else:
-                updated_messages = result
+            # Normal completion: result is a list of messages
+            updated_messages = loop_result.messages
 
             logger.info(
                 f"[AgentRunner] Runnable completed. Received {len(updated_messages)} total messages",
@@ -574,7 +367,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             logger.debug("[AgentRunner] Reset thread ID and credential resolver context")
 
         # Extract only the new messages since our last context
-        # The zerg_react_agent returns ALL messages including the history
+        # The supervisor loop returns ALL messages including the history
         # We use messages_with_context to slice correctly - this includes the
         # ephemeral context injection that should NOT be saved to the database.
         if len(updated_messages) <= messages_with_context:

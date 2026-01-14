@@ -67,14 +67,16 @@ def _empty_usage() -> dict:
 
 def reset_llm_usage() -> None:
     """Reset accumulated LLM usage. Call before starting a new run."""
-    _llm_usage_var.set(_empty_usage())
+    # Keep as None until we observe real usage metadata from the provider.
+    # This preserves legacy semantics where missing usage stays NULL in DB.
+    _llm_usage_var.set(None)
 
 
 def get_llm_usage() -> dict:
     """Get accumulated LLM usage from current run."""
     usage = _llm_usage_var.get()
     if usage is None:
-        return _empty_usage()
+        return {}
     return usage
 
 
@@ -379,6 +381,8 @@ async def _execute_tool(
         )
 
     start_time = datetime.now(timezone.utc)
+    result_content = None  # May be set by spawn_worker or error handling
+    observation = None  # Set by normal tool execution
 
     tool_to_call = tools_by_name.get(tool_name)
 
@@ -394,32 +398,20 @@ async def _execute_tool(
 
                 # Call spawn_worker_async directly with tool_call_id for idempotency
                 # Pass _skip_interrupt=True because we handle interrupt ourselves
+                # Pass _return_structured=True to get job_id directly without regex
                 job_result = await spawn_worker_async(
                     task=tool_args.get("task", ""),
                     model=tool_args.get("model"),
                     _tool_call_id=tool_call_id,
                     _skip_interrupt=True,  # LangGraph-free path
+                    _return_structured=True,  # Get dict with job_id directly
                 )
 
-                # Check if job was already completed (idempotent case)
-                # If the result contains "completed:", it's done
-                if "completed:" in job_result:
-                    result_content = job_result
-                # Check for errors - don't interrupt on error
-                elif job_result.startswith("Error"):
-                    result_content = job_result
-                else:
-                    # Job is queued - extract job_id and raise interrupt
-                    # Parse job_id from "Worker job X queued..." or similar
-                    import re
-
-                    match = re.search(r"Worker job (\d+)", job_result)
-                    if not match:
-                        # Couldn't parse job_id - treat as error, don't interrupt
-                        result_content = f"Error: spawn_worker returned unexpected result: {job_result}"
-                    else:
-                        job_id = int(match.group(1))
-
+                # Handle structured response (dict) or string response
+                if isinstance(job_result, dict):
+                    # Structured response: {"job_id": X, "status": "queued", "task": ...}
+                    job_id = job_result.get("job_id")
+                    if job_result.get("status") == "queued" and job_id is not None:
                         # Emit tool completion before interrupting
                         end_time = datetime.now(timezone.utc)
                         duration_ms = int((end_time - start_time).total_seconds() * 1000)
@@ -429,7 +421,7 @@ async def _execute_tool(
                                 tool_call_id=tool_call_id,
                                 duration_ms=duration_ms,
                                 result_preview=f"Worker job {job_id} spawned",
-                                result=job_result,
+                                result=str(job_result),
                             )
 
                         # Raise interrupt to pause supervisor
@@ -442,6 +434,12 @@ async def _execute_tool(
                                 "tool_call_id": tool_call_id,
                             }
                         )
+                    else:
+                        # Unexpected dict response (shouldn't happen with _return_structured=True)
+                        result_content = json.dumps(job_result)
+                else:
+                    # String response - typically an error or completed result
+                    result_content = str(job_result)
 
             # Check if tool has async implementation
             elif getattr(tool_to_call, "coroutine", None):
@@ -450,18 +448,19 @@ async def _execute_tool(
                 # Run sync tool in thread
                 observation = await asyncio.to_thread(tool_to_call.invoke, tool_args)
 
-            # Serialize observation
-            if isinstance(observation, dict):
-                from datetime import date as date_type
+            # Serialize observation (only if not already set by spawn_worker)
+            if observation is not None and result_content is None:
+                if isinstance(observation, dict):
+                    from datetime import date as date_type
 
-                def datetime_handler(obj):
-                    if isinstance(obj, (datetime, date_type)):
-                        return obj.isoformat()
-                    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+                    def datetime_handler(obj):
+                        if isinstance(obj, (datetime, date_type)):
+                            return obj.isoformat()
+                        raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
-                result_content = json.dumps(observation, default=datetime_handler)
-            else:
-                result_content = str(observation)
+                    result_content = json.dumps(observation, default=datetime_handler)
+                else:
+                    result_content = str(observation)
 
         except AgentInterrupted:
             # Re-raise interrupt
@@ -472,6 +471,10 @@ async def _execute_tool(
 
     end_time = datetime.now(timezone.utc)
     duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    # Defensive: ensure result_content is not None
+    if result_content is None:
+        result_content = "(No result)"
 
     # Check for errors
     is_error, error_msg = check_tool_error(result_content)

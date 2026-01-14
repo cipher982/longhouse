@@ -18,7 +18,7 @@ from zerg.tools.result_utils import redact_sensitive_args
 
 
 class TestWorkerToolEventEmission:
-    """Tests for tool event emission from zerg_react_agent._call_tool_async."""
+    """Tests for tool event emission from supervisor_react_engine._execute_tool."""
 
     @pytest.fixture
     def worker_context(self):

@@ -15,7 +15,7 @@ Usage:
     finally:
         reset_emitter(token)
 
-    # In tool execution (zerg_react_agent.py):
+    # In tool execution (supervisor_react_engine.py):
     from zerg.events import get_emitter
 
     emitter = get_emitter()

@@ -200,7 +200,7 @@ async def main():
     if types_ok and flow_ok:
         print("✅ All checks passed! Tool event flow is working correctly.")
         print("\nThe events will flow as follows:")
-        print("  1. Worker executes tool → zerg_react_agent emits event")
+        print("  1. Worker executes tool → supervisor_react_engine emits event")
         print("  2. Event bus delivers to subscribers")
         print("  3. SSE endpoint receives and forwards to frontend")
         print("  4. Frontend event bus receives and updates UI")

@@ -335,61 +335,6 @@ class TestNonStreamingPath:
             assert "--- Evidence for Worker 123 ---" in expanded_msg.content
             assert "Tool output here" in expanded_msg.content
 
-    @pytest.mark.asyncio
-    async def test_agent_uses_wrapped_llm_non_streaming(self, monkeypatch):
-        """Test that agent's non-streaming path uses the wrapped LLM.
-
-        This verifies that _call_model_async always uses llm_with_tools (wrapped)
-        instead of calling _call_model_sync (which would create a fresh LLM).
-        """
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from langchain_core.messages import AIMessage, HumanMessage
-        from zerg.agents_def.zerg_react_agent import get_runnable
-
-        # Disable streaming
-        monkeypatch.setenv("LLM_TOKEN_STREAM", "false")
-
-        # Create mock agent
-        mock_agent = MagicMock()
-        mock_agent.id = 1
-        mock_agent.owner_id = 100
-        mock_agent.model = "gpt-4"
-        mock_agent.allowed_tools = []
-
-        # Patch _make_llm to track if it's called multiple times (it shouldn't be)
-        llm_creation_count = 0
-        original_make_llm = None
-
-        def counting_make_llm(agent_row, tools):
-            nonlocal llm_creation_count, original_make_llm
-            llm_creation_count += 1
-            # Create a mock LLM that returns a final response
-            mock_llm = MagicMock()
-            mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Final response"))
-            mock_llm.bind_tools = MagicMock(return_value=mock_llm)
-            return mock_llm
-
-        # Patch _make_llm in the module
-        import zerg.agents_def.zerg_react_agent as react_module
-        original_make_llm = react_module._make_llm
-        react_module._make_llm = counting_make_llm
-
-        try:
-            # Create runnable
-            runnable = get_runnable(mock_agent)
-
-            # Execute with a simple message
-            messages = [HumanMessage(content="Hello")]
-            config = {"configurable": {"thread_id": "test-thread"}}
-            result = await runnable.ainvoke(messages, config=config)
-
-            # Verify _make_llm was called exactly once (not twice - once for wrapper, once for sync call)
-            assert llm_creation_count == 1, f"Expected 1 LLM creation, got {llm_creation_count}"
-
-        finally:
-            # Restore original
-            react_module._make_llm = original_make_llm
-
 
 class TestCriticalScenario:
     """Test the critical scenario: empty worker prose but useful tool outputs.

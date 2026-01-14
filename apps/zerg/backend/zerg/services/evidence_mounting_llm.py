@@ -51,7 +51,7 @@ class EvidenceMountingLLM:
     persistent message state.
 
     Usage:
-        # Create wrapper (typically in zerg_react_agent.py)
+        # Create wrapper (typically in supervisor_react_engine.py)
         base_llm = ChatOpenAI(model="gpt-4")
         wrapped_llm = EvidenceMountingLLM(
             base_llm=base_llm,

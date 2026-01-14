@@ -6,11 +6,12 @@ disposable worker agents, retrieve their results, and drill into their artifacts
 The supervisor/worker pattern enables complex delegation scenarios where a supervisor
 can spawn multiple workers for parallel execution or break down complex tasks.
 
-Uses LangGraph's interrupt/resume pattern for async worker execution:
-- spawn_worker() creates job and calls interrupt()
-- Worker runs in background
-- Worker completion calls Command(resume=result)
-- interrupt() returns the result, tool continues
+Worker execution flow:
+- spawn_worker() creates WorkerJob and returns job info
+- Caller (supervisor_react_engine) raises AgentInterrupted to pause
+- Worker runs in background via WorkerJobProcessor
+- Worker completion triggers resume via worker_resume.py
+- Supervisor resumes with worker result injected as tool response
 """
 
 import logging
@@ -20,14 +21,10 @@ from datetime import timezone
 from typing import List
 
 from langchain_core.tools import StructuredTool
-from langgraph.errors import GraphInterrupt
-from langgraph.types import interrupt
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
 from zerg.services.worker_artifact_store import WorkerArtifactStore
-
-# Note: DecisionMode and roundabout_monitor imports removed - replaced by interrupt/resume
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +40,13 @@ async def spawn_worker_async(
     model: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
-    _skip_interrupt: bool = False,  # Internal: skip interrupt() for LangGraph-free engine
-) -> str:
+    _skip_interrupt: bool = False,  # Internal: legacy param, now ignored
+    _return_structured: bool = False,  # Internal: return dict instead of string for supervisor_react_engine
+) -> str | dict:
     """Spawn a worker agent to execute a task and wait for completion.
 
-    The worker runs in the background. This tool uses LangGraph's interrupt/resume
-    pattern to pause execution until the worker completes, then returns the result.
+    The worker runs in the background. Creates a WorkerJob and returns job info
+    for the caller to handle interruption and resumption.
 
     Args:
         task: Natural language description of what the worker should do
@@ -80,12 +78,12 @@ async def spawn_worker_async(
     worker_model = model or DEFAULT_WORKER_MODEL_ID
 
     try:
-        # IDEMPOTENCY: Handle LangGraph replay after resume.
+        # IDEMPOTENCY: Prevent duplicate workers on retry/resume.
         #
         # Primary strategy: Use tool_call_id (unique per LLM response) for exact idempotency.
         # Fallback strategy: Prefix matching on task string (handles cases without tool_call_id).
         #
-        # This prevents replay duplicates while allowing legitimate multi-worker scenarios.
+        # This prevents duplicate workers while allowing legitimate multi-worker scenarios.
 
         worker_job = None
         existing_job = None
@@ -148,8 +146,8 @@ async def spawn_worker_async(
 
         if existing_job:
             if existing_job.status == "success":
-                # Already completed - return cached result immediately (no interrupt)
-                # This prevents 3ms "phantom" workers on LangGraph replay
+                # Already completed - return cached result immediately
+                # This prevents duplicate workers on retry
                 logger.debug(f"Existing job {existing_job.id} already succeeded, returning cached result")
                 if existing_job.worker_id:
                     try:
@@ -178,7 +176,7 @@ async def spawn_worker_async(
             worker_job = WorkerJob(
                 owner_id=owner_id,
                 supervisor_run_id=supervisor_run_id,
-                tool_call_id=_tool_call_id,  # Enables idempotency on LangGraph replay
+                tool_call_id=_tool_call_id,  # Enables idempotency on retry/resume
                 task=task,
                 model=worker_model,
                 status="queued",
@@ -204,48 +202,14 @@ async def spawn_worker_async(
                     },
                 )
 
-        # INTERRUPT: Pause execution and checkpoint state.
-        # The __interrupt__ payload tells the frontend what's happening.
-        # When worker completes, worker_runner calls Command(resume=result),
-        # and interrupt() returns that result.
-        #
-        # NOTE: interrupt() only works inside a LangGraph runnable context.
-        # When called from the LangGraph-free engine or tests, skip interrupt.
+        # Return job info for caller to handle interruption.
+        # supervisor_react_engine raises AgentInterrupted
+        # to pause execution until worker completes.
+        logger.debug(f"spawn_worker returning queued response for job {worker_job.id}")
+        if _return_structured:
+            return {"job_id": worker_job.id, "status": "queued", "task": task[:100]}
+        return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
 
-        if _skip_interrupt:
-            # Called from LangGraph-free supervisor_react_engine
-            # Return job info immediately - caller will raise AgentInterrupted
-            logger.debug(f"spawn_worker (skip_interrupt=True) returning queued response for job {worker_job.id}")
-            return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
-
-        try:
-            worker_result = interrupt(
-                {
-                    "type": "worker_pending",
-                    "job_id": worker_job.id,
-                    "task": task[:100],
-                    "model": worker_model,
-                    "tool_call_id": _tool_call_id,  # For AIMessage reconstruction on persist
-                    # No "message" field - let frontend show typing indicator
-                    # The worker card displays task details
-                }
-            )
-
-            # AFTER RESUME: worker_result contains the worker's output
-            # This code only runs after Command(resume=...) is called
-            return f"Worker job {worker_job.id} completed:\n\n{worker_result}"
-
-        except RuntimeError as e:
-            if "outside of a runnable context" in str(e):
-                # Called outside LangGraph graph execution (e.g., tests, direct API calls)
-                # Fall back to fire-and-forget: job is queued and will be picked up by WorkerJobProcessor.
-                logger.debug(f"spawn_worker called outside runnable context, returning queued response for job {worker_job.id}")
-                return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
-            raise
-
-    except GraphInterrupt:
-        # Let interrupt bubble up to pause the graph - this is expected behavior
-        raise
     except Exception as e:
         logger.exception(f"Failed to spawn worker for task: {task}")
         db.rollback()

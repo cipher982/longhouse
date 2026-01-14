@@ -20,7 +20,6 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session
 
-from zerg.agents_def.zerg_react_agent import clear_evidence_mount_warning
 from zerg.crud import crud
 from zerg.managers.agent_runner import AgentInterrupted
 from zerg.managers.agent_runner import AgentRunner
@@ -445,6 +444,8 @@ class SupervisorService:
                 status=RunStatus.RUNNING,
                 trigger=RunTrigger.API,
                 started_at=started_at_naive,
+                model=model_override or agent.model,
+                reasoning_effort=reasoning_effort,
             )
             self.db.add(run)
             self.db.commit()
@@ -797,7 +798,6 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
-            clear_evidence_mount_warning(run.id)
 
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
@@ -893,7 +893,6 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
-            clear_evidence_mount_warning(run.id)
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 
