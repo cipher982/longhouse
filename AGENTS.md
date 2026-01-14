@@ -38,11 +38,13 @@ When running, you have live access to:
 - **Playwright MCP** — take screenshots, click elements, run browser code
 - **API calls** — `curl localhost:30080/api/health` or WebFetch tool
 - **Logs** — `make logs` to tail all services
-- **LangGraph Debug Pipeline** — see dedicated section below
+- **Supervisor/Worker Debug Pipeline** — see dedicated section below
 
-## LangGraph Debug Pipeline
+## Supervisor/Worker Debug Pipeline
 
 Three-layer debugging infrastructure for investigating LLM behavior in supervisor/worker runs.
+
+**Note**: The supervisor/worker path is now **LangGraph-free by default** (as of 2026-01-13). The ReAct loop runs in `supervisor_react_engine.py` without LangGraph checkpointing. LangGraph is still used for the workflow engine and available as a rollback via `USE_LANGGRAPH_SUPERVISOR=1`.
 
 ### Quick Reference
 
@@ -400,8 +402,19 @@ On failure, shows first 10 failed tests with guidance:
 - Tests: `apps/zerg/backend/tests/` — run with `make test`
 - Debug scripts: `scripts/debug_*.py` — helpers for workflow/execution debugging
 - Uses FastAPI with Pydantic models
-- Agent logic uses LangGraph
 - Routers in `routers/`, services in `services/`, models in `models/`
+
+**Supervisor/Worker Architecture** (key files):
+| File | Purpose |
+|------|---------|
+| `services/supervisor_react_engine.py` | Core ReAct loop (LangGraph-free) |
+| `managers/agent_runner.py` | `run_thread()` and `run_continuation()` entry points |
+| `services/supervisor_service.py` | Orchestrates runs, handles `AgentInterrupted` |
+| `services/worker_runner.py` | Executes worker jobs, triggers supervisor resume |
+| `services/worker_resume.py` | Resumes supervisor after worker completion |
+| `tools/builtin/supervisor_tools.py` | `spawn_worker` tool definition |
+
+**Flow**: User message → `SupervisorService` → `AgentRunner.run_thread()` → `supervisor_react_engine` → (if spawn_worker) `AgentInterrupted` → WAITING → worker runs → `worker_resume` → `AgentRunner.run_continuation()` → final response
 
 ### Frontend (TypeScript/React)
 - Zerg dashboard: `apps/zerg/frontend-web/`
@@ -549,6 +562,12 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
 18. **UI effects toggle**: Dashboard/app pages use static backgrounds + glass panels by default. Use `?effects=off` URL param or `VITE_UI_EFFECTS=off` to disable ambient visuals entirely. Landing page has its own animated effects (hero, particles) controlled separately via `?fx=none`.
 
 19. **Marketing mode**: Use `?marketing=true` URL param to enable vivid styling for screenshots. Works with URL-addressable pages: `/canvas?workflow=health&marketing=true`, `/chat?thread=marketing&marketing=true`, `/dashboard?marketing=true`. Pages emit `data-ready="true"` on body when loaded for automation.
+
+20. **Feature flags are import-time**: Environment variables read via `os.getenv()` at module level (like `USE_LANGGRAPH_SUPERVISOR`) are evaluated once at import. Tests must patch the module variable directly (e.g., `zerg.services.worker_resume.USE_LANGGRAPH_SUPERVISOR`), not `os.environ`.
+
+21. **Exception classes must be single-sourced**: Custom exceptions like `AgentInterrupted` must be defined in one place and imported everywhere. Defining a local class with the same name causes `except` blocks to miss it silently.
+
+22. **Pre-commit + unstaged files**: If pre-commit hooks auto-fix files while you have unstaged changes, you get conflicts. Stage everything first (`git add -A`) before committing.
 
 ## Environment Setup
 
