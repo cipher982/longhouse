@@ -230,6 +230,7 @@ async def _call_llm(
     run_id: int | None,
     owner_id: int | None,
     model: str,
+    trace_id: str | None = None,
     enable_token_stream: bool = False,
 ) -> AIMessage:
     """Call LLM with heartbeats, audit logging, and usage tracking."""
@@ -250,6 +251,7 @@ async def _call_llm(
             run_id=run_id,
             worker_id=None,
             owner_id=owner_id,
+            trace_id=trace_id,
             phase=phase,
             model=model,
             messages=messages,
@@ -512,6 +514,7 @@ async def run_supervisor_loop(
     *,
     run_id: int | None = None,
     owner_id: int | None = None,
+    trace_id: str | None = None,
     enable_token_stream: bool = False,
 ) -> SupervisorResult:
     """Run the supervisor ReAct loop until completion or interrupt.
@@ -524,6 +527,7 @@ async def run_supervisor_loop(
         tools: List of available tools.
         run_id: Supervisor run ID for event correlation.
         owner_id: Owner ID for event correlation.
+        trace_id: End-to-end trace ID for debugging.
         enable_token_stream: Whether to stream tokens.
 
     Returns:
@@ -594,6 +598,7 @@ async def run_supervisor_loop(
                     run_id=run_id,
                     owner_id=owner_id,
                     model=model,
+                    trace_id=trace_id,
                     enable_token_stream=enable_token_stream,
                 )
             else:
@@ -605,6 +610,7 @@ async def run_supervisor_loop(
                     run_id=run_id,
                     owner_id=owner_id,
                     model=model,
+                    trace_id=trace_id,
                     enable_token_stream=enable_token_stream,
                 )
         else:
@@ -616,6 +622,7 @@ async def run_supervisor_loop(
                 run_id=run_id,
                 owner_id=owner_id,
                 model=model,
+                trace_id=trace_id,
                 enable_token_stream=enable_token_stream,
             )
     else:
@@ -627,6 +634,7 @@ async def run_supervisor_loop(
             run_id=run_id,
             owner_id=owner_id,
             model=model,
+            trace_id=trace_id,
             enable_token_stream=enable_token_stream,
         )
 
@@ -667,6 +675,7 @@ async def run_supervisor_loop(
                 run_id=run_id,
                 owner_id=owner_id,
                 model=model,
+                trace_id=trace_id,
                 enable_token_stream=enable_token_stream,
             )
 
@@ -710,6 +719,73 @@ async def run_supervisor_loop(
         # Add AIMessage to history
         current_messages.append(llm_response)
 
+        # Enforce: spawn_worker must be the only tool call
+        # Mixed tool sets cause ordering issues (tools before spawn_worker run,
+        # then interrupt; tools after run only on resume)
+        tool_names = [tc.get("name") for tc in llm_response.tool_calls]
+        has_spawn_worker = "spawn_worker" in tool_names
+        if has_spawn_worker and len(llm_response.tool_calls) > 1:
+            # Return error and let LLM retry with spawn_worker alone
+            error_msg = (
+                "Error: spawn_worker must be called alone, not with other tools. "
+                f"You tried to call: {', '.join(tool_names)}. "
+                "Please call spawn_worker separately."
+            )
+            logger.warning(f"[ReAct] spawn_worker mixed with other tools: {tool_names}")
+
+            # Emit synthetic tool_started/tool_failed events so UI activity ticker stays consistent
+            try:
+                from zerg.events import get_emitter
+                from zerg.tools.result_utils import redact_sensitive_args
+                from zerg.tools.result_utils import safe_preview
+
+                emitter = get_emitter()
+                if emitter:
+                    for tc in llm_response.tool_calls:
+                        tool_name = tc.get("name", "unknown_tool")
+                        tool_call_id = tc.get("id", "")
+                        tool_args = tc.get("args") or {}
+                        safe_args = redact_sensitive_args(tool_args)
+
+                        await emitter.emit_tool_started(
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            tool_args_preview=safe_preview(str(safe_args)),
+                            tool_args=safe_args,
+                        )
+
+                        await emitter.emit_tool_failed(
+                            tool_name=tool_name,
+                            tool_call_id=tool_call_id,
+                            duration_ms=0,
+                            error=error_msg,
+                        )
+            except Exception:
+                # Event emission best-effort; do not block error handling path
+                logger.exception("Failed to emit synthetic tool_failed events for mixed spawn_worker call")
+
+            # Create error ToolMessages for each tool call to keep transcript consistent
+            for tc in llm_response.tool_calls:
+                current_messages.append(
+                    ToolMessage(
+                        content=error_msg,
+                        tool_call_id=tc.get("id"),
+                        name=tc.get("name"),
+                    )
+                )
+            # Continue loop to let LLM correct itself
+            llm_response = await _call_llm(
+                current_messages,
+                llm_with_tools,
+                phase="tool_iteration",
+                run_id=run_id,
+                owner_id=owner_id,
+                model=model,
+                trace_id=trace_id,
+                enable_token_stream=enable_token_stream,
+            )
+            continue
+
         # Execute tools
         tool_results = []
         for tc in llm_response.tool_calls:
@@ -744,6 +820,7 @@ async def run_supervisor_loop(
             run_id=run_id,
             owner_id=owner_id,
             model=model,
+            trace_id=trace_id,
             enable_token_stream=enable_token_stream,
         )
 

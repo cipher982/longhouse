@@ -110,7 +110,7 @@ class TestLangGraphFreeResumeHappyPath:
             MagicMock(role="assistant", content="Task completed successfully"),
         ]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             return mock_created_rows
 
         with patch(
@@ -241,7 +241,7 @@ class TestLangGraphFreeResumeConcurrency:
         # Track how many times run_continuation is called
         call_count = 0
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             nonlocal call_count
             call_count += 1
             await asyncio.sleep(0.05)  # Simulate some work
@@ -417,7 +417,7 @@ class TestLangGraphFreeResumeErrorHandling:
         # Mock AgentRunner.run_continuation
         mock_created_rows = [MagicMock(role="assistant", content="Done")]
 
-        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id):
+        async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
             return mock_created_rows
 
         with patch(

@@ -46,7 +46,7 @@ export interface EventMap {
   'connection:error': { error: Error; message: string };
 
   // Supervisor Progress Events
-  'supervisor:started': { runId: number; task: string; timestamp: number };
+  'supervisor:started': { runId: number; task: string; timestamp: number; traceId?: string };
   'supervisor:thinking': { message: string; timestamp: number };
   'supervisor:worker_spawned': { jobId: number; task: string; timestamp: number };
   'supervisor:worker_started': { jobId: number; workerId?: string; timestamp: number };
@@ -58,6 +58,7 @@ export interface EventMap {
     status: string;
     durationMs?: number;
     timestamp: number;
+    traceId?: string;
     usage?: {
       prompt_tokens?: number | null;
       completion_tokens?: number | null;
@@ -65,7 +66,7 @@ export interface EventMap {
       reasoning_tokens?: number | null;
     };
   };
-  'supervisor:error': { message: string; details?: string; timestamp: number };
+  'supervisor:error': { message: string; details?: string; timestamp: number; traceId?: string };
   'supervisor:deferred': { runId: number; message: string; attachUrl?: string; timestamp: number };
   'supervisor:waiting': { runId: number; jobId?: number; message: string; timestamp: number };
   'supervisor:resumed': { runId: number; timestamp: number };

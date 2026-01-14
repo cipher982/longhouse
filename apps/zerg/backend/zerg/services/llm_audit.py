@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import uuid
 from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from typing import Any
 from typing import Dict
 from typing import List
@@ -81,6 +84,7 @@ class LLMAuditLogger:
         worker_id: str | None,
         thread_id: int | None = None,
         owner_id: int | None = None,
+        trace_id: str | None = None,
         phase: str,
         model: str,
         messages: List[Any],
@@ -89,6 +93,8 @@ class LLMAuditLogger:
         self.ensure_started()
 
         correlation_id = f"{datetime.utcnow().isoformat()}_{phase}_{id(messages)}"
+        # Generate a unique span_id for this LLM call
+        span_id = str(uuid.uuid4())
 
         try:
             serialized_messages = serialize_messages(messages)
@@ -100,6 +106,8 @@ class LLMAuditLogger:
                 "worker_id": worker_id,
                 "thread_id": thread_id,
                 "owner_id": owner_id,
+                "trace_id": trace_id,
+                "span_id": span_id,
                 "phase": phase,
                 "model": model,
                 "messages": serialized_messages,
@@ -237,12 +245,18 @@ class LLMAuditLogger:
                     session = SessionLocal()
                     try:
                         for record in to_write:
+                            # Convert trace_id and span_id to UUID objects if present
+                            trace_id_uuid = uuid.UUID(record["trace_id"]) if record.get("trace_id") else None
+                            span_id_uuid = uuid.UUID(record["span_id"]) if record.get("span_id") else None
+
                             session.add(
                                 LLMAuditLog(
                                     run_id=record.get("run_id"),
                                     worker_id=record.get("worker_id"),
                                     thread_id=record.get("thread_id"),
                                     owner_id=record.get("owner_id"),
+                                    trace_id=trace_id_uuid,
+                                    span_id=span_id_uuid,
                                     phase=record.get("phase"),
                                     model=record.get("model"),
                                     messages=record.get("messages"),
@@ -264,9 +278,22 @@ class LLMAuditLogger:
                     finally:
                         session.close()
 
-                # Optional: Prune stale pending requests (e.g. > 10 mins old)
-                # to prevent memory leak if response never comes (process crash/restart handles itself, but logic errors?)
-                # We can do this occasionally.
+                # Prune stale pending requests (> 10 mins old) to prevent memory leak
+                # if response never arrives (crash, cancel, timeout)
+                stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+                stale_cids = []
+                for cid, record in pending.items():
+                    created_at = record.get("created_at")
+                    if created_at and isinstance(created_at, datetime):
+                        # Make created_at timezone-aware if needed
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        if created_at < stale_cutoff:
+                            stale_cids.append(cid)
+                if stale_cids:
+                    logger.warning(f"Pruning {len(stale_cids)} stale LLM audit pending entries (> 10 min old)")
+                    for cid in stale_cids:
+                        del pending[cid]
 
             except asyncio.CancelledError:
                 # Shutdown

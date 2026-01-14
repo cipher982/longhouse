@@ -533,3 +533,14 @@ debug-inspect: ## Inspect LangGraph checkpoint state (usage: make debug-inspect 
 
 debug-batch: ## Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
 	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py batch --stdin
+
+debug-trace: ## Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 or make debug-trace RECENT=1)
+	@if [ -n "$(RECENT)" ]; then \
+		cd apps/zerg/backend && uv run python scripts/debug_trace.py --recent; \
+	elif [ -n "$(TRACE)" ]; then \
+		cd apps/zerg/backend && uv run python scripts/debug_trace.py $(TRACE) $(if $(LEVEL),--level $(LEVEL),); \
+	else \
+		echo "❌ Usage: make debug-trace TRACE=<uuid> [LEVEL=summary|full|errors]"; \
+		echo "         make debug-trace RECENT=1"; \
+		exit 1; \
+	fi

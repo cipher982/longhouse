@@ -28,12 +28,6 @@ from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
 
-_COMPLETED_TASK_PREFIX_LEN = 50
-
-
-def _task_prefix(task: str, length: int = _COMPLETED_TASK_PREFIX_LEN) -> str:
-    return (task or "")[:length]
-
 
 async def spawn_worker_async(
     task: str,
@@ -70,9 +64,10 @@ async def spawn_worker_async(
     db = resolver.db
     owner_id = resolver.owner_id
 
-    # Get supervisor run_id from context (for SSE event correlation)
+    # Get supervisor run_id and trace_id from context (for SSE event correlation and debugging)
     ctx = get_supervisor_context()
     supervisor_run_id = ctx.run_id if ctx else None
+    trace_id = ctx.trace_id if ctx else None
 
     # Use default worker model if not specified
     worker_model = model or DEFAULT_WORKER_MODEL_ID
@@ -117,19 +112,12 @@ async def spawn_worker_async(
             )
 
             if completed_jobs:
-                # First try exact match (safest)
+                # Exact task match only - prefix matching was removed as unsafe
+                # (near-matches could return wrong worker results if tasks share prefixes)
                 for job in completed_jobs:
                     if job.task == task:
                         existing_job = job
                         break
-                # Then try prefix CONTAINMENT match - handles LLM rephrasing on replay
-                if existing_job is None:
-                    prefix_len = _COMPLETED_TASK_PREFIX_LEN
-                    task_pfx = _task_prefix(task, prefix_len)
-                    prefix_matches = [j for j in completed_jobs if (task.startswith(j.task[:prefix_len]) or j.task.startswith(task_pfx))]
-                    if len(prefix_matches) == 1:
-                        existing_job = prefix_matches[0]
-                        logger.debug(f"Reusing job {existing_job.id} via prefix containment match")
 
         if existing_job is None:
             # No completed match - check for in-progress job with EXACT task match
@@ -173,10 +161,13 @@ async def spawn_worker_async(
 
         if worker_job is None:
             # Create new worker job record with tool_call_id for idempotency
+            import uuid as uuid_module
+
             worker_job = WorkerJob(
                 owner_id=owner_id,
                 supervisor_run_id=supervisor_run_id,
                 tool_call_id=_tool_call_id,  # Enables idempotency on retry/resume
+                trace_id=uuid_module.UUID(trace_id) if trace_id else None,  # Inherit from supervisor for debugging
                 task=task,
                 model=worker_model,
                 status="queued",

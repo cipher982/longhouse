@@ -50,11 +50,67 @@ Three-layer debugging infrastructure for investigating LLM behavior in superviso
 
 | Question | Tool | Command |
 |----------|------|---------|
+| "Debug this trace end-to-end" | **Trace Debugger** | `make debug-trace TRACE=<uuid>` |
+| "What recent traces exist?" | Trace Debugger | `make debug-trace RECENT=1` |
 | "What messages are in the thread?" | Thread Inspector | `make debug-thread THREAD_ID=1` |
 | "Are there duplicate messages?" | Validator | `make debug-validate THREAD_ID=1` |
 | "What's the LangGraph checkpoint state?" | Inspector | `make debug-inspect THREAD_ID=1` |
 | "What did the LLM see/respond?" | Audit Log | `uv run python scripts/debug_run_audit.py --run-id 82` |
 | "Can I replay with different prompts?" | Replay Harness | `uv run python scripts/replay_run.py <run_id>` |
+
+### Trace-Centric Debugging (Recommended)
+
+**One ID to rule them all**: Every supervisor run gets a `trace_id` (UUID) that propagates through workers and LLM audit logs. Copy from UI, debug with agents.
+
+**Copy from UI**: In dev mode, the trace_id appears in the bottom-right corner of the chat UI. Click to copy.
+
+**Debug any trace**:
+```bash
+# Show unified timeline for a trace
+make debug-trace TRACE=abc-123-def
+
+# Full details (LLM messages, tool calls)
+make debug-trace TRACE=abc-123-def LEVEL=full
+
+# Just errors and anomalies
+make debug-trace TRACE=abc-123-def LEVEL=errors
+
+# List recent traces
+make debug-trace RECENT=1
+```
+
+**What it shows**:
+- Unified timeline across supervisor runs, workers, and LLM calls
+- Duration and token usage per phase
+- Anomaly detection (failed workers, slow LLM calls, stuck workers)
+- JSON output with `--json` flag for AI agents
+
+**MCP Tool for AI Agents**:
+
+AI agents (Claude Code, Cursor) can debug traces programmatically via the `debug-trace` MCP server:
+
+```json
+// Cursor: .cursor/mcp.json (already configured)
+// Claude Code: Add to your MCP config
+{
+  "debug-trace": {
+    "command": "uv",
+    "args": ["run", "python", "scripts/mcp_debug_trace/server.py"],
+    "cwd": "/path/to/zerg",
+    "transport": "stdio"
+  }
+}
+```
+
+Available tools:
+- `debug_trace(trace_id, level)` - Get full trace timeline (level: summary/full/errors)
+- `list_recent_traces(limit)` - List recent traces for discovery
+
+Workflow:
+1. User copies trace_id from UI footer
+2. User asks: "debug trace abc-123"
+3. AI calls MCP tool → gets full context
+4. AI explains what happened
 
 ### Layer 1: Thread Inspector (`debug_langgraph.py`)
 

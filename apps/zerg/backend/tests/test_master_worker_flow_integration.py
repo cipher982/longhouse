@@ -425,7 +425,7 @@ async def test_resume_completes_interrupted_run(
         MagicMock(role="assistant", content="Cube is at 45% disk usage. Docker images are the largest consumer."),
     ]
 
-    async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id):
+    async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id, trace_id=None):
         return mock_created_rows
 
     # Call REAL resume function with mocked run_continuation
@@ -455,25 +455,24 @@ async def test_resume_completes_interrupted_run(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_double_worker_spawn_on_resume_bug(
+async def test_different_tasks_create_separate_workers(
     db_session,
     test_user,
     credential_context,
     temp_artifact_path,
 ):
-    """REGRESSION TEST: Reproduce the bug where LLM spawns a SECOND worker on resume.
+    """Verify that different tasks create separate workers (EXACT match only).
 
-    From Docker logs (2026-01-13 01:58):
-    1. User: "check disk space on cube real quick"
-    2. LLM call 1: spawn_worker("Check disk space on cube")
-    3. Graph interrupts, worker executes, completes
-    4. Resume supervisor
-    5. LLM call 2 (on resume): spawn_worker("Check disk space on cube real quick")
-       ^^^ THIS IS THE BUG - should synthesize result, not spawn again
-    6. TWO workers created for ONE user request
+    Scenario from Docker logs (2026-01-13 01:58):
+    1. LLM call 1: spawn_worker("Check disk space on cube")
+    2. Worker completes
+    3. LLM call 2: spawn_worker("Check disk space on cube real quick")
 
-    This test directly calls spawn_worker_async twice with the task strings
-    from the real bug scenario to verify idempotency works.
+    With EXACT matching only, these are treated as different tasks and create
+    separate workers. This is the safer default - prefix matching was removed
+    because near-matches could return wrong worker results.
+
+    If you need idempotency for rephrased tasks, use tool_call_id.
     """
     import json
     import os
@@ -506,8 +505,7 @@ async def test_double_worker_spawn_on_resume_bug(
     )
 
     try:
-        # Phase 1: First spawn_worker call - creates the worker
-        # Task: "Check disk space on cube" (what the LLM said first)
+        # Phase 1: First spawn_worker call - creates worker
         result1 = await spawn_worker_async("Check disk space on cube", model=TEST_WORKER_MODEL)
         assert "queued successfully" in result1, f"First spawn should create job, got: {result1}"
 
@@ -519,12 +517,12 @@ async def test_double_worker_spawn_on_resume_bug(
         first_worker = workers[0]
         assert first_worker.task == "Check disk space on cube"
 
-        # Mark first worker as complete WITH artifacts (simulating real worker completion)
+        # Mark first worker as complete WITH artifacts
         first_worker.status = "success"
         first_worker.worker_id = "test-worker-resume-001"
         db_session.commit()
 
-        # Create artifact files (required for idempotency to return cached result)
+        # Create artifact files
         artifact_store = WorkerArtifactStore()
         worker_dir = artifact_store._get_worker_dir("test-worker-resume-001")
         os.makedirs(worker_dir, exist_ok=True)
@@ -539,9 +537,8 @@ async def test_double_worker_spawn_on_resume_bug(
                 "owner_id": test_user.id,
             }, f)
 
-        # Phase 2: Second spawn_worker call - the LLM rephrases on resume
-        # Task: "Check disk space on cube real quick" (what the LLM said on resume)
-        # THIS IS THE BUG SCENARIO - the idempotency should catch this
+        # Phase 2: Second spawn_worker with DIFFERENT task
+        # With exact matching only, this creates a new worker (expected behavior)
         result2 = await spawn_worker_async("Check disk space on cube real quick", model=TEST_WORKER_MODEL)
 
         # Count workers AFTER second spawn
@@ -550,21 +547,17 @@ async def test_double_worker_spawn_on_resume_bug(
             WorkerJob.supervisor_run_id == run.id
         ).all()
 
-        # THE KEY ASSERTION - This catches the bug
-        # If idempotency is broken, we'll have 2 workers
-        # The prefix matching should detect "Check disk space on cube" is a prefix of
-        # "Check disk space on cube real quick" and return the cached result
-        assert len(workers_after) == 1, (
-            f"BUG REPRODUCED: {len(workers_after)} workers created!\n"
+        # Different tasks = different workers (exact matching only)
+        assert len(workers_after) == 2, (
+            f"Expected 2 workers for different tasks, got {len(workers_after)}\n"
             f"Workers: {[(w.task, w.status) for w in workers_after]}\n"
             f"First spawn result: {result1}\n"
-            f"Second spawn result: {result2}\n"
-            f"Expected idempotency to catch the rephrased task."
+            f"Second spawn result: {result2}"
         )
 
-        # Second call should return the cached result
-        assert "completed" in result2.lower(), (
-            f"Second spawn should return cached result, got: {result2}"
+        # Second call creates new worker (different task = no cache hit)
+        assert "queued successfully" in result2, (
+            f"Second spawn should create new job (different task), got: {result2}"
         )
 
     finally:
