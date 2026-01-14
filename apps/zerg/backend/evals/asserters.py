@@ -309,7 +309,7 @@ def assert_worker_tool_called(
         return False, f"Worker {worker_id} has no worker_id (not started yet)"
 
     # Worker tool calls are emitted as AgentRunEvents on the *supervisor run*.
-    # See zerg_react_agent._call_tool_async: it uses ctx.run_id (supervisor run_id)
+    # See supervisor_react_engine._call_tool_async: it uses ctx.run_id (supervisor run_id)
     # and includes worker_id + tool_name in the payload.
     events = db_session.query(AgentRunEvent).filter(AgentRunEvent.run_id == metrics.run_id).all()
 

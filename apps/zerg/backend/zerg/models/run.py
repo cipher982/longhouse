@@ -44,6 +44,10 @@ class AgentRun(Base):
     # Model used for this run (for continuation inheritance)
     model = Column(String(100), nullable=True)
 
+    # Reasoning effort used for this run (for continuation inheritance)
+    # Values: none, low, medium, high
+    reasoning_effort = Column(String(20), nullable=True)
+
     # Message ID (UUID) assigned to the assistant message in supervisor_started event.
     # Used by continuation runs to look up the original message's ID for
     # continuation_of_message_id (schema requires UUID, not sentinel string).

@@ -43,14 +43,10 @@ class _UsageStub:
 async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatch):
     # Ensure allowed model
     monkeypatch.setenv("ALLOWED_MODELS_NON_ADMIN", TEST_WORKER_MODEL)
-    # Clear AgentRunner runnable cache and patch ChatOpenAI used by agent definition to our usage stub
-    import zerg.agents_def.zerg_react_agent as zr
-    import zerg.managers.agent_runner as ar
+    # Patch ChatOpenAI used by supervisor_react_engine to our usage stub
     import zerg.services.supervisor_react_engine as sre
 
-    ar._RUNNABLE_CACHE.clear()
-    monkeypatch.setattr(zr, "ChatOpenAI", _UsageStub)
-    monkeypatch.setattr(sre, "ChatOpenAI", _UsageStub)  # Also patch new engine
+    monkeypatch.setattr(sre, "ChatOpenAI", _UsageStub)
 
     # Create a user and agent/thread
     user = crud.get_user_by_email(db_session, "u@local") or crud.create_user(
@@ -109,11 +105,10 @@ class _NoUsageStub:
 
 @pytest.mark.asyncio
 async def test_usage_missing_leaves_totals_null(client, db_session, monkeypatch):
-    import zerg.agents_def.zerg_react_agent as zr
-    import zerg.managers.agent_runner as ar
+    # Patch ChatOpenAI used by supervisor_react_engine to our no-usage stub
+    import zerg.services.supervisor_react_engine as sre
 
-    ar._RUNNABLE_CACHE.clear()
-    monkeypatch.setattr(zr, "ChatOpenAI", _NoUsageStub)
+    monkeypatch.setattr(sre, "ChatOpenAI", _NoUsageStub)
 
     user = crud.get_user_by_email(db_session, "u2@local") or crud.create_user(
         db_session, email="u2@local", provider=None, role="USER"

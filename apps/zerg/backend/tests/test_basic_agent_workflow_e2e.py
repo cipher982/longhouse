@@ -69,21 +69,24 @@ async def test_basic_agent_workflow_execution_e2e(db, test_user, sample_agent):
     db.add(workflow)
     db.commit()
 
-    # Mock only the LLM call to avoid external dependencies
-    with patch("zerg.agents_def.zerg_react_agent.get_runnable") as mock_get_runnable:
-        # Create a mock runnable that simulates successful agent execution
-        mock_runnable = AsyncMock()
+    # Mock only the supervisor loop to avoid external LLM dependencies
+    from zerg.services.supervisor_react_engine import SupervisorResult
 
-        # Mock the ainvoke method to return what a real agent would return
-        async def mock_ainvoke(messages, config):
-            # Return the input messages plus a new assistant message
-            # This simulates what the real LangGraph agent does
-            from langchain_core.messages import AIMessage
+    async def mock_run_supervisor_loop(messages, **kwargs):
+        """Mock the supervisor loop to return input messages + new AIMessage."""
+        from langchain_core.messages import AIMessage
 
-            return messages + [AIMessage(content="Hello! I successfully processed your request.")]
+        # Return ALL messages (input + new) as real supervisor loop does
+        return SupervisorResult(
+            messages=list(messages) + [AIMessage(content="Hello! I successfully processed your request.")],
+            usage={"total_tokens": 10},
+            interrupted=False,
+        )
 
-        mock_runnable.ainvoke = mock_ainvoke
-        mock_get_runnable.return_value = mock_runnable
+    with patch(
+        "zerg.services.supervisor_react_engine.run_supervisor_loop",
+        new=mock_run_supervisor_loop,
+    ):
 
         # Execute the workflow - this should work end-to-end
         execution_id = await workflow_engine.execute_workflow(workflow.id)
@@ -159,17 +162,24 @@ async def test_basic_workflow_datetime_handling(db, test_user, sample_agent):
     db.add(workflow)
     db.commit()
 
-    # Mock the agent to avoid LLM calls
-    with patch("zerg.agents_def.zerg_react_agent.get_runnable") as mock_get_runnable:
-        mock_runnable = AsyncMock()
+    # Mock the supervisor loop to avoid LLM calls
+    from zerg.services.supervisor_react_engine import SupervisorResult
 
-        async def mock_ainvoke(messages, config):
-            from langchain_core.messages import AIMessage
+    async def mock_run_supervisor_loop(messages, **kwargs):
+        """Mock the supervisor loop to return input messages + new AIMessage."""
+        from langchain_core.messages import AIMessage
 
-            return messages + [AIMessage(content="Test response")]
+        # Return ALL messages (input + new) as real supervisor loop does
+        return SupervisorResult(
+            messages=list(messages) + [AIMessage(content="Test response")],
+            usage={"total_tokens": 10},
+            interrupted=False,
+        )
 
-        mock_runnable.ainvoke = mock_ainvoke
-        mock_get_runnable.return_value = mock_runnable
+    with patch(
+        "zerg.services.supervisor_react_engine.run_supervisor_loop",
+        new=mock_run_supervisor_loop,
+    ):
 
         # Execute workflow
         execution_id = await workflow_engine.execute_workflow(workflow.id)

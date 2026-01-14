@@ -325,11 +325,7 @@ async def test_interrupt_triggers_waiting_status(
     scripted_llm = ScriptedChatLLM()
 
     # Patch the LLM creation to use our scripted version
-    # Patch both LangGraph path and new engine path
-    with (
-        patch("zerg.agents_def.zerg_react_agent._make_llm", return_value=scripted_llm),
-        patch("zerg.services.supervisor_react_engine._make_llm", return_value=scripted_llm),
-    ):
+    with patch("zerg.services.supervisor_react_engine._make_llm", return_value=scripted_llm):
         # Run supervisor - should interrupt on spawn_worker
         result = await service.run_supervisor(
             owner_id=test_user.id,
@@ -373,14 +369,10 @@ async def test_resume_completes_interrupted_run(
 
     This test:
     1. Sets up a run in WAITING state (simulating post-interrupt)
-    2. Calls the REAL resume function with a mock runnable
+    2. Calls the REAL resume function with mocked run_continuation
     3. Verifies the run completes with SUCCESS status and final response
     """
     from unittest.mock import patch
-
-    from langchain_core.messages import AIMessage
-    from langchain_core.messages import HumanMessage
-    from langchain_core.messages import SystemMessage
 
     from zerg.crud import crud
     from zerg.services.worker_resume import resume_supervisor_with_worker_result
@@ -413,10 +405,12 @@ async def test_resume_completes_interrupted_run(
     db_session.commit()
     db_session.refresh(run)
 
-    # Create corresponding worker job
+    # Create corresponding worker job with tool_call_id for resume lookup
+    tool_call_id = f"call_{uuid.uuid4().hex[:12]}"
     worker_job = WorkerJob(
         owner_id=test_user.id,
         supervisor_run_id=run.id,
+        tool_call_id=tool_call_id,
         task="Check disk space on cube",
         model=TEST_WORKER_MODEL,
         status="success",
@@ -424,27 +418,26 @@ async def test_resume_completes_interrupted_run(
     db_session.add(worker_job)
     db_session.commit()
 
-    # Mock runnable that returns a final response (simulating resumed graph)
-    class MockRunnable:
-        async def ainvoke(self, _input, _config):
-            # Return message history with final assistant response
-            return [
-                SystemMessage(content="You are Jarvis."),
-                HumanMessage(content="check disk space on cube"),
-                AIMessage(content="Cube is at 45% disk usage. Docker images are the largest consumer."),
-            ]
+    # Mock AgentRunner.run_continuation to return a final response
+    from unittest.mock import MagicMock
 
-    mock_runnable = MockRunnable()
+    mock_created_rows = [
+        MagicMock(role="assistant", content="Cube is at 45% disk usage. Docker images are the largest consumer."),
+    ]
 
-    # Call REAL resume function with mock runnable
-    with (
-        patch("zerg.services.worker_resume.USE_LANGGRAPH_SUPERVISOR", True),
-        patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=mock_runnable),
+    async def mock_run_continuation(self, db, thread, tool_call_id, tool_result, run_id):
+        return mock_created_rows
+
+    # Call REAL resume function with mocked run_continuation
+    with patch(
+        "zerg.managers.agent_runner.AgentRunner.run_continuation",
+        new=mock_run_continuation,
     ):
         result = await resume_supervisor_with_worker_result(
             db=db_session,
             run_id=run.id,
             worker_result="Cube disk usage: 45% used. Docker images are largest.",
+            job_id=worker_job.id,
         )
 
     # Verify resume succeeded

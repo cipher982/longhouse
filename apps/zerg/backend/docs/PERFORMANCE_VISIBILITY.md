@@ -241,7 +241,7 @@ grep "duration_ms=" logs/backend/backend.log | awk -F'duration_ms=' '{print $2}'
 Structured logs are emitted in two places:
 
 1. **worker_runner.py** - After summary extraction (LLM call)
-2. **zerg_react_agent.py** - After tool execution (tool call)
+2. **supervisor_react_engine.py** - After tool execution (tool call)
 
 Both use the same pattern:
 

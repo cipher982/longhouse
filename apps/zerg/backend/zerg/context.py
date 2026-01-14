@@ -14,7 +14,7 @@ Usage:
     finally:
         reset_worker_context(token)
 
-    # In zerg_react_agent._call_tool_async():
+    # In supervisor_react_engine._call_tool_async():
     ctx = get_worker_context()
     if ctx:
         await emit_tool_started_event(ctx, tool_name, ...)

@@ -671,8 +671,10 @@ class TestSupervisorReActEngineInterrupt:
             ],
         )
 
-        # Mock spawn_worker_async to return a job result (triggers interrupt internally)
-        async def mock_spawn_worker_async(task, model=None, _tool_call_id=None, _skip_interrupt=False):
+        # Mock spawn_worker_async to return structured dict (with _return_structured=True)
+        async def mock_spawn_worker_async(task, model=None, _tool_call_id=None, _skip_interrupt=False, _return_structured=False):
+            if _return_structured:
+                return {"job_id": 456, "status": "queued", "task": task[:100]}
             return "Worker job 456 queued successfully"
 
         with (
