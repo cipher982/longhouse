@@ -978,6 +978,7 @@ class SupervisorService:
                     db=fresh_db,
                     run_id=run_id,
                     worker_result=result_text,
+                    job_id=worker_job.id,
                 )
                 logger.info(f"Immediate resume completed for run {run_id}")
             finally:

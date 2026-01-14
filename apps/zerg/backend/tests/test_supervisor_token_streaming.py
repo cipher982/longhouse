@@ -55,9 +55,14 @@ async def test_supervisor_token_events_published(monkeypatch, db_session, test_u
     # Enable token streaming (env var read fresh each time via get_settings())
     monkeypatch.setenv("LLM_TOKEN_STREAM", "true")
 
-    # Patch ChatOpenAI with our mock
+    # Patch ChatOpenAI with our mock in both LangGraph and new engine paths
     monkeypatch.setattr(
         "zerg.agents_def.zerg_react_agent.ChatOpenAI",
+        MockChatOpenAI,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "zerg.services.supervisor_react_engine.ChatOpenAI",
         MockChatOpenAI,
         raising=True,
     )
@@ -132,9 +137,14 @@ async def test_token_context_set_correctly(monkeypatch, db_session, test_user, s
 
     monkeypatch.setattr(token_stream.WsTokenCallback, "on_llm_new_token", capture_context)
 
-    # Patch ChatOpenAI to emit tokens
+    # Patch ChatOpenAI to emit tokens in both LangGraph and new engine paths
     monkeypatch.setattr(
         "zerg.agents_def.zerg_react_agent.ChatOpenAI",
+        MockChatOpenAI,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "zerg.services.supervisor_react_engine.ChatOpenAI",
         MockChatOpenAI,
         raising=True,
     )

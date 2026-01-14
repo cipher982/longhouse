@@ -103,6 +103,7 @@ async def resume_run(
             db=db,
             run_id=run_id,
             worker_result=result_text,
+            job_id=payload.job_id,
         )
 
         return {

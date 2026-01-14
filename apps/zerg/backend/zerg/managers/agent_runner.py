@@ -4,7 +4,7 @@ This class bridges:
 
 • Agent ORM row (system instructions, model name, …)
 • ThreadService for DB persistence
-• LangGraph **runnable** compiled from the functional ReAct definition.
+• ReAct execution loop (LangGraph-free by default, LangGraph for rollback)
 
 Design goals
 ------------
@@ -16,12 +16,13 @@ Design goals
    call the method directly don't break.  This wrapper simply delegates to
    the async implementation via ``asyncio.run`` and will be removed once all
    call-sites are async.
-4. Handle LangGraph interrupt/resume pattern for async tool execution (spawn_worker).
+4. Handle interrupt/resume pattern for async tool execution (spawn_worker).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 from typing import Dict
@@ -31,24 +32,20 @@ from typing import Tuple
 from sqlalchemy.orm import Session
 
 from zerg.agents_def import zerg_react_agent
-
-# Token streaming context helper
 from zerg.callbacks.token_stream import set_current_thread_id
-
-# Connector credential context helper
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
-
-# Connector status injection for agent context awareness
 from zerg.connectors.status_builder import build_agent_context
 from zerg.crud import crud
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
-
-# Static connector protocols for system prompt
 from zerg.prompts.connector_protocols import get_connector_protocols
 from zerg.services.thread_service import ThreadService
+
+# Feature flag: Use LangGraph runnable for initial supervisor run (rollback path)
+# Default is False (use new LangGraph-free engine)
+USE_LANGGRAPH_RUN_THREAD = os.getenv("USE_LANGGRAPH_RUN_THREAD", "0") == "1"
 
 logger = logging.getLogger(__name__)
 
@@ -300,14 +297,11 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         )
 
         try:
-            # TODO: Token streaming needs LangChain version compatibility investigation
             # Track count of messages sent to LLM (including injected context)
             messages_with_context = len(original_msgs)
             logger.info(f"[AgentRunner] Calling LLM with {messages_with_context} messages (thread={thread.id})", extra={"tag": "LLM"})
 
             # Optional debug: dump full LLM input to file (set DEBUG_LLM_INPUT=1)
-            import os
-
             if os.getenv("DEBUG_LLM_INPUT") == "1":
                 import tempfile
                 from pathlib import Path as PathLib
@@ -326,49 +320,136 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                         f.write("-" * 80 + "\n\n")
                 logger.info(f"[DEBUG] Full LLM input written to: {debug_file}")
 
-            # Reset LLM usage tracking before invoking (so we capture usage from this run only)
-            from zerg.agents_def.zerg_react_agent import reset_llm_usage
+            # ------------------------------------------------------------------
+            # Execute supervisor loop: LangGraph-free (default) or LangGraph (rollback)
+            # ------------------------------------------------------------------
+            if USE_LANGGRAPH_RUN_THREAD:
+                # LEGACY PATH: Use LangGraph runnable
+                logger.info("[AgentRunner] Using LangGraph runnable (USE_LANGGRAPH_RUN_THREAD=1)")
 
-            reset_llm_usage()
+                # Reset LLM usage tracking before invoking
+                from zerg.agents_def.zerg_react_agent import reset_llm_usage
 
-            # Use **async** invoke with the entrypoint
-            # Pass the messages list directly to the function
-            # For Functional API, we use .ainvoke method with the config
-            # The entrypoint function will return the full message history
-            result = await self._runnable.ainvoke(original_msgs, config)
+                reset_llm_usage()
+
+                result = await self._runnable.ainvoke(original_msgs, config)
+            else:
+                # NEW PATH: Use LangGraph-free supervisor_react_engine
+                logger.info("[AgentRunner] Using LangGraph-free engine")
+
+                from zerg.services.supervisor_react_engine import reset_llm_usage
+                from zerg.services.supervisor_react_engine import run_supervisor_loop
+                from zerg.tools.unified_access import get_tool_resolver
+
+                # Get tools for this agent (use DB-loaded agent_row for fresh allowed_tools)
+                resolver = get_tool_resolver()
+                tools = resolver.filter_by_allowlist(agent_row.allowed_tools)
+
+                reset_llm_usage()
+
+                # Get run_id from supervisor context if available (set by SupervisorService)
+                from zerg.services.supervisor_context import get_supervisor_context
+
+                ctx = get_supervisor_context()
+                run_id = ctx.run_id if ctx else None
+
+                # Run the supervisor loop
+                loop_result = await run_supervisor_loop(
+                    messages=original_msgs,
+                    agent_row=self.agent,
+                    tools=tools,
+                    run_id=run_id,
+                    owner_id=self.agent.owner_id,
+                    enable_token_stream=self.enable_token_stream,
+                )
+
+                # Capture usage from the new engine
+                from zerg.services.supervisor_react_engine import get_llm_usage
+
+                engine_usage = get_llm_usage()
+                if engine_usage:
+                    # Use explicit None check to preserve legitimate 0 values
+                    self.usage_prompt_tokens = engine_usage.get("prompt_tokens")
+                    self.usage_completion_tokens = engine_usage.get("completion_tokens")
+                    self.usage_total_tokens = engine_usage.get("total_tokens")
+                    self.usage_reasoning_tokens = engine_usage.get("reasoning_tokens")
+
+                # Handle interrupt from new engine
+                if loop_result.interrupted:
+                    # Persist new messages before raising interrupt
+                    if len(loop_result.messages) > messages_with_context:
+                        new_messages = loop_result.messages[messages_with_context:]
+                        # Filter out SystemMessages (ephemeral, not persisted)
+                        new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
+                        if new_messages:
+                            created_rows = self.thread_service.save_new_messages(
+                                db,
+                                thread_id=thread.id,
+                                messages=new_messages,
+                                processed=True,
+                            )
+                            # Persist usage on last assistant message
+                            usage_payload = {
+                                "prompt_tokens": self.usage_prompt_tokens,
+                                "completion_tokens": self.usage_completion_tokens,
+                                "total_tokens": self.usage_total_tokens,
+                                "reasoning_tokens": self.usage_reasoning_tokens,
+                            }
+                            if any(v is not None for v in usage_payload.values()):
+                                last_assistant_row = next(
+                                    (row for row in reversed(created_rows) if row.role == "assistant"),
+                                    None,
+                                )
+                                if last_assistant_row is not None:
+                                    existing_meta = dict(last_assistant_row.message_metadata or {})
+                                    existing_meta["usage"] = usage_payload
+                                    last_assistant_row.message_metadata = existing_meta
+                                    db.commit()
+
+                    # Mark user messages processed
+                    self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
+                    self.thread_service.touch_thread_timestamp(db, thread.id)
+
+                    logger.info(f"[AgentRunner] Supervisor interrupted: {loop_result.interrupt_value}", extra={"tag": "AGENT"})
+                    raise AgentInterrupted(loop_result.interrupt_value or {})
+
+                # Convert SupervisorResult to expected format for downstream processing
+                result = loop_result.messages
 
             # ------------------------------------------------------------------
-            # Capture usage metadata (works for both normal completion + interrupt)
+            # Capture usage metadata (LangGraph path only - new engine captures above)
             # ------------------------------------------------------------------
-            from zerg.agents_def.zerg_react_agent import get_llm_usage
+            if USE_LANGGRAPH_RUN_THREAD:
+                from zerg.agents_def.zerg_react_agent import get_llm_usage
 
-            ctx_usage = get_llm_usage()
-            logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
+                ctx_usage = get_llm_usage()
+                logger.debug(f"[AgentRunner] Context variable usage: {ctx_usage}")
 
-            if ctx_usage:
-                p_sum = ctx_usage.get("prompt_tokens", 0) or 0
-                c_sum = ctx_usage.get("completion_tokens", 0) or 0
-                t_sum = ctx_usage.get("total_tokens", 0) or 0
-                r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
+                if ctx_usage:
+                    p_sum = ctx_usage.get("prompt_tokens", 0) or 0
+                    c_sum = ctx_usage.get("completion_tokens", 0) or 0
+                    t_sum = ctx_usage.get("total_tokens", 0) or 0
+                    r_sum = ctx_usage.get("reasoning_tokens", 0) or 0
 
-                if p_sum or c_sum or t_sum or r_sum:
-                    self.usage_prompt_tokens = p_sum if p_sum else None
-                    self.usage_completion_tokens = c_sum if c_sum else None
-                    self.usage_total_tokens = t_sum if t_sum else None
-                    self.usage_reasoning_tokens = r_sum if r_sum else None
-                    logger.info(
-                        f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
-                        f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}",
-                        extra={"tag": "LLM"},
-                    )
+                    if p_sum or c_sum or t_sum or r_sum:
+                        self.usage_prompt_tokens = p_sum if p_sum else None
+                        self.usage_completion_tokens = c_sum if c_sum else None
+                        self.usage_total_tokens = t_sum if t_sum else None
+                        self.usage_reasoning_tokens = r_sum if r_sum else None
+
+            # Log usage (both paths)
+            if self.usage_total_tokens is not None:
+                logger.info(
+                    f"[AgentRunner] Usage: prompt={self.usage_prompt_tokens}, completion={self.usage_completion_tokens}, "
+                    f"total={self.usage_total_tokens}, reasoning={self.usage_reasoning_tokens}",
+                    extra={"tag": "LLM"},
+                )
 
             # ------------------------------------------------------------------
-            # Handle LangGraph interrupt (spawn_worker uses interrupt() for async execution)
-            #
-            # When interrupt() is called, the graph returns {"__interrupt__": [...]} instead of messages.
-            # We still mark user messages processed so we don't re-run the same turn.
+            # Handle LangGraph interrupt (only for LangGraph path)
+            # The new engine handles interrupts above and raises AgentInterrupted directly.
             # ------------------------------------------------------------------
-            if isinstance(result, dict) and "__interrupt__" in result:
+            if USE_LANGGRAPH_RUN_THREAD and isinstance(result, dict) and "__interrupt__" in result:
                 interrupts = result.get("__interrupt__") or []
                 interrupt_value = None
                 if interrupts:
@@ -501,7 +582,10 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             return []
 
         new_messages = updated_messages[messages_with_context:]
-        logger.debug(f"[AgentRunner] Extracted {len(new_messages)} new messages")
+
+        # Filter out SystemMessages (ephemeral context, not persisted to DB)
+        new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
+        logger.debug(f"[AgentRunner] Extracted {len(new_messages)} new messages (excluding system)")
 
         # Log each new message for debugging
         for i, msg in enumerate(new_messages):
@@ -557,5 +641,232 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         logger.info(f"[AgentRunner] run_thread completed successfully for thread {thread.id}", extra={"tag": "AGENT"})
         return created_rows
+
+    # ------------------------------------------------------------------
+    # Continuation API (LangGraph-free path for worker resume)
+    # ------------------------------------------------------------------
+
+    async def run_continuation(
+        self,
+        db: Session,
+        thread: ThreadModel,
+        tool_call_id: str,
+        tool_result: str,
+        *,
+        run_id: int | None = None,
+    ) -> Sequence[ThreadMessageModel]:
+        """Continue supervisor execution after worker completion.
+
+        This method is called when a worker completes and the supervisor needs to
+        resume. Unlike run_thread(), this does NOT use LangGraph checkpointing.
+
+        Args:
+            db: Database session.
+            thread: Thread to continue.
+            tool_call_id: The tool_call_id from the spawn_worker call.
+            tool_result: The worker's result to inject as ToolMessage.
+            run_id: Supervisor run ID for event correlation.
+
+        Returns:
+            List of new message rows created during continuation.
+
+        Raises:
+            AgentInterrupted: If spawn_worker is called again (sequential workers).
+        """
+        from langchain_core.messages import SystemMessage
+        from langchain_core.messages import ToolMessage
+
+        from zerg.connectors.context import reset_credential_resolver
+        from zerg.connectors.context import set_credential_resolver
+        from zerg.connectors.resolver import CredentialResolver
+        from zerg.services.supervisor_react_engine import run_supervisor_loop
+        from zerg.tools.unified_access import get_tool_resolver
+
+        logger.info(
+            f"[AgentRunner] Starting run_continuation for thread {thread.id}, tool_call_id={tool_call_id}",
+            extra={"tag": "AGENT"},
+        )
+
+        # Load conversation history from DB
+        db_messages = self.thread_service.get_thread_messages_as_langchain(db, thread.id)
+        conversation_msgs = [msg for msg in db_messages if not (hasattr(msg, "type") and msg.type == "system")]
+
+        # Check if ToolMessage for this tool_call_id already exists (idempotency)
+        existing_tool_response = any(isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id for m in db_messages)
+
+        if existing_tool_response:
+            logger.info(f"[AgentRunner] ToolMessage for tool_call_id={tool_call_id} already exists, skipping creation")
+            # Reload conversation with existing tool message
+            tool_msg = next(m for m in db_messages if isinstance(m, ToolMessage) and m.tool_call_id == tool_call_id)
+        else:
+            # Create ToolMessage for the worker result
+            tool_msg = ToolMessage(
+                content=f"Worker completed:\n\n{tool_result}",
+                tool_call_id=tool_call_id,
+                name="spawn_worker",
+            )
+
+            # Persist ToolMessage immediately
+            self.thread_service.save_new_messages(
+                db,
+                thread_id=thread.id,
+                messages=[tool_msg],
+                processed=True,
+            )
+            logger.debug(f"[AgentRunner] Persisted ToolMessage for tool_call_id={tool_call_id}")
+
+        # Build fresh system prompt
+        agent_row = crud.get_agent(db, self.agent.id)
+        if not agent_row or not agent_row.system_instructions:
+            raise RuntimeError(f"Agent {self.agent.id} has no system_instructions")
+
+        protocols = get_connector_protocols()
+        system_content = f"{protocols}\n\n{agent_row.system_instructions}"
+        system_msg = SystemMessage(content=system_content)
+
+        # Build full message list for continuation
+        # conversation_msgs already includes the AIMessage with tool_calls
+        if existing_tool_response:
+            # ToolMessage already in conversation_msgs, don't add again
+            full_messages = [system_msg] + conversation_msgs
+        else:
+            # Add the newly created tool result
+            full_messages = [system_msg] + conversation_msgs + [tool_msg]
+
+        # Inject connector status context (same as run_thread)
+        try:
+            context_text = build_agent_context(
+                db=db,
+                owner_id=self.agent.owner_id,
+                agent_id=self.agent.id,
+                allowed_tools=getattr(agent_row, "allowed_tools", None),
+                compact_json=True,
+            )
+            context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
+            # Insert after main system message
+            full_messages = [full_messages[0], context_system_msg] + full_messages[1:]
+        except Exception as e:
+            logger.warning(
+                "[AgentRunner] Failed to inject connector context in continuation: %s",
+                e,
+                exc_info=True,
+            )
+
+        messages_with_context = len(full_messages)
+
+        # Set up credential resolver context
+        credential_resolver = CredentialResolver(
+            agent_id=self.agent.id,
+            db=db,
+            owner_id=self.agent.owner_id,
+        )
+        _cred_ctx_token = set_credential_resolver(credential_resolver)
+
+        # Set up thread context for token streaming
+        _ctx_token = set_current_thread_id(thread.id)
+
+        try:
+            # Get tools for the agent
+            resolver = get_tool_resolver()
+            allowed_tools = getattr(agent_row, "allowed_tools", None)
+            tools = resolver.filter_by_allowlist(allowed_tools)
+
+            # Reset usage tracking
+            from zerg.services.supervisor_react_engine import reset_llm_usage
+
+            reset_llm_usage()
+
+            # Run the supervisor loop using the new engine
+            result = await run_supervisor_loop(
+                messages=full_messages,
+                agent_row=self.agent,
+                tools=tools,
+                run_id=run_id,
+                owner_id=self.agent.owner_id,
+                enable_token_stream=self.enable_token_stream,
+            )
+
+            # Capture usage
+            self.usage_prompt_tokens = result.usage.get("prompt_tokens")
+            self.usage_completion_tokens = result.usage.get("completion_tokens")
+            self.usage_total_tokens = result.usage.get("total_tokens")
+            self.usage_reasoning_tokens = result.usage.get("reasoning_tokens")
+
+            # Handle interrupt (supervisor spawned another worker)
+            if result.interrupted:
+                logger.info(
+                    f"[AgentRunner] Continuation interrupted: {result.interrupt_value}",
+                    extra={"tag": "AGENT"},
+                )
+                # Persist any new messages before raising
+                if len(result.messages) > messages_with_context:
+                    new_messages = result.messages[messages_with_context:]
+                    # Filter out SystemMessages (ephemeral, not persisted)
+                    new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
+                    if new_messages:
+                        self.thread_service.save_new_messages(
+                            db,
+                            thread_id=thread.id,
+                            messages=new_messages,
+                            processed=True,
+                        )
+                raise AgentInterrupted(result.interrupt_value or {})
+
+            # Normal completion: extract new messages
+            if len(result.messages) <= messages_with_context:
+                logger.warning(
+                    "No new messages generated during continuation for thread %s",
+                    thread.id,
+                    extra={"tag": "AGENT"},
+                )
+                return []
+
+            new_messages = result.messages[messages_with_context:]
+
+            # Filter out SystemMessages (they shouldn't be persisted - injected fresh each run)
+            new_messages = [m for m in new_messages if not (hasattr(m, "type") and m.type == "system")]
+            logger.debug(f"[AgentRunner] Extracted {len(new_messages)} new messages from continuation (excluding system)")
+
+            # Persist new messages (excluding the ToolMessage we already saved)
+            created_rows = self.thread_service.save_new_messages(
+                db,
+                thread_id=thread.id,
+                messages=new_messages,
+                processed=True,
+            )
+            logger.info(
+                f"[AgentRunner] Saved {len(created_rows)} message rows from continuation",
+                extra={"tag": "AGENT"},
+            )
+
+            # Persist usage on final assistant message
+            usage_payload = {
+                "prompt_tokens": self.usage_prompt_tokens,
+                "completion_tokens": self.usage_completion_tokens,
+                "total_tokens": self.usage_total_tokens,
+                "reasoning_tokens": self.usage_reasoning_tokens,
+            }
+            if any(v is not None for v in usage_payload.values()):
+                last_assistant_row = next(
+                    (row for row in reversed(created_rows) if row.role == "assistant"),
+                    None,
+                )
+                if last_assistant_row is not None:
+                    existing_meta = dict(last_assistant_row.message_metadata or {})
+                    existing_meta["usage"] = usage_payload
+                    last_assistant_row.message_metadata = existing_meta
+                    db.commit()
+
+            # Touch thread timestamp
+            self.thread_service.touch_thread_timestamp(db, thread.id)
+
+            return created_rows
+
+        finally:
+            # Reset contexts
+            from zerg.callbacks.token_stream import reset_current_thread_id
+
+            reset_current_thread_id(_ctx_token)
+            reset_credential_resolver(_cred_ctx_token)
 
     # No synchronous wrapper – all call-sites should be async going forward.
