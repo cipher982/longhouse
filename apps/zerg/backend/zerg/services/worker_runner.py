@@ -281,6 +281,7 @@ class WorkerRunner:
                         run_id=event_ctx["run_id"],
                         status="failed",
                         error=worker_context.critical_error_message,
+                        job_id=job_id,
                     )
 
                 logger.error(f"Worker {worker_id} failed due to critical error after {duration_ms}ms")
@@ -342,6 +343,7 @@ class WorkerRunner:
                     run_id=event_ctx["run_id"],
                     status="success",
                     result_summary=summary or result_text,
+                    job_id=job_id,
                 )
 
             # Clean up temporary agent if created
@@ -400,6 +402,7 @@ class WorkerRunner:
                     run_id=event_ctx["run_id"],
                     status="failed",
                     error=error_msg,
+                    job_id=job_id,
                 )
 
             return WorkerResult(
@@ -820,11 +823,12 @@ Example: "Backup completed 157GB in 17s, no errors found"
         status: str,
         result_summary: str | None = None,
         error: str | None = None,
+        job_id: int | None = None,
     ) -> None:
         """Resume interrupted supervisor if waiting for worker (NON-BLOCKING).
 
-        Uses LangGraph's Command(resume=...) pattern to continue the supervisor
-        from where interrupt() was called in spawn_worker.
+        Uses either LangGraph's Command(resume=...) pattern or the new
+        LangGraph-free AgentRunner.run_continuation() to continue the supervisor.
 
         This is fire-and-forget to prevent worker "duration" from including supervisor synthesis time.
 
@@ -888,11 +892,12 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             summary_text = "(No result summary)"
 
-                    # Resume using LangGraph's Command(resume=...)
+                    # Resume using LangGraph-free or LangGraph path (based on feature flag)
                     await resume_supervisor_with_worker_result(
                         db=fresh_db,
                         run_id=run_id,
                         worker_result=summary_text,
+                        job_id=job_id,
                     )
                 except Exception as e:
                     logger.exception(f"Background resume failed for run {run_id}: {e}")

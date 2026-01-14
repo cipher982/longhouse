@@ -1,0 +1,755 @@
+"""LangGraph-free ReAct engine for supervisor agents.
+
+This module provides a pure async ReAct loop for supervisor execution without
+LangGraph checkpointing or interrupt() semantics. It replaces the @entrypoint-
+decorated graph with explicit control flow.
+
+Key differences from LangGraph-based implementation:
+- No checkpointer - state is managed via DB thread messages
+- No interrupt() - spawn_worker raises AgentInterrupted directly
+- No add_messages() - plain list operations
+- Returns (messages, usage) tuple for explicit persistence
+
+Usage:
+    result = await run_supervisor_loop(
+        messages=db_messages,
+        agent_row=agent,
+        tools=tool_list,
+    )
+    new_messages = result.messages
+    usage = result.usage
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextvars
+import logging
+from dataclasses import dataclass
+from dataclasses import field
+from datetime import datetime
+from datetime import timezone
+from typing import TYPE_CHECKING
+
+from langchain_core.messages import AIMessage
+from langchain_core.messages import BaseMessage
+from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
+from langchain_openai import ChatOpenAI
+
+from zerg.managers.agent_runner import AgentInterrupted
+
+if TYPE_CHECKING:
+    from langchain_core.tools import BaseTool
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Usage tracking (thread-local accumulator)
+# ---------------------------------------------------------------------------
+
+# Use None as default to avoid mutable default footgun
+_llm_usage_var: contextvars.ContextVar[dict | None] = contextvars.ContextVar("llm_usage", default=None)
+
+# Maximum iterations in the ReAct loop to prevent infinite loops
+MAX_REACT_ITERATIONS = 50
+
+
+def _empty_usage() -> dict:
+    """Return a fresh empty usage dict."""
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+
+
+def reset_llm_usage() -> None:
+    """Reset accumulated LLM usage. Call before starting a new run."""
+    _llm_usage_var.set(_empty_usage())
+
+
+def get_llm_usage() -> dict:
+    """Get accumulated LLM usage from current run."""
+    usage = _llm_usage_var.get()
+    if usage is None:
+        return _empty_usage()
+    return usage
+
+
+def _accumulate_llm_usage(usage: dict) -> None:
+    """Add usage from an LLM call to the accumulated total."""
+    current = _llm_usage_var.get()
+    if current is None:
+        current = _empty_usage()
+
+    current["prompt_tokens"] += usage.get("prompt_tokens", 0) or 0
+    current["completion_tokens"] += usage.get("completion_tokens", 0) or 0
+    current["total_tokens"] += usage.get("total_tokens", 0) or 0
+
+    # Extract reasoning_tokens from completion_tokens_details
+    details = usage.get("completion_tokens_details") or {}
+    current["reasoning_tokens"] += details.get("reasoning_tokens", 0) or 0
+
+    _llm_usage_var.set(current)
+
+
+# ---------------------------------------------------------------------------
+# Result dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SupervisorResult:
+    """Result from supervisor ReAct loop execution."""
+
+    messages: list[BaseMessage]
+    """Full message history including new messages from this run."""
+
+    usage: dict = field(default_factory=dict)
+    """Accumulated token usage for this run."""
+
+    interrupted: bool = False
+    """True if execution was interrupted (spawn_worker called)."""
+
+    interrupt_value: dict | None = None
+    """Interrupt payload if interrupted=True."""
+
+
+# ---------------------------------------------------------------------------
+# LLM Factory
+# ---------------------------------------------------------------------------
+
+
+def _make_llm(
+    model: str,
+    tools: list[BaseTool],
+    *,
+    reasoning_effort: str = "none",
+    tool_choice: dict | str | bool | None = None,
+):
+    """Create a tool-bound ChatOpenAI instance."""
+    from zerg.config import get_settings
+    from zerg.testing.test_models import is_test_model
+    from zerg.testing.test_models import warn_if_test_model
+
+    # Handle mock/scripted models for testing
+    if is_test_model(model):
+        warn_if_test_model(model)
+
+        if model == "gpt-mock":
+            from zerg.testing.mock_llm import MockChatLLM
+
+            llm = MockChatLLM()
+            try:
+                return llm.bind_tools(tools, tool_choice=tool_choice)
+            except TypeError:
+                return llm.bind_tools(tools)
+
+        if model == "gpt-scripted":
+            # ScriptedChatLLM not typically used for supervisor
+            from zerg.testing.scripted_llm import ScriptedChatLLM
+
+            llm = ScriptedChatLLM(sequences=[])
+            try:
+                return llm.bind_tools(tools, tool_choice=tool_choice)
+            except TypeError:
+                return llm.bind_tools(tools)
+
+    kwargs: dict = {
+        "model": model,
+        "streaming": get_settings().llm_token_stream,
+        "api_key": get_settings().openai_api_key,
+        "reasoning_effort": reasoning_effort,
+    }
+
+    llm = ChatOpenAI(**kwargs)
+
+    if tool_choice is None:
+        return llm.bind_tools(tools)
+
+    try:
+        return llm.bind_tools(tools, tool_choice=tool_choice)
+    except TypeError:
+        return llm.bind_tools(tools)
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat emission during LLM calls
+# ---------------------------------------------------------------------------
+
+
+async def _emit_heartbeats(
+    heartbeat_cancelled: asyncio.Event,
+    run_id: int | None,
+    owner_id: int | None,
+    phase: str,
+) -> None:
+    """Emit heartbeats every 10 seconds during LLM call."""
+    from zerg.events import EventType
+    from zerg.events import event_bus
+
+    try:
+        while not heartbeat_cancelled.is_set():
+            await asyncio.sleep(10)
+            if heartbeat_cancelled.is_set():
+                break
+
+            if run_id is not None:
+                await event_bus.publish(
+                    EventType.SUPERVISOR_HEARTBEAT,
+                    {
+                        "event_type": EventType.SUPERVISOR_HEARTBEAT,
+                        "run_id": run_id,
+                        "owner_id": owner_id,
+                        "activity": "llm_reasoning",
+                        "phase": phase,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                logger.debug(f"Emitted heartbeat for supervisor run {run_id} during {phase}")
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.warning(f"Error in heartbeat task: {e}")
+
+
+# ---------------------------------------------------------------------------
+# LLM Call with streaming, audit logging, heartbeats
+# ---------------------------------------------------------------------------
+
+
+async def _call_llm(
+    messages: list[BaseMessage],
+    llm_with_tools,
+    *,
+    phase: str,
+    run_id: int | None,
+    owner_id: int | None,
+    model: str,
+    enable_token_stream: bool = False,
+) -> AIMessage:
+    """Call LLM with heartbeats, audit logging, and usage tracking."""
+    from zerg.services.llm_audit import audit_logger
+
+    start_time = datetime.now(timezone.utc)
+
+    # Start heartbeat task - must be inside try to ensure cleanup
+    heartbeat_cancelled = asyncio.Event()
+    heartbeat_task = asyncio.create_task(_emit_heartbeats(heartbeat_cancelled, run_id, owner_id, phase))
+
+    # Initialize to avoid UnboundLocalError if log_request fails
+    audit_correlation_id = None
+
+    try:
+        # Audit log request (inside try to ensure heartbeat cleanup on failure)
+        audit_correlation_id = await audit_logger.log_request(
+            run_id=run_id,
+            worker_id=None,
+            owner_id=owner_id,
+            phase=phase,
+            model=model,
+            messages=messages,
+        )
+        if enable_token_stream:
+            from zerg.callbacks.token_stream import WsTokenCallback
+
+            callback = WsTokenCallback()
+            result = await llm_with_tools.ainvoke(messages, config={"callbacks": [callback]})
+        else:
+            result = await llm_with_tools.ainvoke(messages)
+
+    except Exception as e:
+        # Audit log error (only if we got a correlation_id)
+        error_duration = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+        if audit_correlation_id is not None:
+            try:
+                await audit_logger.log_response(
+                    correlation_id=audit_correlation_id,
+                    content=None,
+                    tool_calls=None,
+                    input_tokens=None,
+                    output_tokens=None,
+                    reasoning_tokens=None,
+                    duration_ms=error_duration,
+                    error=str(e),
+                )
+            except Exception as log_err:
+                logger.warning(f"Failed to log audit error: {log_err}")
+        raise
+
+    finally:
+        # Stop heartbeat
+        heartbeat_cancelled.set()
+        try:
+            await asyncio.wait_for(heartbeat_task, timeout=1.0)
+        except asyncio.TimeoutError:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+    end_time = datetime.now(timezone.utc)
+    duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    # Audit log response
+    try:
+        audit_content = None
+        audit_tool_calls = None
+        audit_usage = None
+
+        if isinstance(result, AIMessage):
+            audit_content = result.content
+            audit_tool_calls = result.tool_calls
+            audit_usage = getattr(result, "usage_metadata", {}) or {}
+
+        await audit_logger.log_response(
+            correlation_id=audit_correlation_id,
+            content=audit_content,
+            tool_calls=audit_tool_calls,
+            input_tokens=audit_usage.get("input_tokens") if audit_usage else None,
+            output_tokens=audit_usage.get("output_tokens") if audit_usage else None,
+            reasoning_tokens=(audit_usage.get("output_token_details", {}).get("reasoning") if audit_usage else None),
+            duration_ms=duration_ms,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log audit response: {e}")
+
+    # Accumulate usage
+    if isinstance(result, AIMessage):
+        usage_meta = getattr(result, "usage_metadata", None)
+        if usage_meta:
+            usage_dict = {
+                "prompt_tokens": usage_meta.get("input_tokens", 0),
+                "completion_tokens": usage_meta.get("output_tokens", 0),
+                "total_tokens": usage_meta.get("total_tokens", 0),
+                "completion_tokens_details": {"reasoning_tokens": usage_meta.get("output_token_details", {}).get("reasoning", 0)},
+            }
+            _accumulate_llm_usage(usage_dict)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Tool execution with event emission
+# ---------------------------------------------------------------------------
+
+
+async def _execute_tool(
+    tool_call: dict,
+    tools_by_name: dict[str, BaseTool],
+    *,
+    run_id: int | None,
+    owner_id: int | None,
+) -> ToolMessage:
+    """Execute a single tool call with event emission.
+
+    For spawn_worker, raises AgentInterrupted instead of returning ToolMessage.
+    For other tools, returns ToolMessage with result.
+
+    Raises:
+        AgentInterrupted: If spawn_worker is called and job is queued (not already complete).
+    """
+    import json
+
+    from zerg.events import get_emitter
+    from zerg.tools.result_utils import check_tool_error
+    from zerg.tools.result_utils import redact_sensitive_args
+    from zerg.tools.result_utils import safe_preview
+
+    tool_name = tool_call.get("name", "unknown_tool")
+    tool_args = tool_call.get("args", {})
+    tool_call_id = tool_call.get("id", "")
+
+    # Get emitter for event emission
+    emitter = get_emitter()
+
+    # Redact sensitive fields
+    safe_args = redact_sensitive_args(tool_args)
+
+    # Emit STARTED event
+    if emitter:
+        await emitter.emit_tool_started(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_args_preview=safe_preview(str(safe_args)),
+            tool_args=safe_args,
+        )
+
+    start_time = datetime.now(timezone.utc)
+
+    tool_to_call = tools_by_name.get(tool_name)
+
+    if not tool_to_call:
+        result_content = f"Error: Tool '{tool_name}' not found."
+        logger.error(result_content)
+    else:
+        try:
+            # Special handling for spawn_worker
+            if tool_name == "spawn_worker":
+                # Import here to avoid circular dependency
+                from zerg.tools.builtin.supervisor_tools import spawn_worker_async
+
+                # Call spawn_worker_async directly with tool_call_id for idempotency
+                # Pass _skip_interrupt=True because we handle interrupt ourselves
+                job_result = await spawn_worker_async(
+                    task=tool_args.get("task", ""),
+                    model=tool_args.get("model"),
+                    _tool_call_id=tool_call_id,
+                    _skip_interrupt=True,  # LangGraph-free path
+                )
+
+                # Check if job was already completed (idempotent case)
+                # If the result contains "completed:", it's done
+                if "completed:" in job_result:
+                    result_content = job_result
+                # Check for errors - don't interrupt on error
+                elif job_result.startswith("Error"):
+                    result_content = job_result
+                else:
+                    # Job is queued - extract job_id and raise interrupt
+                    # Parse job_id from "Worker job X queued..." or similar
+                    import re
+
+                    match = re.search(r"Worker job (\d+)", job_result)
+                    if not match:
+                        # Couldn't parse job_id - treat as error, don't interrupt
+                        result_content = f"Error: spawn_worker returned unexpected result: {job_result}"
+                    else:
+                        job_id = int(match.group(1))
+
+                        # Emit tool completion before interrupting
+                        end_time = datetime.now(timezone.utc)
+                        duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                        if emitter:
+                            await emitter.emit_tool_completed(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                duration_ms=duration_ms,
+                                result_preview=f"Worker job {job_id} spawned",
+                                result=job_result,
+                            )
+
+                        # Raise interrupt to pause supervisor
+                        raise AgentInterrupted(
+                            {
+                                "type": "worker_pending",
+                                "job_id": job_id,
+                                "task": tool_args.get("task", "")[:100],
+                                "model": tool_args.get("model"),
+                                "tool_call_id": tool_call_id,
+                            }
+                        )
+
+            # Check if tool has async implementation
+            elif getattr(tool_to_call, "coroutine", None):
+                observation = await tool_to_call.ainvoke(tool_args)
+            else:
+                # Run sync tool in thread
+                observation = await asyncio.to_thread(tool_to_call.invoke, tool_args)
+
+            # Serialize observation
+            if isinstance(observation, dict):
+                from datetime import date as date_type
+
+                def datetime_handler(obj):
+                    if isinstance(obj, (datetime, date_type)):
+                        return obj.isoformat()
+                    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+                result_content = json.dumps(observation, default=datetime_handler)
+            else:
+                result_content = str(observation)
+
+        except AgentInterrupted:
+            # Re-raise interrupt
+            raise
+        except Exception as exc:
+            result_content = f"<tool-error> {exc}"
+            logger.exception("Error executing tool %s", tool_name)
+
+    end_time = datetime.now(timezone.utc)
+    duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    # Check for errors
+    is_error, error_msg = check_tool_error(result_content)
+
+    # Emit COMPLETED/FAILED event
+    if emitter:
+        if is_error:
+            await emitter.emit_tool_failed(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                duration_ms=duration_ms,
+                error=safe_preview(error_msg or result_content, 500),
+            )
+        else:
+            await emitter.emit_tool_completed(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                duration_ms=duration_ms,
+                result_preview=safe_preview(result_content),
+                result=result_content,
+            )
+
+    return ToolMessage(content=result_content, tool_call_id=tool_call_id, name=tool_name)
+
+
+# ---------------------------------------------------------------------------
+# Main ReAct Loop
+# ---------------------------------------------------------------------------
+
+
+async def run_supervisor_loop(
+    messages: list[BaseMessage],
+    agent_row,
+    tools: list[BaseTool],
+    *,
+    run_id: int | None = None,
+    owner_id: int | None = None,
+    enable_token_stream: bool = False,
+) -> SupervisorResult:
+    """Run the supervisor ReAct loop until completion or interrupt.
+
+    This is the main entry point for LangGraph-free supervisor execution.
+
+    Args:
+        messages: Initial message history (from DB).
+        agent_row: Agent ORM row or AgentRuntimeView with model config.
+        tools: List of available tools.
+        run_id: Supervisor run ID for event correlation.
+        owner_id: Owner ID for event correlation.
+        enable_token_stream: Whether to stream tokens.
+
+    Returns:
+        SupervisorResult with messages, usage, and interrupt status.
+        If interrupted=True, caller should persist messages and set run to WAITING.
+    """
+    # Build tools map
+    tools_by_name = {tool.name: tool for tool in tools}
+
+    # Get model and reasoning effort from agent config
+    model = agent_row.model
+    cfg = getattr(agent_row, "config", {}) or {}
+    reasoning_effort = (cfg.get("reasoning_effort") or "none").lower()
+
+    # Reset usage tracking
+    reset_llm_usage()
+
+    # Create LLM
+    llm_with_tools = _make_llm(
+        model=model,
+        tools=tools,
+        reasoning_effort=reasoning_effort,
+    )
+
+    current_messages = list(messages)  # Copy to avoid mutation
+
+    # Check for pending tool calls (resume case)
+    if current_messages:
+        last_msg = current_messages[-1]
+        if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
+            pending_tool_ids = {tc["id"] for tc in last_msg.tool_calls}
+            responded_tool_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
+            unresponded = pending_tool_ids - responded_tool_ids
+
+            if unresponded:
+                # Resume: execute pending tools first
+                logger.info(f"Resuming with {len(unresponded)} pending tool call(s)")
+                pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
+
+                tool_results = []
+                for tc in pending_calls:
+                    try:
+                        result = await _execute_tool(
+                            tc,
+                            tools_by_name,
+                            run_id=run_id,
+                            owner_id=owner_id,
+                        )
+                        tool_results.append(result)
+                    except AgentInterrupted as e:
+                        # Include already-completed tool results before returning
+                        # This prevents re-execution on resume
+                        current_messages.extend(tool_results)
+                        return SupervisorResult(
+                            messages=current_messages,
+                            usage=get_llm_usage(),
+                            interrupted=True,
+                            interrupt_value=e.interrupt_value,
+                        )
+
+                current_messages.extend(tool_results)
+
+                # Call LLM with tool results
+                llm_response = await _call_llm(
+                    current_messages,
+                    llm_with_tools,
+                    phase="resume_synthesis",
+                    run_id=run_id,
+                    owner_id=owner_id,
+                    model=model,
+                    enable_token_stream=enable_token_stream,
+                )
+            else:
+                # All tool calls responded, proceed normally
+                llm_response = await _call_llm(
+                    current_messages,
+                    llm_with_tools,
+                    phase="initial",
+                    run_id=run_id,
+                    owner_id=owner_id,
+                    model=model,
+                    enable_token_stream=enable_token_stream,
+                )
+        else:
+            # No pending tool calls
+            llm_response = await _call_llm(
+                current_messages,
+                llm_with_tools,
+                phase="initial",
+                run_id=run_id,
+                owner_id=owner_id,
+                model=model,
+                enable_token_stream=enable_token_stream,
+            )
+    else:
+        # Empty messages (shouldn't happen in production)
+        llm_response = await _call_llm(
+            current_messages,
+            llm_with_tools,
+            phase="initial",
+            run_id=run_id,
+            owner_id=owner_id,
+            model=model,
+            enable_token_stream=enable_token_stream,
+        )
+
+    # Handle empty response retry
+    if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+        content = llm_response.content
+        content_text = ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    content_text += str(part.get("text") or "")
+                elif isinstance(part, str):
+                    content_text += part
+        else:
+            content_text = str(content or "")
+
+        if not content_text.strip():
+            logger.warning("Agent produced empty response; retrying once")
+            current_messages.append(
+                SystemMessage(
+                    content=(
+                        "Your previous response was empty. You MUST either:\n"
+                        "1) Call the appropriate tool(s), OR\n"
+                        "2) Provide a final answer.\n\n"
+                        "Do not return an empty message."
+                    )
+                )
+            )
+            llm_response = await _call_llm(
+                current_messages,
+                _make_llm(
+                    model=model,
+                    tools=tools,
+                    reasoning_effort=reasoning_effort,
+                    tool_choice="required" if tools else None,
+                ),
+                phase="empty_retry",
+                run_id=run_id,
+                owner_id=owner_id,
+                model=model,
+                enable_token_stream=enable_token_stream,
+            )
+
+            # Still empty? Return error message
+            if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+                retry_text = ""
+                retry_content = llm_response.content
+                if isinstance(retry_content, list):
+                    for part in retry_content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            retry_text += str(part.get("text") or "")
+                        elif isinstance(part, str):
+                            retry_text += part
+                else:
+                    retry_text = str(retry_content or "")
+
+                if not retry_text.strip():
+                    logger.error("Agent produced empty response after retry")
+                    llm_response = AIMessage(content=("Error: LLM returned an empty response twice. " "This is a provider/model issue."))
+
+    # Main ReAct loop with iteration guard
+    iteration = 0
+    while isinstance(llm_response, AIMessage) and llm_response.tool_calls:
+        iteration += 1
+        if iteration > MAX_REACT_ITERATIONS:
+            logger.error(f"ReAct loop exceeded {MAX_REACT_ITERATIONS} iterations. " "Possible infinite loop detected. Returning error.")
+            error_msg = AIMessage(
+                content=(
+                    f"Error: Supervisor exceeded maximum of {MAX_REACT_ITERATIONS} "
+                    "tool iterations. This may indicate a loop or overly complex task."
+                )
+            )
+            current_messages.append(error_msg)
+            return SupervisorResult(
+                messages=current_messages,
+                usage=get_llm_usage(),
+                interrupted=False,
+                interrupt_value=None,
+            )
+
+        # Add AIMessage to history
+        current_messages.append(llm_response)
+
+        # Execute tools
+        tool_results = []
+        for tc in llm_response.tool_calls:
+            try:
+                result = await _execute_tool(
+                    tc,
+                    tools_by_name,
+                    run_id=run_id,
+                    owner_id=owner_id,
+                )
+                tool_results.append(result)
+            except AgentInterrupted as e:
+                # Include already-completed tool results before returning
+                # This prevents re-execution on resume
+                # AIMessage is already in current_messages
+                current_messages.extend(tool_results)
+                return SupervisorResult(
+                    messages=current_messages,
+                    usage=get_llm_usage(),
+                    interrupted=True,
+                    interrupt_value=e.interrupt_value,
+                )
+
+        # Add tool results to history
+        current_messages.extend(tool_results)
+
+        # Call LLM again
+        llm_response = await _call_llm(
+            current_messages,
+            llm_with_tools,
+            phase="tool_iteration",
+            run_id=run_id,
+            owner_id=owner_id,
+            model=model,
+            enable_token_stream=enable_token_stream,
+        )
+
+    # Add final response
+    current_messages.append(llm_response)
+
+    return SupervisorResult(
+        messages=current_messages,
+        usage=get_llm_usage(),
+        interrupted=False,
+        interrupt_value=None,
+    )

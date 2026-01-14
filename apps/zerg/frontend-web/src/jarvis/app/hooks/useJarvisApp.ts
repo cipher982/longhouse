@@ -28,6 +28,7 @@ import { SupervisorChatController } from '../../lib/supervisor-chat-controller'
 import { bootstrapSession, type BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
 import { workerProgressStore } from '../../lib/worker-progress-store'
+import { supervisorToolStore, type SupervisorToolCall } from '../../lib/supervisor-tool-store'
 import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
@@ -254,6 +255,54 @@ export function useJarvisApp(options: UseJarvisAppOptions = {}) {
       const messages = await supervisorChatRef.current.loadHistory(50)
 
       if (messages.length > 0) {
+        // Extract and hydrate tool calls from history
+        const historicalTools: SupervisorToolCall[] = []
+        for (const msg of messages) {
+          if (msg.role === 'assistant' && msg.tool_calls) {
+            for (const tc of msg.tool_calls) {
+              // Convert API format to store format
+              const tool: SupervisorToolCall = {
+                toolCallId: tc.tool_call_id,
+                toolName: tc.tool_name,
+                status: 'completed', // Historical tools are always completed
+                runId: 0, // Historical - no run association needed
+                startedAt: msg.timestamp.getTime(),
+                completedAt: msg.timestamp.getTime(),
+                args: tc.args,
+                resultPreview: tc.result?.substring(0, 200),
+                result: tc.result ? { raw: tc.result } : undefined,
+                logs: [],
+              }
+
+              // For spawn_worker, include worker metadata
+              if (tc.tool_name === 'spawn_worker' && tc.worker) {
+                const nestedTools = tc.worker.tools.map(wt => ({
+                  toolCallId: `${tc.tool_call_id}-${wt.tool_name}`,
+                  toolName: wt.tool_name,
+                  status: wt.status as 'running' | 'completed' | 'failed',
+                  durationMs: wt.duration_ms,
+                  resultPreview: wt.result_preview,
+                  error: wt.error,
+                }))
+
+                tool.result = {
+                  workerStatus: tc.worker.status,
+                  workerSummary: tc.worker.summary,
+                  nestedTools,
+                }
+              }
+
+              historicalTools.push(tool)
+            }
+          }
+        }
+
+        // Hydrate the supervisor tool store with historical tools
+        if (historicalTools.length > 0) {
+          supervisorToolStore.loadTools(historicalTools)
+          logger.info(`[useJarvisApp] Hydrated ${historicalTools.length} historical tool calls`)
+        }
+
         // Note: Internal orchestration messages are now filtered server-side via the
         // `internal` column on ThreadMessage. The history API only returns user-facing messages.
         const history: ConversationTurn[] = messages.map(msg => ({

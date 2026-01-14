@@ -325,7 +325,11 @@ async def test_interrupt_triggers_waiting_status(
     scripted_llm = ScriptedChatLLM()
 
     # Patch the LLM creation to use our scripted version
-    with patch("zerg.agents_def.zerg_react_agent._make_llm", return_value=scripted_llm):
+    # Patch both LangGraph path and new engine path
+    with (
+        patch("zerg.agents_def.zerg_react_agent._make_llm", return_value=scripted_llm),
+        patch("zerg.services.supervisor_react_engine._make_llm", return_value=scripted_llm),
+    ):
         # Run supervisor - should interrupt on spawn_worker
         result = await service.run_supervisor(
             owner_id=test_user.id,
@@ -433,7 +437,10 @@ async def test_resume_completes_interrupted_run(
     mock_runnable = MockRunnable()
 
     # Call REAL resume function with mock runnable
-    with patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=mock_runnable):
+    with (
+        patch("zerg.services.worker_resume.USE_LANGGRAPH_SUPERVISOR", True),
+        patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=mock_runnable),
+    ):
         result = await resume_supervisor_with_worker_result(
             db=db_session,
             run_id=run.id,
