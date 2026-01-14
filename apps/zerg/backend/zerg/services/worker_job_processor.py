@@ -129,6 +129,7 @@ class WorkerJobProcessor:
 
                 # Execute the worker
                 # Pass job.id for roundabout correlation, run_id for SSE tool events
+                # trace_id for end-to-end debugging (inherited from supervisor)
                 result = await runner.run_worker(
                     db=db,
                     task=job.task,
@@ -138,7 +139,10 @@ class WorkerJobProcessor:
                         "owner_id": job.owner_id,
                     },
                     job_id=job.id,
-                    event_context={"run_id": supervisor_run_id},
+                    event_context={
+                        "run_id": supervisor_run_id,
+                        "trace_id": str(job.trace_id) if job.trace_id else None,
+                    },
                 )
 
                 # Update job with results

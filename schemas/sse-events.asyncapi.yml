@@ -360,6 +360,10 @@ components:
           type: string
           format: uuid
           description: For continuation runs, the message_id of the original run's message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging (copy from UI for agent debugging)
 
     SupervisorThinkingPayload:
       type: object
@@ -424,6 +428,10 @@ components:
           type: string
           format: uuid
           description: Unique identifier for the assistant message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorDeferredPayload:
       type: object
@@ -516,6 +524,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
     # Worker Event Payloads

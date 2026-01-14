@@ -1,0 +1,81 @@
+/**
+ * TraceIdDisplay styles
+ *
+ * Small footer badge showing trace_id for debugging.
+ * Positioned in bottom-right corner of chat container.
+ */
+
+.trace-id-display {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 100;
+  opacity: 0.8;
+  transition: opacity 0.3s ease;
+}
+
+.trace-id-display:hover {
+  opacity: 1;
+}
+
+.trace-id-display--fading {
+  opacity: 0.4;
+}
+
+.trace-id-display__button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #888;
+  transition: all 0.2s ease;
+}
+
+.trace-id-display__button:hover {
+  background: rgba(0, 0, 0, 0.8);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #aaa;
+}
+
+.trace-id-display__label {
+  font-weight: 500;
+  color: #666;
+}
+
+.trace-id-display__id {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  color: #8ab4f8;
+  letter-spacing: 0.5px;
+}
+
+.trace-id-display__icon {
+  font-size: 12px;
+  margin-left: 2px;
+}
+
+/* Dark mode adjustments (default is dark) */
+@media (prefers-color-scheme: light) {
+  .trace-id-display__button {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #666;
+  }
+
+  .trace-id-display__button:hover {
+    background: white;
+    border-color: rgba(0, 0, 0, 0.2);
+  }
+
+  .trace-id-display__label {
+    color: #888;
+  }
+
+  .trace-id-display__id {
+    color: #1a73e8;
+  }
+}

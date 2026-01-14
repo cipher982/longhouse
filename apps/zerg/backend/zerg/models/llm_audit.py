@@ -5,6 +5,7 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from zerg.database import Base
@@ -21,6 +22,10 @@ class LLMAuditLog(Base):
     worker_id = Column(String(100), nullable=True, index=True)
     thread_id = Column(Integer, ForeignKey("agent_threads.id", ondelete="SET NULL"), nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # Tracing - for end-to-end debugging
+    trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)  # End-to-end trace correlation
+    span_id = Column(UUID(as_uuid=True), nullable=True)  # Unique ID for this LLM call
 
     # Request
     phase = Column(String(50))  # initial, tool_iteration, synthesis
