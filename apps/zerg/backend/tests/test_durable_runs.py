@@ -205,7 +205,7 @@ class TestResumeFlow:
 
         # Mock resume_supervisor_with_worker_result
         # The import is inside the function, so we patch the service module
-        async def mock_resume(db, run_id, worker_result):
+        async def mock_resume(db, run_id, worker_result, job_id=None):  # noqa: ARG001 - test double
             # Update run status to success (simulating what real resume does)
             run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
             run.status = RunStatus.SUCCESS

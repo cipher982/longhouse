@@ -43,6 +43,7 @@ async def spawn_worker_async(
     model: str | None = None,
     *,
     _tool_call_id: str | None = None,  # Internal: passed by _call_tool_async for idempotency
+    _skip_interrupt: bool = False,  # Internal: skip interrupt() for LangGraph-free engine
 ) -> str:
     """Spawn a worker agent to execute a task and wait for completion.
 
@@ -209,7 +210,14 @@ async def spawn_worker_async(
         # and interrupt() returns that result.
         #
         # NOTE: interrupt() only works inside a LangGraph runnable context.
-        # When called directly (e.g., from tests), we fall back to fire-and-forget.
+        # When called from the LangGraph-free engine or tests, skip interrupt.
+
+        if _skip_interrupt:
+            # Called from LangGraph-free supervisor_react_engine
+            # Return job info immediately - caller will raise AgentInterrupted
+            logger.debug(f"spawn_worker (skip_interrupt=True) returning queued response for job {worker_job.id}")
+            return f"Worker job {worker_job.id} queued successfully. Working on: {task[:100]}"
+
         try:
             worker_result = interrupt(
                 {

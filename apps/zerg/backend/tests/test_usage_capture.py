@@ -46,9 +46,11 @@ async def test_usage_totals_persist_with_metadata(client, db_session, monkeypatc
     # Clear AgentRunner runnable cache and patch ChatOpenAI used by agent definition to our usage stub
     import zerg.agents_def.zerg_react_agent as zr
     import zerg.managers.agent_runner as ar
+    import zerg.services.supervisor_react_engine as sre
 
     ar._RUNNABLE_CACHE.clear()
     monkeypatch.setattr(zr, "ChatOpenAI", _UsageStub)
+    monkeypatch.setattr(sre, "ChatOpenAI", _UsageStub)  # Also patch new engine
 
     # Create a user and agent/thread
     user = crud.get_user_by_email(db_session, "u@local") or crud.create_user(

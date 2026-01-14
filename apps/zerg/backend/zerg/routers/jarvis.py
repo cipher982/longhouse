@@ -205,6 +205,37 @@ async def jarvis_events(
 # ---------------------------------------------------------------------------
 
 
+class WorkerToolInfo(BaseModel):
+    """Tool executed by a worker."""
+
+    tool_name: str
+    status: str  # completed, failed
+    duration_ms: Optional[int] = None
+    result_preview: Optional[str] = None
+    error: Optional[str] = None
+
+
+class WorkerInfo(BaseModel):
+    """Worker spawned by spawn_worker tool."""
+
+    job_id: int
+    task: str
+    status: str  # spawned, running, complete, failed
+    summary: Optional[str] = None
+    tools: List[WorkerToolInfo] = []
+
+
+class ToolCallInfo(BaseModel):
+    """Tool call made by supervisor."""
+
+    tool_call_id: str
+    tool_name: str
+    args: Optional[dict] = None
+    result: Optional[str] = None
+    # For spawn_worker tools, includes worker activity
+    worker: Optional[WorkerInfo] = None
+
+
 class JarvisChatMessage(BaseModel):
     """Single chat message in history."""
 
@@ -212,6 +243,7 @@ class JarvisChatMessage(BaseModel):
     content: str = Field(..., description="Message content")
     timestamp: datetime = Field(..., description="Message timestamp")
     usage: Optional[dict] = Field(None, description="Optional LLM usage metadata for this assistant response")
+    tool_calls: Optional[List[ToolCallInfo]] = Field(None, description="Tool calls made by this assistant message")
 
 
 class JarvisHistoryResponse(BaseModel):
@@ -219,6 +251,132 @@ class JarvisHistoryResponse(BaseModel):
 
     messages: List[JarvisChatMessage] = Field(..., description="List of messages")
     total: int = Field(..., description="Total message count")
+
+
+def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
+    """Fetch worker activity for spawn_worker tool calls.
+
+    Queries AgentRunEvent to build a complete picture of worker execution:
+    - worker_spawned: task, job_id
+    - worker_started: confirms worker began
+    - worker_tool_started/completed/failed: nested tool calls
+    - worker_complete: final status
+    - worker_summary_ready: LLM-generated summary
+
+    Args:
+        db: Database session
+        agent_id: Supervisor agent ID (to filter runs)
+        tool_call_ids: List of spawn_worker tool_call_ids to look up
+
+    Returns:
+        Dict mapping tool_call_id -> worker activity dict with:
+        - job_id, task, status, summary, tools[]
+    """
+    from zerg.models import AgentRun
+    from zerg.models import AgentRunEvent
+
+    if not tool_call_ids:
+        return {}
+
+    # Get runs for this agent
+    run_ids = [r.id for r in db.query(AgentRun.id).filter(AgentRun.agent_id == agent_id).all()]
+    if not run_ids:
+        return {}
+
+    # Fetch all relevant events in one query
+    events = (
+        db.query(AgentRunEvent)
+        .filter(
+            AgentRunEvent.run_id.in_(run_ids),
+            AgentRunEvent.event_type.in_(
+                [
+                    "supervisor_tool_started",
+                    "worker_spawned",
+                    "worker_started",
+                    "worker_tool_started",
+                    "worker_tool_completed",
+                    "worker_tool_failed",
+                    "worker_complete",
+                    "worker_summary_ready",
+                ]
+            ),
+        )
+        .order_by(AgentRunEvent.id.asc())
+        .all()
+    )
+
+    # Build job_id -> worker activity from worker events
+    job_activity: dict[int, dict] = {}
+    for e in events:
+        payload = e.payload or {}
+        job_id = payload.get("job_id")
+
+        if e.event_type == "worker_spawned" and job_id:
+            job_activity[job_id] = {
+                "job_id": job_id,
+                "task": payload.get("task", ""),
+                "status": "spawned",
+                "summary": None,
+                "tools": [],
+            }
+        elif e.event_type == "worker_started" and job_id and job_id in job_activity:
+            job_activity[job_id]["status"] = "running"
+        elif e.event_type == "worker_tool_started" and job_id and job_id in job_activity:
+            job_activity[job_id]["tools"].append(
+                {
+                    "tool_call_id": payload.get("tool_call_id"),
+                    "tool_name": payload.get("tool_name", "unknown"),
+                    "status": "running",
+                }
+            )
+        elif e.event_type == "worker_tool_completed" and job_id and job_id in job_activity:
+            tc_id = payload.get("tool_call_id")
+            for t in job_activity[job_id]["tools"]:
+                if t["tool_call_id"] == tc_id:
+                    t["status"] = "completed"
+                    t["duration_ms"] = payload.get("duration_ms")
+                    t["result_preview"] = payload.get("result_preview")
+                    break
+        elif e.event_type == "worker_tool_failed" and job_id and job_id in job_activity:
+            tc_id = payload.get("tool_call_id")
+            for t in job_activity[job_id]["tools"]:
+                if t["tool_call_id"] == tc_id:
+                    t["status"] = "failed"
+                    t["duration_ms"] = payload.get("duration_ms")
+                    t["error"] = payload.get("error")
+                    break
+        elif e.event_type == "worker_complete" and job_id and job_id in job_activity:
+            job_activity[job_id]["status"] = "complete" if payload.get("status") == "success" else "failed"
+        elif e.event_type == "worker_summary_ready" and job_id and job_id in job_activity:
+            job_activity[job_id]["summary"] = payload.get("summary")
+
+    # Now map tool_call_id -> job_id by looking at supervisor_tool_started + worker_spawned correlation
+    # The spawn_worker tool_call_id is in supervisor_tool_started, and the job_id is in the subsequent worker_spawned
+    result: dict[str, dict] = {}
+
+    # Group events by run_id for correlation
+    events_by_run: dict[int, list] = {}
+    for e in events:
+        if e.run_id not in events_by_run:
+            events_by_run[e.run_id] = []
+        events_by_run[e.run_id].append(e)
+
+    for run_id, run_events in events_by_run.items():
+        # Find spawn_worker tool_call_id and corresponding job_id
+        pending_tool_call_id = None
+        for e in run_events:
+            payload = e.payload or {}
+            if e.event_type == "supervisor_tool_started" and payload.get("tool_name") == "spawn_worker":
+                tc_id = payload.get("tool_call_id")
+                if tc_id in tool_call_ids:
+                    pending_tool_call_id = tc_id
+            elif e.event_type == "worker_spawned" and pending_tool_call_id:
+                job_id = payload.get("job_id")
+                if job_id and job_id in job_activity:
+                    result[pending_tool_call_id] = job_activity[job_id]
+                pending_tool_call_id = None
+
+    return result
 
 
 @router.get("/history", response_model=JarvisHistoryResponse)
@@ -269,16 +427,87 @@ def jarvis_history(
     # Get paginated messages
     messages = query.offset(offset).limit(limit).all()
 
-    # Convert to response format
-    chat_messages = [
-        JarvisChatMessage(
-            role=msg.role,
-            content=msg.content,
-            timestamp=msg.sent_at,
-            usage=(msg.message_metadata or {}).get("usage") if msg.role == "assistant" else None,
+    # Collect all tool_call_ids that are spawn_worker to batch-fetch worker activity
+    spawn_worker_tool_call_ids = []
+    for msg in messages:
+        if msg.role == "assistant" and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get("name") == "spawn_worker" and tc.get("id"):
+                    spawn_worker_tool_call_ids.append(tc["id"])
+
+    # Batch fetch worker activity for all spawn_worker tool calls
+    worker_activity_map: dict[str, dict] = {}
+    if spawn_worker_tool_call_ids:
+        worker_activity_map = _fetch_worker_activity(db, agent.id, spawn_worker_tool_call_ids)
+
+    # Also need to find tool results from ToolMessages
+    # Get all ToolMessages for this thread to map tool_call_id -> result
+    tool_results_map: dict[str, str] = {}
+    tool_messages = (
+        db.query(ThreadMessage)
+        .filter(
+            ThreadMessage.thread_id == thread.id,
+            ThreadMessage.role == "tool",
+            ThreadMessage.tool_call_id.isnot(None),
         )
-        for msg in messages
-    ]
+        .all()
+    )
+    for tm in tool_messages:
+        if tm.tool_call_id:
+            tool_results_map[tm.tool_call_id] = tm.content or ""
+
+    # Convert to response format
+    chat_messages = []
+    for msg in messages:
+        tool_calls_info = None
+        if msg.role == "assistant" and msg.tool_calls:
+            tool_calls_info = []
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id", "")
+                tc_name = tc.get("name", "unknown")
+                tc_args = tc.get("args")
+                tc_result = tool_results_map.get(tc_id)
+
+                # For spawn_worker, include worker activity
+                worker_info = None
+                if tc_name == "spawn_worker" and tc_id in worker_activity_map:
+                    wa = worker_activity_map[tc_id]
+                    worker_info = WorkerInfo(
+                        job_id=wa["job_id"],
+                        task=wa["task"],
+                        status=wa["status"],
+                        summary=wa.get("summary"),
+                        tools=[
+                            WorkerToolInfo(
+                                tool_name=t["tool_name"],
+                                status=t["status"],
+                                duration_ms=t.get("duration_ms"),
+                                result_preview=t.get("result_preview"),
+                                error=t.get("error"),
+                            )
+                            for t in wa.get("tools", [])
+                        ],
+                    )
+
+                tool_calls_info.append(
+                    ToolCallInfo(
+                        tool_call_id=tc_id,
+                        tool_name=tc_name,
+                        args=tc_args,
+                        result=tc_result,
+                        worker=worker_info,
+                    )
+                )
+
+        chat_messages.append(
+            JarvisChatMessage(
+                role=msg.role,
+                content=msg.content or "",
+                timestamp=msg.sent_at,
+                usage=(msg.message_metadata or {}).get("usage") if msg.role == "assistant" else None,
+                tool_calls=tool_calls_info,
+            )
+        )
 
     logger.debug(
         f"Jarvis history: returned {len(chat_messages)} messages "

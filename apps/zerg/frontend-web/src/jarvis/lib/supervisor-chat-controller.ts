@@ -45,6 +45,30 @@ import {
   type SupervisorToolFailedPayload,
 } from '../../generated/sse-events';
 
+export interface WorkerToolInfo {
+  tool_name: string;
+  status: string;
+  duration_ms?: number;
+  result_preview?: string;
+  error?: string;
+}
+
+export interface WorkerInfo {
+  job_id: number;
+  task: string;
+  status: string;
+  summary?: string;
+  tools: WorkerToolInfo[];
+}
+
+export interface ToolCallInfo {
+  tool_call_id: string;
+  tool_name: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  worker?: WorkerInfo;
+}
+
 export interface SupervisorChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -55,6 +79,7 @@ export interface SupervisorChatMessage {
     total_tokens?: number | null;
     reasoning_tokens?: number | null;
   };
+  tool_calls?: ToolCallInfo[];
 }
 
 export interface SupervisorChatConfig {
@@ -110,12 +135,13 @@ export class SupervisorChatController {
       const data = await response.json();
 
       // Transform server format to UI format
-      // Server returns: { messages: Array<{ role, content, timestamp, usage? }>, total }
+      // Server returns: { messages: Array<{ role, content, timestamp, usage?, tool_calls? }>, total }
       const messages: SupervisorChatMessage[] = (data.messages || []).map((msg: any) => ({
         role: msg.role,
         content: msg.content,
         timestamp: new Date(msg.timestamp),
         usage: msg.usage || undefined,
+        tool_calls: msg.tool_calls || undefined,
       }));
 
       logger.debug(`[SupervisorChat] Loaded ${messages.length} messages from history`);

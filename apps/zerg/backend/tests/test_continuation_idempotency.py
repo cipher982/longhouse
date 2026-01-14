@@ -123,7 +123,10 @@ async def test_concurrent_resume_only_runs_once(db_session, test_user):
     db1 = session_factory()
     db2 = session_factory()
     try:
-        with patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=fake_runnable):
+        with (
+            patch("zerg.services.worker_resume.USE_LANGGRAPH_SUPERVISOR", True),
+            patch("zerg.agents_def.zerg_react_agent.get_runnable", return_value=fake_runnable),
+        ):
             r1, r2 = await asyncio.gather(
                 resume_supervisor_with_worker_result(db=db1, run_id=run.id, worker_result="a"),
                 resume_supervisor_with_worker_result(db=db2, run_id=run.id, worker_result="b"),
