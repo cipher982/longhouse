@@ -493,12 +493,13 @@ export class SupervisorChatController {
           }
         }
 
-        // Emit supervisor started event for progress UI
+        // Emit supervisor started event for progress UI (include trace_id for debugging)
         if (this.currentRunId) {
           eventBus.emit('supervisor:started', {
             runId: this.currentRunId,
             task: payload.task || 'Processing message...',
             timestamp: Date.now(),
+            traceId: payload.trace_id,
           });
         }
         break;
@@ -584,7 +585,7 @@ export class SupervisorChatController {
           stateManager.updateAssistantStatusByMessageId(messageId, 'final', result, payload.usage, this.currentRunId ?? undefined);
         }
 
-        // Clear supervisor progress UI
+        // Clear supervisor progress UI (include trace_id for debugging)
         if (this.currentRunId) {
           eventBus.emit('supervisor:complete', {
             runId: this.currentRunId,
@@ -593,6 +594,7 @@ export class SupervisorChatController {
             timestamp: Date.now(),
             // Token usage for debug/power mode
             usage: payload.usage,
+            traceId: payload.trace_id,
           });
         }
 
@@ -689,6 +691,7 @@ export class SupervisorChatController {
           eventBus.emit('supervisor:error', {
             message: errorMsg,
             timestamp: Date.now(),
+            traceId: payload.trace_id,
           });
         }
         break;

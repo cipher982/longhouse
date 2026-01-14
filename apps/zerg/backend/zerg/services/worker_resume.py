@@ -93,6 +93,8 @@ async def _continue_supervisor_langgraph_free(
     agent = run.agent
     owner_id = agent.owner_id
     message_id = run.assistant_message_id
+    # Inherit trace_id from the original run for end-to-end tracing
+    trace_id = str(run.trace_id) if run.trace_id else None
 
     # Get tool_call_id from WorkerJob
     tool_call_id = None
@@ -177,11 +179,12 @@ async def _continue_supervisor_langgraph_free(
         },
     )
 
-    # Set up contexts
+    # Set up contexts (include trace_id for end-to-end tracing)
     _supervisor_ctx_token = set_supervisor_context(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
+        trace_id=trace_id,
     )
 
     _supervisor_emitter = SupervisorEmitter(
@@ -206,6 +209,7 @@ async def _continue_supervisor_langgraph_free(
             tool_call_id=tool_call_id,
             tool_result=worker_result,
             run_id=run_id,
+            trace_id=trace_id,
         )
 
         # Normal completion
@@ -279,6 +283,9 @@ async def _continue_supervisor_langgraph_free(
 
         run.status = RunStatus.WAITING
         run.duration_ms = _compute_duration_ms(run.started_at)
+        # Persist partial token usage (will be added to on next resume)
+        if runner.usage_total_tokens is not None:
+            run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()
 
         await emit_run_event(

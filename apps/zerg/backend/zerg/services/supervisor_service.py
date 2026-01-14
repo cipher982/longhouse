@@ -383,6 +383,7 @@ class SupervisorService:
         task: str,
         run_id: int | None = None,
         message_id: str | None = None,
+        trace_id: str | None = None,
         timeout: int = 60,
         model_override: str | None = None,
         reasoning_effort: str | None = None,
@@ -496,6 +497,7 @@ class SupervisorService:
             "task": task,
             "owner_id": owner_id,
             "message_id": message_id,
+            "trace_id": str(run.trace_id) if run.trace_id else None,
         }
         if continuation_of_message_id:
             started_payload["continuation_of_message_id"] = continuation_of_message_id
@@ -555,7 +557,20 @@ class SupervisorService:
             from zerg.services.supervisor_context import reset_supervisor_context
             from zerg.services.supervisor_context import set_supervisor_context
 
-            _supervisor_ctx_token = set_supervisor_context(run_id=run.id, owner_id=owner_id, message_id=message_id)
+            # Resolve trace_id: use provided, or from run, or generate new
+            effective_trace_id = trace_id or (str(run.trace_id) if run.trace_id else None)
+            if not effective_trace_id:
+                effective_trace_id = str(uuid.uuid4())
+                # Also persist to run for consistency
+                run.trace_id = uuid.UUID(effective_trace_id)
+                self.db.commit()
+
+            _supervisor_ctx_token = set_supervisor_context(
+                run_id=run.id,
+                owner_id=owner_id,
+                message_id=message_id,
+                trace_id=effective_trace_id,
+            )
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)
             # SupervisorEmitter always emits supervisor_tool_* events regardless of contextvar state
@@ -655,6 +670,9 @@ class SupervisorService:
                 # Update run status to WAITING
                 run.status = RunStatus.WAITING
                 run.duration_ms = duration_ms
+                # Persist partial token usage before WAITING (will be added to on resume)
+                if runner.usage_total_tokens is not None:
+                    run.total_tokens = runner.usage_total_tokens
                 self.db.commit()
 
                 # Extract interrupt payload (needed for job_id check below)
@@ -753,7 +771,7 @@ class SupervisorService:
             run.status = RunStatus.SUCCESS
             run.finished_at = end_time.replace(tzinfo=None)
             run.duration_ms = duration_ms
-            if runner.usage_total_tokens:
+            if runner.usage_total_tokens is not None:
                 run.total_tokens = runner.usage_total_tokens
             self.db.commit()
 
@@ -773,6 +791,7 @@ class SupervisorService:
                     "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
                     "message_id": message_id,
+                    "trace_id": str(run.trace_id) if run.trace_id else None,
                     # Token usage for debug/power mode
                     "usage": {
                         "prompt_tokens": runner.usage_prompt_tokens,
@@ -832,6 +851,7 @@ class SupervisorService:
                     "status": "cancelled",
                     "duration_ms": duration_ms,
                     "owner_id": owner_id,
+                    "trace_id": str(run.trace_id) if run.trace_id else None,
                 },
             )
 
@@ -874,6 +894,7 @@ class SupervisorService:
                     "status": "error",
                     "debug_url": f"/supervisor/{run.id}",
                     "owner_id": owner_id,
+                    "trace_id": str(run.trace_id) if run.trace_id else None,
                 },
             )
 

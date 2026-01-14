@@ -46,6 +46,8 @@ export interface SupervisorStartedPayload {
   message_id: string;
   /** For continuation runs, the message_id of the original run's message */
   continuation_of_message_id?: string;
+  /** End-to-end trace ID for debugging (copy from UI for agent debugging) */
+  trace_id?: string;
 }
 
 export interface SupervisorThinkingPayload {
@@ -78,6 +80,8 @@ export interface SupervisorCompletePayload {
   debug_url?: string;
   /** Unique identifier for the assistant message */
   message_id?: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorDeferredPayload {
@@ -122,6 +126,8 @@ export interface ErrorPayload {
   /** Alternative error message field */
   message?: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerSpawnedPayload {

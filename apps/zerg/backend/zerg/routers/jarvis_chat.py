@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -42,6 +43,7 @@ async def _chat_stream_generator(
     owner_id: int,
     message: str,
     message_id: str,
+    trace_id: str,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
 ):
@@ -68,6 +70,7 @@ async def _chat_stream_generator(
                     task=message,
                     run_id=run_id,
                     message_id=message_id,
+                    trace_id=trace_id,
                     timeout=600,  # 10 min safety net; deferred state kicks in before this
                     model_override=model,
                     reasoning_effort=reasoning_effort,
@@ -185,6 +188,9 @@ async def jarvis_chat(
         agent = supervisor_service.get_or_create_supervisor_agent(current_user.id)
         thread = supervisor_service.get_or_create_supervisor_thread(current_user.id, agent)
 
+        # Generate trace_id for end-to-end debugging
+        trace_id = uuid.uuid4()
+
         # Create run record
         run = AgentRun(
             agent_id=agent.id,
@@ -194,6 +200,7 @@ async def jarvis_chat(
             assistant_message_id=request.message_id,  # Client-generated message ID
             model=model_to_use,  # Store resolved model for continuation inheritance
             reasoning_effort=reasoning_effort,  # Store for continuation inheritance
+            trace_id=trace_id,  # End-to-end tracing
         )
         db.add(run)
         db.commit()
@@ -204,6 +211,7 @@ async def jarvis_chat(
         agent_id = agent.id
         thread_id = thread.id
         run_status_value = run.status.value
+        trace_id_str = str(trace_id)  # Convert to string for JSON serialization
     # Session is now closed - no DB connection held during streaming
 
     # v2.2: Notify dashboard of new run
@@ -245,6 +253,7 @@ async def jarvis_chat(
             current_user.id,
             request.message,
             request.message_id,
+            trace_id_str,
             model=model_to_use,
             reasoning_effort=reasoning_effort,
         )

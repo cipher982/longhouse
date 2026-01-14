@@ -39,6 +39,7 @@ class SupervisorContext:
     run_id: int
     owner_id: int
     message_id: str  # UUID for the assistant message (stable across tokens/completion)
+    trace_id: Optional[str] = None  # End-to-end trace ID for debugging (UUID as string)
 
 
 # Context variable holding the current supervisor context
@@ -63,7 +64,12 @@ def get_supervisor_context() -> Optional[SupervisorContext]:
     return _supervisor_context_var.get()
 
 
-def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> contextvars.Token:
+def set_supervisor_context(
+    run_id: int,
+    owner_id: int,
+    message_id: str,
+    trace_id: Optional[str] = None,
+) -> contextvars.Token:
     """Set the supervisor context for the current execution.
 
     Should be called by SupervisorService before invoking the agent.
@@ -73,11 +79,12 @@ def set_supervisor_context(run_id: int, owner_id: int, message_id: str) -> conte
         run_id: The supervisor AgentRun ID
         owner_id: The owner's user ID
         message_id: UUID for the assistant message
+        trace_id: End-to-end trace ID for debugging (optional)
 
     Returns:
         Token for resetting via reset_supervisor_context()
     """
-    ctx = SupervisorContext(run_id=run_id, owner_id=owner_id, message_id=message_id)
+    ctx = SupervisorContext(run_id=run_id, owner_id=owner_id, message_id=message_id, trace_id=trace_id)
     return _supervisor_context_var.set(ctx)
 
 
@@ -99,6 +106,17 @@ def get_supervisor_message_id() -> Optional[str]:
     """
     ctx = _supervisor_context_var.get()
     return ctx.message_id if ctx else None
+
+
+def get_supervisor_trace_id() -> Optional[str]:
+    """Get the current supervisor trace_id from context.
+
+    Returns:
+        str if set (we're inside a supervisor run with trace_id), None otherwise.
+        Used for end-to-end debugging across supervisor/worker boundaries.
+    """
+    ctx = _supervisor_context_var.get()
+    return ctx.trace_id if ctx else None
 
 
 def get_next_seq(run_id: int) -> int:
@@ -138,6 +156,7 @@ __all__ = [
     "set_supervisor_context",
     "reset_supervisor_context",
     "get_supervisor_message_id",
+    "get_supervisor_trace_id",
     "get_next_seq",
     "reset_seq",
 ]

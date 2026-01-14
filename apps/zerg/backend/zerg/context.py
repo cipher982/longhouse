@@ -63,6 +63,8 @@ class WorkerContext:
         Optional run ID for correlating events
     job_id
         Optional WorkerJob ID for roundabout event correlation
+    trace_id
+        Optional trace ID for end-to-end debugging (inherited from supervisor)
     task
         Task description (first 100 chars)
     tool_calls
@@ -77,6 +79,7 @@ class WorkerContext:
     owner_id: int | None = None
     run_id: str | None = None
     job_id: int | None = None
+    trace_id: str | None = None
     task: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     has_critical_error: bool = False

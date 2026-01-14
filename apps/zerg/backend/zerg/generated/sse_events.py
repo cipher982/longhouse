@@ -48,6 +48,7 @@ class SupervisorStartedPayload(BaseModel):
     task: str = Field(min_length=1, description='User\'s task/question')
     message_id: str = Field(description='Unique identifier for the assistant message (stable across tokens/completion)')
     continuation_of_message_id: Optional[str] = Field(default=None, description='For continuation runs, the message_id of the original run\'s message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging (copy from UI for agent debugging)')
 
 class SupervisorThinkingPayload(BaseModel):
     """Payload for SupervisorThinkingPayload"""
@@ -75,6 +76,7 @@ class SupervisorCompletePayload(BaseModel):
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     debug_url: Optional[str] = Field(default=None, description='URL for debug/inspection')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorDeferredPayload(BaseModel):
     """Payload for SupervisorDeferredPayload"""
@@ -112,6 +114,7 @@ class ErrorPayload(BaseModel):
     error: Optional[str] = Field(default=None, description='Error message')
     message: Optional[str] = Field(default=None, description='Alternative error message field')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerSpawnedPayload(BaseModel):
     """Payload for WorkerSpawnedPayload"""

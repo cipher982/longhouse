@@ -270,11 +270,16 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
             reset_llm_usage()
 
-            # Get run_id from supervisor context if available (set by SupervisorService)
+            # Get run_id and trace_id from context (supervisor or worker)
+            from zerg.context import get_worker_context
             from zerg.services.supervisor_context import get_supervisor_context
 
-            ctx = get_supervisor_context()
-            run_id = ctx.run_id if ctx else None
+            sup_ctx = get_supervisor_context()
+            worker_ctx = get_worker_context()
+
+            # Prefer supervisor context, fall back to worker context for trace_id
+            run_id = sup_ctx.run_id if sup_ctx else None
+            trace_id = sup_ctx.trace_id if sup_ctx else (worker_ctx.trace_id if worker_ctx else None)
 
             # Run the supervisor loop
             loop_result = await run_supervisor_loop(
@@ -283,6 +288,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 tools=tools,
                 run_id=run_id,
                 owner_id=self.agent.owner_id,
+                trace_id=trace_id,
                 enable_token_stream=self.enable_token_stream,
             )
 
@@ -447,6 +453,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         tool_result: str,
         *,
         run_id: int | None = None,
+        trace_id: str | None = None,
     ) -> Sequence[ThreadMessageModel]:
         """Continue supervisor execution after worker completion.
 
@@ -459,6 +466,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             tool_call_id: The tool_call_id from the spawn_worker call.
             tool_result: The worker's result to inject as ToolMessage.
             run_id: Supervisor run ID for event correlation.
+            trace_id: End-to-end trace ID for debugging.
 
         Returns:
             List of new message rows created during continuation.
@@ -499,14 +507,39 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 name="spawn_worker",
             )
 
-            # Persist ToolMessage immediately
+            # Find the parent assistant message that issued this tool_call
+            # so the UI can correctly group tool outputs after page refresh
+            from zerg.models.thread import ThreadMessage as ThreadMessageModel
+
+            parent_id = None
+            parent_msg = (
+                db.query(ThreadMessageModel)
+                .filter(
+                    ThreadMessageModel.thread_id == thread.id,
+                    ThreadMessageModel.role == "assistant",
+                    ThreadMessageModel.tool_calls.isnot(None),
+                )
+                .order_by(ThreadMessageModel.sent_at.desc())
+                .all()
+            )
+            for msg in parent_msg:
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        if tc.get("id") == tool_call_id:
+                            parent_id = msg.id
+                            break
+                if parent_id:
+                    break
+
+            # Persist ToolMessage with parent_id for UI grouping
             self.thread_service.save_new_messages(
                 db,
                 thread_id=thread.id,
                 messages=[tool_msg],
                 processed=True,
+                parent_id=parent_id,
             )
-            logger.debug(f"[AgentRunner] Persisted ToolMessage for tool_call_id={tool_call_id}")
+            logger.debug(f"[AgentRunner] Persisted ToolMessage for tool_call_id={tool_call_id} (parent_id={parent_id})")
 
         # Build fresh system prompt
         agent_row = crud.get_agent(db, self.agent.id)
@@ -576,6 +609,7 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 tools=tools,
                 run_id=run_id,
                 owner_id=self.agent.owner_id,
+                trace_id=trace_id,
                 enable_token_stream=self.enable_token_stream,
             )
 

@@ -12,6 +12,7 @@ from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import relationship
@@ -378,6 +379,9 @@ class WorkerJob(Base):
     # Tool call idempotency - prevents duplicate workers from LangGraph interrupt/resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
+
+    # Trace ID for end-to-end debugging (inherited from supervisor run)
+    trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     # Job specification
     task = Column(Text, nullable=False)

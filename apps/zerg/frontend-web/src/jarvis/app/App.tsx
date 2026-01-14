@@ -10,7 +10,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useAppState, useAppDispatch } from './context'
 import { useTextChannel } from './hooks'
 import { useJarvisApp } from './hooks/useJarvisApp'
-import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator } from './components'
+import { DebugPanel, Header, ChatContainer, TextInput, OfflineBanner, ModelSelector, RunStatusIndicator, TraceIdDisplay } from './components'
+import './components/TraceIdDisplay.css'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
@@ -197,6 +198,9 @@ export default function App({ embedded = false }: AppProps) {
 
       {/* Run status indicator for E2E testing - hidden but accessible via data-testid */}
       <RunStatusIndicator />
+
+      {/* Trace ID display for debugging - shows in dev mode only */}
+      <TraceIdDisplay devOnly={true} />
       </div>
     </>
   )
