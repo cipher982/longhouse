@@ -79,19 +79,24 @@ async def test_conditional_workflow_high_branch_integration(db, test_user, sampl
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock ONLY the LLM API call, not the entire AgentRunner
-        with patch("zerg.agents_def.zerg_react_agent.get_runnable") as mock_get_runnable:
-            mock_runnable = AsyncMock()
+        # Mock the supervisor ReAct loop to return input messages + response
+        from zerg.services.supervisor_react_engine import SupervisorResult
 
-            async def mock_ainvoke(messages, config):
-                """Mock only the LLM part, return proper LangChain messages."""
-                from langchain_core.messages import AIMessage
+        async def mock_run_supervisor_loop(messages, **kwargs):
+            """Mock the supervisor loop to return input messages + new AIMessage."""
+            from langchain_core.messages import AIMessage
 
-                # This simulates what OpenAI would return
-                return messages + [AIMessage(content="The number 75 is indeed greater than 50!")]
+            # Return ALL messages (input + new) as real supervisor loop does
+            return SupervisorResult(
+                messages=list(messages) + [AIMessage(content="The number 75 is indeed greater than 50!")],
+                usage={"total_tokens": 10},
+                interrupted=False,
+            )
 
-            mock_runnable.ainvoke = mock_ainvoke
-            mock_get_runnable.return_value = mock_runnable
+        with patch(
+            "zerg.services.supervisor_react_engine.run_supervisor_loop",
+            new=mock_run_supervisor_loop,
+        ):
 
             # Create and execute workflow - everything else is REAL
             workflow_data = create_conditional_workflow_data(sample_agent.id)
@@ -196,17 +201,24 @@ async def test_conditional_workflow_low_branch_integration(db, test_user, sample
         mock_resolver_instance.get_tool = lambda name: mock_tool if name == "random_number" else None
         mock_resolver.return_value = mock_resolver_instance
 
-        # Mock only LLM
-        with patch("zerg.agents_def.zerg_react_agent.get_runnable") as mock_get_runnable:
-            mock_runnable = AsyncMock()
+        # Mock the supervisor ReAct loop to return input messages + response
+        from zerg.services.supervisor_react_engine import SupervisorResult
 
-            async def mock_ainvoke(messages, config):
-                from langchain_core.messages import AIMessage
+        async def mock_run_supervisor_loop(messages, **kwargs):
+            """Mock the supervisor loop to return input messages + new AIMessage."""
+            from langchain_core.messages import AIMessage
 
-                return messages + [AIMessage(content="The number 25 is 50 or less.")]
+            # Return ALL messages (input + new) as real supervisor loop does
+            return SupervisorResult(
+                messages=list(messages) + [AIMessage(content="The number 25 is 50 or less.")],
+                usage={"total_tokens": 10},
+                interrupted=False,
+            )
 
-            mock_runnable.ainvoke = mock_ainvoke
-            mock_get_runnable.return_value = mock_runnable
+        with patch(
+            "zerg.services.supervisor_react_engine.run_supervisor_loop",
+            new=mock_run_supervisor_loop,
+        ):
 
             # Execute workflow
             workflow_data = create_conditional_workflow_data(sample_agent.id)

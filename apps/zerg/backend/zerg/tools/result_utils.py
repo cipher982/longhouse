@@ -179,6 +179,69 @@ def redact_sensitive_args(args: Any) -> Any:
         return args
 
 
+def is_critical_tool_error(
+    result_content: str,
+    error_msg: str | None,
+    *,
+    tool_name: str | None = None,
+) -> bool:
+    """Return True if a tool error is a "fail-fast" configuration/setup problem.
+
+    This intentionally errs on the side of *not* failing fast so the agent can:
+    - correct bad arguments (validation errors)
+    - try alternate tools (e.g. runner_exec -> ssh_exec)
+    """
+    # runner_exec has a natural fallback (ssh_exec) for single-user/dev setups.
+    # Treat runner failures as non-critical so the model can attempt alternatives.
+    if tool_name == "runner_exec":
+        return False
+
+    content_lower = (result_content or "").lower()
+    msg_lower = (error_msg or "").lower()
+    combined = f"{content_lower} {msg_lower}"
+
+    # Connector/configuration errors (typically non-recoverable in-task)
+    config_indicators = [
+        "connector_not_configured",
+        "not configured",
+        "not connected",
+        "invalid_credentials",
+        "credentials have expired",
+        "ssh client not found",
+        "ssh key not found",
+        "no ssh key",
+        "not found in path",
+    ]
+    if any(indicator in combined for indicator in config_indicators):
+        return True
+
+    # Permission errors usually indicate missing key/rights.
+    # (This can be "wrong user", but failing fast tends to be preferable here.)
+    if "permission_denied" in combined or "permission denied" in combined:
+        return True
+
+    # Execution errors that strongly indicate infra/setup issues (SSH/host/network)
+    if "execution_error" in combined and any(term in combined for term in ["ssh", "connection", "host", "unreachable"]):
+        return True
+
+    # Validation errors are usually recoverable (bad args/format); don't fail fast.
+    if "validation_error" in combined:
+        return False
+
+    # Transient failures (timeouts, rate limits) are non-critical.
+    transient_indicators = [
+        "timeout",
+        "timed out",
+        "rate_limited",
+        "rate limit",
+        "temporarily unavailable",
+    ]
+    if any(indicator in combined for indicator in transient_indicators):
+        return False
+
+    return False
+
+
 def safe_preview(content: Any, max_len: int = 200) -> str:
     """Create a safe preview of content, truncating if needed.
 
@@ -206,6 +269,7 @@ def safe_preview(content: Any, max_len: int = 200) -> str:
 
 __all__ = [
     "check_tool_error",
+    "is_critical_tool_error",
     "redact_sensitive_args",
     "safe_preview",
     "SENSITIVE_KEYS",

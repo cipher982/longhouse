@@ -144,7 +144,7 @@ class WorkerRunner:
         logger.info(f"Created worker {worker_id} for task: {task[:50]}...")
 
         # Set up worker context for tool event emission
-        # This context is read by zerg_react_agent._call_tool_async to emit
+        # This context is read by supervisor_react_engine._call_tool_async to emit
         # WORKER_TOOL_STARTED/COMPLETED/FAILED events
         # job_id is critical for roundabout event correlation
         worker_context = WorkerContext(

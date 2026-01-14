@@ -151,14 +151,14 @@ class TestCriticalErrorDetection:
 
     def test_runner_exec_validation_error_is_not_critical(self):
         """Test that runner_exec validation errors are non-critical."""
-        from zerg.agents_def.zerg_react_agent import is_critical_tool_error
+        from zerg.tools.result_utils import is_critical_tool_error
 
         result = "{'ok': False, 'error_type': 'validation_error', 'user_message': \"Runner 'laptop' not found\"}"
         assert is_critical_tool_error(result, "Runner 'laptop' not found", tool_name="runner_exec") is False
 
     def test_runner_exec_any_error_is_not_critical(self):
         """Test that ALL runner_exec errors are non-critical (allows fallback)."""
-        from zerg.agents_def.zerg_react_agent import is_critical_tool_error
+        from zerg.tools.result_utils import is_critical_tool_error
 
         # Even configuration errors should be non-critical for runner_exec
         # because SSH fallback is always available
@@ -167,7 +167,7 @@ class TestCriticalErrorDetection:
 
     def test_ssh_exec_key_error_is_critical(self):
         """Test that SSH key errors ARE critical (no fallback from SSH)."""
-        from zerg.agents_def.zerg_react_agent import is_critical_tool_error
+        from zerg.tools.result_utils import is_critical_tool_error
 
         result = (
             "{'ok': False, 'error_type': 'execution_error', 'user_message': 'SSH key not found at ~/.ssh/id_ed25519'}"

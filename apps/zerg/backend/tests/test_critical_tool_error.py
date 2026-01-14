@@ -1,4 +1,4 @@
-from zerg.agents_def.zerg_react_agent import is_critical_tool_error
+from zerg.tools.result_utils import is_critical_tool_error
 
 
 def test_runner_exec_missing_runner_is_not_critical():

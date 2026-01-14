@@ -29,8 +29,8 @@
 
 ```python
 # tests/test_basic_agent_workflow_e2e.py - Tests exact "add agent, press run" scenario
-with patch('zerg.agents_def.zerg_react_agent.get_runnable') as mock_llm:
-    mock_llm.return_value.ainvoke = mock_ainvoke  # Mock ONLY LLM API
+with patch('zerg.services.supervisor_react_engine.run_supervisor_loop') as mock_loop:
+    mock_loop.return_value = SupervisorResult(messages=[...], usage={}, interrupted=False)
 
     # Everything else runs REAL:
     execution_id = await workflow_engine.execute_workflow(workflow.id)

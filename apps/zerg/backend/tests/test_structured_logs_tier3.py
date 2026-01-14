@@ -122,7 +122,7 @@ def test_tool_call_structured_logging(capture_logs):
             success=True,
         )
 
-        # Emit structured log (simulating what zerg_react_agent does)
+        # Emit structured log (simulating what supervisor_react_engine does)
         logger = logging.getLogger("zerg.test")
         log_extra = {
             "event": "tool_call_complete",

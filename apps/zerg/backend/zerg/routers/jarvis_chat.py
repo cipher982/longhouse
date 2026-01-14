@@ -193,6 +193,7 @@ async def jarvis_chat(
             trigger=RunTrigger.API,
             assistant_message_id=request.message_id,  # Client-generated message ID
             model=model_to_use,  # Store resolved model for continuation inheritance
+            reasoning_effort=reasoning_effort,  # Store for continuation inheritance
         )
         db.add(run)
         db.commit()
