@@ -106,10 +106,16 @@ async def resume_run(
             job_id=payload.job_id,
         )
 
+        result_status = result.get("status") if result else "unknown"
+        # Preserve legacy "resumed" status on success, but surface skips/errors/waiting explicitly.
+        resume_status = "resumed"
+        if result_status in ("skipped", "error", "waiting"):
+            resume_status = result_status
+
         return {
-            "status": "resumed",
+            "status": resume_status,
             "run_id": run_id,
-            "result_status": result.get("status") if result else "unknown",
+            "result_status": result_status,
         }
 
     except Exception as e:
