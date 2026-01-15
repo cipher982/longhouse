@@ -88,7 +88,7 @@ class ScriptedChatLLM(BaseChatModel):
     """A deterministic chat model driven by simple prompt scenarios.
 
     Supports both static scenarios (default behavior) and sequenced responses
-    for testing LangGraph replay behavior where the LLM might produce different
+    for testing supervisor replay behavior where the LLM might produce different
     outputs on subsequent calls.
 
     Usage with sequences:
@@ -123,7 +123,7 @@ class ScriptedChatLLM(BaseChatModel):
     def _get_sequenced_response(self, prompt: str) -> Optional[AIMessage]:
         """Return a sequenced response if one matches the prompt and call count.
 
-        This enables testing LangGraph replay behavior where the LLM might
+        This enables testing replay behavior where the LLM might
         return different responses on subsequent calls (e.g., slightly
         rephrased task descriptions).
 

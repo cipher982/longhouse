@@ -266,28 +266,23 @@ test.describe('Multi-provider models', () => {
 
 ## 8. Open Questions
 
-1. **Should we remove OpenRouter?** It adds complexity and doesn't guarantee Groq. If we have direct Groq, maybe remove OpenRouter models?
+1. **Model allowlisting:** `ALLOWED_MODELS_NON_ADMIN` env var exists - does it work with Groq models?
 
-2. **Model allowlisting:** `ALLOWED_MODELS_NON_ADMIN` env var exists - does it work with new providers?
+2. **Cost tracking:** Different providers have different costs. Do we need per-provider cost tracking?
 
-3. **Cost tracking:** Different providers have different costs. Do we need per-provider cost tracking?
-
-4. **Rate limiting:** Groq has aggressive rate limits on free tier. Should we handle 429s gracefully?
+3. **Rate limiting:** Groq has aggressive rate limits on free tier. Should we handle 429s gracefully?
 
 ---
 
 ## Summary
 
 **What works:**
-- Basic provider routing (OpenAI, Groq, OpenRouter)
+- Provider routing (OpenAI, Groq)
 - Model selection in UI
-- API calls go to correct provider
+- Reasoning selector gated by capabilities
+- Model ID validation + clearer API key errors
 
 **What's broken/missing:**
-- Reasoning selector shows for all models (should be OpenAI only)
-- No model capabilities metadata
-- No validation
-- No automated tests
-- No documentation
-
-**Priority fix:** Hide reasoning selector for non-reasoning models - it's confusing users.
+- Limited capabilities metadata (reasoning only)
+- No startup key validation / model filtering
+- No provider-specific chat E2E smoke tests

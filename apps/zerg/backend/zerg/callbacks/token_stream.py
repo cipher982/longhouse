@@ -6,7 +6,7 @@ individual **assistant tokens** over the existing topic-based WebSocket layer.
 The handler is *stateless* apart from a reference to the global
 ``topic_manager`` instance.  The thread context is passed via a
 ``contextvars.ContextVar`` so callers (namely ``AgentRunner``) can set/reset
-the value immediately before invoking the LangGraph runnable without having to
+the value immediately before invoking the LLM without having to
 re-instantiate the LLM for each thread.
 """
 
