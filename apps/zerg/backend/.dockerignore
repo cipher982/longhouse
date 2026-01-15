@@ -30,6 +30,11 @@ ENV/
 .venv/
 .ENV/
 
+# UV and Ruff caches
+.uv_cache/
+.uv_tmp/
+.ruff_cache/
+
 # Testing artifacts
 .tox/
 .coverage
@@ -49,6 +54,9 @@ test*.db
 # Logs
 *.log
 logs/
+
+# Local data (LLM audit logs, debug dumps)
+data/
 
 # IDE
 .vscode/
