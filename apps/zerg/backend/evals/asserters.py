@@ -105,6 +105,29 @@ def assert_tool_called(
     return False, f"Tool '{tool_name}' was not called (observed: {observed})"
 
 
+def assert_not_tool_called(
+    metrics: EvalMetrics,
+    tool_name: str,
+) -> tuple[bool, str]:
+    """Assert that a specific tool was NOT called during the run.
+
+    Useful for testing that agents pick the right specialized tool
+    instead of a generic fallback (e.g., get_whoop_data instead of web_search).
+
+    Args:
+        metrics: EvalMetrics from run
+        tool_name: Name of the tool that should NOT have been called
+
+    Returns:
+        (passed, message) tuple
+    """
+    if tool_name not in metrics.tools_called:
+        return True, f"Tool '{tool_name}' was correctly not called"
+
+    observed = ", ".join(metrics.tools_called) if metrics.tools_called else "(none)"
+    return False, f"Tool '{tool_name}' was unexpectedly called (all tools: {observed})"
+
+
 def assert_worker_spawned(
     metrics: EvalMetrics,
     count: int | None = None,
@@ -528,6 +551,7 @@ ASSERTERS = {
     "contains": assert_contains,
     "regex": assert_regex,
     "tool_called": assert_tool_called,
+    "not_tool_called": assert_not_tool_called,
     "worker_spawned": assert_worker_spawned,
     "latency_ms": assert_latency_ms,
     "total_tokens": assert_total_tokens,

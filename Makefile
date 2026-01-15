@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +308,10 @@ eval-fast: ## Run fast tests only (quick sanity check)
 eval-all: ## Run all eval tests including slow ones
 	@echo "🔬 Running ALL eval tests (including slow tests)..."
 	cd apps/zerg/backend && uv run pytest evals/ -v -n auto --variant=$(EVAL_VARIANT) --timeout=120
+
+eval-tool-selection: ## Run tool selection evals (LIVE mode - tests tool picking quality)
+	@echo "🎯 Running tool selection evals (LIVE mode)..."
+	cd apps/zerg/backend && env EVAL_MODE=live uv run pytest evals/ -v -k tool_selection --timeout=120
 
 # ---------------------------------------------------------------------------
 # SDK & Integration

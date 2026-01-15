@@ -49,6 +49,7 @@ dependencies = [
     "tavily-python>=0.7.0",
     "trafilatura>=2.0.0",
     "boto3>=1.35.0",
+    "numpy>=2.4.1",
 ]
 
 [build-system]
