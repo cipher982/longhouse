@@ -1,5 +1,4 @@
 {
-  "$schema": "./models.schema.json",
   "$comment": "Single source of truth for all LLM model configuration across Zerg and Jarvis",
 
   "text": {
@@ -14,19 +13,50 @@
         "displayName": "GPT-5.2",
         "provider": "openai",
         "tier": "TIER_1",
-        "description": "Latest state-of-the-art reasoning capability"
+        "description": "Latest state-of-the-art reasoning capability",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
       },
       "gpt-5-mini": {
         "displayName": "GPT-5 Mini",
         "provider": "openai",
         "tier": "TIER_2",
-        "description": "Good quality, lower cost"
+        "description": "Good quality, lower cost",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": false
+        }
       },
       "gpt-5-nano": {
         "displayName": "GPT-5 Nano",
         "provider": "openai",
         "tier": "TIER_3",
-        "description": "Fast and cheap, basic capability"
+        "description": "Fast and cheap, basic capability",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": false
+        }
+      },
+      "meta-llama/llama-4-maverick-17b-128e-instruct": {
+        "displayName": "Llama 4 Maverick (Groq)",
+        "provider": "groq",
+        "description": "Meta's Llama 4 Maverick via Groq LPU - blazing fast",
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "capabilities": {
+          "reasoning": false
+        }
+      },
+      "qwen/qwen3-32b": {
+        "displayName": "Qwen 3 32B (Groq)",
+        "provider": "groq",
+        "description": "Alibaba's Qwen 3 32B via Groq LPU - fast general purpose",
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
       }
     }
   },

@@ -15,10 +15,16 @@ export interface ChatPreferences {
   reasoning_effort: 'none' | 'low' | 'medium' | 'high'
 }
 
+export interface ModelCapabilities {
+  reasoning?: boolean
+  reasoningNone?: boolean
+}
+
 export interface ModelInfo {
   id: string
   display_name: string
   description: string
+  capabilities?: ModelCapabilities
 }
 
 export function usePreferences() {
@@ -52,8 +58,24 @@ export function usePreferences() {
 
   // Convenience methods
   const setModel = useCallback(
-    (model: string) => updatePreference('chat_model', model),
-    [updatePreference]
+    (model: string) => {
+      updatePreference('chat_model', model)
+
+      // Find the new model's capabilities
+      const newModel = state.availableModels?.find((m) => m.id === model)
+      const supportsReasoning = newModel?.capabilities?.reasoning ?? false
+      const supportsReasoningNone = newModel?.capabilities?.reasoningNone ?? false
+
+      // Reset reasoning_effort if model doesn't support current setting
+      if (!supportsReasoning) {
+        // Model doesn't support reasoning at all - reset to 'none' (will be ignored)
+        updatePreference('reasoning_effort', 'none')
+      } else if (!supportsReasoningNone && state.preferences.reasoning_effort === 'none') {
+        // Model doesn't support 'none' but user has 'none' selected - reset to 'low'
+        updatePreference('reasoning_effort', 'low')
+      }
+    },
+    [updatePreference, state.availableModels, state.preferences.reasoning_effort]
   )
 
   const setReasoningEffort = useCallback(

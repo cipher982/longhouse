@@ -26,6 +26,7 @@ import json
 import logging
 from datetime import datetime
 from datetime import timezone
+from typing import Dict
 from typing import List
 from typing import Optional
 
@@ -581,6 +582,7 @@ class JarvisModelInfo(BaseModel):
     id: str = Field(..., description="Model ID (e.g., gpt-5.2)")
     display_name: str = Field(..., description="Human-readable name")
     description: str = Field(..., description="Brief description")
+    capabilities: Optional[Dict] = Field(default=None, description="Model capabilities (reasoning, etc.)")
 
 
 class JarvisPreferences(BaseModel):
@@ -654,6 +656,7 @@ def jarvis_bootstrap(
             id=m.id,
             display_name=m.display_name,
             description=m.description or "",
+            capabilities=m.capabilities,
         )
         for m in all_models
         if not is_test_model(m.id)

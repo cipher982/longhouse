@@ -43,6 +43,7 @@ export interface ModelInfo {
   id: string
   display_name: string
   description: string
+  capabilities?: { reasoning?: boolean; reasoningNone?: boolean }
 }
 
 export interface ChatPreferences {

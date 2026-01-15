@@ -47,6 +47,7 @@ def _mock_settings_with_allowlist(allowed_model: str):
         environment=real_settings.environment,
         allowed_cors_origins=real_settings.allowed_cors_origins,
         openai_api_key=real_settings.openai_api_key,
+        groq_api_key=real_settings.groq_api_key,
         app_public_url=real_settings.app_public_url,
         runner_docker_image=real_settings.runner_docker_image,
         pubsub_audience=real_settings.pubsub_audience,
@@ -75,7 +76,6 @@ def _mock_settings_with_allowlist(allowed_model: str):
         roundabout_llm_timeout=real_settings.roundabout_llm_timeout,
         e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
         e2e_worker_id=real_settings.e2e_worker_id,
-        openrouter_api_key=real_settings.openrouter_api_key,
     )
     return mock_settings
 

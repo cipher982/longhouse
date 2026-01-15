@@ -2,9 +2,10 @@
  * ModelSelector component - Dropdown selectors for model and reasoning effort
  */
 
+import { useMemo } from 'react'
 import { usePreferences } from '../hooks'
 
-const REASONING_OPTIONS = [
+const ALL_REASONING_OPTIONS = [
   { value: 'none', label: 'None' },
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
@@ -13,6 +14,23 @@ const REASONING_OPTIONS = [
 
 export function ModelSelector() {
   const { availableModels, preferences, setModel, setReasoningEffort } = usePreferences()
+
+  // Find selected model's capabilities
+  const selectedModel = useMemo(
+    () => availableModels?.find((m) => m.id === preferences.chat_model),
+    [availableModels, preferences.chat_model]
+  )
+
+  const supportsReasoning = selectedModel?.capabilities?.reasoning ?? false
+  const supportsReasoningNone = selectedModel?.capabilities?.reasoningNone ?? false
+
+  // Filter reasoning options based on model capabilities
+  const reasoningOptions = useMemo(() => {
+    if (!supportsReasoning) return []
+    return supportsReasoningNone
+      ? ALL_REASONING_OPTIONS
+      : ALL_REASONING_OPTIONS.filter((opt) => opt.value !== 'none')
+  }, [supportsReasoning, supportsReasoningNone])
 
   // Don't render until models are loaded
   if (!availableModels || availableModels.length === 0) {
@@ -34,18 +52,20 @@ export function ModelSelector() {
         ))}
       </select>
 
-      <select
-        className="reasoning-select"
-        value={preferences.reasoning_effort}
-        onChange={(e) => setReasoningEffort(e.target.value)}
-        aria-label="Reasoning effort"
-      >
-        {REASONING_OPTIONS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      {supportsReasoning && (
+        <select
+          className="reasoning-select"
+          value={preferences.reasoning_effort}
+          onChange={(e) => setReasoningEffort(e.target.value)}
+          aria-label="Reasoning effort"
+        >
+          {reasoningOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   )
 }
