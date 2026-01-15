@@ -376,7 +376,7 @@ class WorkerJob(Base):
     # ON DELETE SET NULL: if supervisor run is deleted, worker job remains but loses correlation
     supervisor_run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Tool call idempotency - prevents duplicate workers from LangGraph interrupt/resume replay
+    # Tool call idempotency - prevents duplicate workers from supervisor resume replay
     # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
     tool_call_id = Column(String(64), nullable=True, index=True)
 
@@ -404,7 +404,7 @@ class WorkerJob(Base):
     # Relationships
     owner = relationship("User", backref="worker_jobs")
 
-    # Unique constraint for idempotency - prevents duplicate workers from LangGraph replay
+    # Unique constraint for idempotency - prevents duplicate workers from replay
     # Uses partial index: only enforce when both fields are non-null
     __table_args__ = (
         Index(

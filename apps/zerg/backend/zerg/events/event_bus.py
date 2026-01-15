@@ -55,7 +55,7 @@ class EventType(str, Enum):
     SUPERVISOR_TOKEN = "supervisor_token"  # Real-time LLM token streaming
     SUPERVISOR_COMPLETE = "supervisor_complete"
     SUPERVISOR_DEFERRED = "supervisor_deferred"  # Timeout migration: still running, caller stopped waiting
-    SUPERVISOR_WAITING = "supervisor_waiting"  # Interrupted waiting for worker (LangGraph interrupt/resume)
+    SUPERVISOR_WAITING = "supervisor_waiting"  # Interrupted waiting for worker (supervisor resume)
     SUPERVISOR_RESUMED = "supervisor_resumed"  # Resumed from interrupt after worker completed
     WORKER_SPAWNED = "worker_spawned"
     WORKER_STARTED = "worker_started"

@@ -125,7 +125,7 @@ make debug-thread THREAD_ID=1
 # Validate message integrity (duplicates, ordering, tool response counts)
 make debug-validate THREAD_ID=1
 
-# Inspect LangGraph checkpoint state
+# Inspect workflow LangGraph checkpoint state
 make debug-inspect THREAD_ID=1
 
 # Batch queries (minimal tokens for AI agents)
@@ -301,7 +301,7 @@ make generate-sdk  # OpenAPI types
 make regen-ws      # WebSocket contract code
 make regen-sse     # SSE event contract code
 
-# LangGraph Debugging (see "LangGraph Debug Pipeline" section for full docs)
+# Workflow LangGraph Debugging (see "LangGraph Debug Pipeline" section for full docs)
 make debug-thread THREAD_ID=1      # View thread messages
 make debug-validate THREAD_ID=1   # Check message integrity
 cd apps/zerg/backend && uv run python scripts/debug_run_audit.py --run-id <id>  # LLM audit trail

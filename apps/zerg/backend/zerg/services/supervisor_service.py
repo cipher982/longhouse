@@ -664,8 +664,8 @@ class SupervisorService:
                 created_messages = await run_task
 
             except AgentInterrupted as interrupt:
-                # LangGraph interrupt (spawn_worker waiting for worker completion)
-                # The graph state is checkpointed - we'll resume when worker completes
+                # Supervisor interrupt (spawn_worker waiting for worker completion)
+                # Run state is persisted; we'll resume via AgentRunner.run_continuation
                 end_time = datetime.now(timezone.utc)
                 duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
@@ -766,8 +766,8 @@ class SupervisorService:
             duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
             # NOTE: Old "durable runs" code that checked for worker spawns after completion
-            # has been removed. With the interrupt/resume pattern, spawn_worker calls interrupt()
-            # which raises AgentInterrupted before we get here. See the AgentInterrupted handler above.
+            # has been removed. With the interrupt/resume pattern, spawn_worker raises
+            # AgentInterrupted before we get here. See the AgentInterrupted handler above.
 
             # Update run status
             run.status = RunStatus.SUCCESS
