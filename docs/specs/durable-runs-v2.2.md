@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Runs are now **durable** - they survive client disconnects, timeouts, and network blips. Timeouts stop *waiting*, not kill *work*. When background work completes, the supervisor is notified and resumes automatically using LangGraph's native interrupt/resume pattern. The dashboard stays in sync via real-time WebSocket updates.
+Runs are now **durable** - they survive client disconnects, timeouts, and network blips. Timeouts stop *waiting*, not kill *work*. When background work completes, the supervisor is notified and resumes automatically via the LangGraph-free continuation path (`AgentRunner.run_continuation`). The dashboard stays in sync via real-time WebSocket updates.
 
 ### Durability Scope (v2.2)
 
@@ -28,7 +28,7 @@ Runs are now **durable** - they survive client disconnects, timeouts, and networ
 ---
 
 This spec aligns Zerg's execution model with:
-- **LangGraph** native semantics (threads + runs + interrupts + resume)
+- **LangGraph** semantics (inspiration; workflow engine only, supervisor is LangGraph-free)
 - **Temporal** durable execution (heartbeats, timeouts as semantics)
 - **AWS Step Functions** callback token pattern (pause → resume)
 - **Airflow** deferrable operators (suspend without killing)
@@ -83,7 +83,7 @@ User sent: "check disk space on cube"
 | **Join** | LangGraph, Celery | Block until run/task completes |
 | **Heartbeat** | Temporal | Progress signal during LLM thinking (not just tools) |
 | **Watch/Monitor** | Akka DeathWatch | Supervisor lifecycle notifications |
-| **Interrupt/Resume** | LangGraph | Pause workflow for worker, resume with result |
+| **Interrupt/Resume** | LangGraph (inspiration) | Pause workflow for worker, resume with result |
 | **Chord** | Celery | Multi-worker join + callback |
 | **Saga** | Garcia-Molina 1987 | Multi-step orchestration with compensation |
 | **Shield** | asyncio | Prevent timeout from cancelling task |
@@ -98,7 +98,7 @@ User sent: "check disk space on cube"
 
 **Airflow Deferrable Operators**: "Suspend itself and free the worker, hand waiting to Triggerer, resume when ready." Exactly timeout migration.
 
-**LangGraph**: Thread = durable state, Run = execution attempt. `runs.create()` returns immediately, `runs.join()` blocks with timeout. Timeout stops waiting, doesn't kill run. Native `interrupt()` and `resume` for coordination.
+**LangGraph** (inspiration): Thread = durable state, Run = execution attempt. `runs.create()` returns immediately, `runs.join()` blocks with timeout. Timeout stops waiting, doesn't kill run.
 
 ---
 
@@ -126,7 +126,7 @@ State Definitions:
 - QUEUED: Created, waiting for executor
 - RUNNING: Actively executing (supervisor or worker)
 - DEFERRED: Timeout migration - still running, but caller stopped waiting
-- WAITING: Interrupted - waiting for worker completion (LangGraph interrupt)
+- WAITING: Interrupted - waiting for worker completion (supervisor resume)
 - COMPLETED: Finished successfully
 - FAILED: Finished with error
 ```
@@ -177,22 +177,29 @@ run_id = await supervisor.run_async(task)
 # 4. On completion: supervisor resumes (via resume handler)
 ```
 
-### Completion Notifications (LangGraph Interrupt/Resume)
+### Completion Notifications (Supervisor Interrupt/Resume)
 
-When a background/deferred run reaches a point where it needs external work (e.g., spawning a worker), it uses LangGraph's native `interrupt()` pattern.
+When a background/deferred run reaches a point where it needs external work (e.g., spawning a worker), the supervisor loop interrupts and the run enters WAITING.
 
-1. **Supervisor spawns worker** → calls `interrupt({"job_id": job_id, "message": "..."})`
-2. **Run state → WAITING** (checkpointed in LangGraph thread)
+1. **Supervisor spawns worker** → `spawn_worker` returns job info and the loop raises `AgentInterrupted`
+2. **Run state → WAITING** (persisted on the run record)
 3. **Worker completes** → saves result to artifact store
 4. **Resumer** (see `worker_resume.py`) fetches the worker result
 5. **Resume call**:
    ```python
-   # Bridges worker completion back into the supervisor graph
-   await runnable.ainvoke(Command(resume=worker_result), config)
+   # Bridges worker completion back into the supervisor loop
+   await runner.run_continuation(
+       db=db,
+       thread=thread,
+       tool_call_id=tool_call_id,
+       tool_result=worker_result,
+       run_id=run_id,
+       trace_id=trace_id,
+   )
    ```
 6. **Continuation**:
-   - LangGraph resumes from the `interrupt()` point
-   - Injects `worker_result` as the return value of the tool call
+   - Supervisor replays from persisted history (no LangGraph checkpointing)
+   - Injects `worker_result` as a ToolMessage for the original tool call
    - Supervisor synthesizes final answer or spawns next worker
 7. **User notified** via SSE (if connected) or stored for later
 
@@ -384,7 +391,7 @@ if ctx.polls_without_progress >= ROUNDABOUT_NO_PROGRESS_POLLS:
 The frontend has a 60s watchdog (`WATCHDOG_TIMEOUT_MS = 60000`) that calls `cancel()` and aborts the stream. This is another "timeout kills work" bug.
 
 ```typescript
-// Current (around line ~XXX):
+// Current:
 // if (elapsed > WATCHDOG_TIMEOUT_MS) {
 //     this.cancel();  // WRONG: kills server-side work
 // }

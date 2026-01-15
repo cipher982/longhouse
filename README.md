@@ -22,7 +22,7 @@ User → http://localhost:30080 (nginx)
   /api/*       → Zerg FastAPI backend (includes Jarvis BFF at /api/jarvis/*)
   /ws/*        → Zerg WS (SSE/WS)
 
-Backend: FastAPI + LangGraph supervisor/worker agents
+Backend: FastAPI + LangGraph-free supervisor/worker agents (workflow engine uses LangGraph)
 Workers: disposable agents, artifacts under /data/workers
 Frontend: Unified React SPA (Zerg dashboard + Jarvis chat), served same-origin
 ```
@@ -64,7 +64,7 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ```
 apps/
 └── zerg/
-    ├── backend/        # FastAPI + LangGraph supervisor/worker
+    ├── backend/        # FastAPI + LangGraph-free supervisor/worker
     ├── frontend-web/   # React dashboard
     └── e2e/            # Playwright unified tests
 

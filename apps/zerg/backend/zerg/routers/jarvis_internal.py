@@ -3,11 +3,11 @@
 These endpoints are called internally by the backend (not exposed to public API)
 to handle run resume when a supervisor is interrupted and workers complete.
 
-Uses LangGraph's interrupt/resume pattern:
-- Supervisor calls spawn_worker() which calls interrupt()
+Uses the LangGraph-free supervisor resume pattern:
+- Supervisor calls spawn_worker() and the loop raises AgentInterrupted
 - Run status becomes WAITING
 - Worker completes, calls resume endpoint
-- Command(resume=result) continues the graph
+- AgentRunner.run_continuation() continues execution
 """
 
 import logging
@@ -53,8 +53,8 @@ async def resume_run(
     """Resume a WAITING run when a worker completes.
 
     Called internally when a worker completes while the supervisor run was
-    WAITING (interrupted by spawn_worker). Uses LangGraph's Command(resume=...)
-    to continue the graph from where interrupt() was called.
+    WAITING (interrupted by spawn_worker). Uses AgentRunner.run_continuation()
+    to continue the supervisor loop from persisted history.
 
     Args:
         run_id: ID of the WAITING supervisor run
@@ -94,8 +94,8 @@ async def resume_run(
             result_text = f"Worker failed: {payload.error or 'Unknown error'}"
 
         # Use resume_supervisor_with_worker_result which:
-        # 1. Loads the graph with the same thread_id
-        # 2. Calls Command(resume=result) to continue from interrupt()
+        # 1. Locates the tool_call_id for the worker job
+        # 2. Injects the tool result via AgentRunner.run_continuation()
         # 3. Emits completion events
         from zerg.services.worker_resume import resume_supervisor_with_worker_result
 

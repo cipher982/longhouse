@@ -830,8 +830,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
     ) -> None:
         """Resume interrupted supervisor if waiting for worker (NON-BLOCKING).
 
-        Uses either LangGraph's Command(resume=...) pattern or the new
-        LangGraph-free AgentRunner.run_continuation() to continue the supervisor.
+        Uses the LangGraph-free AgentRunner.run_continuation() to continue the supervisor.
 
         This is fire-and-forget to prevent worker "duration" from including supervisor synthesis time.
 
@@ -895,7 +894,7 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             summary_text = "(No result summary)"
 
-                    # Resume using LangGraph-free or LangGraph path (based on feature flag)
+                    # Resume using the LangGraph-free path
                     await resume_supervisor_with_worker_result(
                         db=fresh_db,
                         run_id=run_id,

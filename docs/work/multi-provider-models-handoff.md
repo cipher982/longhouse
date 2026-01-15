@@ -1,8 +1,8 @@
 # Multi-Provider Model Support - Handoff Doc
 
-## Current State (as of 2026-01-14)
+## Current State (as of 2026-01-15)
 
-We added OpenRouter and Groq as providers, but the implementation has gaps. This doc covers what exists, what's broken, and what needs proper implementation.
+Groq is supported alongside OpenAI. OpenRouter references were removed from the runtime code path. This doc notes what exists, what was fixed, and what remains.
 
 ---
 
@@ -31,12 +31,19 @@ Frontend model selector dropdown      # User picks model
         "provider": "openai",
         "tier": "TIER_1",
         "description": "...",
-        "baseUrl": null  // optional - only for non-OpenAI
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
       },
       "qwen/qwen3-32b": {
         "displayName": "Qwen 3 32B (Groq)",
         "provider": "groq",
-        "baseUrl": "https://api.groq.com/openai/v1"
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "capabilities": {
+          "reasoning": true,
+          "reasoningNone": true
+        }
       }
     }
   }
@@ -53,9 +60,6 @@ provider = model_config.provider.value if model_config else "openai"
 if provider == "groq":
     api_key = settings.groq_api_key
     base_url = model_config.base_url
-elif provider == "openrouter":
-    api_key = settings.openrouter_api_key
-    base_url = model_config.base_url
 else:
     api_key = settings.openai_api_key
     base_url = None
@@ -63,83 +67,36 @@ else:
 
 ---
 
-## 2. Known Issues / Gaps
+## 2. Known Issues / Gaps (Updated)
 
 ### Issue 1: Reasoning selector shows for all models
 
-**Problem:** The UI shows "Reasoning effort: None/Low/Medium/High" for ALL models, but only OpenAI reasoning models support this parameter.
+**Status:** Resolved.
+- Frontend filters by `model.capabilities.reasoning` (`ModelSelector.tsx`)
+- Backend only passes `reasoning_effort` when supported (`supervisor_react_engine.py`)
 
-**Where it breaks:**
-- Frontend: `src/jarvis/app/components/ModelSelector.tsx` (or similar) - doesn't filter by provider
-- Backend: We pass `reasoning_effort` to `ChatOpenAI` even for non-OpenAI - it's ignored but confusing
+### Issue 2: Model capability metadata depth
 
-**Fix needed:**
-1. Add `supportsReasoning: boolean` to model config
-2. Frontend: Hide reasoning selector when model doesn't support it
-3. Backend: Only pass `reasoning_effort` when provider supports it (already partially done)
+**Status:** Partial.
+- `capabilities` exists in `models.json` (currently `reasoning` / `reasoningNone`)
+- If we need tool-calling/vision/context-window metadata, extend the schema and UI
 
-### Issue 2: No model capability metadata
+### Issue 3: Model ID validation
 
-**Problem:** Different models support different features:
-- Tool calling (most do, but not all)
-- Streaming (most do)
-- Reasoning effort (OpenAI only)
-- Vision/images (some models)
-- Context window size (varies wildly)
+**Status:** Resolved.
+- `_make_llm()` validates model IDs and raises with available models if unknown
 
-**Current state:** We have none of this metadata. We just assume all models work the same.
+### Issue 4: API key validation
 
-**Fix needed:** Add to `models.json`:
-```json
-{
-  "gpt-5.2": {
-    "capabilities": {
-      "toolCalling": true,
-      "streaming": true,
-      "reasoning": true,
-      "vision": true,
-      "contextWindow": 128000
-    }
-  },
-  "qwen/qwen3-32b": {
-    "capabilities": {
-      "toolCalling": true,
-      "streaming": true,
-      "reasoning": false,
-      "vision": false,
-      "contextWindow": 32000
-    }
-  }
-}
-```
+**Status:** Partial.
+- Groq models check `GROQ_API_KEY` at runtime and raise a clear error
+- No startup validation or auto-filtering of available models yet
 
-### Issue 3: No validation of model IDs
+### Issue 5: E2E coverage for model UX
 
-**Problem:** If someone types a wrong model ID in the UI or API, we just pass it through and let OpenAI/Groq error out.
-
-**Fix needed:** Validate model ID exists in our config before making LLM calls.
-
-### Issue 4: API keys not validated at startup
-
-**Problem:** If `GROQ_API_KEY` is missing but a user selects a Groq model, they get a cryptic runtime error.
-
-**Fix needed:** Either:
-- Validate all provider API keys at startup (strict)
-- Or filter available models based on which API keys are configured (flexible)
-
-### Issue 5: No E2E tests for multi-provider
-
-**Problem:** We tested manually via browser, but no automated tests exist.
-
-**Fix needed:** Add E2E tests:
-```typescript
-test('can chat with Groq model', async () => {
-  // Select Groq model
-  // Send message
-  // Verify response received
-  // Verify no errors
-});
-```
+**Status:** Partial.
+- `apps/zerg/e2e/tests/model-capabilities.spec.ts` covers model list + reasoning selector behavior
+- No provider-specific chat smoke test yet (optional add if we want runtime coverage)
 
 ---
 
@@ -173,39 +130,37 @@ test('can chat with Groq model', async () => {
 - Headers: None special
 - Notes: Blazing fast (LPU), limited model selection
 
-### OpenRouter
-- Base URL: `https://openrouter.ai/api/v1`
-- API key env: `OPENROUTER_API_KEY`
-- Special params: None (provider routing is in request body, not supported yet)
-- Headers: `HTTP-Referer`, `X-Title` (for attribution/rankings)
-- Notes: Routes to multiple backends, can't guarantee which one
+### OpenRouter (not supported)
+- Removed from the runtime code path as of 2026-01-15
+- If re-adding: base URL `https://openrouter.ai/api/v1`, env `OPENROUTER_API_KEY`,
+  and required attribution headers (`HTTP-Referer`, `X-Title`)
 
 ---
 
 ## 5. Proper Implementation Checklist
 
 ### Phase 1: Fix UI (reasoning selector)
-- [ ] Add `supportsReasoning` to model config schema
-- [ ] Update `models.json` with capability flags
-- [ ] Update `ModelConfig` class to include capabilities
-- [ ] Update frontend to conditionally show reasoning selector
-- [ ] Test: reasoning selector hidden for Groq models
+- [x] Add `supportsReasoning` to model config schema
+- [x] Update `models.json` with capability flags
+- [x] Update `ModelConfig` class to include capabilities
+- [x] Update frontend to conditionally show reasoning selector
+- [x] Test: reasoning selector hidden for Groq models
 
-### Phase 2: Add model capabilities
+### Phase 2: Add model capabilities (partial: reasoning only)
 - [ ] Design capabilities schema (toolCalling, streaming, reasoning, vision, contextWindow)
 - [ ] Add to all models in `models.json`
 - [ ] Expose via `/api/models` endpoint
 - [ ] Frontend can use for feature gating
 
 ### Phase 3: Validation
-- [ ] Validate model ID exists before LLM call
-- [ ] Validate required API key exists for provider
-- [ ] Return helpful error messages
+- [x] Validate model ID exists before LLM call
+- [ ] Validate required API key exists for provider (startup or filtering)
+- [x] Return helpful error messages
 
 ### Phase 4: E2E Tests
 - [ ] Test: Select OpenAI model, send message, get response
 - [ ] Test: Select Groq model, send message, get response
-- [ ] Test: Reasoning selector hidden for non-reasoning models
+- [x] Test: Reasoning selector hidden for non-reasoning models
 - [ ] Test: Error handling when API key missing
 
 ### Phase 5: Documentation
@@ -221,7 +176,7 @@ test('can chat with Groq model', async () => {
 ```json
 "model-id": {
   "displayName": "Human Name",
-  "provider": "openai|groq|openrouter",
+  "provider": "openai|groq",
   "description": "...",
   "baseUrl": "https://..." // if not OpenAI
 }

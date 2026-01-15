@@ -27,7 +27,7 @@ class AgentStatus(str, Enum):
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
-    WAITING = "waiting"  # Interrupted waiting for worker completion (LangGraph interrupt/resume)
+    WAITING = "waiting"  # Interrupted waiting for worker completion (supervisor resume)
     DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
     SUCCESS = "success"
     FAILED = "failed"

@@ -58,8 +58,8 @@ def supervisor_agent(db_session, test_user):
 async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, test_user, temp_artifact_path):
     """Test that a supervisor agent can use spawn_worker tool (queues job).
 
-    spawn_worker uses LangGraph's interrupt/resume pattern, so calling it triggers
-    AgentInterrupted. We verify the interrupt payload and that the job was queued.
+    spawn_worker triggers AgentInterrupted in the LangGraph-free supervisor loop.
+    We verify the interrupt payload and that the job was queued.
     """
     from zerg.managers.agent_runner import AgentInterrupted
     from zerg.models.models import WorkerJob

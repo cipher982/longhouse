@@ -1,14 +1,14 @@
 """Integration test: supervisor → spawn_worker → interrupt → worker_complete → resume → final response.
 
-This covers the master/worker flow used by Jarvis chat using LangGraph's interrupt/resume pattern:
-- Supervisor calls spawn_worker which triggers interrupt()
+This covers the master/worker flow used by Jarvis chat using the LangGraph-free resume pattern:
+- Supervisor calls spawn_worker and raises AgentInterrupted
 - Run is marked WAITING (interrupted waiting for worker completion)
-- Worker completes, triggers resume via Command(resume=result)
-- Supervisor resumes from interrupt() and generates final response
+- Worker completes, triggers resume via AgentRunner.run_continuation
+- Supervisor continues and generates final response
 
-NOTE: This was rewritten during the LangGraph interrupt/resume refactor (Jan 2026).
-The old continuation pattern (DEFERRED + run_continuation) was replaced with
-interrupt()/Command(resume=...) pattern.
+NOTE: This was rewritten during the supervisor refactor (Jan 2026). The old
+continuation pattern (DEFERRED + run_continuation) was replaced with
+interrupt/resume via AgentInterrupted + DB-based continuation.
 
 See: docs/work/supervisor-continuation-refactor.md
 """
@@ -65,7 +65,7 @@ async def test_supervisor_worker_interrupt_resume_flow(
     """Test the interrupt/resume flow for supervisor → worker → final response.
 
     This test verifies:
-    1. Supervisor run becomes WAITING when spawn_worker calls interrupt()
+    1. Supervisor run becomes WAITING when spawn_worker triggers AgentInterrupted
     2. Worker job is created and correlated to the supervisor run
     3. Resume completes the supervisor run with final response
     """
@@ -108,8 +108,8 @@ async def test_supervisor_worker_interrupt_resume_flow(
     db_session.refresh(worker_job)
 
     async def fake_run_thread_with_interrupt(_self, _db, _thread):
-        """Simulate supervisor calling spawn_worker which triggers interrupt."""
-        # Raise AgentInterrupted to simulate the interrupt() call inside spawn_worker
+        """Simulate supervisor calling spawn_worker which triggers AgentInterrupted."""
+        # Raise AgentInterrupted to simulate the interrupt path inside spawn_worker
         # Note: No "message" field - frontend shows typing indicator, worker card shows task
         raise AgentInterrupted({
             "type": "worker_pending",
@@ -234,10 +234,10 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
     credential_context,
     temp_artifact_path,
 ):
-    """Test that spawn_worker queues a job when called outside LangGraph context.
+    """Test that spawn_worker queues a job when called outside supervisor context.
 
     This tests the graceful degradation when spawn_worker is called directly
-    (e.g., from tests or CLI) rather than from within a LangGraph graph execution.
+    (e.g., from tests or CLI) rather than from within the supervisor loop.
     """
     from zerg.tools.builtin.supervisor_tools import spawn_worker_async
 
@@ -260,8 +260,8 @@ async def test_spawn_worker_fallback_when_outside_runnable_context(
     token = set_supervisor_context(run_id=run.id, owner_id=test_user.id, message_id="test-message-id")
 
     try:
-        # Call spawn_worker directly (outside LangGraph context)
-        # This should trigger the fallback path since interrupt() will fail
+        # Call spawn_worker directly (outside supervisor loop context)
+        # This should trigger the fallback path since no AgentInterrupted handling exists
         result = await spawn_worker_async(task="Test fallback task", model=TEST_WORKER_MODEL)
 
         # Should return "queued successfully" (fallback pattern)
@@ -296,7 +296,7 @@ async def test_interrupt_triggers_waiting_status(
     """Test that spawn_worker properly triggers interrupt and WAITING status.
 
     This catches regressions where:
-    - GraphInterrupt is accidentally caught (would result in SUCCESS instead of WAITING)
+    - AgentInterrupted is accidentally caught (would result in SUCCESS instead of WAITING)
     - Tools run in wrong context (thread instead of async, breaking interrupt)
 
     The test uses ScriptedLLM to deterministically call spawn_worker,

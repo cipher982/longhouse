@@ -8,8 +8,9 @@ Tests verify:
 5. Resume endpoint resumes WAITING runs when worker completes
 6. Heartbeat events reset no-progress counter
 
-NOTE: The continuation pattern was replaced by LangGraph's interrupt/resume
-pattern in Jan 2026. See: docs/work/supervisor-continuation-refactor.md
+NOTE: The continuation pattern was replaced by the LangGraph-free supervisor
+resume path in Jan 2026 (AgentInterrupted + AgentRunner.run_continuation).
+See: docs/work/supervisor-continuation-refactor.md
 """
 
 import asyncio
@@ -170,7 +171,7 @@ class TestDeferredEventTypes:
 class TestResumeFlow:
     """Test resume flow when worker completes while supervisor is WAITING.
 
-    This tests the LangGraph interrupt/resume pattern that replaced the
+    This tests the LangGraph-free supervisor resume pattern that replaced the
     old continuation pattern in Jan 2026.
     """
 
