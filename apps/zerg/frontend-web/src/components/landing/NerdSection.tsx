@@ -43,10 +43,10 @@ export function NerdSection() {
   ];
 
   const techHighlights = [
-    "LangGraph-powered agent execution",
+    "ReAct-based agent execution",
     "Per-token LLM streaming over WebSocket",
     "MCP (Model Context Protocol) integration",
-    "Two-tier credential management"
+    "Two-tier credential management",
   ];
 
   return (

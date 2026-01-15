@@ -44,7 +44,7 @@ When running, you have live access to:
 
 Three-layer debugging infrastructure for investigating LLM behavior in supervisor/worker runs.
 
-**Note**: The supervisor/worker path is now **LangGraph-free by default** (as of 2026-01-13). The ReAct loop runs in `supervisor_react_engine.py` without LangGraph checkpointing. LangGraph is still used for the workflow engine and available as a rollback via `USE_LANGGRAPH_SUPERVISOR=1`.
+**Note**: The supervisor/worker path is now **LangGraph-free by default** (as of 2026-01-13). The ReAct loop runs in `supervisor_react_engine.py` without LangGraph checkpointing. LangGraph is still used for the workflow engine.
 
 ### Quick Reference
 
@@ -54,7 +54,7 @@ Three-layer debugging infrastructure for investigating LLM behavior in superviso
 | "What recent traces exist?" | Trace Debugger | `make debug-trace RECENT=1` |
 | "What messages are in the thread?" | Thread Inspector | `make debug-thread THREAD_ID=1` |
 | "Are there duplicate messages?" | Validator | `make debug-validate THREAD_ID=1` |
-| "What's the LangGraph checkpoint state?" | Inspector | `make debug-inspect THREAD_ID=1` |
+| "What's the workflow LangGraph checkpoint state?" | Inspector | `make debug-inspect THREAD_ID=1` |
 | "What did the LLM see/respond?" | Audit Log | `uv run python scripts/debug_run_audit.py --run-id 82` |
 | "Can I replay with different prompts?" | Replay Harness | `uv run python scripts/replay_run.py <run_id>` |
 
@@ -114,7 +114,7 @@ Workflow:
 
 ### Layer 1: Thread Inspector (`debug_langgraph.py`)
 
-Inspect DB state (ThreadMessage table) and LangGraph checkpoints.
+Inspect DB state (ThreadMessage table) and workflow LangGraph checkpoints.
 
 ```bash
 cd apps/zerg/backend
@@ -619,7 +619,7 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
 
 19. **Marketing mode**: Use `?marketing=true` URL param to enable vivid styling for screenshots. Works with URL-addressable pages: `/canvas?workflow=health&marketing=true`, `/chat?thread=marketing&marketing=true`, `/dashboard?marketing=true`. Pages emit `data-ready="true"` on body when loaded for automation.
 
-20. **Feature flags are import-time**: Environment variables read via `os.getenv()` at module level (like `USE_LANGGRAPH_SUPERVISOR`) are evaluated once at import. Tests must patch the module variable directly (e.g., `zerg.services.worker_resume.USE_LANGGRAPH_SUPERVISOR`), not `os.environ`.
+20. **Feature flags are import-time**: Environment variables read via `os.getenv()` at module level are evaluated once at import. Tests must patch the module variable directly, not `os.environ`.
 
 21. **Exception classes must be single-sourced**: Custom exceptions like `AgentInterrupted` must be defined in one place and imported everywhere. Defining a local class with the same name causes `except` blocks to miss it silently.
 

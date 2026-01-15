@@ -305,9 +305,9 @@ class TestWorkerSupervisorCorrelation:
         assert job is not None
         assert job.supervisor_run_id is None
 
-    # NOTE: test_run_continuation_inherits_model was removed during the LangGraph
-    # interrupt/resume refactor (Jan 2026). The continuation pattern now uses
-    # interrupt() + Command(resume=...) instead of creating separate continuation runs.
+    # NOTE: test_run_continuation_inherits_model was removed during the supervisor
+    # resume refactor (Jan 2026). The continuation pattern now uses
+    # AgentInterrupted + AgentRunner.run_continuation instead of separate runs.
     # See: docs/work/supervisor-continuation-refactor.md
 
 

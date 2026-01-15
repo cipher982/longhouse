@@ -207,7 +207,7 @@ def get_active_run(
     )
 
     if not active_run:
-        # WAITING runs are interrupted via spawn_worker (LangGraph interrupt/resume).
+        # WAITING runs are interrupted via spawn_worker (supervisor resume).
         active_run = (
             db.query(AgentRun)
             .filter(AgentRun.agent_id == supervisor_agent.id)

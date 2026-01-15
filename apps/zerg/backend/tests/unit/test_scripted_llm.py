@@ -168,7 +168,7 @@ async def test_async_generate():
 
 
 class TestSequencedResponses:
-    """Test sequenced response functionality for LangGraph replay simulation."""
+    """Test sequenced response functionality for supervisor replay simulation."""
 
     def test_sequenced_response_on_first_call(self):
         """Test that sequenced response is returned on first matching call."""

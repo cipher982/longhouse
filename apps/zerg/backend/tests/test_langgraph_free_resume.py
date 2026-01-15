@@ -1,8 +1,8 @@
 """Tests for LangGraph-free supervisor resume path.
 
 These tests verify the new resume implementation that uses AgentRunner.run_continuation()
-instead of LangGraph's Command(resume=...) pattern. The default behavior (USE_LANGGRAPH_SUPERVISOR=0)
-now uses the LangGraph-free path.
+instead of LangGraph's Command(resume=...) pattern. The default behavior now uses
+the LangGraph-free path.
 
 Key behaviors tested:
 - Happy path: WAITING run resumes successfully
