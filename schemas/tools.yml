@@ -80,6 +80,8 @@ components:
         - task_delete
         - task_list
         - task_update
+        - list_tools
+        - search_tools
         - web_fetch
         - web_search
 
@@ -110,6 +112,7 @@ components:
         - ssh
         - supervisor
         - task
+        - tool_discovery
         - uuid
         - web_fetch
         - web_search
@@ -277,6 +280,10 @@ components:
               const: task
             task_update:
               const: task
+            list_tools:
+              const: tool_discovery
+            search_tools:
+              const: tool_discovery
             web_fetch:
               const: web_fetch
             web_search:
@@ -343,6 +350,8 @@ components:
             - task_delete
             - task_list
             - task_update
+            - list_tools
+            - search_tools
             - web_fetch
             - web_search
 

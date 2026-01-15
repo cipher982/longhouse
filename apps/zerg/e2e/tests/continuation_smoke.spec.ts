@@ -22,6 +22,7 @@ test.describe('Continuation Flow Smoke Test', () => {
     const response = await request.post('/api/jarvis/chat', {
       data: {
         message: 'TRIGGER_WORKER', // Triggers spawn_worker in MockLLM
+        message_id: crypto.randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'smoke-continuation'
       }
