@@ -70,6 +70,8 @@ class ToolName(str, Enum):
     TASK_DELETE = "task_delete"
     TASK_LIST = "task_list"
     TASK_UPDATE = "task_update"
+    LIST_TOOLS = "list_tools"
+    SEARCH_TOOLS = "search_tools"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
 
@@ -100,6 +102,7 @@ class ServerName(str, Enum):
     SSH = "ssh"
     SUPERVISOR = "supervisor"
     TASK = "task"
+    TOOL_DISCOVERY = "tool_discovery"
     UUID = "uuid"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
@@ -168,6 +171,8 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.TASK_DELETE: ServerName.TASK,
     ToolName.TASK_LIST: ServerName.TASK,
     ToolName.TASK_UPDATE: ServerName.TASK,
+    ToolName.LIST_TOOLS: ServerName.TOOL_DISCOVERY,
+    ToolName.SEARCH_TOOLS: ServerName.TOOL_DISCOVERY,
     ToolName.WEB_FETCH: ServerName.WEB_FETCH,
     ToolName.WEB_SEARCH: ServerName.WEB_SEARCH,
 }

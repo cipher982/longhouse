@@ -10,11 +10,18 @@ Key differences from LangGraph-based implementation:
 - No add_messages() - plain list operations
 - Returns (messages, usage) tuple for explicit persistence
 
+Lazy Loading (optional):
+- When lazy_loading=True, only core tools are bound initially
+- Tool catalog is injected into system prompt for awareness
+- Non-core tools are loaded on-demand via LazyToolBinder
+- LLM is rebound when new tools are loaded
+
 Usage:
     result = await run_supervisor_loop(
         messages=db_messages,
         agent_row=agent,
         tools=tool_list,
+        lazy_loading=True,  # Enable lazy loading
     )
     new_messages = result.messages
     usage = result.usage
@@ -24,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import logging
 from dataclasses import dataclass
 from dataclasses import field
@@ -389,11 +397,20 @@ async def _execute_tool(
     *,
     run_id: int | None,
     owner_id: int | None,
+    tool_getter: callable | None = None,
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
     For spawn_worker, raises AgentInterrupted instead of returning ToolMessage.
     For other tools, returns ToolMessage with result.
+
+    Args:
+        tool_call: Tool call dict with name, args, id.
+        tools_by_name: Dict mapping tool names to BaseTool instances.
+        run_id: Supervisor run ID for event correlation.
+        owner_id: Owner ID for event correlation.
+        tool_getter: Optional callable for lazy tool loading. If provided,
+            called with tool_name to get/load the tool. Used for lazy loading.
 
     Raises:
         AgentInterrupted: If spawn_worker is called and job is queued (not already complete).
@@ -428,7 +445,11 @@ async def _execute_tool(
     result_content = None  # May be set by spawn_worker or error handling
     observation = None  # Set by normal tool execution
 
-    tool_to_call = tools_by_name.get(tool_name)
+    # Get tool using tool_getter (lazy loading) or tools_by_name (eager)
+    if tool_getter is not None:
+        tool_to_call = tool_getter(tool_name)
+    else:
+        tool_to_call = tools_by_name.get(tool_name)
 
     if not tool_to_call:
         result_content = f"Error: Tool '{tool_name}' not found."
@@ -558,6 +579,7 @@ async def run_supervisor_loop(
     owner_id: int | None = None,
     trace_id: str | None = None,
     enable_token_stream: bool = False,
+    lazy_loading: bool = False,
 ) -> SupervisorResult:
     """Run the supervisor ReAct loop until completion or interrupt.
 
@@ -571,13 +593,68 @@ async def run_supervisor_loop(
         owner_id: Owner ID for event correlation.
         trace_id: End-to-end trace ID for debugging.
         enable_token_stream: Whether to stream tokens.
+        lazy_loading: If True, use lazy tool loading with catalog injection.
+            Core tools are always bound; other tools load on-demand.
 
     Returns:
         SupervisorResult with messages, usage, and interrupt status.
         If interrupted=True, caller should persist messages and set run to WAITING.
     """
-    # Build tools map
-    tools_by_name = {tool.name: tool for tool in tools}
+    # Set up tool binder (lazy or eager)
+    if lazy_loading:
+        from zerg.tools.catalog import build_catalog
+        from zerg.tools.catalog import format_catalog_for_prompt
+        from zerg.tools.lazy_binder import LazyToolBinder
+        from zerg.tools.tool_search import clear_search_context
+        from zerg.tools.tool_search import set_search_context
+        from zerg.tools.unified_access import get_tool_resolver
+
+        # Build lazy binder from resolver (not pre-filtered tools)
+        resolver = get_tool_resolver()
+        # Extract allowlist from tools if filtering was applied
+        allowed_names = [t.name for t in tools]
+        lazy_binder = LazyToolBinder(resolver, allowed_tools=allowed_names)
+
+        # Set search context so search_tools respects allowlist and rebind cap
+        # MAX_TOOLS_FROM_SEARCH is defined below in _maybe_rebind_after_tool_search
+        set_search_context(allowed_tools=allowed_names, max_results=8)
+
+        # Use only loaded tools for binding
+        bound_tools = lazy_binder.get_bound_tools()
+        tools_by_name = {t.name: t for t in tools}  # Full set for execution
+
+        # Inject catalog into first system message
+        # Use actually loaded core tools (respects allowlist) not the full CORE_TOOLS set
+        loaded_core_names = sorted(lazy_binder.loaded_tool_names)
+        catalog = build_catalog()
+        catalog_text = format_catalog_for_prompt(catalog, exclude_core=True)
+        catalog_instructions = "You have access to the following tools. Core tools are always available."
+        if "search_tools" in loaded_core_names:
+            catalog_instructions += (
+                " For other tools, first call `search_tools` with a query describing what you need. "
+                "The matching tools will be available on your next turn."
+            )
+
+        catalog_header = (
+            "\n\n## Available Tools\n"
+            f"{catalog_instructions}\n"
+            f"\n### Core Tools (always loaded): {', '.join(loaded_core_names)}\n"
+            f"{catalog_text}"
+        )
+
+        # Inject catalog after first system message
+        if messages and hasattr(messages[0], "type") and messages[0].type == "system":
+            original_content = messages[0].content
+            messages = [SystemMessage(content=original_content + catalog_header)] + list(messages[1:])
+
+        logger.info(
+            f"[LazyLoading] Initialized with {len(bound_tools)} core tools, " f"{len(tools)} total tools available, catalog injected"
+        )
+    else:
+        # Eager loading - all tools bound upfront (original behavior)
+        lazy_binder = None
+        bound_tools = tools
+        tools_by_name = {tool.name: tool for tool in tools}
 
     # Get model and reasoning effort from agent config
     model = agent_row.model
@@ -587,64 +664,156 @@ async def run_supervisor_loop(
     # Reset usage tracking
     reset_llm_usage()
 
-    # Create LLM
-    llm_with_tools = _make_llm(
-        model=model,
-        tools=tools,
-        reasoning_effort=reasoning_effort,
-    )
+    try:
+        # Create LLM with bound tools (core-only for lazy, all for eager)
+        llm_with_tools = _make_llm(
+            model=model,
+            tools=bound_tools,
+            reasoning_effort=reasoning_effort,
+        )
 
-    current_messages = list(messages)  # Copy to avoid mutation
+        current_messages = list(messages)  # Copy to avoid mutation
 
-    # Check for pending tool calls (resume case)
-    if current_messages:
-        last_msg = current_messages[-1]
-        if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
-            pending_tool_ids = {tc["id"] for tc in last_msg.tool_calls}
-            responded_tool_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
-            unresponded = pending_tool_ids - responded_tool_ids
+        # Helper to get tool and handle lazy loading
+        def get_tool_for_execution(tool_name: str) -> BaseTool | None:
+            """Get a tool for execution, handling lazy loading if enabled."""
+            nonlocal llm_with_tools, bound_tools
 
-            if unresponded:
-                # Resume: execute pending tools first
-                logger.info(f"Resuming with {len(unresponded)} pending tool call(s)")
-                pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
-
-                tool_results = []
-                for tc in pending_calls:
-                    try:
-                        result = await _execute_tool(
-                            tc,
-                            tools_by_name,
-                            run_id=run_id,
-                            owner_id=owner_id,
-                        )
-                        tool_results.append(result)
-                    except AgentInterrupted as e:
-                        # Include already-completed tool results before returning
-                        # This prevents re-execution on resume
-                        current_messages.extend(tool_results)
-                        return SupervisorResult(
-                            messages=current_messages,
-                            usage=get_llm_usage(),
-                            interrupted=True,
-                            interrupt_value=e.interrupt_value,
-                        )
-
-                current_messages.extend(tool_results)
-
-                # Call LLM with tool results
-                llm_response = await _call_llm(
-                    current_messages,
-                    llm_with_tools,
-                    phase="resume_synthesis",
-                    run_id=run_id,
-                    owner_id=owner_id,
-                    model=model,
-                    trace_id=trace_id,
-                    enable_token_stream=enable_token_stream,
-                )
+            if lazy_binder:
+                tool = lazy_binder.get_tool(tool_name)
+                # Check if we need to rebind (new tools were loaded)
+                if lazy_binder.needs_rebind():
+                    bound_tools = lazy_binder.get_bound_tools()
+                    llm_with_tools = _make_llm(
+                        model=model,
+                        tools=bound_tools,
+                        reasoning_effort=reasoning_effort,
+                    )
+                    lazy_binder.clear_rebind_flag()
+                    logger.info(f"[LazyLoading] Rebound LLM with {len(bound_tools)} tools after loading '{tool_name}'")
+                return tool
             else:
-                # All tool calls responded, proceed normally
+                return tools_by_name.get(tool_name)
+
+        # Maximum tools to load from a single search_tools call
+        MAX_TOOLS_FROM_SEARCH = 8
+
+        def _maybe_rebind_after_tool_search(tool_results: list[ToolMessage]) -> None:
+            """Rebind LLM with tools discovered via search_tools.
+
+            This implements the Claude Code pattern: after search_tools returns,
+            we parse the tool names and bind them BEFORE the next LLM call.
+            This allows the LLM to actually call the discovered tools.
+            """
+            nonlocal llm_with_tools, bound_tools
+
+            if not lazy_binder:
+                return
+
+            # Collect tool names returned by search_tools
+            names: list[str] = []
+            for msg in tool_results:
+                if msg.name != "search_tools":
+                    continue
+                try:
+                    payload = json.loads(msg.content)
+                except Exception:
+                    logger.debug("[LazyLoading] search_tools result not JSON; skipping")
+                    continue
+
+                for entry in payload.get("tools") or []:
+                    name = entry.get("name")
+                    if isinstance(name, str) and name:
+                        names.append(name)
+
+            if not names:
+                return
+
+            # De-dupe and cap to prevent context explosion
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for name in names:
+                if name not in seen:
+                    seen.add(name)
+                    deduped.append(name)
+            deduped = deduped[:MAX_TOOLS_FROM_SEARCH]
+
+            loaded = lazy_binder.load_tools(deduped)
+            if lazy_binder.needs_rebind():
+                bound_tools = lazy_binder.get_bound_tools()
+                llm_with_tools = _make_llm(
+                    model=model,
+                    tools=bound_tools,
+                    reasoning_effort=reasoning_effort,
+                )
+                lazy_binder.clear_rebind_flag()
+                logger.info(f"[LazyLoading] Rebound after search_tools; loaded={loaded}, total bound={len(bound_tools)}")
+
+        # Check for pending tool calls (resume case)
+        if current_messages:
+            last_msg = current_messages[-1]
+            if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
+                pending_tool_ids = {tc["id"] for tc in last_msg.tool_calls}
+                responded_tool_ids = {m.tool_call_id for m in current_messages if isinstance(m, ToolMessage)}
+                unresponded = pending_tool_ids - responded_tool_ids
+
+                if unresponded:
+                    # Resume: execute pending tools first
+                    logger.info(f"Resuming with {len(unresponded)} pending tool call(s)")
+                    pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
+
+                    tool_results = []
+                    for tc in pending_calls:
+                        try:
+                            result = await _execute_tool(
+                                tc,
+                                tools_by_name,
+                                run_id=run_id,
+                                owner_id=owner_id,
+                                tool_getter=get_tool_for_execution if lazy_binder else None,
+                            )
+                            tool_results.append(result)
+                        except AgentInterrupted as e:
+                            # Include already-completed tool results before returning
+                            # This prevents re-execution on resume
+                            current_messages.extend(tool_results)
+                            return SupervisorResult(
+                                messages=current_messages,
+                                usage=get_llm_usage(),
+                                interrupted=True,
+                                interrupt_value=e.interrupt_value,
+                            )
+
+                    current_messages.extend(tool_results)
+
+                    # Rebind tools if search_tools was called (Claude Code pattern)
+                    _maybe_rebind_after_tool_search(tool_results)
+
+                    # Call LLM with tool results
+                    llm_response = await _call_llm(
+                        current_messages,
+                        llm_with_tools,
+                        phase="resume_synthesis",
+                        run_id=run_id,
+                        owner_id=owner_id,
+                        model=model,
+                        trace_id=trace_id,
+                        enable_token_stream=enable_token_stream,
+                    )
+                else:
+                    # All tool calls responded, proceed normally
+                    llm_response = await _call_llm(
+                        current_messages,
+                        llm_with_tools,
+                        phase="initial",
+                        run_id=run_id,
+                        owner_id=owner_id,
+                        model=model,
+                        trace_id=trace_id,
+                        enable_token_stream=enable_token_stream,
+                    )
+            else:
+                # No pending tool calls
                 llm_response = await _call_llm(
                     current_messages,
                     llm_with_tools,
@@ -656,7 +825,7 @@ async def run_supervisor_loop(
                     enable_token_stream=enable_token_stream,
                 )
         else:
-            # No pending tool calls
+            # Empty messages (shouldn't happen in production)
             llm_response = await _call_llm(
                 current_messages,
                 llm_with_tools,
@@ -667,155 +836,188 @@ async def run_supervisor_loop(
                 trace_id=trace_id,
                 enable_token_stream=enable_token_stream,
             )
-    else:
-        # Empty messages (shouldn't happen in production)
-        llm_response = await _call_llm(
-            current_messages,
-            llm_with_tools,
-            phase="initial",
-            run_id=run_id,
-            owner_id=owner_id,
-            model=model,
-            trace_id=trace_id,
-            enable_token_stream=enable_token_stream,
-        )
 
-    # Handle empty response retry
-    if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
-        content = llm_response.content
-        content_text = ""
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    content_text += str(part.get("text") or "")
-                elif isinstance(part, str):
-                    content_text += part
-        else:
-            content_text = str(content or "")
+        # Handle empty response retry
+        if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+            content = llm_response.content
+            content_text = ""
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        content_text += str(part.get("text") or "")
+                    elif isinstance(part, str):
+                        content_text += part
+            else:
+                content_text = str(content or "")
 
-        if not content_text.strip():
-            logger.warning("Agent produced empty response; retrying once")
-            current_messages.append(
-                SystemMessage(
-                    content=(
-                        "Your previous response was empty. You MUST either:\n"
-                        "1) Call the appropriate tool(s), OR\n"
-                        "2) Provide a final answer.\n\n"
-                        "Do not return an empty message."
-                    )
-                )
-            )
-            llm_response = await _call_llm(
-                current_messages,
-                _make_llm(
-                    model=model,
-                    tools=tools,
-                    reasoning_effort=reasoning_effort,
-                    tool_choice="required" if tools else None,
-                ),
-                phase="empty_retry",
-                run_id=run_id,
-                owner_id=owner_id,
-                model=model,
-                trace_id=trace_id,
-                enable_token_stream=enable_token_stream,
-            )
-
-            # Still empty? Return error message
-            if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
-                retry_text = ""
-                retry_content = llm_response.content
-                if isinstance(retry_content, list):
-                    for part in retry_content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            retry_text += str(part.get("text") or "")
-                        elif isinstance(part, str):
-                            retry_text += part
-                else:
-                    retry_text = str(retry_content or "")
-
-                if not retry_text.strip():
-                    logger.error("Agent produced empty response after retry")
-                    llm_response = AIMessage(content=("Error: LLM returned an empty response twice. " "This is a provider/model issue."))
-
-    # Main ReAct loop with iteration guard
-    iteration = 0
-    while isinstance(llm_response, AIMessage) and llm_response.tool_calls:
-        iteration += 1
-        if iteration > MAX_REACT_ITERATIONS:
-            logger.error(f"ReAct loop exceeded {MAX_REACT_ITERATIONS} iterations. " "Possible infinite loop detected. Returning error.")
-            error_msg = AIMessage(
-                content=(
-                    f"Error: Supervisor exceeded maximum of {MAX_REACT_ITERATIONS} "
-                    "tool iterations. This may indicate a loop or overly complex task."
-                )
-            )
-            current_messages.append(error_msg)
-            return SupervisorResult(
-                messages=current_messages,
-                usage=get_llm_usage(),
-                interrupted=False,
-                interrupt_value=None,
-            )
-
-        # Add AIMessage to history
-        current_messages.append(llm_response)
-
-        # Enforce: spawn_worker must be the only tool call
-        # Mixed tool sets cause ordering issues (tools before spawn_worker run,
-        # then interrupt; tools after run only on resume)
-        tool_names = [tc.get("name") for tc in llm_response.tool_calls]
-        has_spawn_worker = "spawn_worker" in tool_names
-        if has_spawn_worker and len(llm_response.tool_calls) > 1:
-            # Return error and let LLM retry with spawn_worker alone
-            error_msg = (
-                "Error: spawn_worker must be called alone, not with other tools. "
-                f"You tried to call: {', '.join(tool_names)}. "
-                "Please call spawn_worker separately."
-            )
-            logger.warning(f"[ReAct] spawn_worker mixed with other tools: {tool_names}")
-
-            # Emit synthetic tool_started/tool_failed events so UI activity ticker stays consistent
-            try:
-                from zerg.events import get_emitter
-                from zerg.tools.result_utils import redact_sensitive_args
-                from zerg.tools.result_utils import safe_preview
-
-                emitter = get_emitter()
-                if emitter:
-                    for tc in llm_response.tool_calls:
-                        tool_name = tc.get("name", "unknown_tool")
-                        tool_call_id = tc.get("id", "")
-                        tool_args = tc.get("args") or {}
-                        safe_args = redact_sensitive_args(tool_args)
-
-                        await emitter.emit_tool_started(
-                            tool_name=tool_name,
-                            tool_call_id=tool_call_id,
-                            tool_args_preview=safe_preview(str(safe_args)),
-                            tool_args=safe_args,
-                        )
-
-                        await emitter.emit_tool_failed(
-                            tool_name=tool_name,
-                            tool_call_id=tool_call_id,
-                            duration_ms=0,
-                            error=error_msg,
-                        )
-            except Exception:
-                # Event emission best-effort; do not block error handling path
-                logger.exception("Failed to emit synthetic tool_failed events for mixed spawn_worker call")
-
-            # Create error ToolMessages for each tool call to keep transcript consistent
-            for tc in llm_response.tool_calls:
+            if not content_text.strip():
+                logger.warning("Agent produced empty response; retrying once")
                 current_messages.append(
-                    ToolMessage(
-                        content=error_msg,
-                        tool_call_id=tc.get("id"),
-                        name=tc.get("name"),
+                    SystemMessage(
+                        content=(
+                            "Your previous response was empty. You MUST either:\n"
+                            "1) Call the appropriate tool(s), OR\n"
+                            "2) Provide a final answer.\n\n"
+                            "Do not return an empty message."
+                        )
                     )
                 )
-            # Continue loop to let LLM correct itself
+                llm_response = await _call_llm(
+                    current_messages,
+                    _make_llm(
+                        model=model,
+                        tools=bound_tools,
+                        reasoning_effort=reasoning_effort,
+                        tool_choice="required" if bound_tools else None,
+                    ),
+                    phase="empty_retry",
+                    run_id=run_id,
+                    owner_id=owner_id,
+                    model=model,
+                    trace_id=trace_id,
+                    enable_token_stream=enable_token_stream,
+                )
+
+                # Still empty? Return error message
+                if isinstance(llm_response, AIMessage) and not llm_response.tool_calls:
+                    retry_text = ""
+                    retry_content = llm_response.content
+                    if isinstance(retry_content, list):
+                        for part in retry_content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                retry_text += str(part.get("text") or "")
+                            elif isinstance(part, str):
+                                retry_text += part
+                    else:
+                        retry_text = str(retry_content or "")
+
+                    if not retry_text.strip():
+                        logger.error("Agent produced empty response after retry")
+                        llm_response = AIMessage(
+                            content=("Error: LLM returned an empty response twice. " "This is a provider/model issue.")
+                        )
+
+        # Main ReAct loop with iteration guard
+        iteration = 0
+        while isinstance(llm_response, AIMessage) and llm_response.tool_calls:
+            iteration += 1
+            if iteration > MAX_REACT_ITERATIONS:
+                logger.error(f"ReAct loop exceeded {MAX_REACT_ITERATIONS} iterations. " "Possible infinite loop detected. Returning error.")
+                error_msg = AIMessage(
+                    content=(
+                        f"Error: Supervisor exceeded maximum of {MAX_REACT_ITERATIONS} "
+                        "tool iterations. This may indicate a loop or overly complex task."
+                    )
+                )
+                current_messages.append(error_msg)
+                return SupervisorResult(
+                    messages=current_messages,
+                    usage=get_llm_usage(),
+                    interrupted=False,
+                    interrupt_value=None,
+                )
+
+            # Add AIMessage to history
+            current_messages.append(llm_response)
+
+            # Enforce: spawn_worker must be the only tool call
+            # Mixed tool sets cause ordering issues (tools before spawn_worker run,
+            # then interrupt; tools after run only on resume)
+            tool_names = [tc.get("name") for tc in llm_response.tool_calls]
+            has_spawn_worker = "spawn_worker" in tool_names
+            if has_spawn_worker and len(llm_response.tool_calls) > 1:
+                # Return error and let LLM retry with spawn_worker alone
+                error_msg = (
+                    "Error: spawn_worker must be called alone, not with other tools. "
+                    f"You tried to call: {', '.join(tool_names)}. "
+                    "Please call spawn_worker separately."
+                )
+                logger.warning(f"[ReAct] spawn_worker mixed with other tools: {tool_names}")
+
+                # Emit synthetic tool_started/tool_failed events so UI activity ticker stays consistent
+                try:
+                    from zerg.events import get_emitter
+                    from zerg.tools.result_utils import redact_sensitive_args
+                    from zerg.tools.result_utils import safe_preview
+
+                    emitter = get_emitter()
+                    if emitter:
+                        for tc in llm_response.tool_calls:
+                            tool_name = tc.get("name", "unknown_tool")
+                            tool_call_id = tc.get("id", "")
+                            tool_args = tc.get("args") or {}
+                            safe_args = redact_sensitive_args(tool_args)
+
+                            await emitter.emit_tool_started(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                tool_args_preview=safe_preview(str(safe_args)),
+                                tool_args=safe_args,
+                            )
+
+                            await emitter.emit_tool_failed(
+                                tool_name=tool_name,
+                                tool_call_id=tool_call_id,
+                                duration_ms=0,
+                                error=error_msg,
+                            )
+                except Exception:
+                    # Event emission best-effort; do not block error handling path
+                    logger.exception("Failed to emit synthetic tool_failed events for mixed spawn_worker call")
+
+                # Create error ToolMessages for each tool call to keep transcript consistent
+                for tc in llm_response.tool_calls:
+                    current_messages.append(
+                        ToolMessage(
+                            content=error_msg,
+                            tool_call_id=tc.get("id"),
+                            name=tc.get("name"),
+                        )
+                    )
+                # Continue loop to let LLM correct itself
+                llm_response = await _call_llm(
+                    current_messages,
+                    llm_with_tools,
+                    phase="tool_iteration",
+                    run_id=run_id,
+                    owner_id=owner_id,
+                    model=model,
+                    trace_id=trace_id,
+                    enable_token_stream=enable_token_stream,
+                )
+                continue
+
+            # Execute tools
+            tool_results = []
+            for tc in llm_response.tool_calls:
+                try:
+                    result = await _execute_tool(
+                        tc,
+                        tools_by_name,
+                        run_id=run_id,
+                        owner_id=owner_id,
+                        tool_getter=get_tool_for_execution if lazy_binder else None,
+                    )
+                    tool_results.append(result)
+                except AgentInterrupted as e:
+                    # Include already-completed tool results before returning
+                    # This prevents re-execution on resume
+                    # AIMessage is already in current_messages
+                    current_messages.extend(tool_results)
+                    return SupervisorResult(
+                        messages=current_messages,
+                        usage=get_llm_usage(),
+                        interrupted=True,
+                        interrupt_value=e.interrupt_value,
+                    )
+
+            # Add tool results to history
+            current_messages.extend(tool_results)
+
+            # Rebind tools if search_tools was called (Claude Code pattern)
+            _maybe_rebind_after_tool_search(tool_results)
+
+            # Call LLM again
             llm_response = await _call_llm(
                 current_messages,
                 llm_with_tools,
@@ -826,52 +1028,18 @@ async def run_supervisor_loop(
                 trace_id=trace_id,
                 enable_token_stream=enable_token_stream,
             )
-            continue
 
-        # Execute tools
-        tool_results = []
-        for tc in llm_response.tool_calls:
-            try:
-                result = await _execute_tool(
-                    tc,
-                    tools_by_name,
-                    run_id=run_id,
-                    owner_id=owner_id,
-                )
-                tool_results.append(result)
-            except AgentInterrupted as e:
-                # Include already-completed tool results before returning
-                # This prevents re-execution on resume
-                # AIMessage is already in current_messages
-                current_messages.extend(tool_results)
-                return SupervisorResult(
-                    messages=current_messages,
-                    usage=get_llm_usage(),
-                    interrupted=True,
-                    interrupt_value=e.interrupt_value,
-                )
+        # Add final response
+        current_messages.append(llm_response)
 
-        # Add tool results to history
-        current_messages.extend(tool_results)
-
-        # Call LLM again
-        llm_response = await _call_llm(
-            current_messages,
-            llm_with_tools,
-            phase="tool_iteration",
-            run_id=run_id,
-            owner_id=owner_id,
-            model=model,
-            trace_id=trace_id,
-            enable_token_stream=enable_token_stream,
+        return SupervisorResult(
+            messages=current_messages,
+            usage=get_llm_usage(),
+            interrupted=False,
+            interrupt_value=None,
         )
 
-    # Add final response
-    current_messages.append(llm_response)
-
-    return SupervisorResult(
-        messages=current_messages,
-        usage=get_llm_usage(),
-        interrupted=False,
-        interrupt_value=None,
-    )
+    finally:
+        # Clear search context (only needed for lazy loading, but safe to call always)
+        if lazy_loading:
+            clear_search_context()

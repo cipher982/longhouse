@@ -1,0 +1,142 @@
+version: "1.0"
+description: Tool selection quality evals - tests that agents pick the right specialized tool
+
+# NOTE: These tests require LIVE MODE (real LLM) to be meaningful.
+# In hermetic mode, the stub LLM doesn't select tools based on context.
+# Run with: make eval-live-tool-selection or EVAL_MODE=live pytest ...
+
+# Variants for comparing lazy vs eager tool loading
+variants:
+  eager:
+    model: gpt-5-mini
+    temperature: 0.0
+    reasoning_effort: none
+    # lazy_loading: false (default)
+
+  lazy:
+    model: gpt-5-mini
+    temperature: 0.0
+    reasoning_effort: none
+    # lazy_loading: true (enable in runner)
+
+cases:
+  # Health data should use personal tool, not web search
+  - id: health_whoop
+    category: tool_selection
+    description: WHOOP data request should use get_whoop_data, not web_search
+    input: "What's my current heart rate and recovery score?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: get_whoop_data
+      - type: not_tool_called
+        value: web_search
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, personal, live]
+
+  # Location should use Traccar, not web search
+  - id: location_traccar
+    category: tool_selection
+    description: Location request should use get_current_location
+    input: "Where am I right now?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: get_current_location
+      - type: not_tool_called
+        value: web_search
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, personal, live]
+
+  # GitHub should use GitHub tools, not generic HTTP
+  - id: github_issues
+    category: tool_selection
+    description: GitHub issue lookup should use github_list_issues
+    input: "List open issues in the anthropics/claude-code repo"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: github_list_issues
+      - type: not_tool_called
+        value: http_request
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, github, live]
+
+  # Slack should use webhook, not email
+  - id: slack_message
+    category: tool_selection
+    description: Slack message request should use send_slack_webhook
+    input: "Send a message to the #engineering slack channel saying hello"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: send_slack_webhook
+      - type: not_tool_called
+        value: send_email
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, messaging, live]
+
+  # Notes search should use Obsidian, not web search
+  - id: notes_search
+    category: tool_selection
+    description: Personal notes search should use search_notes
+    input: "Search my notes for anything about project planning"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: search_notes
+      - type: not_tool_called
+        value: web_search
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, personal, live]
+
+  # Web search for general knowledge (should NOT use specialized tools)
+  - id: web_general_knowledge
+    category: tool_selection
+    description: General knowledge question should use web_search
+    input: "What were the major tech announcements at CES 2025?"
+    timeout: 60
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: web_search
+      - type: not_tool_called
+        value: get_whoop_data
+      - type: not_tool_called
+        value: github_list_issues
+      - type: latency_ms
+        max: 30000
+    tags: [tool_selection, web, live]
+
+  # Worker spawning for infrastructure tasks
+  - id: infra_ssh_task
+    category: tool_selection
+    description: Server task should spawn worker, not call http_request
+    input: "Check disk space on the clifford server"
+    timeout: 120
+    assert:
+      - type: status
+        value: success
+      - type: tool_called
+        value: spawn_worker
+      - type: not_tool_called
+        value: http_request
+      - type: worker_spawned
+        min_count: 1
+    tags: [tool_selection, infrastructure, worker, live]
