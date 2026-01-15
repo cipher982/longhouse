@@ -570,6 +570,8 @@ class SupervisorService:
                 owner_id=owner_id,
                 message_id=message_id,
                 trace_id=effective_trace_id,
+                model=model_override or agent.model,
+                reasoning_effort=reasoning_effort,
             )
 
             # Set up injected emitter for event emission (Phase 2 of emitter refactor)

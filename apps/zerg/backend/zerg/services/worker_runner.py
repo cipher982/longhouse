@@ -222,8 +222,9 @@ class WorkerRunner:
             )
 
             # Run agent and capture messages (with timeout enforcement)
-            # Disable reasoning for workers - they execute tools, not complex reasoning
-            runner = AgentRunner(agent, reasoning_effort="none")
+            # Use reasoning_effort from config (inherited from supervisor) or default to "none"
+            worker_reasoning_effort = config.get("reasoning_effort", "none")
+            runner = AgentRunner(agent, reasoning_effort=worker_reasoning_effort)
             try:
                 created_messages = await asyncio.wait_for(runner.run_thread(db, thread), timeout=timeout)
             except asyncio.TimeoutError:
