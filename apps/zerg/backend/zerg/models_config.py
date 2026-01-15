@@ -20,6 +20,7 @@ class ModelProvider(str, Enum):
     """Enum for different model providers"""
 
     OPENAI = "openai"
+    GROQ = "groq"
 
 
 class ModelConfig:
@@ -33,6 +34,8 @@ class ModelConfig:
         is_default: bool = False,
         tier: Optional[str] = None,
         description: Optional[str] = None,
+        base_url: Optional[str] = None,
+        capabilities: Optional[Dict] = None,
     ):
         self.id = id
         self.display_name = display_name
@@ -40,6 +43,8 @@ class ModelConfig:
         self.is_default = is_default
         self.tier = tier
         self.description = description
+        self.base_url = base_url
+        self.capabilities = capabilities or {}
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for API responses"""
@@ -48,6 +53,7 @@ class ModelConfig:
             "display_name": self.display_name,
             "provider": self.provider,
             "is_default": self.is_default,
+            "capabilities": self.capabilities,
         }
 
 
@@ -125,6 +131,8 @@ for _model_id, _model_info in _MODELS.items():
             is_default=_is_default,
             tier=_model_info.get("tier"),
             description=_model_info.get("description"),
+            base_url=_model_info.get("baseUrl"),
+            capabilities=_model_info.get("capabilities"),
         )
     )
 

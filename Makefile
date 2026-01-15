@@ -250,6 +250,11 @@ test-frontend-unit: ## Run frontend unit tests only
 		cd apps/zerg/frontend-web && bun run test; \
 	fi
 
+test-integration: ## Run integration tests (REAL API calls, requires API keys)
+	@echo "🧪 Running integration tests (real API calls)..."
+	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
+	cd apps/zerg/backend && EVAL_MODE=live uv run pytest tests/integration/ -v -m integration
+
 test-zerg-e2e: ## Run Zerg E2E tests (Playwright)
 	@echo "🧪 Running Zerg E2E tests..."
 	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
