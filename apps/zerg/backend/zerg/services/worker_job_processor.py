@@ -136,6 +136,7 @@ class WorkerJobProcessor:
                     agent=None,  # Create temporary agent
                     agent_config={
                         "model": job.model,
+                        "reasoning_effort": job.reasoning_effort or "none",  # Inherit from supervisor
                         "owner_id": job.owner_id,
                     },
                     job_id=job.id,

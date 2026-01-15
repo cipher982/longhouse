@@ -40,6 +40,8 @@ class SupervisorContext:
     owner_id: int
     message_id: str  # UUID for the assistant message (stable across tokens/completion)
     trace_id: Optional[str] = None  # End-to-end trace ID for debugging (UUID as string)
+    model: Optional[str] = None  # Model ID for workers to inherit
+    reasoning_effort: Optional[str] = None  # Reasoning effort for workers to inherit
 
 
 # Context variable holding the current supervisor context
@@ -69,6 +71,8 @@ def set_supervisor_context(
     owner_id: int,
     message_id: str,
     trace_id: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> contextvars.Token:
     """Set the supervisor context for the current execution.
 
@@ -80,11 +84,20 @@ def set_supervisor_context(
         owner_id: The owner's user ID
         message_id: UUID for the assistant message
         trace_id: End-to-end trace ID for debugging (optional)
+        model: Model ID for workers to inherit (optional)
+        reasoning_effort: Reasoning effort for workers to inherit (optional)
 
     Returns:
         Token for resetting via reset_supervisor_context()
     """
-    ctx = SupervisorContext(run_id=run_id, owner_id=owner_id, message_id=message_id, trace_id=trace_id)
+    ctx = SupervisorContext(
+        run_id=run_id,
+        owner_id=owner_id,
+        message_id=message_id,
+        trace_id=trace_id,
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
     return _supervisor_context_var.set(ctx)
 
 

@@ -386,6 +386,7 @@ class WorkerJob(Base):
     # Job specification
     task = Column(Text, nullable=False)
     model = Column(String(100), nullable=False, default=DEFAULT_WORKER_MODEL_ID)
+    reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
 
     # Execution state
     status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed
