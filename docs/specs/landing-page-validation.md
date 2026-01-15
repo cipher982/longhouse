@@ -151,7 +151,7 @@ Validated the landing page at `/landing` against the comprehensive checklist in 
   - "Visual Workflow Builder" title bar
   - Canvas shows workflow: Trigger (New Email) → AI Agent (Analyze Sentiment) → Condition (Is Urgent?) → Actions (Send Slack Alert / Archive Email)
   - Left sidebar with tools: Add Node, Pan, Zoom, Settings
-  - "Under the hood" section with code snippets: LangGraph, Per-token streaming, MCP, Two-tier credentials
+  - "Under the hood" section with code snippets: ReAct execution, Per-token streaming, MCP, Two-tier credentials
 
 ### Integrations Section
 - **Status:** PASS

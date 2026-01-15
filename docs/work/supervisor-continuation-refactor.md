@@ -1,6 +1,6 @@
 # Supervisor Continuation Architecture Refactor
 
-**Status:** ✅ Implementation Complete
+**Status:** Superseded — supervisor/worker is LangGraph-free as of 2026-01-13
 **Priority:** High - Current implementation has fundamental design flaws
 **Created:** 2025-01-10
 **Completed:** 2025-01-10
@@ -8,14 +8,15 @@
 
 ---
 
-## Implementation Summary (Jan 2026)
+## Implementation Summary (Updated 2026-01-15)
 
-The refactor has been successfully implemented using LangGraph's native `interrupt()`/`Command(resume=...)` pattern. Key changes:
+The supervisor/worker path now uses a LangGraph-free ReAct loop with DB-based continuation. `spawn_worker` returns job info, the loop raises `AgentInterrupted`, and `worker_resume.py` calls `AgentRunner.run_continuation()` to inject the tool result. LangGraph interrupt/resume is no longer used for supervisor/worker execution (workflow engine still uses LangGraph).
 
 ### Files Added/Modified
-- **NEW:** `zerg/services/worker_resume.py` - Resume handler with idempotent atomic WAITING→RUNNING transition
-- **Modified:** `zerg/tools/builtin/supervisor_tools.py` - `spawn_worker_async()` now uses `interrupt()`
-- **Modified:** `zerg/services/worker_runner.py` - Calls resume handler instead of `run_continuation()`
+- **NEW:** `zerg/services/worker_resume.py` - Resume handler with idempotent WAITING→RUNNING transition
+- **Modified:** `zerg/tools/builtin/supervisor_tools.py` - `spawn_worker_async()` returns job info; loop raises `AgentInterrupted`
+- **Modified:** `zerg/services/supervisor_react_engine.py` - LangGraph-free ReAct loop (supervisor)
+- **Modified:** `zerg/services/worker_runner.py` - Calls resume handler (LangGraph-free)
 - **Modified:** `zerg/routers/jarvis_sse.py` - Subscribes to `SUPERVISOR_WAITING`/`SUPERVISOR_RESUMED` events
 - **Modified:** `zerg/events/event_bus.py` - Added new event types
 - **Deleted:** `run_continuation()` method from supervisor_service.py
@@ -26,10 +27,12 @@ The refactor has been successfully implemented using LangGraph's native `interru
 - `tests/test_durable_runs.py` - Updated for WAITING/resume pattern
 
 ### Minor Follow-up Items (Not Blockers)
-1. **Idempotency key improvement** - Currently keyed on `(supervisor_run_id, task)`. Consider using tool-call-id for truly duplicate task handling.
+1. **Idempotency key improvement** - Currently keyed on `(supervisor_run_id, task)` fallback. Consider relying purely on `tool_call_id` where possible.
 2. **Event emission placement** - `emit_run_event("supervisor_resumed")` could be wrapped in try/except for best-effort semantics.
-3. **E2E integration test** - Current test mocks the resume function; add test exercising real `Command(resume=...)` path.
+3. **E2E integration test** - Current test mocks the resume function; add test exercising real LangGraph-free continuation path.
 4. **Status semantics** - `jarvis_internal.py` returns `"status": "resumed"` even when handler returns `"skipped"`.
+
+The remainder of this document is historical context from the original LangGraph-based design.
 
 ---
 

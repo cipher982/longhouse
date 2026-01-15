@@ -1,7 +1,7 @@
-"""Tests for spawn_worker idempotency during LangGraph replay.
+"""Tests for spawn_worker idempotency during supervisor resume replay.
 
 These tests verify the idempotency fix that prevents duplicate workers when:
-1. LangGraph replays tool calls after interrupt/resume
+1. The supervisor loop replays tool calls after interrupt/resume
 2. The LLM slightly rephrases the task on replay (e.g., "check disk" → "check disk space")
 
 The fix uses:
@@ -56,7 +56,7 @@ def supervisor_run(db_session, test_user, sample_agent, sample_thread):
 
 
 class TestSpawnWorkerIdempotency:
-    """Tests for spawn_worker idempotency during LangGraph replay."""
+    """Tests for spawn_worker idempotency during supervisor replay."""
 
     @pytest.mark.asyncio
     async def test_exact_task_reuse_while_in_progress(

@@ -1009,8 +1009,8 @@ class SupervisorService:
         except Exception as e:
             logger.exception(f"Failed to trigger immediate resume for run {run_id}: {e}")
 
-    # NOTE: run_continuation() removed - replaced by LangGraph interrupt/resume pattern
-    # See worker_resume.py for the new implementation using Command(resume=...)
+    # NOTE: run_continuation() removed - replaced by LangGraph-free continuation
+    # See worker_resume.py for the new implementation using AgentRunner.run_continuation()
 
 
 __all__ = ["SupervisorService", "SupervisorRunResult", "SUPERVISOR_THREAD_TYPE"]
