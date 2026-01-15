@@ -69,8 +69,10 @@ async def spawn_worker_async(
     supervisor_run_id = ctx.run_id if ctx else None
     trace_id = ctx.trace_id if ctx else None
 
-    # Use default worker model if not specified
-    worker_model = model or DEFAULT_WORKER_MODEL_ID
+    # Worker inherits model and reasoning_effort from supervisor context
+    # Priority: explicit arg > supervisor context > default
+    worker_model = model or (ctx.model if ctx else None) or DEFAULT_WORKER_MODEL_ID
+    worker_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
 
     try:
         # IDEMPOTENCY: Prevent duplicate workers on retry/resume.
@@ -170,6 +172,7 @@ async def spawn_worker_async(
                 trace_id=uuid_module.UUID(trace_id) if trace_id else None,  # Inherit from supervisor for debugging
                 task=task,
                 model=worker_model,
+                reasoning_effort=worker_reasoning_effort,  # Inherit from supervisor
                 status="queued",
             )
             db.add(worker_job)

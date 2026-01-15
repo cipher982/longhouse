@@ -180,11 +180,14 @@ async def _continue_supervisor_langgraph_free(
     )
 
     # Set up contexts (include trace_id for end-to-end tracing)
+    # Include model/reasoning_effort so workers inherit supervisor settings
     _supervisor_ctx_token = set_supervisor_context(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
         trace_id=trace_id,
+        model=run.model,
+        reasoning_effort=run.reasoning_effort,
     )
 
     _supervisor_emitter = SupervisorEmitter(
