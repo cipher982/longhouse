@@ -74,10 +74,16 @@ export interface ChatMessage {
 /**
  * Model info from bootstrap
  */
+export interface ModelCapabilities {
+  reasoning?: boolean
+  reasoningNone?: boolean
+}
+
 export interface ModelInfo {
   id: string
   display_name: string
   description: string
+  capabilities?: ModelCapabilities
 }
 
 /**

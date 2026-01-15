@@ -159,12 +159,54 @@ def _make_llm(
             except TypeError:
                 return llm.bind_tools(tools)
 
+    # Look up model config for provider routing
+    from zerg.models_config import ModelProvider
+    from zerg.models_config import get_all_models
+    from zerg.models_config import get_model_by_id
+
+    model_config = get_model_by_id(model)
+    settings = get_settings()
+
+    # Validate model exists
+    if not model_config:
+        available = [m.id for m in get_all_models()]
+        raise ValueError(f"Unknown model: {model}. Available: {available}")
+
+    # Select API key and base_url based on provider
+    provider = model_config.provider
+
+    if provider == ModelProvider.GROQ:
+        api_key = settings.groq_api_key
+        base_url = model_config.base_url
+        # Validate Groq API key exists
+        if not api_key:
+            raise ValueError(f"GROQ_API_KEY not configured but Groq model '{model}' selected")
+    else:
+        api_key = settings.openai_api_key
+        base_url = None
+
     kwargs: dict = {
         "model": model,
-        "streaming": get_settings().llm_token_stream,
-        "api_key": get_settings().openai_api_key,
-        "reasoning_effort": reasoning_effort,
+        "streaming": settings.llm_token_stream,
+        "api_key": api_key,
     }
+
+    # Check if model supports reasoning
+    capabilities = model_config.capabilities or {}
+    supports_reasoning = capabilities.get("reasoning", False)
+    supports_reasoning_none = capabilities.get("reasoningNone", False)
+
+    # Add base_url and provider-specific config
+    if provider == ModelProvider.GROQ:
+        kwargs["base_url"] = base_url
+
+    # Only pass reasoning_effort if model supports it
+    if supports_reasoning:
+        # If model doesn't support 'none', use 'low' as fallback
+        effort = reasoning_effort
+        if reasoning_effort == "none" and not supports_reasoning_none:
+            effort = "low"
+        kwargs["reasoning_effort"] = effort
 
     llm = ChatOpenAI(**kwargs)
 

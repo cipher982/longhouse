@@ -183,27 +183,32 @@ except ImportError:
     pass
 
 # Mock the OpenAI module before importing main app
-mock_openai = MagicMock()
-mock_client = MagicMock()
-mock_chat = MagicMock()
-mock_completions = MagicMock()
+# EXCEPTION: When EVAL_MODE=live, skip mocking to allow real API calls
+import os as _os_early
 
-# Configure the mock to return a string for the content
-mock_message = MagicMock()
-mock_message.content = "This is a mock response from the LLM"
-mock_choice = MagicMock()
-mock_choice.message = mock_message
-mock_choices = [mock_choice]
-mock_response = MagicMock()
-mock_response.choices = mock_choices
+_eval_mode_early = _os_early.environ.get("EVAL_MODE", "hermetic")
+if _eval_mode_early != "live":
+    mock_openai = MagicMock()
+    mock_client = MagicMock()
+    mock_chat = MagicMock()
+    mock_completions = MagicMock()
 
-mock_completions.create.return_value = mock_response
-mock_chat.completions = mock_completions
-mock_client.chat = mock_chat
-mock_openai.return_value = mock_client
+    # Configure the mock to return a string for the content
+    mock_message = MagicMock()
+    mock_message.content = "This is a mock response from the LLM"
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_choices = [mock_choice]
+    mock_response = MagicMock()
+    mock_response.choices = mock_choices
 
-sys.modules["openai"] = MagicMock()
-sys.modules["openai.OpenAI"] = mock_openai
+    mock_completions.create.return_value = mock_response
+    mock_chat.completions = mock_completions
+    mock_client.chat = mock_chat
+    mock_openai.return_value = mock_client
+
+    sys.modules["openai"] = MagicMock()
+    sys.modules["openai.OpenAI"] = mock_openai
 
 # Don't completely mock langgraph, just patch specific functionality
 # This allows importing langgraph and accessing attributes like __version__
