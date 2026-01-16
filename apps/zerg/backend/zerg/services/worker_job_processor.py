@@ -14,16 +14,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
 
 from zerg.crud import crud
 from zerg.database import db_session
+from zerg.middleware.worker_db import current_worker_id
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 from zerg.services.worker_runner import WorkerRunner
 
 logger = logging.getLogger(__name__)
+
+# E2E test mode detection
+_is_e2e_mode = os.getenv("ENVIRONMENT") == "test:e2e"
 
 
 class WorkerJobProcessor:
@@ -71,10 +76,17 @@ class WorkerJobProcessor:
 
     async def _process_pending_jobs(self) -> None:
         """Process pending worker jobs."""
-        # First, get job IDs with a short-lived session
+        if _is_e2e_mode:
+            # E2E mode: poll all test schemas for jobs
+            await self._process_pending_jobs_e2e()
+        else:
+            # Normal mode: poll default schema
+            await self._process_pending_jobs_default()
+
+    async def _process_pending_jobs_default(self) -> None:
+        """Process pending jobs from default schema (normal mode)."""
         job_ids = []
         with db_session() as db:
-            # Find queued jobs
             queued_jobs = (
                 db.query(crud.WorkerJob)
                 .filter(crud.WorkerJob.status == "queued")
@@ -86,14 +98,53 @@ class WorkerJobProcessor:
             if not queued_jobs:
                 return
 
-            # Extract just the IDs - the session will be released after this block
             job_ids = [job.id for job in queued_jobs]
             logger.info(f"Found {len(job_ids)} queued worker jobs")
 
-        # Process jobs concurrently - each task gets its own session
         if job_ids:
             tasks = [asyncio.create_task(self._process_job_by_id(job_id)) for job_id in job_ids]
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _process_pending_jobs_e2e(self) -> None:
+        """Process pending jobs from all E2E test schemas.
+
+        In E2E mode, each Playwright worker gets its own Postgres schema.
+        We need to poll all schemas to find queued jobs.
+        """
+        # Poll schemas 0-15 (matches Playwright worker count in test setup)
+        # This is fast because empty schemas return immediately
+        for worker_id in range(16):
+            worker_id_str = str(worker_id)
+            token = current_worker_id.set(worker_id_str)
+            try:
+                job_ids = []
+                with db_session() as db:
+                    queued_jobs = (
+                        db.query(crud.WorkerJob)
+                        .filter(crud.WorkerJob.status == "queued")
+                        .order_by(crud.WorkerJob.created_at.asc())
+                        .limit(self._max_concurrent_jobs)
+                        .all()
+                    )
+
+                    if queued_jobs:
+                        job_ids = [job.id for job in queued_jobs]
+                        logger.info(f"Found {len(job_ids)} queued worker jobs in schema {worker_id}")
+
+                if job_ids:
+                    # Process jobs with the correct worker_id context
+                    tasks = [asyncio.create_task(self._process_job_by_id_with_context(job_id, worker_id_str)) for job_id in job_ids]
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                current_worker_id.reset(token)
+
+    async def _process_job_by_id_with_context(self, job_id: int, worker_id_str: str) -> None:
+        """Process a job with the correct E2E schema context."""
+        token = current_worker_id.set(worker_id_str)
+        try:
+            await self._process_job_by_id(job_id)
+        finally:
+            current_worker_id.reset(token)
 
     async def _process_job_by_id(self, job_id: int) -> None:
         """Process a single worker job by ID with its own database session."""
