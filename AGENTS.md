@@ -287,8 +287,9 @@ make stop
 # ⚠️  CRITICAL: NEVER run pytest/bunx/playwright directly - ALWAYS use make targets
 # Direct commands miss env vars, wrong CWD, and cause false failures
 make test          # Unit tests only (backend + frontend)
-make test-e2e      # Playwright E2E only
-make test-all      # Unit + Playwright E2E
+make test-e2e-core # Core E2E (critical path, no retries)
+make test-e2e      # Playwright E2E (full suite minus core)
+make test-all      # Unit + Playwright E2E (full minus core)
 make test-chat-e2e # Chat page E2E (unified SPA)
 
 # Targeted E2E testing
@@ -403,12 +404,19 @@ docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.
 |---------|--------------|-------|
 | `make test` | Unit tests (backend + frontend) | ~50 lines output |
 | `make test MINIMAL=1` | Unit tests (compact mode) | **Recommended for Agents** (~10 lines) |
-| `make test-e2e` | Playwright E2E tests | **Minimal output** (~10 lines pass, ~30 lines fail) |
-| `make test-all` | Unit + E2E combined | Runs both suites |
+| `make test-e2e-core` | Core E2E tests (`tests/core/**`) | **No retries**; must pass 100% |
+| `make test-e2e` | Playwright E2E (full suite minus core) | **Minimal output** (~10 lines pass, ~30 lines fail) |
+| `make test-all` | Unit + Playwright E2E (full minus core) | **Does not include core** |
 | `make test-e2e-single TEST=<spec>` | Single E2E test file | Most useful for iteration |
 | `make test-e2e-verbose` | E2E with full output | For debugging |
 | `make test-e2e-errors` | Show last run's errors | `cat test-results/errors.txt` |
 | `make test-e2e-query Q='...'` | Query results JSON | e.g., `Q='.counts'` or `Q='.failed[]'` |
+
+### E2E Projects (Playwright)
+
+- **Core**: `tests/core/**`, retries=0, critical path only. Run with `make test-e2e-core`.
+- **Full**: everything else (core ignored), retries allowed. Run with `make test-e2e`.
+- **Full E2E coverage** = run **both** `make test-e2e-core` and `make test-e2e`.
 
 ### E2E Output: Progressive Disclosure
 
@@ -442,7 +450,10 @@ On failure, shows first 10 failed tests with guidance:
 
 ### E2E Test Isolation
 - Per-worker Postgres schemas (not SQLite) for true isolation
+- **8 Playwright workers** (reduced from 16) + **8 uvicorn workers** (optimal balance)
+- Database reset with retry logic + stagger delays to prevent lock contention
 - Playwright artifacts in `apps/zerg/e2e/test-results/` and `playwright-report/`
+- Override: `PLAYWRIGHT_WORKERS=N bunx playwright test ...`
 
 ### Debugging E2E Failures
 1. Check summary: `make test-e2e-query Q='.failed[] | .file'`
