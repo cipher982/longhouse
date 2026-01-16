@@ -1,19 +1,34 @@
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: Token streaming UI selectors have changed
 test.skip();
 
 // Reset DB before each test to keep agent/thread ids predictable
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 async function createAgentAndGetId(page: Page): Promise<string> {
   await page.goto('/');
-  await page.locator('[data-testid="create-agent-btn"]').click();
-  const row = page.locator('tr[data-agent-id]').first();
-  await expect(row).toBeVisible();
-  return (await row.getAttribute('data-agent-id')) as string;
+  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  await expect(createBtn).toBeVisible({ timeout: 10000 });
+
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 10000 }
+    ),
+    createBtn.click(),
+  ]);
+
+  const body = await response.json();
+  const agentId = String(body.id);
+
+  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  await expect(row).toBeVisible({ timeout: 10000 });
+  return agentId;
 }
 
 test.describe('Chat Token Streaming Tests', () => {

@@ -11,10 +11,12 @@
 
 import { test, expect, type Page } from './fixtures';
 import { waitForEventBusAvailable } from './helpers/ready-signals';
+import { resetDatabase } from './test-utils';
 
 // Reset DB before each test
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 async function navigateToChatPage(page: Page): Promise<void> {

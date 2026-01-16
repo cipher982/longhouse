@@ -19,10 +19,12 @@
  */
 
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Reset DB before each test for clean, isolated state
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 // ============================================================================
@@ -32,18 +34,22 @@ test.beforeEach(async ({ request }) => {
 /**
  * Navigate to canvas page and wait for it to be ready.
  * Waits for the canvas container and agent shelf to be visible.
+ *
+ * CRITICAL: Use Promise.all to attach waitForResponse BEFORE navigation
+ * to avoid race condition where response arrives before listener is attached.
  */
 async function navigateToCanvas(page: Page): Promise<void> {
-  await page.goto('/canvas');
+  // Attach response listener BEFORE navigation to avoid race condition
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/agents') && r.status() === 200,
+      { timeout: 10000 }
+    ),
+    page.goto('/canvas'),
+  ]);
 
   // Wait for canvas container to be ready
   await expect(page.locator('[data-testid="canvas-container"]')).toBeVisible({ timeout: 10000 });
-
-  // Wait for agent shelf to load agents (API response)
-  await page.waitForResponse(
-    (r) => r.url().includes('/api/agents') && r.status() === 200,
-    { timeout: 10000 }
-  );
 }
 
 /**

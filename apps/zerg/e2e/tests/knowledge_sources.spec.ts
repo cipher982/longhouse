@@ -16,10 +16,12 @@
  */
 
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Reset DB before each test for clean, isolated state
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 // ============================================================================

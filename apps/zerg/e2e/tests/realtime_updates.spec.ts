@@ -1,9 +1,11 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Ensure every test in this file starts with an empty DB so row counts are
 // deterministic across parallel pages.
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 test('Dashboard live update placeholder', async ({ browser }) => {

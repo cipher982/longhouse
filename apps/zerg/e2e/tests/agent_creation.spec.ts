@@ -1,8 +1,10 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 test.describe('Agent Creation', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('creates agents with "New Agent" placeholder name', async ({ page }) => {
