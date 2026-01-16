@@ -31,6 +31,8 @@ from .thread import ThreadMessage
 from .trigger import Trigger
 from .trigger_config import TriggerConfig
 from .user import User
+from .worker_barrier import BarrierJob
+from .worker_barrier import WorkerBarrier
 
 __all__ = [
     # Core models (split into separate files)
@@ -38,11 +40,13 @@ __all__ = [
     "AgentMessage",
     "AgentRun",
     "AgentRunEvent",
+    "BarrierJob",
     "Connector",
     "Thread",
     "ThreadMessage",
     "Trigger",
     "User",
+    "WorkerBarrier",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
     "AgentMemoryKV",
