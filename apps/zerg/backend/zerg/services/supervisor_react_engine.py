@@ -815,7 +815,7 @@ async def _execute_tools_parallel(
                         tool_call_id=tool_call_id,
                         duration_ms=duration_ms,
                         result_preview=f"Created job {worker_job.id}",
-                        result={"job_id": worker_job.id, "status": "queued", "task": task[:100]},
+                        result={"job_id": worker_job.id, "status": "created", "task": task[:100]},
                     )
 
             except Exception as exc:

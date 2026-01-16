@@ -120,6 +120,7 @@ class WorkerSpawnedPayload(BaseModel):
     """Payload for WorkerSpawnedPayload"""
 
     job_id: int = Field(ge=1, description='Worker job ID')
+    tool_call_id: Optional[str] = Field(default=None, description='Tool call ID for the spawn_worker invocation')
     task: str = Field(min_length=1, description='Worker task (may be truncated to 100 chars)')
     model: Optional[str] = Field(default=None, description='LLM model for worker')
     run_id: Optional[int] = Field(default=None, ge=1, description='')

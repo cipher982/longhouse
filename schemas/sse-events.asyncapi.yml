@@ -540,6 +540,9 @@ components:
           type: integer
           minimum: 1
           description: Worker job ID
+        tool_call_id:
+          type: string
+          description: Tool call ID for the spawn_worker invocation
         task:
           type: string
           minLength: 1

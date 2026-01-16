@@ -190,6 +190,7 @@ async def spawn_worker_async(
                     event_type="worker_spawned",
                     payload={
                         "job_id": worker_job.id,
+                        "tool_call_id": _tool_call_id,
                         "task": task[:100],
                         "model": worker_model,
                         "owner_id": owner_id,
