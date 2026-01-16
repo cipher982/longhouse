@@ -566,6 +566,294 @@ async def _execute_tool(
 
 
 # ---------------------------------------------------------------------------
+# Parallel Tool Execution
+# ---------------------------------------------------------------------------
+
+
+async def _execute_tools_parallel(
+    tool_calls: list[dict],
+    tools_by_name: dict[str, BaseTool],
+    *,
+    run_id: int | None,
+    owner_id: int | None,
+    tool_getter: callable | None = None,
+) -> tuple[list[ToolMessage], dict | None]:
+    """Execute tools in parallel, handling spawn_workers specially.
+
+    Implements the parallel-first pattern:
+    1. Non-spawn tools execute concurrently via asyncio.gather()
+    2. Spawn_worker calls are collected (not executed immediately)
+    3. Returns interrupt info with ALL spawn_worker job_ids for barrier creation
+
+    Two-Phase Commit for spawn_worker:
+    - Jobs are created with status='created' (not 'queued')
+    - Caller (supervisor_service) creates WorkerBarrier + flips to 'queued'
+    - This prevents the "fast worker" race condition
+
+    Args:
+        tool_calls: List of tool call dicts from LLM response.
+        tools_by_name: Dict mapping tool names to BaseTool instances.
+        run_id: Supervisor run ID for event correlation.
+        owner_id: Owner ID for event correlation.
+        tool_getter: Optional callable for lazy tool loading.
+
+    Returns:
+        Tuple of (tool_results, interrupt_value):
+        - tool_results: List of ToolMessages from non-spawn tools
+        - interrupt_value: Dict with spawn_worker info if any, None otherwise
+
+    Note:
+        Does NOT raise AgentInterrupted - caller handles interruption.
+    """
+
+    # Separate spawn_workers from other tools
+    spawn_calls = [tc for tc in tool_calls if tc.get("name") == "spawn_worker"]
+    other_calls = [tc for tc in tool_calls if tc.get("name") != "spawn_worker"]
+
+    tool_results: list[ToolMessage] = []
+
+    # Phase 1: Execute non-spawn tools in parallel
+    if other_calls:
+
+        async def execute_single_tool(tc: dict) -> ToolMessage:
+            """Execute a single tool, catching exceptions."""
+            try:
+                return await _execute_tool(
+                    tc,
+                    tools_by_name,
+                    run_id=run_id,
+                    owner_id=owner_id,
+                    tool_getter=tool_getter,
+                )
+            except AgentInterrupted:
+                # Re-raise - shouldn't happen for non-spawn tools
+                raise
+            except Exception as exc:
+                logger.exception(f"Error in parallel tool execution: {tc.get('name')}")
+                return ToolMessage(
+                    content=f"<tool-error>{exc}</tool-error>",
+                    tool_call_id=tc.get("id", ""),
+                    name=tc.get("name", "unknown"),
+                )
+
+        # Execute all non-spawn tools concurrently
+        results = await asyncio.gather(
+            *[execute_single_tool(tc) for tc in other_calls],
+            return_exceptions=True,
+        )
+
+        # Process results, preserving order
+        for tc, result in zip(other_calls, results):
+            if isinstance(result, Exception):
+                # Shouldn't happen often since execute_single_tool catches exceptions
+                tool_results.append(
+                    ToolMessage(
+                        content=f"<tool-error>{result}</tool-error>",
+                        tool_call_id=tc.get("id", ""),
+                        name=tc.get("name", "unknown"),
+                    )
+                )
+            else:
+                tool_results.append(result)
+
+    # Phase 2: Process spawn_workers (two-phase commit pattern)
+    if spawn_calls:
+        import time
+
+        from zerg.connectors.context import get_credential_resolver
+        from zerg.events.supervisor_emitter import SupervisorEmitter
+        from zerg.models.models import WorkerJob
+        from zerg.services.supervisor_context import get_supervisor_context
+
+        # Get context for job creation
+        resolver = get_credential_resolver()
+        ctx = get_supervisor_context()
+
+        # Create emitter for tool lifecycle events
+        emitter = None
+        if ctx:
+            emitter = SupervisorEmitter(
+                run_id=ctx.run_id,
+                owner_id=ctx.owner_id,
+                message_id=ctx.message_id,
+            )
+
+        if not resolver:
+            # No credential context - return error for each spawn_worker
+            for tc in spawn_calls:
+                tool_results.append(
+                    ToolMessage(
+                        content="<tool-error>Cannot spawn worker - no credential context</tool-error>",
+                        tool_call_id=tc.get("id", ""),
+                        name="spawn_worker",
+                    )
+                )
+            return tool_results, None
+
+        db = resolver.db
+        supervisor_run_id = ctx.run_id if ctx else None
+        trace_id = ctx.trace_id if ctx else None
+
+        # Worker inherits model and reasoning_effort from supervisor context
+        worker_model = (ctx.model if ctx else None) or "gpt-5-mini"
+        worker_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
+
+        created_jobs: list[dict] = []
+
+        for tc in spawn_calls:
+            task = tc.get("args", {}).get("task", "")
+            model_override = tc.get("args", {}).get("model")
+            tool_call_id = tc.get("id", "")
+            start_time = time.time()
+
+            # Emit tool_started event for UI
+            if emitter:
+                await emitter.emit_tool_started(
+                    tool_name="spawn_worker",
+                    tool_call_id=tool_call_id,
+                    tool_args_preview=task[:100] if task else "",
+                    tool_args={"task": task, "model": model_override},
+                )
+
+            try:
+                # Check for existing job with same tool_call_id (idempotency)
+                existing_job = None
+                if tool_call_id and supervisor_run_id:
+                    existing_job = (
+                        db.query(WorkerJob)
+                        .filter(
+                            WorkerJob.supervisor_run_id == supervisor_run_id,
+                            WorkerJob.tool_call_id == tool_call_id,
+                        )
+                        .first()
+                    )
+
+                if existing_job and existing_job.status == "success":
+                    # Already completed - return cached result
+                    from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+                    artifact_store = WorkerArtifactStore()
+                    try:
+                        metadata = artifact_store.get_worker_metadata(existing_job.worker_id)
+                        summary = metadata.get("summary")
+                        result = summary or artifact_store.get_worker_result(existing_job.worker_id)
+                        tool_results.append(
+                            ToolMessage(
+                                content=f"Worker job {existing_job.id} completed:\n\n{result}",
+                                tool_call_id=tool_call_id,
+                                name="spawn_worker",
+                            )
+                        )
+                        # Emit tool_completed for idempotent cached result
+                        if emitter:
+                            duration_ms = int((time.time() - start_time) * 1000)
+                            await emitter.emit_tool_completed(
+                                tool_name="spawn_worker",
+                                tool_call_id=tool_call_id,
+                                duration_ms=duration_ms,
+                                result_preview=f"Cached result for job {existing_job.id}",
+                                result={"job_id": existing_job.id, "status": "success", "cached": True},
+                            )
+                        continue  # Skip to next spawn_worker
+                    except FileNotFoundError:
+                        pass  # Fall through to create new job
+
+                if existing_job and existing_job.status in ["queued", "running", "created"]:
+                    # Reuse existing job
+                    created_jobs.append(
+                        {
+                            "job": existing_job,
+                            "tool_call_id": tool_call_id,
+                            "task": task[:100],
+                        }
+                    )
+                    # Emit tool_completed for reused job (include job_id for frontend mapping)
+                    if emitter:
+                        duration_ms = int((time.time() - start_time) * 1000)
+                        await emitter.emit_tool_completed(
+                            tool_name="spawn_worker",
+                            tool_call_id=tool_call_id,
+                            duration_ms=duration_ms,
+                            result_preview=f"Reusing existing job {existing_job.id}",
+                            result={"job_id": existing_job.id, "status": existing_job.status, "task": task[:100]},
+                        )
+                    continue
+
+                # Create new job with status='created' (TWO-PHASE COMMIT)
+                # Workers won't pick up jobs with status='created'
+                import uuid as uuid_module
+
+                worker_job = WorkerJob(
+                    owner_id=resolver.owner_id,
+                    supervisor_run_id=supervisor_run_id,
+                    tool_call_id=tool_call_id,
+                    trace_id=uuid_module.UUID(trace_id) if trace_id else None,
+                    task=task,
+                    model=model_override or worker_model,
+                    reasoning_effort=worker_reasoning_effort,
+                    status="created",  # NOT 'queued' - two-phase commit pattern
+                )
+                db.add(worker_job)
+                db.commit()
+                db.refresh(worker_job)
+
+                logger.info(f"[PARALLEL-SPAWN] Created worker job {worker_job.id} with status='created'")
+
+                created_jobs.append(
+                    {
+                        "job": worker_job,
+                        "tool_call_id": tool_call_id,
+                        "task": task[:100],
+                    }
+                )
+
+                # Emit tool_completed for new job (include job_id for frontend mapping)
+                if emitter:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await emitter.emit_tool_completed(
+                        tool_name="spawn_worker",
+                        tool_call_id=tool_call_id,
+                        duration_ms=duration_ms,
+                        result_preview=f"Created job {worker_job.id}",
+                        result={"job_id": worker_job.id, "status": "queued", "task": task[:100]},
+                    )
+
+            except Exception as exc:
+                logger.exception(f"Error creating spawn_worker job: {task[:50]}")
+                db.rollback()  # Clear error state so subsequent operations work
+
+                # Emit tool_failed event
+                if emitter:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    await emitter.emit_tool_failed(
+                        tool_name="spawn_worker",
+                        tool_call_id=tool_call_id,
+                        duration_ms=duration_ms,
+                        error=str(exc),
+                    )
+
+                tool_results.append(
+                    ToolMessage(
+                        content=f"<tool-error>Failed to spawn worker: {exc}</tool-error>",
+                        tool_call_id=tool_call_id,
+                        name="spawn_worker",
+                    )
+                )
+
+        # If we created/found jobs, return interrupt info for barrier creation
+        if created_jobs:
+            return tool_results, {
+                "type": "workers_pending",
+                "created_jobs": created_jobs,
+                "job_ids": [j["job"].id for j in created_jobs],
+                "tool_call_ids": [j["tool_call_id"] for j in created_jobs],
+                "tasks": [j["task"] for j in created_jobs],
+            }
+
+    return tool_results, None
+
+
+# ---------------------------------------------------------------------------
 # Main ReAct Loop
 # ---------------------------------------------------------------------------
 
@@ -758,31 +1046,27 @@ async def run_supervisor_loop(
                 unresponded = pending_tool_ids - responded_tool_ids
 
                 if unresponded:
-                    # Resume: execute pending tools first
+                    # Resume: execute pending tools in PARALLEL
                     logger.info(f"Resuming with {len(unresponded)} pending tool call(s)")
                     pending_calls = [tc for tc in last_msg.tool_calls if tc["id"] in unresponded]
 
-                    tool_results = []
-                    for tc in pending_calls:
-                        try:
-                            result = await _execute_tool(
-                                tc,
-                                tools_by_name,
-                                run_id=run_id,
-                                owner_id=owner_id,
-                                tool_getter=get_tool_for_execution if lazy_binder else None,
-                            )
-                            tool_results.append(result)
-                        except AgentInterrupted as e:
-                            # Include already-completed tool results before returning
-                            # This prevents re-execution on resume
-                            current_messages.extend(tool_results)
-                            return SupervisorResult(
-                                messages=current_messages,
-                                usage=get_llm_usage(),
-                                interrupted=True,
-                                interrupt_value=e.interrupt_value,
-                            )
+                    tool_results, interrupt_value = await _execute_tools_parallel(
+                        pending_calls,
+                        tools_by_name,
+                        run_id=run_id,
+                        owner_id=owner_id,
+                        tool_getter=get_tool_for_execution if lazy_binder else None,
+                    )
+
+                    # Handle interruption from spawn_worker (barrier pattern)
+                    if interrupt_value:
+                        current_messages.extend(tool_results)
+                        return SupervisorResult(
+                            messages=current_messages,
+                            usage=get_llm_usage(),
+                            interrupted=True,
+                            interrupt_value=interrupt_value,
+                        )
 
                     current_messages.extend(tool_results)
 
@@ -920,96 +1204,26 @@ async def run_supervisor_loop(
             # Add AIMessage to history
             current_messages.append(llm_response)
 
-            # Enforce: spawn_worker must be the only tool call
-            # Mixed tool sets cause ordering issues (tools before spawn_worker run,
-            # then interrupt; tools after run only on resume)
-            tool_names = [tc.get("name") for tc in llm_response.tool_calls]
-            has_spawn_worker = "spawn_worker" in tool_names
-            if has_spawn_worker and len(llm_response.tool_calls) > 1:
-                # Return error and let LLM retry with spawn_worker alone
-                error_msg = (
-                    "Error: spawn_worker must be called alone, not with other tools. "
-                    f"You tried to call: {', '.join(tool_names)}. "
-                    "Please call spawn_worker separately."
+            # Execute tools in PARALLEL (non-spawn tools run concurrently,
+            # spawn_workers use two-phase commit for barrier synchronization)
+            tool_results, interrupt_value = await _execute_tools_parallel(
+                llm_response.tool_calls,
+                tools_by_name,
+                run_id=run_id,
+                owner_id=owner_id,
+                tool_getter=get_tool_for_execution if lazy_binder else None,
+            )
+
+            # Handle interruption from spawn_worker (barrier pattern)
+            if interrupt_value:
+                # Non-spawn tool results are included, spawn_workers trigger barrier
+                current_messages.extend(tool_results)
+                return SupervisorResult(
+                    messages=current_messages,
+                    usage=get_llm_usage(),
+                    interrupted=True,
+                    interrupt_value=interrupt_value,
                 )
-                logger.warning(f"[ReAct] spawn_worker mixed with other tools: {tool_names}")
-
-                # Emit synthetic tool_started/tool_failed events so UI activity ticker stays consistent
-                try:
-                    from zerg.events import get_emitter
-                    from zerg.tools.result_utils import redact_sensitive_args
-                    from zerg.tools.result_utils import safe_preview
-
-                    emitter = get_emitter()
-                    if emitter:
-                        for tc in llm_response.tool_calls:
-                            tool_name = tc.get("name", "unknown_tool")
-                            tool_call_id = tc.get("id", "")
-                            tool_args = tc.get("args") or {}
-                            safe_args = redact_sensitive_args(tool_args)
-
-                            await emitter.emit_tool_started(
-                                tool_name=tool_name,
-                                tool_call_id=tool_call_id,
-                                tool_args_preview=safe_preview(str(safe_args)),
-                                tool_args=safe_args,
-                            )
-
-                            await emitter.emit_tool_failed(
-                                tool_name=tool_name,
-                                tool_call_id=tool_call_id,
-                                duration_ms=0,
-                                error=error_msg,
-                            )
-                except Exception:
-                    # Event emission best-effort; do not block error handling path
-                    logger.exception("Failed to emit synthetic tool_failed events for mixed spawn_worker call")
-
-                # Create error ToolMessages for each tool call to keep transcript consistent
-                for tc in llm_response.tool_calls:
-                    current_messages.append(
-                        ToolMessage(
-                            content=error_msg,
-                            tool_call_id=tc.get("id"),
-                            name=tc.get("name"),
-                        )
-                    )
-                # Continue loop to let LLM correct itself
-                llm_response = await _call_llm(
-                    current_messages,
-                    llm_with_tools,
-                    phase="tool_iteration",
-                    run_id=run_id,
-                    owner_id=owner_id,
-                    model=model,
-                    trace_id=trace_id,
-                    enable_token_stream=enable_token_stream,
-                )
-                continue
-
-            # Execute tools
-            tool_results = []
-            for tc in llm_response.tool_calls:
-                try:
-                    result = await _execute_tool(
-                        tc,
-                        tools_by_name,
-                        run_id=run_id,
-                        owner_id=owner_id,
-                        tool_getter=get_tool_for_execution if lazy_binder else None,
-                    )
-                    tool_results.append(result)
-                except AgentInterrupted as e:
-                    # Include already-completed tool results before returning
-                    # This prevents re-execution on resume
-                    # AIMessage is already in current_messages
-                    current_messages.extend(tool_results)
-                    return SupervisorResult(
-                        messages=current_messages,
-                        usage=get_llm_usage(),
-                        interrupted=True,
-                        interrupt_value=e.interrupt_value,
-                    )
 
             # Add tool results to history
             current_messages.extend(tool_results)

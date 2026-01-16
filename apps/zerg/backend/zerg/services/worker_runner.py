@@ -830,7 +830,10 @@ Example: "Backup completed 157GB in 17s, no errors found"
     ) -> None:
         """Resume interrupted supervisor if waiting for worker (NON-BLOCKING).
 
-        Uses the LangGraph-free AgentRunner.run_continuation() to continue the supervisor.
+        Uses barrier pattern for parallel workers:
+        - Checks if there's a WorkerBarrier for this run
+        - If so, updates barrier and triggers batch resume only when ALL workers complete
+        - Falls back to single-worker resume for backwards compatibility
 
         This is fire-and-forget to prevent worker "duration" from including supervisor synthesis time.
 
@@ -847,15 +850,31 @@ Example: "Backup completed 157GB in 17s, no errors found"
             Brief summary of worker result
         error
             Error message if failed
+        job_id
+            Worker job ID (required for barrier pattern)
         """
         try:
+            # Capture worker_id for E2E schema isolation - must happen BEFORE asyncio.create_task
+            # which runs with an empty context (to prevent emitter leakage)
+            from zerg.middleware.worker_db import current_worker_id
+
+            captured_worker_id = current_worker_id.get()
 
             async def _run_resume_async():
                 """Background task to resume with fresh DB session."""
                 from zerg.database import get_session_factory
                 from zerg.models.enums import RunStatus
                 from zerg.models.models import AgentRun
+                from zerg.models.worker_barrier import WorkerBarrier
+                from zerg.services.worker_resume import check_and_resume_if_all_complete
+                from zerg.services.worker_resume import resume_supervisor_batch
                 from zerg.services.worker_resume import resume_supervisor_with_worker_result
+
+                # Restore worker_id context for E2E schema routing
+                # (asyncio.create_task with Context() clears all contextvars)
+                token = None
+                if captured_worker_id is not None:
+                    token = current_worker_id.set(captured_worker_id)
 
                 session_factory = get_session_factory()
                 fresh_db = session_factory()
@@ -894,17 +913,57 @@ Example: "Backup completed 157GB in 17s, no errors found"
                         else:
                             summary_text = "(No result summary)"
 
-                    # Resume using the LangGraph-free path
-                    await resume_supervisor_with_worker_result(
-                        db=fresh_db,
-                        run_id=run_id,
-                        worker_result=summary_text,
-                        job_id=job_id,
-                    )
+                    # Check if this run uses barrier pattern (parallel workers)
+                    barrier = fresh_db.query(WorkerBarrier).filter(WorkerBarrier.run_id == run_id).first()
+
+                    if barrier and job_id:
+                        # BARRIER PATTERN: Use atomic barrier check
+                        logger.info(f"Using barrier pattern for run {run_id}, job {job_id}")
+
+                        barrier_result = await check_and_resume_if_all_complete(
+                            db=fresh_db,
+                            run_id=run_id,
+                            job_id=job_id,
+                            result=summary_text,
+                            error=error if status == "failed" else None,
+                        )
+
+                        # CRITICAL: Commit barrier state changes (check_and_resume uses nested transaction)
+                        # Without this commit, BarrierJob updates and completed_count are rolled back
+                        fresh_db.commit()
+
+                        if barrier_result["status"] == "resume":
+                            # This worker is the last one - trigger batch resume
+                            logger.info(
+                                f"Barrier complete for run {run_id}, triggering batch resume "
+                                f"with {len(barrier_result['worker_results'])} results"
+                            )
+                            await resume_supervisor_batch(
+                                db=fresh_db,
+                                run_id=run_id,
+                                worker_results=barrier_result["worker_results"],
+                            )
+                        elif barrier_result["status"] == "waiting":
+                            logger.info(f"Barrier for run {run_id}: {barrier_result['completed']}/{barrier_result['expected']} complete")
+                        else:
+                            logger.debug(f"Barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
+                    else:
+                        # SINGLE-WORKER PATH: Fall back to original resume for backwards compatibility
+                        logger.debug(f"No barrier for run {run_id}, using single-worker resume")
+                        await resume_supervisor_with_worker_result(
+                            db=fresh_db,
+                            run_id=run_id,
+                            worker_result=summary_text,
+                            job_id=job_id,
+                        )
+
                 except Exception as e:
                     logger.exception(f"Background resume failed for run {run_id}: {e}")
                 finally:
                     fresh_db.close()
+                    # Clean up the worker_id context
+                    if token is not None:
+                        current_worker_id.reset(token)
 
             # IMPORTANT: create_task() captures current contextvars.
             #
