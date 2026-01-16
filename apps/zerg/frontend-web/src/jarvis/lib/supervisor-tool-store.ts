@@ -350,9 +350,15 @@ class SupervisorToolStore {
 
     // Worker lifecycle events - update spawn_worker tool metadata
     eventBus.on('supervisor:worker_spawned', (data) => {
-      // Find the most recent spawn_worker tool that's running (just started)
-      // This works because worker_spawned fires immediately after spawn_worker starts
-      const toolCallId = this.findMostRecentSpawnWorkerTool();
+      // Use tool_call_id from event payload if available (parallel path includes it)
+      // Fall back to finding most recent running tool (legacy single-worker path)
+      let toolCallId = data.toolCallId || this.findMostRecentSpawnWorkerTool();
+
+      // If still not found, try searching by job_id in completed tools
+      if (!toolCallId) {
+        toolCallId = this.findSpawnWorkerToolForJob(data.jobId);
+      }
+
       if (toolCallId) {
         this.workerJobToToolCallId.set(data.jobId, toolCallId);
         this.updateWorkerMetadata(toolCallId, { workerStatus: 'spawned' });
