@@ -89,7 +89,7 @@ class SupervisorEmitter:
         tool_call_id: str,
         duration_ms: int,
         result_preview: str,
-        result: str | None = None,
+        result: str | dict | None = None,
     ) -> None:
         """Emit supervisor_tool_completed event.
 
@@ -98,8 +98,16 @@ class SupervisorEmitter:
         from zerg.services.event_store import append_run_event
 
         try:
-            # Truncate result for storage
-            raw_result = result[:2000] if result and len(result) > 2000 else result
+            # Handle structured results (dict) vs string results differently
+            if isinstance(result, dict):
+                # Structured result (e.g., spawn_worker with job_id) - pass through
+                result_payload = result
+            elif isinstance(result, str):
+                # String result - truncate and wrap for backward compatibility
+                raw_result = result[:2000] if len(result) > 2000 else result
+                result_payload = {"raw": raw_result}
+            else:
+                result_payload = None
 
             await append_run_event(
                 run_id=self.run_id,
@@ -110,7 +118,7 @@ class SupervisorEmitter:
                     "tool_call_id": tool_call_id,
                     "duration_ms": duration_ms,
                     "result_preview": result_preview,
-                    "result": {"raw": raw_result},  # Full result for detail view
+                    "result": result_payload,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
