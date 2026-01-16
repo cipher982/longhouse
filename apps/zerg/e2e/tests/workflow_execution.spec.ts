@@ -68,13 +68,16 @@ async function addAgentNodeToWorkflow(page: Page, agentName: string) {
   await page.waitForSelector('.react-flow__node, .canvas-node, .generic-node', { timeout: 5000 });
 }
 
+import { resetDatabase } from './test-utils';
+
 test.describe('Workflow Execution End-to-End Tests', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test.afterEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('Create workflow and execute simple workflow', async ({ page, request }, testInfo) => {

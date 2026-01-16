@@ -91,38 +91,41 @@ export async function createMultipleAgents(
 
 /**
  * Create agent via UI and return its ID
- * Uses the dashboard create button
+ * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
 export async function createAgentViaUI(page: Page): Promise<string> {
   // Navigate to dashboard if not already there
   try {
     await page.locator('.header-nav').click();
     await page.waitForTimeout(500);
-  } catch (error) {
+  } catch {
     // Ignore if already on dashboard or button doesn't exist
   }
 
-  // Click create agent button
-  await page.locator('[data-testid="create-agent-btn"]').click();
+  const createBtn = page.locator('[data-testid="create-agent-btn"]');
+  await expect(createBtn).toBeVisible({ timeout: 10000 });
+  await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Wait for new row to be visible and stable
-  const newRow = page.locator('tr[data-agent-id]').first();
-  await expect(newRow).toBeVisible({ timeout: 5000 });
+  // Capture API response to get the ACTUAL created agent ID
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 10000 }
+    ),
+    createBtn.click(),
+  ]);
 
-  // Wait for row to be fully rendered
-  await page.waitForFunction(
-    (selector) => {
-      const row = document.querySelector(selector);
-      return row && row.clientHeight > 0 && row.clientWidth > 0;
-    },
-    'tr[data-agent-id]:first-of-type',
-    { timeout: 5000 }
-  );
+  // Parse the agent ID from the response body - this is deterministic
+  const body = await response.json();
+  const agentId = String(body.id);
 
-  const agentId = await newRow.getAttribute('data-agent-id');
-  if (!agentId) {
-    throw new Error('Failed to get agent ID from newly created agent row');
+  if (!agentId || agentId === 'undefined') {
+    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
+
+  // Wait for THIS SPECIFIC agent's row to appear (not just any row)
+  const newRow = page.locator(`tr[data-agent-id="${agentId}"]`);
+  await expect(newRow).toBeVisible({ timeout: 10000 });
 
   testLog.info(`✅ Agent created via UI with ID: ${agentId}`);
   return agentId;

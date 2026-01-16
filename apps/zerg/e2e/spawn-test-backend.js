@@ -92,10 +92,10 @@ const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 // E2E tests use per-Playwright-worker Postgres schemas routed via X-Test-Worker header.
 // Schemas are pre-created in test-setup.js, so we can safely use multiple uvicorn workers.
 // Pinned defaults for reproducible test runs:
-// - Local: 6 uvicorn workers (tested optimal with 16 Playwright workers for zero flake)
+// - Local: 8 uvicorn workers (bumped from 6 to reduce race conditions with 16 Playwright workers)
 // - CI: 2 uvicorn workers (conservative for shared runners)
 // Override with UVICORN_WORKERS env var if needed.
-const defaultLocalUvicornWorkers = 6;   // Tested: 0 failures, 47s runtime
+const defaultLocalUvicornWorkers = 8;   // Bumped: better concurrency for 16 Playwright workers
 const defaultCIUvicornWorkers = 2;
 const envUvicornWorkers = Number.parseInt(process.env.UVICORN_WORKERS ?? "", 10);
 const uvicornWorkers = workerId

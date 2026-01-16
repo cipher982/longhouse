@@ -1,7 +1,9 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 // Stubs for trigger management – UI selectors may evolve, skip if missing.

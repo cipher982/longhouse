@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: WebSocket subscription tests need backend support for subscribe_ack
 test.skip();
@@ -16,9 +17,9 @@ test.skip();
  */
 
 test.describe('WebSocket Subscription Confirmation (Real E2E)', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    // Use fixture-provided request context with auth headers
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('successful subscription tracks message ID and waits for ack', async ({ page }) => {

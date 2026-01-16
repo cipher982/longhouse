@@ -10,10 +10,12 @@
  */
 
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Reset DB before each test
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 test.describe('Perfect Chat E2E Test', () => {

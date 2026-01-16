@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: WebSocket queue tests need specific test mode setup
 test.skip();
@@ -18,8 +19,9 @@ test.skip();
  */
 
 test.describe('WebSocket Bounded Message Queue (Real E2E)', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('queue enforces 100 message limit with FIFO eviction', async ({ page }) => {

@@ -527,12 +527,15 @@ function printMetricsSummary(metrics: PerformanceMetrics): void {
   console.log('─'.repeat(50));
 }
 
+import { resetDatabase } from './test-utils';
+
 // Extend timeout for performance tests since LLM responses can take time
 test.setTimeout(120000);
 
 // Reset DB before each test
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 test.describe('Chat Performance Evaluation', () => {

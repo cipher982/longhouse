@@ -1,19 +1,36 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 test.describe('Agent scheduling UI', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test.afterEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   async function createAndOpenConfig(page) {
     await page.goto('/');
-    await page.locator('[data-testid="create-agent-btn"]').click();
-    const row = page.locator('tr[data-agent-id]').first();
-    const id = await row.getAttribute('data-agent-id');
+    const createBtn = page.locator('[data-testid="create-agent-btn"]');
+    await expect(createBtn).toBeVisible({ timeout: 10000 });
+
+    // Capture API response to get the ACTUAL created agent ID
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 10000 }
+      ),
+      createBtn.click(),
+    ]);
+
+    const body = await response.json();
+    const id = String(body.id);
+
+    const row = page.locator(`tr[data-agent-id="${id}"]`);
+    await expect(row).toBeVisible({ timeout: 10000 });
+
     await page.locator(`[data-testid="debug-agent-${id}"]`).click();
     await page.waitForSelector('[data-testid="agent-debug-modal"]', { state: 'visible' });
     return id;

@@ -210,7 +210,9 @@ export class JarvisAPIClient {
     this.disconnectEventStream();
 
     // Cookie-based auth - withCredentials: true sends HttpOnly session cookie
-    const url = `${this._baseURL}/api/jarvis/events`;
+    // In E2E tests, include worker ID query param for DB schema isolation
+    const testWorkerId = typeof window !== 'undefined' ? (window as any).__TEST_WORKER_ID__ : undefined;
+    const url = `${this._baseURL}/api/jarvis/events${testWorkerId ? `?worker=${testWorkerId}` : ''}`;
     this.eventSource = new EventSource(url, { withCredentials: true });
 
     this.eventSource.addEventListener('connected', () => {

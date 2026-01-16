@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: Workflow animation tests depend on canvas selectors that have changed
 test.skip();
@@ -49,8 +50,9 @@ async function createConnectedWorkflow(page) {
 }
 
 test.describe('Workflow Execution Animations', () => {
+    // Uses strict reset that throws on failure to fail fast
     test.beforeEach(async ({ request }) => {
-        await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+        await resetDatabase(request);
     });
 
     test('Connection lines should animate during workflow execution', async ({ page }) => {

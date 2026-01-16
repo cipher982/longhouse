@@ -1,12 +1,14 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: Auth flows test API that may not exist in dev mode
 test.skip();
 
 test.describe('Authentication flows', () => {
   // Reset DB before each test for clean state
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('Dev login flow - landing page to dashboard', async ({ page }) => {

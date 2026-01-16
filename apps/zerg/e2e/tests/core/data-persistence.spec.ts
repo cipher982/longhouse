@@ -7,14 +7,17 @@
  */
 
 import { test, expect, type Page } from '../fixtures';
+import { resetDatabase } from '../test-utils';
 
 // Reset DB before each test for clean state
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 /**
  * Create an agent via UI and return its ID.
+ * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy in parallel tests)
  */
 async function createAgentViaUI(page: Page): Promise<string> {
   await page.goto('/');
@@ -23,7 +26,8 @@ async function createAgentViaUI(page: Page): Promise<string> {
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  await Promise.all([
+  // Capture API response to get the ACTUAL created agent ID
+  const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 10000 }
@@ -31,13 +35,17 @@ async function createAgentViaUI(page: Page): Promise<string> {
     createBtn.click(),
   ]);
 
-  const row = page.locator('tr[data-agent-id]').first();
-  await expect(row).toBeVisible({ timeout: 10000 });
+  // Parse the agent ID from the response body - this is deterministic
+  const body = await response.json();
+  const agentId = String(body.id);
 
-  const agentId = await row.getAttribute('data-agent-id');
-  if (!agentId) {
-    throw new Error('Failed to get agent ID from newly created agent row');
+  if (!agentId || agentId === 'undefined') {
+    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
+
+  // Wait for THIS SPECIFIC agent's row to appear (not just any row)
+  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  await expect(row).toBeVisible({ timeout: 10000 });
 
   return agentId;
 }

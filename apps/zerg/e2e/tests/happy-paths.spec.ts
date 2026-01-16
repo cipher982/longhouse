@@ -20,10 +20,12 @@
  */
 
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Reset DB before each test for clean, isolated state
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+  await resetDatabase(request);
 });
 
 // ============================================================================
@@ -32,7 +34,7 @@ test.beforeEach(async ({ request }) => {
 
 /**
  * Create an agent via UI and return its ID.
- * Waits for API response to ensure agent is persisted.
+ * CRITICAL: Gets ID from API response, NOT from DOM query (.first() is racy).
  */
 async function createAgentViaUI(page: Page): Promise<string> {
   await page.goto('/');
@@ -41,7 +43,7 @@ async function createAgentViaUI(page: Page): Promise<string> {
   await expect(createBtn).toBeVisible({ timeout: 10000 });
   await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-  // Wait for API response before proceeding
+  // Capture API response to get the ACTUAL created agent ID
   const [response] = await Promise.all([
     page.waitForResponse(
       (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
@@ -50,14 +52,17 @@ async function createAgentViaUI(page: Page): Promise<string> {
     createBtn.click(),
   ]);
 
-  // Wait for row to appear in DOM
-  const row = page.locator('tr[data-agent-id]').first();
-  await expect(row).toBeVisible({ timeout: 10000 });
+  // Parse the agent ID from the response body - this is deterministic
+  const body = await response.json();
+  const agentId = String(body.id);
 
-  const agentId = await row.getAttribute('data-agent-id');
-  if (!agentId) {
-    throw new Error('Failed to get agent ID from newly created agent row');
+  if (!agentId || agentId === 'undefined') {
+    throw new Error(`Failed to get agent ID from API response: ${JSON.stringify(body)}`);
   }
+
+  // Wait for THIS SPECIFIC agent's row to appear (not just any row)
+  const row = page.locator(`tr[data-agent-id="${agentId}"]`);
+  await expect(row).toBeVisible({ timeout: 10000 });
 
   return agentId;
 }
@@ -156,11 +161,8 @@ test.describe('Smoke Tests - Core Functionality', () => {
     await expect(createBtn).toBeVisible({ timeout: 10000 });
     await expect(createBtn).toBeEnabled({ timeout: 5000 });
 
-    const agentRows = page.locator('tr[data-agent-id]');
-    const initialCount = await agentRows.count();
-
-    // Wait for API response
-    await Promise.all([
+    // Capture API response to get the ACTUAL created agent ID (deterministic, no race)
+    const [response] = await Promise.all([
       page.waitForResponse(
         (r) => r.url().includes('/api/agents') && r.request().method() === 'POST' && r.status() === 201,
         { timeout: 10000 }
@@ -168,15 +170,16 @@ test.describe('Smoke Tests - Core Functionality', () => {
       createBtn.click(),
     ]);
 
-    // Use polling to wait for new row
-    await expect.poll(async () => await agentRows.count(), { timeout: 10000 }).toBe(initialCount + 1);
+    // Parse the agent ID from the response body - this is deterministic
+    const body = await response.json();
+    const agentId = String(body.id);
 
-    const newRow = agentRows.first();
-    await expect(newRow).toBeVisible();
-
-    const agentId = await newRow.getAttribute('data-agent-id');
     expect(agentId).toBeTruthy();
     expect(agentId).toMatch(/^\d+$/);
+
+    // Wait for THIS SPECIFIC agent's row to appear (not just any row via .first())
+    const newRow = page.locator(`tr[data-agent-id="${agentId}"]`);
+    await expect(newRow).toBeVisible({ timeout: 10000 });
   });
 
   test('SMOKE 2: Navigate to Chat - URL and UI are correct', async ({ page }) => {
