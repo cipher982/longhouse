@@ -704,6 +704,7 @@ export class SupervisorChatController {
         logger.debug('[SupervisorChat] Worker spawned:', payload.job_id);
         eventBus.emit('supervisor:worker_spawned', {
           jobId: payload.job_id,
+          toolCallId: payload.tool_call_id,
           task: payload.task,
           timestamp: Date.now(),
         });

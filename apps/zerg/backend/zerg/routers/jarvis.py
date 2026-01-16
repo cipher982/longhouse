@@ -308,6 +308,8 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
 
     # Build job_id -> worker activity from worker events
     job_activity: dict[int, dict] = {}
+    # Map tool_call_id -> worker activity (for spawn_worker history)
+    result: dict[str, dict] = {}
     for e in events:
         payload = e.payload or {}
         job_id = payload.get("job_id")
@@ -320,6 +322,9 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
                 "summary": None,
                 "tools": [],
             }
+            tool_call_id = payload.get("tool_call_id")
+            if tool_call_id and tool_call_id in tool_call_ids:
+                result[tool_call_id] = job_activity[job_id]
         elif e.event_type == "worker_started" and job_id and job_id in job_activity:
             job_activity[job_id]["status"] = "running"
         elif e.event_type == "worker_tool_started" and job_id and job_id in job_activity:
@@ -351,31 +356,32 @@ def _fetch_worker_activity(db: Session, agent_id: int, tool_call_ids: list[str])
         elif e.event_type == "worker_summary_ready" and job_id and job_id in job_activity:
             job_activity[job_id]["summary"] = payload.get("summary")
 
-    # Now map tool_call_id -> job_id by looking at supervisor_tool_started + worker_spawned correlation
-    # The spawn_worker tool_call_id is in supervisor_tool_started, and the job_id is in the subsequent worker_spawned
-    result: dict[str, dict] = {}
+    # Fallback mapping for legacy events without worker_spawned.tool_call_id
+    # Use supervisor_tool_started -> worker_spawned correlation only when tool_call_id is missing.
+    from collections import deque
 
-    # Group events by run_id for correlation
     events_by_run: dict[int, list] = {}
     for e in events:
         if e.run_id not in events_by_run:
             events_by_run[e.run_id] = []
         events_by_run[e.run_id].append(e)
 
-    for run_id, run_events in events_by_run.items():
-        # Find spawn_worker tool_call_id and corresponding job_id
-        pending_tool_call_id = None
+    for run_events in events_by_run.values():
+        pending_tool_call_ids: deque[str] = deque()
         for e in run_events:
             payload = e.payload or {}
             if e.event_type == "supervisor_tool_started" and payload.get("tool_name") == "spawn_worker":
                 tc_id = payload.get("tool_call_id")
-                if tc_id in tool_call_ids:
-                    pending_tool_call_id = tc_id
-            elif e.event_type == "worker_spawned" and pending_tool_call_id:
+                if tc_id in tool_call_ids and tc_id not in result:
+                    pending_tool_call_ids.append(tc_id)
+            elif e.event_type == "worker_spawned" and not payload.get("tool_call_id"):
+                if not pending_tool_call_ids:
+                    continue
                 job_id = payload.get("job_id")
                 if job_id and job_id in job_activity:
-                    result[pending_tool_call_id] = job_activity[job_id]
-                pending_tool_call_id = None
+                    tc_id = pending_tool_call_ids.popleft()
+                    if tc_id not in result:
+                        result[tc_id] = job_activity[job_id]
 
     return result
 
