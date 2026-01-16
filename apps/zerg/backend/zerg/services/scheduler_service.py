@@ -46,10 +46,39 @@ class SchedulerService:
             # Subscribe to agent events for dynamic scheduling
             await self._subscribe_to_events()
 
+            # Add barrier reaper job (runs every 60 seconds)
+            self._add_barrier_reaper_job()
+
             # Start the scheduler
             self.scheduler.start()
             self._initialized = True
             logger.info("Scheduler service started")
+
+    def _add_barrier_reaper_job(self):
+        """Add a periodic job to reap expired barriers."""
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        # Run every 60 seconds to catch expired barriers
+        self.scheduler.add_job(
+            self._run_barrier_reaper,
+            trigger=IntervalTrigger(seconds=60),
+            id="barrier_reaper",
+            name="Barrier Reaper",
+            replace_existing=True,
+        )
+        logger.info("Barrier reaper job scheduled (every 60s)")
+
+    async def _run_barrier_reaper(self):
+        """Execute the barrier reaper task."""
+        from zerg.services.worker_resume import reap_expired_barriers
+
+        try:
+            with db_session(self.session_factory) as db:
+                result = await reap_expired_barriers(db)
+                if result.get("reaped", 0) > 0:
+                    logger.info(f"Barrier reaper: reaped {result['reaped']} expired barriers")
+        except Exception as e:
+            logger.exception(f"Barrier reaper failed: {e}")
 
     async def stop(self):
         """Shutdown the scheduler gracefully."""

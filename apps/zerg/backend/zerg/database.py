@@ -295,22 +295,24 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
 
     # Create test user for foreign key constraints (E2E tests need a user for agent creation)
+    # Use ON CONFLICT DO NOTHING to handle concurrent schema initialization race conditions
     with engine.connect() as conn:
         conn.execute(text(f"SET search_path TO {schema_name}, public"))
-        result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
-        user_count = result.scalar()
-        if user_count == 0:
-            logger.debug("Worker %s (Postgres schema) creating test user...", worker_id)
-            conn.execute(
-                text("""
-                    INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                      display_name, context, created_at, updated_at)
-                    VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
-                           'Test User', '{}', NOW(), NOW())
-                """)
-            )
-            conn.commit()
-            logger.debug("Worker %s (Postgres schema) test user created", worker_id)
+        logger.debug("Worker %s (Postgres schema) ensuring test user exists...", worker_id)
+        conn.execute(
+            text("""
+                INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
+                                  display_name, context, created_at, updated_at)
+                VALUES (1, 'test@example.com', 'ADMIN', true, 'dev', 'test-user-1',
+                       'Test User', '{}', NOW(), NOW())
+                ON CONFLICT (id) DO NOTHING
+            """)
+        )
+        # Advance the sequence past id=1 to avoid conflicts with auto-generated IDs
+        # when DevAuthStrategy creates the dev user with auto-generated ID
+        conn.execute(text("SELECT setval('users_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM users), 0), 1))"))
+        conn.commit()
+        logger.debug("Worker %s (Postgres schema) test user ensured", worker_id)
 
     # Add event listener to set search_path on every connection
     @event.listens_for(engine, "connect")
