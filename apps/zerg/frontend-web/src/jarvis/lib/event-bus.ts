@@ -48,7 +48,7 @@ export interface EventMap {
   // Supervisor Progress Events
   'supervisor:started': { runId: number; task: string; timestamp: number; traceId?: string };
   'supervisor:thinking': { message: string; timestamp: number };
-  'supervisor:worker_spawned': { jobId: number; task: string; timestamp: number };
+  'supervisor:worker_spawned': { jobId: number; task: string; timestamp: number; toolCallId?: string };
   'supervisor:worker_started': { jobId: number; workerId?: string; timestamp: number };
   'supervisor:worker_complete': { jobId: number; workerId?: string; status: string; durationMs?: number; timestamp: number };
   'supervisor:worker_summary': { jobId: number; workerId?: string; summary: string; timestamp: number };
