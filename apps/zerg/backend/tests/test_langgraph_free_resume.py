@@ -650,7 +650,7 @@ class TestSupervisorReActEngineInterrupt:
             description: str = "Spawn a background worker"
 
             def _run(self, task: str, model: str = None):
-                # This shouldn't be called - _execute_tool handles spawn_worker specially
+                # This shouldn't be called - _execute_tools_parallel handles spawn_worker specially
                 return "Worker job 123 queued"
 
         # Create messages
@@ -671,11 +671,29 @@ class TestSupervisorReActEngineInterrupt:
             ],
         )
 
-        # Mock spawn_worker_async to return structured dict (with _return_structured=True)
-        async def mock_spawn_worker_async(task, model=None, _tool_call_id=None, _skip_interrupt=False, _return_structured=False):
-            if _return_structured:
-                return {"job_id": 456, "status": "queued", "task": task[:100]}
-            return "Worker job 456 queued successfully"
+        # Mock the database and context for _execute_tools_parallel
+        from zerg.models.models import WorkerJob
+
+        mock_job = MagicMock(spec=WorkerJob)
+        mock_job.id = 456
+        mock_job.status = "created"
+        mock_job.task = "test task"
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = None  # No existing job
+        mock_db.add = MagicMock()
+        mock_db.commit = MagicMock()
+        mock_db.refresh = MagicMock(side_effect=lambda j: setattr(j, 'id', 456))
+
+        mock_resolver = MagicMock()
+        mock_resolver.db = mock_db
+        mock_resolver.owner_id = test_user.id
+
+        mock_ctx = MagicMock()
+        mock_ctx.run_id = 1
+        mock_ctx.trace_id = "12345678-1234-5678-1234-567812345678"  # Valid UUID format
+        mock_ctx.model = "gpt-5-mini"
+        mock_ctx.reasoning_effort = "none"
 
         with (
             patch(
@@ -683,9 +701,12 @@ class TestSupervisorReActEngineInterrupt:
                 new=AsyncMock(return_value=mock_ai_response),
             ),
             patch(
-                # spawn_worker_async is imported inside _execute_tool, patch at definition
-                "zerg.tools.builtin.supervisor_tools.spawn_worker_async",
-                new=mock_spawn_worker_async,
+                "zerg.connectors.context.get_credential_resolver",
+                return_value=mock_resolver,
+            ),
+            patch(
+                "zerg.services.supervisor_context.get_supervisor_context",
+                return_value=mock_ctx,
             ),
         ):
             result = await run_supervisor_loop(
@@ -696,10 +717,10 @@ class TestSupervisorReActEngineInterrupt:
                 owner_id=test_user.id,
             )
 
-            # run_supervisor_loop catches AgentInterrupted and returns SupervisorResult
-            # with interrupted=True instead of raising
+            # run_supervisor_loop returns SupervisorResult with interrupted=True
+            # for the parallel workers pattern
             assert result.interrupted is True, "Result should be interrupted"
             assert result.interrupt_value is not None, "Should have interrupt value"
-            assert result.interrupt_value.get("job_id") == 456
-            assert result.interrupt_value.get("tool_call_id") == "call_test123"
-            assert result.interrupt_value.get("type") == "worker_pending"
+            assert result.interrupt_value.get("type") == "workers_pending"
+            assert "job_ids" in result.interrupt_value, "Should have job_ids list"
+            assert "call_test123" in result.interrupt_value.get("tool_call_ids", [])
