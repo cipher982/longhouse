@@ -912,3 +912,36 @@ def _cleanup_tool_registry():  # noqa: D401 – internal helper
     reg.clear_runtime_tools()
     yield
     reg.clear_runtime_tools()
+
+
+# ---------------------------------------------------------------------------
+# Cleanup: stop LLMAuditLogger so background task doesn't leak
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _shutdown_llm_audit_logger():
+    """Gracefully stop the LLM audit logger at the end of the test session.
+
+    The audit logger runs a background task that writes to DB. Without cleanup,
+    the task is destroyed while pending when the event loop closes, causing
+    noisy "Task was destroyed but it is pending!" warnings.
+    """
+    yield  # run tests
+
+    try:
+        from zerg.services.llm_audit import audit_logger
+
+        async def _stop_audit_logger():
+            await audit_logger.shutdown()
+
+        try:
+            # Try to get running loop first (for async test contexts)
+            loop = asyncio.get_running_loop()
+            loop.create_task(_stop_audit_logger())
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run()
+            asyncio.run(_stop_audit_logger())
+    except Exception:
+        # Logger already stopped or event-loop closed – no action needed
+        pass

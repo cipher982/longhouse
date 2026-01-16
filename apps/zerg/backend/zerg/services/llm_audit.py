@@ -62,9 +62,16 @@ class LLMAuditLogger:
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=1000)
         self._task: asyncio.Task | None = None
         self._started = False
+        self._stopping = False
+        # Disable in tests to avoid "Task was destroyed" noise on event loop close
+        import os
+
+        self._disabled = os.environ.get("TESTING") == "1"
 
     def ensure_started(self):
         """Start background writer task if not running."""
+        if self._disabled or self._stopping:
+            return  # Don't start in tests or during shutdown
         if not self._started:
             # We use a flag to avoid checking loop state repeatedly
             # However, we must ensure we are in a running loop
@@ -76,6 +83,18 @@ class LLMAuditLogger:
             except RuntimeError:
                 # No running loop, can't start yet
                 pass
+
+    async def shutdown(self):
+        """Gracefully shutdown the writer task."""
+        self._stopping = True
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._started = False
+        self._stopping = False
 
     async def log_request(
         self,
