@@ -10,9 +10,13 @@
 
 import { test as base, expect } from './fixtures';
 
-// Use unique worker IDs that won't collide with real Playwright workers
-const WORKER_ID_A = 'guardrail_a';
-const WORKER_ID_B = 'guardrail_b';
+// Use numeric worker IDs outside the normal range (0-15) to avoid collisions
+// The E2E test setup only creates schemas for IDs 0-15, but also supports
+// any numeric ID via dynamic schema creation in the DB routing layer.
+// Note: Using string IDs like 'guardrail_a' doesn't work because schemas
+// are only created for numeric worker IDs.
+const WORKER_ID_A = '100';
+const WORKER_ID_B = '101';
 
 const backendUrl = `http://127.0.0.1:${process.env.BACKEND_PORT || '8001'}`;
 

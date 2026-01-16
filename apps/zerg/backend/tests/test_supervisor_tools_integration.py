@@ -93,17 +93,19 @@ async def test_supervisor_spawns_worker_via_tool(supervisor_agent, db_session, t
             await runner.run_thread(db_session, thread)
             pytest.fail("Expected AgentInterrupted to be raised")
         except AgentInterrupted as e:
-            # Verify interrupt payload indicates worker_pending
-            assert e.interrupt_value.get("type") == "worker_pending", "Interrupt should be worker_pending"
-            assert "job_id" in e.interrupt_value, "Interrupt should include job_id"
+            # Verify interrupt payload indicates workers_pending (parallel pattern)
+            assert e.interrupt_value.get("type") == "workers_pending", "Interrupt should be workers_pending"
+            assert "job_ids" in e.interrupt_value, "Interrupt should include job_ids"
+            assert len(e.interrupt_value["job_ids"]) >= 1, "Should have at least one job_id"
 
-        # Verify a worker JOB was queued
+        # Verify a worker JOB was created
         jobs = db_session.query(WorkerJob).filter(WorkerJob.owner_id == test_user.id).all()
-        assert len(jobs) >= 1, "At least one worker job should have been queued"
+        assert len(jobs) >= 1, "At least one worker job should have been created"
 
-        # Verify job is queued
+        # Verify job is in 'created' status (two-phase commit pattern - not yet 'queued')
+        # The job gets flipped to 'queued' by supervisor_service.py after barrier creation
         job = jobs[0]
-        assert job.status == "queued", "Worker job should be queued"
+        assert job.status == "created", "Worker job should be in 'created' status (two-phase commit)"
         assert len(job.task) > 0, "Worker job should have a task"
 
     finally:
