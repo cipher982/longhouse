@@ -12,7 +12,7 @@ Key principles:
 - **No keyword routing** — Jarvis decides when to delegate, not keyword matching
 - **No specialized workers** — Workers are general-purpose agents with SSH access
 - **Session Durability** — Runs survive disconnects and timeouts; work continues in background
-- **No tool allowlists** — Security via capability boundaries (which hosts can SSH to), not tool restrictions
+- **Lazy tool loading** — 65+ tools available via `search_tools()`, only core tools pre-bound
 - **Event-driven** — Workers notify when done, no polling loops
 
 Full spec: `docs/specs/durable-runs-v2.2.md`
@@ -469,8 +469,34 @@ On failure, shows first 10 failed tests with guidance:
 | `services/worker_runner.py` | Executes worker jobs, triggers supervisor resume |
 | `services/worker_resume.py` | Resumes supervisor after worker completion |
 | `tools/builtin/supervisor_tools.py` | `spawn_worker` tool definition |
+| `tools/tool_search.py` | Semantic search with OpenAI embeddings |
+| `tools/catalog.py` | Tool catalog with CORE_TOOLS list |
+| `tools/lazy_binder.py` | Lazy binding with allowlist support |
+| `tools/builtin/tool_discovery.py` | `search_tools` and `list_tools` definitions |
 
 **Flow**: User message → `SupervisorService` → `AgentRunner.run_thread()` → `supervisor_react_engine` → (if spawn_worker) `AgentInterrupted` → WAITING → worker runs → `worker_resume` → `AgentRunner.run_continuation()` → final response
+
+**Lazy Tool Loading** (Claude Code pattern):
+
+Agents have access to 65+ tools but only ~10 "core tools" are pre-bound to the LLM. Non-core tools are discovered via `search_tools()`:
+
+```
+User: "Where am I?"
+       ↓
+LLM → search_tools("location")
+       ↓
+Returns: [{name: "get_current_location", ...}]
+       ↓
+_maybe_rebind_after_tool_search() rebinds LLM
+       ↓
+LLM → get_current_location
+       ↓
+✅ Works!
+```
+
+Core tools (always loaded): `spawn_worker`, `contact_user`, `web_search`, `http_request`, `list_workers`, `read_worker_result`, `get_worker_metadata`, `grep_workers`, `search_tools`, `list_tools`
+
+Embeddings cached to: `apps/zerg/backend/data/tool_embeddings.npz`
 
 ### Frontend (TypeScript/React)
 - Zerg dashboard: `apps/zerg/frontend-web/`
