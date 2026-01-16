@@ -1,4 +1,5 @@
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 /**
  * E2E Tests for Supervisor Tool Visibility
@@ -8,13 +9,10 @@ import { test, expect, type Page } from './fixtures';
  * providing real-time feedback and persistent history.
  */
 
-// Reset DB before each test (skip if backend not available)
+// Reset DB before each test
+// Uses strict reset that throws on failure to fail fast
 test.beforeEach(async ({ request }) => {
-  try {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
-  } catch (e) {
-    // Backend not running - tests will be skipped
-  }
+  await resetDatabase(request);
 });
 
 async function navigateToChatPage(page: Page): Promise<void> {

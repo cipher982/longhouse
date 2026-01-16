@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: Canvas drag-drop selectors have changed significantly
 test.skip();
@@ -17,9 +18,9 @@ test.skip();
  */
 
 test.describe('Agent + Tool Complete E2E Workflow', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ page, request }) => {
-    // Ensure clean state for this worker before each test.
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
 
     await page.goto('/', { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);

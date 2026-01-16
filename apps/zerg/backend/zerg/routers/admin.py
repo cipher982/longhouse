@@ -99,7 +99,7 @@ def clear_user_data(engine) -> dict[str, any]:
     """Clear user-generated data while preserving infrastructure.
 
     Uses schema discovery to find tables to clear, avoiding hardcoded lists.
-    Includes timeouts to prevent hanging if SSE connections hold locks.
+    Includes timeouts and retry logic for lock contention under high concurrency.
 
     Args:
         engine: SQLAlchemy engine
@@ -110,6 +110,7 @@ def clear_user_data(engine) -> dict[str, any]:
     import time
 
     from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
 
     settings = get_settings()
     # Counting rows for every table adds measurable latency under parallel E2E.
@@ -137,52 +138,73 @@ def clear_user_data(engine) -> dict[str, any]:
         return {"message": "No user data tables found to clear", "tables_cleared": [], "rows_cleared": 0}
 
     start_time = time.perf_counter()
+    max_attempts = 3 if engine.dialect.name == "postgresql" else 1
+    last_err: Exception | None = None
 
-    with engine.connect() as conn:
-        # CRITICAL: Set timeouts to fail fast if locks can't be acquired
-        # This prevents hanging when SSE connections hold transactions open
-        if engine.dialect.name == "postgresql":
-            conn.execute(text("SET lock_timeout = '5s'"))
-            conn.execute(text("SET statement_timeout = '30s'"))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with engine.connect() as conn:
+                # CRITICAL: Set timeouts to fail fast if locks can't be acquired
+                # This prevents hanging when SSE connections hold transactions open
+                if engine.dialect.name == "postgresql":
+                    conn.execute(text("SET lock_timeout = '3s'"))  # Reduced from 5s for faster retry
+                    conn.execute(text("SET statement_timeout = '15s'"))  # Reduced from 30s
 
-        total_before: int | None = None
-        if should_count_rows:
-            # Count rows before clearing (best-effort; for diagnostics only)
-            total_before = 0
-            for table in clear_tables:
-                try:
-                    count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
-                    total_before += count
-                except Exception:
-                    pass
+                total_before: int | None = None
+                if should_count_rows:
+                    # Count rows before clearing (best-effort; for diagnostics only)
+                    total_before = 0
+                    for table in clear_tables:
+                        try:
+                            count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
+                            total_before += count
+                        except Exception:
+                            pass
 
-        if engine.dialect.name == "postgresql":
-            # PostgreSQL: Use TRUNCATE CASCADE for efficiency.
-            if clear_tables:
-                tables_list = ", ".join(f'"{table}"' for table in sorted(clear_tables))
-                conn.execute(text(f"TRUNCATE TABLE {tables_list} RESTART IDENTITY CASCADE"))
-        else:
-            # SQLite: Disable FK checks and DELETE
-            conn.execute(text("PRAGMA foreign_keys = OFF"))
-            for table in sorted(clear_tables):
-                try:
-                    conn.execute(text(f'DELETE FROM "{table}"'))
-                except Exception as e:
-                    logger.warning(f"Failed to clear table {table}: {e}")
-            conn.execute(text("PRAGMA foreign_keys = ON"))
+                if engine.dialect.name == "postgresql":
+                    # PostgreSQL: Use TRUNCATE CASCADE for efficiency.
+                    if clear_tables:
+                        tables_list = ", ".join(f'"{table}"' for table in sorted(clear_tables))
+                        conn.execute(text(f"TRUNCATE TABLE {tables_list} RESTART IDENTITY CASCADE"))
+                else:
+                    # SQLite: Disable FK checks and DELETE
+                    conn.execute(text("PRAGMA foreign_keys = OFF"))
+                    for table in sorted(clear_tables):
+                        try:
+                            conn.execute(text(f'DELETE FROM "{table}"'))
+                        except Exception as e:
+                            logger.warning(f"Failed to clear table {table}: {e}")
+                    conn.execute(text("PRAGMA foreign_keys = ON"))
 
-        conn.commit()
+                conn.commit()
 
-    duration_ms = int((time.perf_counter() - start_time) * 1000)
+            # Success - break out of retry loop
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
 
-    return {
-        "message": "User data cleared successfully",
-        "operation": "clear_data",
-        "tables_cleared": sorted(list(clear_tables)),
-        "rows_cleared": total_before,
-        "counts_skipped": not should_count_rows,
-        "duration_ms": duration_ms,
-    }
+            return {
+                "message": "User data cleared successfully",
+                "operation": "clear_data",
+                "tables_cleared": sorted(list(clear_tables)),
+                "rows_cleared": total_before,
+                "counts_skipped": not should_count_rows,
+                "duration_ms": duration_ms,
+                "attempts": attempt,
+            }
+
+        except OperationalError as e:
+            last_err = e
+            err_str = str(e).lower()
+            # Retry on lock timeout or connection errors
+            if attempt < max_attempts and ("lock" in err_str or "timeout" in err_str or "connection" in err_str):
+                logger.warning(f"clear_user_data attempt {attempt} failed (retrying): {e}")
+                time.sleep(0.1 * attempt)  # Brief backoff: 100ms, 200ms
+                continue
+            raise
+
+    # Should not reach here, but safety net
+    if last_err:
+        raise last_err
+    raise RuntimeError("clear_user_data: unexpected exit from retry loop")
 
 
 def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[str, any]:

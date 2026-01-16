@@ -70,11 +70,12 @@ process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
 // Define workers count first so we can use it later
 // Pinned defaults for reproducible test runs:
-// - Local: 16 Playwright workers (pair with 6+ uvicorn workers for zero flake)
+// - Local: 8 Playwright workers (reduced from 16 - more stable with 8 uvicorn workers)
 // - CI: 4 Playwright workers (conservative for shared runners)
+// Higher worker counts cause lock contention during parallel DB resets.
 // Override with PLAYWRIGHT_WORKERS env var if needed.
 const envWorkers = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const defaultLocalWorkers = 16;  // Tested optimal with 6 uvicorn workers
+const defaultLocalWorkers = 8;  // Tested: 0 hard failures at 8 workers
 const defaultCIWorkers = 4;
 const workers = Number.isFinite(envWorkers) && envWorkers > 0
   ? envWorkers

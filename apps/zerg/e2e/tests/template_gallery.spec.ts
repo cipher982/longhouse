@@ -1,4 +1,5 @@
 import { test, expect, type Page } from './fixtures';
+import { resetDatabase } from './test-utils';
 
 // Skip: Template gallery UI has been removed/redesigned
 test.skip();
@@ -23,13 +24,14 @@ async function openTemplateGallery(page: Page) {
 }
 
 test.describe('Template Gallery Tests', () => {
+  // Uses strict reset that throws on failure to fail fast
   test.beforeEach(async ({ page, request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
     await navigateToCanvas(page);
   });
 
   test.afterEach(async ({ request }) => {
-    await request.post('/admin/reset-database', { data: { reset_type: 'clear_data' } });
+    await resetDatabase(request);
   });
 
   test('Open template gallery modal', async ({ page }) => {
