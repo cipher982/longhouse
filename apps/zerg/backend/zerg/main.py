@@ -403,6 +403,14 @@ async def lifespan(app: FastAPI):
 
         await topic_manager.shutdown()
 
+        # Shutdown LLM audit logger (prevents "Task was destroyed" warnings)
+        try:
+            from zerg.services.llm_audit import audit_logger
+
+            await audit_logger.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to stop audit_logger")
+
         logger.info("Background services stopped")
     except Exception as e:
         logger.error(f"Error during shutdown: {e}")
