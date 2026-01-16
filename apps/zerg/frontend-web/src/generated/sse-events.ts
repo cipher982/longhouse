@@ -133,6 +133,8 @@ export interface ErrorPayload {
 export interface WorkerSpawnedPayload {
   /** Worker job ID */
   job_id: number;
+  /** Tool call ID for the spawn_worker invocation */
+  tool_call_id?: string;
   /** Worker task (may be truncated to 100 chars) */
   task: string;
   /** LLM model for worker */
