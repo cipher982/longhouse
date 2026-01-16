@@ -32,6 +32,16 @@ class TestFindMatchingScenario:
             scenario = find_matching_scenario(prompt, "supervisor")
             assert scenario is not None, f"Failed to match: {prompt}"
 
+    def test_matches_parallel_disk_space(self):
+        scenario = find_matching_scenario("check disk space on cube, clifford, and zerg", "supervisor")
+        assert scenario is not None
+        assert scenario.get("name") == "disk_space_parallel_supervisor"
+
+    def test_matches_parallel_disk_space_without_cube(self):
+        scenario = find_matching_scenario("check disk space on clifford and zerg", "supervisor")
+        assert scenario is not None
+        assert scenario.get("name") == "disk_space_parallel_supervisor"
+
     def test_worker_matches_disk_task(self):
         scenario = find_matching_scenario(
             "Check disk space on cube server using df -h command", "worker"
@@ -93,6 +103,23 @@ class TestScriptedChatLLM:
         assert ai_msg.tool_calls
         assert ai_msg.tool_calls[0]["name"] == "spawn_worker"
 
+    def test_supervisor_emits_parallel_spawn_workers(self):
+        llm = ScriptedChatLLM()
+        llm = llm.bind_tools([])  # Bind empty tools
+
+        messages = [
+            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            HumanMessage(content="check disk space on cube, clifford, and zerg in parallel"),
+        ]
+
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        assert isinstance(ai_msg, AIMessage)
+        assert ai_msg.tool_calls
+        assert len(ai_msg.tool_calls) == 3
+        assert all(call["name"] == "spawn_worker" for call in ai_msg.tool_calls)
+
     def test_worker_emits_ssh_exec(self):
         llm = ScriptedChatLLM()
         llm = llm.bind_tools([])
@@ -127,6 +154,24 @@ class TestScriptedChatLLM:
         assert isinstance(ai_msg, AIMessage)
         assert not ai_msg.tool_calls  # No more tool calls
         assert "45%" in ai_msg.content  # Evidence keyword present
+
+    def test_final_response_injects_keyword_when_missing(self):
+        llm = ScriptedChatLLM()
+        llm = llm.bind_tools([])
+
+        messages = [
+            SystemMessage(content="You are Jarvis. " + "x" * 2000),
+            HumanMessage(content="check disk space on cube"),
+            AIMessage(content="", tool_calls=[{"id": "call_123", "name": "spawn_worker", "args": {}}]),
+            ToolMessage(content="Worker completed.", tool_call_id="call_123"),
+        ]
+
+        result = llm._generate(messages)
+        ai_msg = result.generations[0].message
+
+        assert isinstance(ai_msg, AIMessage)
+        assert not ai_msg.tool_calls
+        assert "45%" in ai_msg.content
 
     def test_bind_tools_returns_new_instance(self):
         llm1 = ScriptedChatLLM()

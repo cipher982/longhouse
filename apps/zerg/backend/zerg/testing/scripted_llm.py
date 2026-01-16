@@ -51,15 +51,28 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
 
     is_disk = any(k in text for k in ("disk", "storage", "space"))
     is_cube = "cube" in text
+    is_clifford = "clifford" in text
+    is_zerg = "zerg" in text
+    host_count = sum([is_cube, is_clifford, is_zerg])
+    # Heuristic: multi-host disk checks imply parallel intent even without the keyword.
+    is_parallel = "parallel" in text or host_count >= 2
 
     if role == "worker":
-        if is_disk and is_cube:
+        if is_disk and (is_cube or is_clifford or is_zerg):
             return {
                 "role": "worker",
                 "name": "disk_space_worker",
                 "evidence_keyword": "45%",
             }
         return None
+
+    # Supervisor: parallel disk checks first, then single-host disk checks.
+    if is_disk and is_parallel:
+        return {
+            "role": "supervisor",
+            "name": "disk_space_parallel_supervisor",
+            "evidence_keyword": "45%",
+        }
 
     # Supervisor: match disk check and provide a generic fallback for everything else.
     if is_disk and is_cube:
@@ -188,6 +201,11 @@ class ScriptedChatLLM(BaseChatModel):
         if tool_msg is not None:
             content = str(tool_msg.content)
             keyword = "45%" if "45%" in content else None
+            if not keyword:
+                scenario = find_matching_scenario(prompt, role)
+                scenario_keyword = scenario.get("evidence_keyword") if scenario else None
+                if isinstance(scenario_keyword, str) and scenario_keyword:
+                    keyword = scenario_keyword
             final_text = (
                 f"Cube is at {keyword} disk usage; biggest usage is Docker images/volumes." if keyword else "Task completed successfully."
             )
@@ -195,6 +213,23 @@ class ScriptedChatLLM(BaseChatModel):
             return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         scenario = find_matching_scenario(prompt, role)
+
+        if role == "supervisor" and scenario and scenario.get("name") == "disk_space_parallel_supervisor":
+            tasks = [
+                "Check disk space on cube and identify what is using space",
+                "Check disk space on clifford and identify what is using space",
+                "Check disk space on zerg and identify what is using space",
+            ]
+            tool_calls = [
+                {
+                    "id": f"call_{uuid.uuid4().hex[:8]}",
+                    "name": "spawn_worker",
+                    "args": {"task": task},
+                }
+                for task in tasks
+            ]
+            ai_message = AIMessage(content="", tool_calls=tool_calls)
+            return ChatResult(generations=[ChatGeneration(message=ai_message)])
 
         if role == "supervisor" and scenario and scenario.get("name") == "disk_space_supervisor":
             tool_call = {
