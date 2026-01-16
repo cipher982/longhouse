@@ -338,6 +338,17 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("Background services started: %s", started)
 
+        # E2E tests: start worker_job_processor even though testing=True
+        # Workers need to process jobs for continuation tests to pass
+        if _settings.testing and _settings.environment == "test:e2e":
+            try:
+                from zerg.services.worker_job_processor import worker_job_processor
+
+                await worker_job_processor.start()
+                logger.info("Worker job processor started (E2E test mode)")
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"Failed to start worker_job_processor in E2E mode: {e}")
+
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -372,6 +383,15 @@ async def lifespan(app: FastAPI):
                 await worker_job_processor.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop worker_job_processor")
+
+        # E2E tests: stop worker_job_processor if it was started
+        if _settings.testing and _settings.environment == "test:e2e":
+            try:
+                from zerg.services.worker_job_processor import worker_job_processor
+
+                await worker_job_processor.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop worker_job_processor in E2E mode")
 
         # Stop shared async runner
         from zerg.utils.async_runner import get_shared_runner

@@ -114,9 +114,11 @@ class DevAuthStrategy(AuthStrategy):
     def _get_or_create_dev_user(self, db: Session):
         import os
 
-        # Skip database operations in test mode with NODE_ENV=test
-        if os.getenv("NODE_ENV") == "test":
-            # Return a mock user for tests to avoid database issues
+        # Skip database operations in unit test mode (NODE_ENV=test WITHOUT E2E)
+        # E2E tests need real database operations for full integration testing
+        is_unit_test = os.getenv("NODE_ENV") == "test" and os.getenv("ENVIRONMENT") != "test:e2e"
+        if is_unit_test:
+            # Return a mock user for unit tests to avoid database issues
 
             from zerg.models.models import User
 
@@ -146,7 +148,20 @@ class DevAuthStrategy(AuthStrategy):
                 db.refresh(user)
             return user
 
-        return crud.create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role)
+        # Handle race condition: another process may create the user between our
+        # get_user_by_email() check and create_user() call. Catch the integrity
+        # error and re-fetch.
+        try:
+            return crud.create_user(db, email=self.DEV_EMAIL, provider=None, role=desired_role)
+        except Exception as e:  # noqa: BLE001 – catch IntegrityError from any DB driver
+            # Check if it's a duplicate key error (concurrent creation race)
+            error_str = str(e).lower()
+            if "duplicate" in error_str or "unique" in error_str:
+                db.rollback()
+                user = crud.get_user_by_email(db, self.DEV_EMAIL)
+                if user is not None:
+                    return user
+            raise
 
     # Public API --------------------------------------------------------
 
