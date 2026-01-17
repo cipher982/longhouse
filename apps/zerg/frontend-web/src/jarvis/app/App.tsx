@@ -15,6 +15,7 @@ import './components/TraceIdDisplay.css'
 import { supervisorToolStore } from '../lib/supervisor-tool-store'
 import { eventBus } from '../lib/event-bus'
 import config from '../../lib/config'
+import { useAuth } from '../../lib/auth'
 
 console.info('[Jarvis] Starting React application')
 
@@ -26,10 +27,11 @@ export default function App({ embedded = false }: AppProps) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isResetting, setIsResetting] = useState(false)
+  const { user } = useAuth()
 
-  // Show debug panel for developers (local dev mode)
-  // In production, could also check user.role === 'ADMIN'
-  const showDebugPanel = config.isDevelopment
+  // Show debug panel for developers (local dev mode) or admins in production
+  const isAdmin = user?.role === 'ADMIN'
+  const showDebugPanel = config.isDevelopment || isAdmin
 
   // Pause expensive CSS animations when window loses focus (saves CPU/GPU)
   useEffect(() => {
