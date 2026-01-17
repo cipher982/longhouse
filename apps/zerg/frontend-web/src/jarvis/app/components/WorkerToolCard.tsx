@@ -21,7 +21,7 @@ import {
   CircleIcon,
   LoaderIcon,
 } from '../../../components/icons';
-import { extractCommandPreview, extractExecTarget, extractExitCode } from '../../lib/tool-display';
+import { extractCommandPreview, extractExecTarget, extractExitCode, extractExecSource, extractOfflineReason } from '../../lib/tool-display';
 import './WorkerToolCard.css';
 
 interface WorkerToolCardProps {
@@ -117,15 +117,24 @@ function ToolStatusIcon({ status }: { status: NestedToolCall['status'] }) {
   }
 }
 
+interface NestedToolItemProps {
+  tool: NestedToolCall;
+  isExpanded: boolean;
+  isCompact: boolean;
+  onToggleExpand: () => void;
+}
+
 /**
- * Render a single nested tool call
+ * Render a single nested tool call with expandable details
  */
-function NestedToolItem({ tool }: { tool: NestedToolCall }) {
+function NestedToolItem({ tool, isExpanded, isCompact, onToggleExpand }: NestedToolItemProps) {
   const statusClass = `nested-tool-status-${tool.status}`;
   const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
   const command = extractCommandPreview(tool.toolName, tool.argsPreview);
   const target = extractExecTarget(tool.toolName, tool.argsPreview);
   const exitCode = extractExitCode(tool.resultPreview, tool.error);
+  const execSource = extractExecSource(tool.toolName);
+  const offlineReason = extractOfflineReason(tool.error, tool.resultPreview);
   const primaryLabel = command ?? tool.toolName;
 
   // Show args preview if running, error preview if failed
@@ -142,35 +151,105 @@ function NestedToolItem({ tool }: { tool: NestedToolCall }) {
   if (command) {
     metaItems.push({ label: tool.toolName, className: 'nested-tool-meta-item' });
   }
+  if (execSource) {
+    metaItems.push({ label: execSource, className: 'nested-tool-meta-item nested-tool-meta-item--source' });
+  }
   if (target) {
     metaItems.push({ label: `target: ${target}`, className: 'nested-tool-meta-item' });
+  }
+  if (offlineReason) {
+    metaItems.push({ label: offlineReason, className: 'nested-tool-meta-item nested-tool-meta-item--offline' });
   }
   if (exitCode !== null) {
     const exitClass = exitCode === 0 ? 'nested-tool-meta-item nested-tool-meta-item--ok' : 'nested-tool-meta-item nested-tool-meta-item--warn';
     metaItems.push({ label: `exit ${exitCode}`, className: exitClass });
   }
 
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (command && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(command).catch(() => {
+        // Silently fail - clipboard may not be available in insecure contexts
+      });
+    }
+  };
+
   return (
     <div className={`nested-tool ${statusClass}`}>
-      <span className="nested-tool-icon">
-        <ToolStatusIcon status={tool.status} />
-      </span>
-      <span className={`nested-tool-name${command ? ' nested-tool-name--command' : ''}`}>{primaryLabel}</span>
-      {metaItems.length > 0 && (
-        <span className="nested-tool-meta">
-          {metaItems.map((item, index) => (
-            <span key={`${tool.toolCallId}-meta-${index}`} className={item.className}>{item.label}</span>
-          ))}
+      <div className="nested-tool-row" onClick={onToggleExpand}>
+        <span className="nested-tool-expand-indicator">{isExpanded ? '▼' : '▶'}</span>
+        <span className="nested-tool-icon">
+          <ToolStatusIcon status={tool.status} />
         </span>
+        <span className={`nested-tool-name${command ? ' nested-tool-name--command' : ''}`}>{primaryLabel}</span>
+        {metaItems.length > 0 && (
+          <span className="nested-tool-meta">
+            {metaItems.map((item, index) => (
+              <span key={`${tool.toolCallId}-meta-${index}`} className={item.className}>{item.label}</span>
+            ))}
+          </span>
+        )}
+        {!isCompact && preview && <span className="nested-tool-preview">{preview}</span>}
+        {command && (
+          <button
+            className="nested-tool-copy"
+            onClick={handleCopy}
+            title="Copy command"
+          >
+            📋
+          </button>
+        )}
+        <span className="nested-tool-duration">{duration}</span>
+      </div>
+
+      {/* Expandable details drawer */}
+      {isExpanded && (
+        <div className="nested-tool-details" data-testid="nested-tool-details">
+          {tool.argsPreview && (
+            <div className="nested-tool-details__section">
+              <span className="nested-tool-details__label">Args</span>
+              <pre className="nested-tool-details__content">{tool.argsPreview}</pre>
+            </div>
+          )}
+          {tool.resultPreview && (
+            <div className="nested-tool-details__section">
+              <span className="nested-tool-details__label">Result</span>
+              <pre className="nested-tool-details__content">{tool.resultPreview}</pre>
+            </div>
+          )}
+          {tool.error && (
+            <div className="nested-tool-details__section nested-tool-details__section--error">
+              <span className="nested-tool-details__label">Error</span>
+              <pre className="nested-tool-details__content">{tool.error}</pre>
+            </div>
+          )}
+          {!tool.argsPreview && !tool.resultPreview && !tool.error && (
+            <div className="nested-tool-details__section">
+              <span className="nested-tool-details__content nested-tool-details__content--empty">No details available</span>
+            </div>
+          )}
+        </div>
       )}
-      {preview && <span className="nested-tool-preview">{preview}</span>}
-      <span className="nested-tool-duration">{duration}</span>
     </div>
   );
 }
 
 export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: WorkerToolCardProps): React.ReactElement {
   const [isExpanded, setIsExpanded] = useState(true); // Workers default to expanded
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [isCompact, setIsCompact] = useState(false);
+
+  const toggleToolExpand = (toolCallId: string) => {
+    setExpandedTools(prev => {
+      const next = new Set(prev);
+      if (next.has(toolCallId)) {
+        next.delete(toolCallId);
+      } else {
+        next.add(toolCallId);
+      }
+      return next;
+    });
+  };
 
   // Extract worker state from tool metadata
   const workerState = useMemo<WorkerState>(() => {
@@ -192,7 +271,7 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
   const duration = formatDuration(tool.durationMs, tool.startedAt, workerState.status);
   const hasNestedTools = workerState.nestedTools.length > 0;
 
-  const containerClass = `worker-tool-card worker-tool-card--${workerState.status} ${isDetached ? 'worker-tool-card--detached' : ''}`;
+  const containerClass = `worker-tool-card worker-tool-card--${workerState.status} ${isDetached ? 'worker-tool-card--detached' : ''} ${isCompact ? 'worker-tool-card--compact' : ''}`;
 
   // Compute stacking offset for detached workers
   const detachedStyle = isDetached && detachedIndex > 0 ? {
@@ -217,6 +296,15 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
         <span className="worker-tool-card__name">spawn_worker</span>
         <span className="worker-tool-card__task">{taskDisplay}</span>
         <span className="worker-tool-card__spacer" />
+        {hasNestedTools && (
+          <button
+            className="worker-tool-card__compact-toggle"
+            onClick={(e) => { e.stopPropagation(); setIsCompact(!isCompact); }}
+            title={isCompact ? 'Expand rows' : 'Compact rows'}
+          >
+            {isCompact ? '⊞' : '⊟'}
+          </button>
+        )}
         <span className="worker-tool-card__duration">{duration}</span>
         <span className="worker-tool-card__expand-toggle">
           {isExpanded ? '▼' : '▶'}
@@ -230,7 +318,13 @@ export function WorkerToolCard({ tool, isDetached = false, detachedIndex = 0 }: 
           {hasNestedTools && (
             <div className="worker-tool-card__nested-tools">
               {workerState.nestedTools.map(nestedTool => (
-                <NestedToolItem key={nestedTool.toolCallId} tool={nestedTool} />
+                <NestedToolItem
+                  key={nestedTool.toolCallId}
+                  tool={nestedTool}
+                  isExpanded={expandedTools.has(nestedTool.toolCallId)}
+                  isCompact={isCompact}
+                  onToggleExpand={() => toggleToolExpand(nestedTool.toolCallId)}
+                />
               ))}
             </div>
           )}

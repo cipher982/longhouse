@@ -259,6 +259,341 @@ test.describe('Core User Journey - Scripted LLM', () => {
 
     console.log('[Worker Tool UI] Command preview verified');
   });
+
+  test('nested tool details drawer expands on click', async ({ page }) => {
+    console.log('[Details Drawer] Starting test');
+
+    await navigateToChatPage(page);
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 201;
+    const toolCallId = 'call-spawn-details';
+    const workerId = 'e2e-worker-details';
+    const jobId = 9002;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Details test', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Test details drawer' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Test details drawer',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'ssh_exec',
+          toolCallId: 'call-tool-details',
+          argsPreview: '{"target":"cube","command":"ls -la /tmp"}',
+          timestamp: now + 4,
+        });
+        bus.emit('worker:tool_completed', {
+          workerId,
+          toolName: 'ssh_exec',
+          toolCallId: 'call-tool-details',
+          durationMs: 25,
+          argsPreview: '{"target":"cube","command":"ls -la /tmp"}',
+          resultPreview: '{"exit_code": 0, "stdout": "drwxrwxrwt 15 root root 4096 Jan 16 10:00 ."}',
+          timestamp: now + 5,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    // Click on the nested tool row to expand details
+    const nestedToolRow = workerCard.locator('.nested-tool-row').first();
+    await nestedToolRow.click();
+
+    // Verify details drawer is visible
+    const detailsDrawer = workerCard.locator('[data-testid="nested-tool-details"]');
+    await expect(detailsDrawer).toBeVisible({ timeout: 2000 });
+
+    // Verify content sections are present
+    await expect(detailsDrawer.locator('.nested-tool-details__label').first()).toContainText('Args', { timeout: 2000 });
+    await expect(detailsDrawer.locator('.nested-tool-details__content').first()).toBeVisible({ timeout: 2000 });
+
+    console.log('[Details Drawer] Details drawer expands correctly');
+  });
+
+  test('source badge displays for exec tools', async ({ page }) => {
+    console.log('[Source Badge] Starting test');
+
+    await navigateToChatPage(page);
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 202;
+    const toolCallId = 'call-spawn-source';
+    const workerId = 'e2e-worker-source';
+    const jobId = 9003;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Source badge test', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Test source badge' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Test source badge',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-source',
+          argsPreview: '{"target":"laptop","command":"uname -a"}',
+          timestamp: now + 4,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    // Verify source badge is visible
+    const sourceBadge = workerCard.locator('.nested-tool-meta-item--source');
+    await expect(sourceBadge).toContainText('Runner', { timeout: 2000 });
+
+    console.log('[Source Badge] Source badge displays correctly');
+  });
+
+  test('offline badge displays for connection errors', async ({ page }) => {
+    console.log('[Offline Badge] Starting test');
+
+    await navigateToChatPage(page);
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 203;
+    const toolCallId = 'call-spawn-offline';
+    const workerId = 'e2e-worker-offline';
+    const jobId = 9004;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Offline badge test', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Test offline badge' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Test offline badge',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-offline',
+          argsPreview: '{"target":"cube","command":"whoami"}',
+          timestamp: now + 4,
+        });
+        bus.emit('worker:tool_failed', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-offline',
+          durationMs: 5000,
+          error: 'Runner offline: cube is not responding',
+          timestamp: now + 5,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    // Verify offline badge is visible
+    const offlineBadge = workerCard.locator('.nested-tool-meta-item--offline');
+    await expect(offlineBadge).toContainText('Runner offline', { timeout: 2000 });
+
+    console.log('[Offline Badge] Offline badge displays correctly');
+  });
+
+  test('compact mode toggle hides previews', async ({ page }) => {
+    console.log('[Compact Mode] Starting test');
+
+    await navigateToChatPage(page);
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 204;
+    const toolCallId = 'call-spawn-compact';
+    const workerId = 'e2e-worker-compact';
+    const jobId = 9005;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Compact mode test', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Test compact mode' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Test compact mode',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'ssh_exec',
+          toolCallId: 'call-tool-compact',
+          argsPreview: '{"target":"cube","command":"echo hello"}',
+          timestamp: now + 4,
+        });
+        bus.emit('worker:tool_completed', {
+          workerId,
+          toolName: 'ssh_exec',
+          toolCallId: 'call-tool-compact',
+          durationMs: 10,
+          resultPreview: '{"exit_code": 0, "stdout": "hello world output here"}',
+          timestamp: now + 5,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    // Verify preview is visible initially
+    const previewText = workerCard.locator('.nested-tool-preview');
+    await expect(previewText).toBeVisible({ timeout: 2000 });
+
+    // Click compact toggle
+    const compactToggle = workerCard.locator('.worker-tool-card__compact-toggle');
+    await compactToggle.click();
+
+    // Verify compact class is applied
+    await expect(workerCard).toHaveClass(/worker-tool-card--compact/, { timeout: 2000 });
+
+    // Preview should be hidden in compact mode (CSS display: none)
+    await expect(previewText).not.toBeVisible({ timeout: 2000 });
+
+    console.log('[Compact Mode] Compact mode toggle works correctly');
+  });
+
+  test('copy button is visible for command tools', async ({ page }) => {
+    console.log('[Copy Button] Starting test');
+
+    await navigateToChatPage(page);
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 205;
+    const toolCallId = 'call-spawn-copy';
+    const workerId = 'e2e-worker-copy';
+    const jobId = 9006;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Copy button test', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Test copy button' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Test copy button',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-copy',
+          argsPreview: '{"target":"laptop","command":"pwd"}',
+          timestamp: now + 4,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    // Hover over the nested tool row to make copy button visible
+    const nestedToolRow = workerCard.locator('.nested-tool-row').first();
+    await nestedToolRow.hover();
+
+    // Verify copy button exists (it's there but hidden until hover in CSS)
+    const copyButton = workerCard.locator('.nested-tool-copy');
+    await expect(copyButton).toBeAttached({ timeout: 2000 });
+
+    // Clicking copy button should not throw an error
+    await copyButton.click();
+
+    console.log('[Copy Button] Copy button is present and clickable');
+  });
 });
 
 test.describe('Core Journey - API Flow', () => {

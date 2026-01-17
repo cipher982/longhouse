@@ -146,11 +146,9 @@
 /* Individual nested tool - scoped under worker-tool-card */
 .worker-tool-card .nested-tool {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
   font-size: 0.75rem;
   color: var(--text-secondary, rgba(255, 255, 255, 0.7));
-  padding: 4px 0;
 }
 
 .worker-tool-card .nested-tool-icon {
@@ -335,6 +333,161 @@
 .worker-tool-card .worker-icon-spawned {
   display: inline-flex;
   color: var(--color-primary, #3b82f6);
+}
+
+/* Compact toggle button */
+.worker-tool-card__compact-toggle {
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.worker-tool-card__compact-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-primary, #3b82f6);
+}
+
+/* Compact mode */
+.worker-tool-card--compact .nested-tool-row {
+  padding: 2px 0;
+  font-size: 0.6875rem;
+}
+
+.worker-tool-card--compact .nested-tool-preview {
+  display: none;
+}
+
+/* Nested tool row wrapper (clickable area) */
+.worker-tool-card .nested-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  border-radius: 4px;
+  margin: 0 -4px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.worker-tool-card .nested-tool-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Expand indicator */
+.worker-tool-card .nested-tool-expand-indicator {
+  font-size: 0.5rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+  flex-shrink: 0;
+  width: 10px;
+  transition: color 0.1s ease;
+}
+
+.worker-tool-card .nested-tool-row:hover .nested-tool-expand-indicator {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+/* Copy button */
+.worker-tool-card .nested-tool-copy {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.worker-tool-card .nested-tool-row:hover .nested-tool-copy {
+  opacity: 1;
+}
+
+.worker-tool-card .nested-tool-copy:hover {
+  color: var(--color-primary, #3b82f6);
+}
+
+/* Source badge */
+.worker-tool-card .nested-tool-meta-item--source {
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--color-primary, #3b82f6);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Offline badge */
+.worker-tool-card .nested-tool-meta-item--offline {
+  border-color: var(--color-error, #ef4444);
+  color: var(--color-error, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* Details drawer */
+.worker-tool-card .nested-tool-details {
+  margin-top: 4px;
+  margin-left: 22px;
+  padding: 8px 12px;
+  background: var(--surface-tertiary, rgba(0, 0, 0, 0.3));
+  border-left: 2px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border-radius: 0 4px 4px 0;
+  font-size: 0.75rem;
+}
+
+.worker-tool-card .nested-tool-details__section {
+  margin-bottom: 8px;
+}
+
+.worker-tool-card .nested-tool-details__section:last-child {
+  margin-bottom: 0;
+}
+
+.worker-tool-card .nested-tool-details__section--error {
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 0 -8px;
+}
+
+.worker-tool-card .nested-tool-details__label {
+  display: block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+  margin-bottom: 4px;
+}
+
+.worker-tool-card .nested-tool-details__section--error .nested-tool-details__label {
+  color: var(--color-error, #ef4444);
+}
+
+.worker-tool-card .nested-tool-details__content {
+  font-family: var(--font-mono, 'SF Mono', 'Monaco', 'Consolas', monospace);
+  font-size: 0.6875rem;
+  color: var(--text-primary, #fff);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.worker-tool-card .nested-tool-details__section--error .nested-tool-details__content {
+  color: var(--color-error, #ef4444);
+}
+
+.worker-tool-card .nested-tool-details__content--empty {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.4));
+  font-style: italic;
 }
 
 /* Responsive adjustments */
