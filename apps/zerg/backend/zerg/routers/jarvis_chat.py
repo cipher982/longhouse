@@ -55,6 +55,70 @@ async def _replay_stream_generator(
     """
     from zerg.services.replay_service import run_replay_conversation
 
+    async def _run_replay_with_error_handling():
+        """Wrapper that emits error events if replay fails."""
+        try:
+            success = await run_replay_conversation(
+                scenario_name=replay_scenario,
+                user_message=message,
+                run_id=run_id,
+                thread_id=thread_id,
+                owner_id=owner_id,
+                message_id=message_id,
+                trace_id=trace_id,
+            )
+            if not success:
+                # No matching conversation found - emit error so stream closes
+                logger.warning(f"Replay failed: no matching conversation for '{message[:50]}...'")
+                await event_bus.publish(
+                    EventType.ERROR,
+                    {
+                        "event_type": "error",
+                        "run_id": run_id,
+                        "owner_id": owner_id,
+                        "message": "Replay mode: no matching conversation for message",
+                        "trace_id": trace_id,
+                    },
+                )
+                await event_bus.publish(
+                    EventType.SUPERVISOR_COMPLETE,
+                    {
+                        "event_type": "supervisor_complete",
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "owner_id": owner_id,
+                        "message_id": message_id,
+                        "status": "failed",
+                        "result": "Replay mode: no matching conversation found",
+                        "trace_id": trace_id,
+                    },
+                )
+        except Exception as e:
+            logger.exception(f"Replay error: {e}")
+            await event_bus.publish(
+                EventType.ERROR,
+                {
+                    "event_type": "error",
+                    "run_id": run_id,
+                    "owner_id": owner_id,
+                    "message": f"Replay error: {e}",
+                    "trace_id": trace_id,
+                },
+            )
+            await event_bus.publish(
+                EventType.SUPERVISOR_COMPLETE,
+                {
+                    "event_type": "supervisor_complete",
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "owner_id": owner_id,
+                    "message_id": message_id,
+                    "status": "failed",
+                    "result": f"Replay error: {e}",
+                    "trace_id": trace_id,
+                },
+            )
+
     task_started = False
     async for event in stream_run_events(run_id, owner_id):
         yield event
@@ -63,18 +127,8 @@ async def _replay_stream_generator(
             task_started = True
             logger.info(f"Replay SSE: starting replay for run {run_id}, scenario={replay_scenario}", extra={"tag": "JARVIS"})
 
-            # Run replay in background
-            asyncio.create_task(
-                run_replay_conversation(
-                    scenario_name=replay_scenario,
-                    user_message=message,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    owner_id=owner_id,
-                    message_id=message_id,
-                    trace_id=trace_id,
-                )
-            )
+            # Run replay in background with error handling
+            asyncio.create_task(_run_replay_with_error_handling())
 
 
 async def _chat_stream_generator(

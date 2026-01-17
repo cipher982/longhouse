@@ -196,8 +196,14 @@ def record_scene(
         return None
 
 
-def record_scenario(scenario_name: str, scene_filter: str | None = None) -> list[Path]:
-    """Record all scenes with audio-driven timing."""
+def record_scenario(scenario_name: str, scene_filter: str | None = None, headless: bool = False) -> list[Path]:
+    """Record all scenes with audio-driven timing.
+
+    Args:
+        scenario_name: Name of the scenario to record
+        scene_filter: Optional scene ID to record only that scene
+        headless: Run browser in headless mode (for CI/servers)
+    """
     scenario = load_scenario(scenario_name)
     audio_durations = load_audio_durations(scenario_name)
 
@@ -212,12 +218,13 @@ def record_scenario(scenario_name: str, scene_filter: str | None = None) -> list
             raise ValueError(f"Scene not found: {scene_filter}")
 
     logger.info(f"Recording {len(scenes)} scene(s) for scenario: {scenario_name}")
+    logger.info(f"Headless mode: {headless}")
 
     viewport = {"width": 1920, "height": 1080}
     video_paths = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)  # Visible for debugging
+        browser = p.chromium.launch(headless=headless)
 
         for scene in scenes:
             audio_dur = audio_durations.get(scene["id"])
@@ -256,6 +263,7 @@ def main():
     parser = argparse.ArgumentParser(description="Capture product demo video")
     parser.add_argument("scenario", default="product-demo", nargs="?", help="Scenario name (default: product-demo)")
     parser.add_argument("--scene", help="Record specific scene only")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (for CI/servers)")
     parser.add_argument("--list", action="store_true", help="List available scenarios")
     args = parser.parse_args()
 
@@ -263,7 +271,7 @@ def main():
         list_scenarios()
         return
 
-    record_scenario(args.scenario, args.scene)
+    record_scenario(args.scenario, args.scene, headless=args.headless)
 
 
 if __name__ == "__main__":
