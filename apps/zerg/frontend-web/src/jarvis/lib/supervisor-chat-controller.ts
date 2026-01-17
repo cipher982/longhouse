@@ -155,7 +155,7 @@ export class SupervisorChatController {
   /**
    * Send a text message to the Supervisor and handle SSE response stream
    */
-  async sendMessage(text: string, messageId: string, options?: { model?: string; reasoning_effort?: string }): Promise<void> {
+  async sendMessage(text: string, messageId: string, options?: { model?: string; reasoning_effort?: string; replay_scenario?: string }): Promise<void> {
     if (!text || text.trim().length === 0) {
       throw new Error('Cannot send empty message');
     }
@@ -263,7 +263,7 @@ export class SupervisorChatController {
     message: string,
     signal: AbortSignal,
     messageId: string,
-    options?: { model?: string; reasoning_effort?: string }
+    options?: { model?: string; reasoning_effort?: string; replay_scenario?: string }
   ): Promise<void> {
     const url = toAbsoluteUrl(`${CONFIG.JARVIS_API_BASE}/chat`);
 
@@ -275,6 +275,12 @@ export class SupervisorChatController {
     }
     if (options?.reasoning_effort) {
       requestBody.reasoning_effort = options.reasoning_effort;
+    }
+    // Video recording: pass replay scenario from window global or options
+    const replayScenario = options?.replay_scenario || (window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO;
+    if (replayScenario) {
+      requestBody.replay_scenario = replayScenario;
+      logger.debug('[SupervisorChat] Using replay scenario:', replayScenario);
     }
 
     const response = await fetch(url, {

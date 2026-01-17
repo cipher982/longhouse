@@ -1,0 +1,197 @@
+# Product Demo Scenario
+# Full product demo - Dashboard, Chat interaction, Canvas workflow
+#
+# Usage:
+#   1. Generate audio first:  make video-audio
+#   2. Record video:          make video-record
+#   3. Process/combine:       make video-process
+
+name: product-demo
+description: Full product demo showcasing Dashboard, Chat, and Canvas features
+
+voiceover:
+  voice: "nova"  # Options: alloy, echo, fable, onyx, nova, shimmer
+  model: "tts-1-hd"  # Higher quality model
+
+# Golden conversation data for replay mode
+# These get inserted as real ThreadMessage rows when replay mode is active
+golden_conversations:
+  morning-briefing:
+    user_message: "Good morning! Give me a quick briefing on my day."
+    messages:
+      - role: assistant
+        content: "Good morning! Let me pull together your briefing..."
+        delay_ms: 400
+      - role: tool_use
+        name: spawn_worker
+        input:
+          worker_name: "daily-briefing"
+          task: "Gather calendar events, weather, and priority tasks"
+        delay_ms: 200
+    worker_result:
+      delay_ms: 2500
+      worker_name: "daily-briefing"
+      status: "complete"
+      result: |
+        Calendar: Team standup at 10am, Design review at 2pm
+        Weather: 68°F, partly cloudy
+        Tasks: 3 high priority items due today
+    final_message:
+      role: assistant
+      content: |
+        Here's your morning briefing:
+
+        **Schedule**
+        - 10:00 AM — Team standup
+        - 2:00 PM — Design review
+
+        **Weather**
+        68°F and partly cloudy — perfect day!
+
+        **Priority Tasks**
+        You have 3 high-priority items due today. Would you like me to show them?
+      delay_ms: 600
+
+  automate-reports:
+    user_message: "Can you set up an automation to send me weekly reports every Monday?"
+    messages:
+      - role: assistant
+        content: "I'll create a workflow to automate your weekly reports..."
+        delay_ms: 500
+      - role: tool_use
+        name: spawn_worker
+        input:
+          worker_name: "workflow-builder"
+          task: "Create weekly report automation with Monday schedule"
+        delay_ms: 200
+    worker_result:
+      delay_ms: 3000
+      worker_name: "workflow-builder"
+      status: "complete"
+      result: |
+        Created workflow: "Weekly Report Automation"
+        Trigger: Every Monday at 9:00 AM
+        Actions: Gather metrics → Generate report → Send email
+    final_message:
+      role: assistant
+      content: |
+        Done! I've created your **Weekly Report Automation** workflow.
+
+        **Schedule:** Every Monday at 9:00 AM
+        **Actions:**
+        1. Gather your weekly metrics
+        2. Generate a formatted report
+        3. Send it to your email
+
+        You can view and customize this workflow in the Canvas. Want me to take you there?
+      delay_ms: 500
+
+# Scene definitions with steps
+scenes:
+  # Scene 1: Dashboard Overview
+  - id: dashboard-intro
+    voiceover: |
+      Meet Swarmlet. Your personal AI automation platform that works the way you think.
+      From the dashboard, you can see all your agents at a glance, monitor active automations,
+      and dive into any workflow with a single click.
+    steps:
+      - action: navigate
+        url: /dashboard?marketing=true&replay=product-demo&effects=off&clock=frozen&seed=demo
+        wait_for: '[data-ready="true"]'
+      - action: pause
+        duration_ms: 1000
+      - action: pause_for_audio
+
+  # Scene 2: Chat Introduction
+  - id: chat-intro
+    voiceover: |
+      The magic happens in chat. Just tell Swarmlet what you need in plain English.
+      No complex menus, no learning curve. Just ask.
+    steps:
+      - action: navigate
+        url: /chat?thread=marketing&marketing=true&replay=product-demo&effects=off&clock=frozen
+        wait_for: '[data-testid="chat-input"]'
+      - action: pause
+        duration_ms: 500
+      - action: pause_for_audio
+
+  # Scene 3: Morning Briefing Demo
+  - id: chat-briefing
+    voiceover: |
+      Watch as Swarmlet handles a morning briefing request.
+      It automatically coordinates with your calendar, checks the weather,
+      and prioritizes your tasks. All from a simple question.
+    golden_conversation: morning-briefing
+    steps:
+      - action: type
+        selector: '[data-testid="chat-input"]'
+        text: "Good morning! Give me a quick briefing on my day."
+        delay_ms: 35
+      - action: pause
+        duration_ms: 300
+      - action: click
+        selector: '[data-testid="send-message-btn"]'
+      - action: wait
+        selector: '[data-testid="worker-tool-card"]'
+        timeout_ms: 10000
+      - action: pause
+        duration_ms: 2000
+      - action: wait
+        selector: '.message-group:last-child .message.assistant'
+        timeout_ms: 15000
+      - action: pause_for_audio
+
+  # Scene 4: Automation Request
+  - id: chat-automation
+    voiceover: |
+      Need something automated? Just describe it.
+      Swarmlet understands context, figures out the right approach,
+      and builds the workflow for you behind the scenes.
+    golden_conversation: automate-reports
+    steps:
+      - action: type
+        selector: '[data-testid="chat-input"]'
+        text: "Can you set up an automation to send me weekly reports every Monday?"
+        delay_ms: 30
+      - action: pause
+        duration_ms: 300
+      - action: click
+        selector: '[data-testid="send-message-btn"]'
+      - action: wait
+        selector: '[data-testid="worker-tool-card"]'
+        timeout_ms: 10000
+      - action: pause
+        duration_ms: 2500
+      - action: wait
+        selector: '.message-group:last-child .message.assistant'
+        timeout_ms: 15000
+      - action: pause_for_audio
+
+  # Scene 5: Canvas Workflow View
+  - id: canvas-view
+    voiceover: |
+      Behind every conversation is a visual workflow you can explore.
+      The Canvas shows exactly how your automations work,
+      with triggers, agents, and actions connected in an intuitive flow.
+    steps:
+      - action: navigate
+        url: /canvas?workflow=health&marketing=true&effects=off&clock=frozen
+        wait_for: '[data-ready="true"]'
+      - action: pause
+        duration_ms: 1500
+      - action: pause_for_audio
+
+  # Scene 6: Closing
+  - id: closing
+    voiceover: |
+      Swarmlet. AI automation that just works.
+      Start for free at swarmlet dot com.
+    steps:
+      - action: navigate
+        url: /landing?marketing=true&effects=off
+        wait_for: '[data-ready="true"]'
+      - action: pause
+        duration_ms: 500
+      - action: pause_for_audio
+      - action: pause
+        duration_ms: 2000
