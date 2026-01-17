@@ -75,6 +75,7 @@ from .crud_workflows import get_workflows
 
 # Re-export from specialized modules
 from .knowledge_crud import *  # noqa: F403
+from .memory_crud import *  # noqa: F403
 from .runner_crud import *  # noqa: F403
 
 __all__ = [
