@@ -167,9 +167,16 @@ if [[ "$SKIP_SMOKE" == "false" ]]; then
   echo "=== Running Smoke Tests ==="
   echo ""
 
-  # Brief pause for any async operations to settle
-  echo "Waiting 10s for backend to settle..."
-  sleep 10
+  # Wait for backend container to be healthy (has 60s start_period)
+  echo "Waiting for backend health check..."
+  for i in {1..12}; do
+    HEALTH=$(ssh zerg "docker inspect '$BACKEND_CONTAINER' --format '{{.State.Health.Status}}'" 2>/dev/null || echo "unknown")
+    if [[ "$HEALTH" == "healthy" ]]; then
+      echo "  Backend healthy after $((i * 5))s"
+      break
+    fi
+    sleep 5
+  done
 
   if "${SCRIPT_DIR}/smoke-prod.sh"; then
     echo ""
