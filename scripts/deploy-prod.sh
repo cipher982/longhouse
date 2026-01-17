@@ -147,9 +147,10 @@ fi
 echo "  Using container: $BACKEND_CONTAINER"
 
 # Copy config files into container /tmp via stdin as uid 1000 (ensures readability)
+# Credentials get 600 perms via umask; context is non-sensitive so default is fine
 echo "  Copying config files into container..."
 ssh zerg "cat ~/.config/zerg/user_context.json | docker exec -i -u 1000 '$BACKEND_CONTAINER' sh -c 'cat > /tmp/user_context.json'"
-ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i -u 1000 '$BACKEND_CONTAINER' sh -c 'cat > /tmp/personal_credentials.json'"
+ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i -u 1000 '$BACKEND_CONTAINER' sh -c 'umask 077 && cat > /tmp/personal_credentials.json'"
 
 # Validate files landed and are non-empty before seeding
 ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_context.json && test -s /tmp/personal_credentials.json'" || {
@@ -161,6 +162,9 @@ ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_cont
 echo "  Running seed scripts with --force..."
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_user_context.py /tmp/user_context.json --force"
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py /tmp/personal_credentials.json --force"
+
+# Clean up temp files (credentials shouldn't linger in /tmp)
+ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' rm -f /tmp/user_context.json /tmp/personal_credentials.json"
 echo "  ✓ Database updated"
 
 # Run smoke tests
