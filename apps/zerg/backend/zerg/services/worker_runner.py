@@ -129,6 +129,7 @@ class WorkerRunner:
         """
         start_time = datetime.now(timezone.utc)
         event_ctx = event_context or {}
+        trace_id = event_ctx.get("trace_id") if event_ctx else None
         owner_for_events = None
         if agent is not None:
             owner_for_events = getattr(agent, "owner_id", None)
@@ -166,6 +167,7 @@ class WorkerRunner:
             owner_id=owner_for_events,
             run_id=event_ctx.get("run_id"),
             job_id=job_id,
+            trace_id=trace_id,
         )
         emitter_token = set_emitter(worker_emitter)
 
@@ -191,6 +193,7 @@ class WorkerRunner:
                         "worker_id": worker_id,
                         "owner_id": owner_for_events,
                         "task": task[:100],
+                        "trace_id": trace_id,
                     },
                 )
 
@@ -275,6 +278,7 @@ class WorkerRunner:
                             "error": worker_context.critical_error_message,
                             "duration_ms": duration_ms,
                             "owner_id": owner_for_events,
+                            "trace_id": trace_id,
                         },
                     )
 
@@ -324,6 +328,7 @@ class WorkerRunner:
                         "status": "success",
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
+                        "trace_id": trace_id,
                     },
                 )
 
@@ -337,6 +342,7 @@ class WorkerRunner:
                             "worker_id": worker_id,
                             "summary": summary,
                             "owner_id": owner_for_events,
+                            "trace_id": trace_id,
                         },
                     )
 
@@ -396,6 +402,7 @@ class WorkerRunner:
                         "error": error_msg,
                         "duration_ms": duration_ms,
                         "owner_id": owner_for_events,
+                        "trace_id": trace_id,
                     },
                 )
 

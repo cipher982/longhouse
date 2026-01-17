@@ -54,6 +54,8 @@ export interface SupervisorThinkingPayload {
   /** Thinking status message */
   message: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorTokenPayload {
@@ -63,6 +65,8 @@ export interface SupervisorTokenPayload {
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorCompletePayload {
@@ -96,6 +100,8 @@ export interface SupervisorDeferredPayload {
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorWaitingPayload {
@@ -110,6 +116,8 @@ export interface SupervisorWaitingPayload {
   thread_id?: number;
   /** Unique identifier for the assistant message */
   message_id?: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorResumedPayload {
@@ -118,6 +126,8 @@ export interface SupervisorResumedPayload {
   thread_id: number;
   /** Unique identifier for the assistant message */
   message_id: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface ErrorPayload {
@@ -140,6 +150,8 @@ export interface WorkerSpawnedPayload {
   /** LLM model for worker */
   model?: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerStartedPayload {
@@ -149,6 +161,8 @@ export interface WorkerStartedPayload {
   run_id?: number;
   /** Worker task (may be truncated) */
   task?: string;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerCompletePayload {
@@ -160,6 +174,8 @@ export interface WorkerCompletePayload {
   /** Error message (only present if status=failed) */
   error?: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerSummaryReadyPayload {
@@ -169,6 +185,8 @@ export interface WorkerSummaryReadyPayload {
   /** Extracted worker summary */
   summary: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerToolStartedPayload {
@@ -180,6 +198,8 @@ export interface WorkerToolStartedPayload {
   tool_args_preview?: string;
   /** Required for security (prevents cross-run leakage) */
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerToolCompletedPayload {
@@ -190,6 +210,8 @@ export interface WorkerToolCompletedPayload {
   /** Preview of tool result (may be truncated) */
   result_preview?: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface WorkerToolFailedPayload {
@@ -200,6 +222,8 @@ export interface WorkerToolFailedPayload {
   /** Error message */
   error: string;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorToolStartedPayload {
@@ -212,6 +236,8 @@ export interface SupervisorToolStartedPayload {
   tool_args?: Record<string, any>;
   /** Supervisor run ID for correlation */
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorToolProgressPayload {
@@ -225,6 +251,8 @@ export interface SupervisorToolProgressPayload {
   /** Optional structured data (metrics, artifacts preview) */
   data?: Record<string, any>;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorToolCompletedPayload {
@@ -236,6 +264,8 @@ export interface SupervisorToolCompletedPayload {
   /** Full result (for persistence/raw view) */
   result?: Record<string, any>;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 export interface SupervisorToolFailedPayload {
@@ -247,6 +277,8 @@ export interface SupervisorToolFailedPayload {
   /** Full error details (stack trace, context) */
   error_details?: Record<string, any>;
   run_id?: number;
+  /** End-to-end trace ID for debugging */
+  trace_id?: string;
 }
 
 // All SSE event types as a constant array (use for validation)

@@ -59,6 +59,7 @@ class TestWorkerEmitter:
             owner_id=1,
             run_id=100,
             job_id=50,
+            trace_id="12345678-1234-5678-1234-567812345678",
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
@@ -70,6 +71,7 @@ class TestWorkerEmitter:
             assert call_kwargs["payload"]["worker_id"] == "test-worker"
             assert call_kwargs["payload"]["job_id"] == 50
             assert call_kwargs["payload"]["tool_name"] == "test_tool"
+            assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
     async def test_emit_tool_completed_emits_worker_event(self):
@@ -185,6 +187,7 @@ class TestSupervisorEmitter:
             run_id=100,
             owner_id=1,
             message_id="msg-123",
+            trace_id="12345678-1234-5678-1234-567812345678",
         )
 
         with patch("zerg.services.event_store.append_run_event", new_callable=AsyncMock) as mock_emit:
@@ -195,6 +198,7 @@ class TestSupervisorEmitter:
             assert call_kwargs["event_type"] == "supervisor_tool_started"
             assert call_kwargs["payload"]["owner_id"] == 1
             assert call_kwargs["payload"]["tool_name"] == "spawn_worker"
+            assert call_kwargs["payload"]["trace_id"] == "12345678-1234-5678-1234-567812345678"
 
     @pytest.mark.asyncio
     async def test_emit_tool_completed_emits_supervisor_event(self):

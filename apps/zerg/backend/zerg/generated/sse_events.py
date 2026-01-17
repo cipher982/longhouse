@@ -55,6 +55,7 @@ class SupervisorThinkingPayload(BaseModel):
 
     message: str = Field(min_length=1, description='Thinking status message')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorTokenPayload(BaseModel):
     """Payload for SupervisorTokenPayload"""
@@ -63,6 +64,7 @@ class SupervisorTokenPayload(BaseModel):
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorCompletePayload(BaseModel):
     """Payload for SupervisorCompletePayload"""
@@ -88,6 +90,7 @@ class SupervisorDeferredPayload(BaseModel):
     agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorWaitingPayload(BaseModel):
     """Payload for SupervisorWaitingPayload"""
@@ -99,6 +102,7 @@ class SupervisorWaitingPayload(BaseModel):
     agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: Optional[int] = Field(default=None, ge=1, description='')
     message_id: Optional[str] = Field(default=None, description='Unique identifier for the assistant message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorResumedPayload(BaseModel):
     """Payload for SupervisorResumedPayload"""
@@ -107,6 +111,7 @@ class SupervisorResumedPayload(BaseModel):
     agent_id: Optional[int] = Field(default=None, ge=1, description='')
     thread_id: int = Field(ge=1, description='')
     message_id: str = Field(description='Unique identifier for the assistant message')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class ErrorPayload(BaseModel):
     """Payload for ErrorPayload"""
@@ -124,6 +129,7 @@ class WorkerSpawnedPayload(BaseModel):
     task: str = Field(min_length=1, description='Worker task (may be truncated to 100 chars)')
     model: Optional[str] = Field(default=None, description='LLM model for worker')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerStartedPayload(BaseModel):
     """Payload for WorkerStartedPayload"""
@@ -132,6 +138,7 @@ class WorkerStartedPayload(BaseModel):
     worker_id: str = Field(min_length=1, description='Worker execution ID')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
     task: Optional[str] = Field(default=None, description='Worker task (may be truncated)')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerCompletePayload(BaseModel):
     """Payload for WorkerCompletePayload"""
@@ -142,6 +149,7 @@ class WorkerCompletePayload(BaseModel):
     duration_ms: Optional[int] = Field(default=None, ge=0, description='')
     error: Optional[str] = Field(default=None, description='Error message (only present if status=failed)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerSummaryReadyPayload(BaseModel):
     """Payload for WorkerSummaryReadyPayload"""
@@ -150,6 +158,7 @@ class WorkerSummaryReadyPayload(BaseModel):
     worker_id: Optional[str] = Field(default=None, description='Worker execution ID')
     summary: str = Field(min_length=1, description='Extracted worker summary')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerToolStartedPayload(BaseModel):
     """Payload for WorkerToolStartedPayload"""
@@ -159,6 +168,7 @@ class WorkerToolStartedPayload(BaseModel):
     tool_call_id: str = Field(min_length=1, description='LangChain tool call ID')
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     run_id: Optional[int] = Field(default=None, ge=1, description='Required for security (prevents cross-run leakage)')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerToolCompletedPayload(BaseModel):
     """Payload for WorkerToolCompletedPayload"""
@@ -169,6 +179,7 @@ class WorkerToolCompletedPayload(BaseModel):
     duration_ms: int = Field(ge=0, description='')
     result_preview: Optional[str] = Field(default=None, description='Preview of tool result (may be truncated)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class WorkerToolFailedPayload(BaseModel):
     """Payload for WorkerToolFailedPayload"""
@@ -179,6 +190,7 @@ class WorkerToolFailedPayload(BaseModel):
     duration_ms: int = Field(ge=0, description='')
     error: str = Field(min_length=1, description='Error message')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorToolStartedPayload(BaseModel):
     """Payload for SupervisorToolStartedPayload"""
@@ -188,6 +200,7 @@ class SupervisorToolStartedPayload(BaseModel):
     tool_args_preview: Optional[str] = Field(default=None, description='Preview of tool arguments (may be truncated)')
     tool_args: Optional[Dict[str, Any]] = Field(default=None, description='Full tool arguments (for persistence/raw view)')
     run_id: Optional[int] = Field(default=None, ge=1, description='Supervisor run ID for correlation')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorToolProgressPayload(BaseModel):
     """Payload for SupervisorToolProgressPayload"""
@@ -198,6 +211,7 @@ class SupervisorToolProgressPayload(BaseModel):
     progress_pct: Optional[int] = Field(default=None, ge=0, le=100, description='Optional progress percentage')
     data: Optional[Dict[str, Any]] = Field(default=None, description='Optional structured data (metrics, artifacts preview)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorToolCompletedPayload(BaseModel):
     """Payload for SupervisorToolCompletedPayload"""
@@ -208,6 +222,7 @@ class SupervisorToolCompletedPayload(BaseModel):
     result_preview: Optional[str] = Field(default=None, description='Condensed result for collapsed view')
     result: Optional[Dict[str, Any]] = Field(default=None, description='Full result (for persistence/raw view)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SupervisorToolFailedPayload(BaseModel):
     """Payload for SupervisorToolFailedPayload"""
@@ -218,6 +233,7 @@ class SupervisorToolFailedPayload(BaseModel):
     error: str = Field(min_length=1, description='Error message')
     error_details: Optional[Dict[str, Any]] = Field(default=None, description='Full error details (stack trace, context)')
     run_id: Optional[int] = Field(default=None, ge=1, description='')
+    trace_id: Optional[str] = Field(default=None, description='End-to-end trace ID for debugging')
 
 class SSEEventType(str, Enum):
     """Enumeration of all SSE event types."""

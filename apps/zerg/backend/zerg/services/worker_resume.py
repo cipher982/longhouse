@@ -228,6 +228,7 @@ async def resume_supervisor_batch(
             "message_id": message_id,
             "owner_id": owner_id,
             "batch_size": len(worker_results),
+            "trace_id": trace_id,
         },
     )
 
@@ -245,6 +246,7 @@ async def resume_supervisor_batch(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
+        trace_id=trace_id,
     )
     _emitter_token = set_emitter(_supervisor_emitter)
     _user_ctx_token = set_current_user_id(owner_id)
@@ -311,6 +313,7 @@ async def resume_supervisor_batch(
                 "message_id": message_id,
                 "usage": usage_payload,
                 "batch_size": len(worker_results),
+                "trace_id": trace_id,
             },
         )
 
@@ -449,6 +452,7 @@ async def resume_supervisor_batch(
                         "task": task,
                         "model": job.model,
                         "owner_id": owner_id,
+                        "trace_id": trace_id,
                     },
                 )
             logger.info(f"Batch re-interrupt: emitted {len(created_jobs)} worker_spawned events")
@@ -477,6 +481,7 @@ async def resume_supervisor_batch(
                 "owner_id": owner_id,
                 "message_id": message_id,
                 "close_stream": False,
+                "trace_id": trace_id,
             },
         )
 
@@ -526,6 +531,7 @@ async def resume_supervisor_batch(
                 "message": str(e),
                 "status": "error",
                 "owner_id": owner_id,
+                "trace_id": trace_id,
             },
         )
 
@@ -666,6 +672,7 @@ async def _continue_supervisor_langgraph_free(
                 "message": error_msg,
                 "status": "error",
                 "owner_id": owner_id,
+                "trace_id": trace_id,
             },
         )
 
@@ -703,6 +710,7 @@ async def _continue_supervisor_langgraph_free(
             "thread_id": thread.id,
             "message_id": message_id,
             "owner_id": owner_id,
+            "trace_id": trace_id,
         },
     )
 
@@ -721,6 +729,7 @@ async def _continue_supervisor_langgraph_free(
         run_id=run.id,
         owner_id=owner_id,
         message_id=message_id,
+        trace_id=trace_id,
     )
     _emitter_token = set_emitter(_supervisor_emitter)
     _user_ctx_token = set_current_user_id(owner_id)
@@ -784,6 +793,7 @@ async def _continue_supervisor_langgraph_free(
                 "owner_id": owner_id,
                 "message_id": message_id,
                 "usage": usage_payload,
+                "trace_id": trace_id,
             },
         )
 
@@ -854,6 +864,7 @@ async def _continue_supervisor_langgraph_free(
                 "owner_id": owner_id,
                 "message_id": message_id,
                 "close_stream": False,
+                "trace_id": trace_id,
             },
         )
 
@@ -897,6 +908,7 @@ async def _continue_supervisor_langgraph_free(
                 "message": str(e),
                 "status": "error",
                 "owner_id": owner_id,
+                "trace_id": trace_id,
             },
         )
 

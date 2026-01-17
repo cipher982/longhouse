@@ -1,5 +1,6 @@
 """CRUD operations for Agent Runs."""
 
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -20,6 +21,7 @@ def create_run(
     thread_id: int,
     trigger: str = "manual",
     status: str = "queued",
+    trace_id: str | uuid.UUID | None = None,
 ) -> AgentRun:
     """Insert a new *AgentRun* row.
 
@@ -35,11 +37,18 @@ def create_run(
         status_enum = RunStatus(status)
     except ValueError:
         raise ValueError(f"Invalid run status: {status}")
+    resolved_trace_id = trace_id
+    if resolved_trace_id is None:
+        resolved_trace_id = uuid.uuid4()
+    elif isinstance(resolved_trace_id, str):
+        resolved_trace_id = uuid.UUID(resolved_trace_id)
+
     run_row = AgentRun(
         agent_id=agent_id,
         thread_id=thread_id,
         trigger=trigger_enum,
         status=status_enum,
+        trace_id=resolved_trace_id,
     )
     db.add(run_row)
     db.commit()
