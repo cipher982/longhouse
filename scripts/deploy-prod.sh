@@ -132,33 +132,29 @@ if [[ $ELAPSED -ge $MAX_WAIT ]]; then
   exit 1
 fi
 
-# Sync config into Docker volume and force-seed the database
-# Coolify converts bind mounts to Docker volumes, so we copy files into the volume
-# then run the seed scripts with --force to actually update the DB (zero-drift)
+# Force-seed config into the database
+# Use docker cp to copy files into container /tmp, then run seed scripts with explicit paths
+# This avoids Coolify volume mount complexity entirely
 echo ""
 echo "Applying config to database..."
 
-# Find backend container (dynamic lookup, not hardcoded name pattern)
-BACKEND_CONTAINER=$(ssh zerg "docker ps --format '{{.Names}}' | grep -E '^backend-' | head -1")
+# Find backend container by APP_UUID (not broad pattern match)
+BACKEND_CONTAINER=$(ssh zerg "docker ps --format '{{.Names}}' | grep -F 'backend-${APP_UUID}' | head -1")
 if [[ -z "$BACKEND_CONTAINER" ]]; then
-  echo "ERROR: No backend container found"
+  echo "ERROR: No backend container found matching APP_UUID ${APP_UUID}"
   exit 1
 fi
+echo "  Using container: $BACKEND_CONTAINER"
 
-# Get the config volume name from the running container (dynamic, not hardcoded)
-CONFIG_VOLUME=$(ssh zerg "docker inspect '$BACKEND_CONTAINER' --format '{{range .Mounts}}{{if eq .Destination \"/home/zerg/.config/zerg\"}}{{.Name}}{{end}}{{end}}'")
-if [[ -z "$CONFIG_VOLUME" ]]; then
-  echo "WARNING: No config volume mounted, skipping volume sync"
-else
-  # Copy files from host into Docker volume, chown to container user (uid 1000)
-  ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${CONFIG_VOLUME}:/dest alpine sh -c 'cp /src/user_context.json /src/personal_credentials.json /dest/ && chown 1000:1000 /dest/*.json && chmod 600 /dest/*.json'"
-  echo "  ✓ Config files synced to volume"
-fi
+# Copy config files into container /tmp via stdin (docker cp doesn't work with read-only rootfs)
+echo "  Copying config files into container..."
+ssh zerg "cat ~/.config/zerg/user_context.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/user_context.json'"
+ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/personal_credentials.json'"
 
-# Force-seed directly via docker exec (this is what makes zero-drift real)
+# Force-seed with explicit paths and user context (ensures correct HOME)
 echo "  Running seed scripts with --force..."
-ssh zerg "docker exec '$BACKEND_CONTAINER' python scripts/seed_user_context.py --force"
-ssh zerg "docker exec '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py --force"
+ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_user_context.py /tmp/user_context.json --force"
+ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py /tmp/personal_credentials.json --force"
 echo "  ✓ Database updated"
 
 # Run smoke tests
@@ -169,14 +165,20 @@ if [[ "$SKIP_SMOKE" == "false" ]]; then
 
   # Wait for backend container to be healthy (has 60s start_period)
   echo "Waiting for backend health check..."
+  HEALTHY=false
   for i in {1..12}; do
     HEALTH=$(ssh zerg "docker inspect '$BACKEND_CONTAINER' --format '{{.State.Health.Status}}'" 2>/dev/null || echo "unknown")
     if [[ "$HEALTH" == "healthy" ]]; then
       echo "  Backend healthy after $((i * 5))s"
+      HEALTHY=true
       break
     fi
     sleep 5
   done
+  if [[ "$HEALTHY" != "true" ]]; then
+    echo "ERROR: Backend not healthy after 60s (status: $HEALTH)"
+    exit 1
+  fi
 
   if "${SCRIPT_DIR}/smoke-prod.sh"; then
     echo ""

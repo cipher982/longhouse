@@ -353,16 +353,6 @@
   border-color: var(--color-primary, #3b82f6);
 }
 
-/* Compact mode */
-.worker-tool-card--compact .nested-tool-row {
-  padding: 2px 0;
-  font-size: 0.6875rem;
-}
-
-.worker-tool-card--compact .nested-tool-preview {
-  display: none;
-}
-
 /* Nested tool row wrapper (clickable area) */
 .worker-tool-card .nested-tool-row {
   display: flex;
@@ -379,6 +369,16 @@
 
 .worker-tool-card .nested-tool-row:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+
+/* Compact mode - must come after base .nested-tool-row rule */
+.worker-tool-card--compact .nested-tool-row {
+  padding: 2px 4px;
+  font-size: 0.6875rem;
+}
+
+.worker-tool-card--compact .nested-tool-preview {
+  display: none;
 }
 
 /* Expand indicator */
