@@ -150,8 +150,8 @@ CONFIG_VOLUME=$(ssh zerg "docker inspect '$BACKEND_CONTAINER' --format '{{range 
 if [[ -z "$CONFIG_VOLUME" ]]; then
   echo "WARNING: No config volume mounted, skipping volume sync"
 else
-  # Copy files from host into Docker volume (600 perms for credentials security)
-  ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${CONFIG_VOLUME}:/dest alpine sh -c 'cp /src/user_context.json /dest/ && chmod 644 /dest/user_context.json && cp /src/personal_credentials.json /dest/ && chmod 600 /dest/personal_credentials.json'"
+  # Copy files from host into Docker volume, chown to container user (uid 1000)
+  ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${CONFIG_VOLUME}:/dest alpine sh -c 'cp /src/user_context.json /src/personal_credentials.json /dest/ && chown 1000:1000 /dest/*.json && chmod 600 /dest/*.json'"
   echo "  ✓ Config files synced to volume"
 fi
 
