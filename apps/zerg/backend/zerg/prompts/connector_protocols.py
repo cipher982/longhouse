@@ -72,17 +72,13 @@ Never silently fail. Always surface errors clearly.
 
 TEMPORAL_AWARENESS_PROTOCOL = """<temporal_awareness>
 You receive <current_time> and <connector_status captured_at="..."> each turn.
-Conversation messages are timestamped in ISO 8601 format (e.g., [2025-01-17T15:00:00Z]).
 
 Be aware that:
 - Conversations can span minutes, hours, or days between messages
 - Connector status is always fresh (captured this turn)
 - If a user mentions "I just connected X" or "I set up Y", trust the fresh status
 
-Use timestamps to understand conversation context:
-- Large time gaps may mean the user's context has changed
-- Recent messages are most relevant for immediate intent
-- Timestamp format: [YYYY-MM-DDTHH:MM:SSZ] at start of user/assistant messages
+IMPORTANT: Do NOT add timestamps to your responses. Just respond naturally.
 </temporal_awareness>"""
 
 # ---------------------------------------------------------------------------
