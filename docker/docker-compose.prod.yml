@@ -62,8 +62,6 @@ services:
       - backend_data:/data
       # SSH key access for worker infrastructure tools (ssh_exec)
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
-      # User config (context, credentials) synced by deploy-prod.sh
-      - ${HOME}/.config/zerg:/home/zerg/.config/zerg:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
