@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
+from sqlalchemy.orm import backref
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -762,6 +763,6 @@ class MemoryEmbedding(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     owner = relationship("User", backref="memory_embeddings")
-    memory_file = relationship("MemoryFile", backref="embeddings")
+    memory_file = relationship("MemoryFile", backref=backref("embeddings", passive_deletes=True))
 
     __table_args__ = (UniqueConstraint("owner_id", "memory_file_id", "model", name="uq_memory_embedding"),)

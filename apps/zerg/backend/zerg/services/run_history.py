@@ -129,4 +129,30 @@ async def execute_thread_run_with_history(
         },
     )
 
+    # Auto-summary -> Memory Files (async, best-effort)
+    from zerg.services.memory_summarizer import schedule_run_summary
+
+    # Extract final result (last assistant message)
+    result_text = None
+    for row in reversed(created_rows):
+        if row.role == "assistant" and row.content:
+            result_text = row.content
+            break
+
+    # Extract task (last user message)
+    task = None
+    for row in created_rows:
+        if row.role == "user" and row.content:
+            task = row.content
+            break
+
+    schedule_run_summary(
+        owner_id=agent.owner_id,
+        thread_id=thread.id,
+        run_id=run_row.id,
+        task=task or "",
+        result_text=result_text or "",
+        trace_id=str(run_row.trace_id) if hasattr(run_row, "trace_id") and run_row.trace_id else None,
+    )
+
     return created_rows
