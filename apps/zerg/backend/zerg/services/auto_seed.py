@@ -59,6 +59,8 @@ def _seed_user_context() -> bool:
         logger.debug("No user context config found - skipping seed")
         return True
 
+    logger.info(f"Seeding user context from: {config_path}")
+
     try:
         with open(config_path) as f:
             context = json.load(f)
@@ -107,6 +109,8 @@ def _seed_personal_credentials() -> bool:
     if not config_path:
         logger.debug("No personal credentials config found - skipping seed")
         return True
+
+    logger.info(f"Seeding personal credentials from: {config_path}")
 
     try:
         # Import the seeding function from the script

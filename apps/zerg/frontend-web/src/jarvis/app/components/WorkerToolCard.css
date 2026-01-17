@@ -178,11 +178,34 @@
 }
 
 .worker-tool-card .nested-tool-meta {
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
   color: var(--text-secondary, rgba(255, 255, 255, 0.6));
   white-space: nowrap;
+}
+
+.worker-tool-card .nested-tool-meta-item {
+  font-size: 0.625rem;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--surface-tertiary, rgba(0, 0, 0, 0.25));
+  color: var(--text-secondary, rgba(255, 255, 255, 0.65));
+}
+
+.worker-tool-card .nested-tool-meta-item--ok {
+  border-color: var(--color-success, #22c55e);
+  color: var(--color-success, #22c55e);
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.worker-tool-card .nested-tool-meta-item--warn {
+  border-color: var(--color-warning, #f59e0b);
+  color: var(--color-warning, #f59e0b);
+  background: var(--warning-muted, rgba(245, 158, 11, 0.15));
 }
 
 .worker-tool-card .nested-tool-preview {

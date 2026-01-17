@@ -21,7 +21,7 @@ import {
   CircleIcon,
   LoaderIcon,
 } from '../../../components/icons';
-import { extractCommandPreview } from '../../lib/tool-display';
+import { extractCommandPreview, extractExecTarget, extractExitCode } from '../../lib/tool-display';
 import './WorkerToolCard.css';
 
 interface WorkerToolCardProps {
@@ -35,6 +35,7 @@ interface NestedToolCall {
   toolName: string;
   status: 'running' | 'completed' | 'failed';
   argsPreview?: string;
+  resultPreview?: string;
   error?: string;
   startedAt: number;
   durationMs?: number;
@@ -123,6 +124,8 @@ function NestedToolItem({ tool }: { tool: NestedToolCall }) {
   const statusClass = `nested-tool-status-${tool.status}`;
   const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
   const command = extractCommandPreview(tool.toolName, tool.argsPreview);
+  const target = extractExecTarget(tool.toolName, tool.argsPreview);
+  const exitCode = extractExitCode(tool.resultPreview, tool.error);
   const primaryLabel = command ?? tool.toolName;
 
   // Show args preview if running, error preview if failed
@@ -131,6 +134,20 @@ function NestedToolItem({ tool }: { tool: NestedToolCall }) {
     preview = truncatePreview(tool.argsPreview, 50);
   } else if (tool.status === 'failed' && tool.error) {
     preview = truncatePreview(tool.error, 50);
+  } else if (tool.status === 'completed' && tool.resultPreview) {
+    preview = truncatePreview(tool.resultPreview, 70);
+  }
+
+  const metaItems: Array<{ label: string; className?: string }> = [];
+  if (command) {
+    metaItems.push({ label: tool.toolName, className: 'nested-tool-meta-item' });
+  }
+  if (target) {
+    metaItems.push({ label: `target: ${target}`, className: 'nested-tool-meta-item' });
+  }
+  if (exitCode !== null) {
+    const exitClass = exitCode === 0 ? 'nested-tool-meta-item nested-tool-meta-item--ok' : 'nested-tool-meta-item nested-tool-meta-item--warn';
+    metaItems.push({ label: `exit ${exitCode}`, className: exitClass });
   }
 
   return (
@@ -139,7 +156,13 @@ function NestedToolItem({ tool }: { tool: NestedToolCall }) {
         <ToolStatusIcon status={tool.status} />
       </span>
       <span className={`nested-tool-name${command ? ' nested-tool-name--command' : ''}`}>{primaryLabel}</span>
-      {command && <span className="nested-tool-meta">{tool.toolName}</span>}
+      {metaItems.length > 0 && (
+        <span className="nested-tool-meta">
+          {metaItems.map((item, index) => (
+            <span key={`${tool.toolCallId}-meta-${index}`} className={item.className}>{item.label}</span>
+          ))}
+        </span>
+      )}
       {preview && <span className="nested-tool-preview">{preview}</span>}
       <span className="nested-tool-duration">{duration}</span>
     </div>

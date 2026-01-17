@@ -30,6 +30,35 @@ done
 echo "=== Deploying Swarmlet to Production ==="
 echo ""
 
+# Sync user context and credentials to prod (before rebuild)
+echo "Syncing user config to prod..."
+
+LOCAL_CONFIG="apps/zerg/backend/scripts"
+REMOTE_CONFIG="~/.config/zerg"
+
+# Ensure remote dir exists
+ssh zerg "mkdir -p $REMOTE_CONFIG"
+
+# User context (required)
+if [ ! -f "$LOCAL_CONFIG/user_context.local.json" ]; then
+  echo "ERROR: $LOCAL_CONFIG/user_context.local.json not found"
+  echo "Copy from user_context.example.json and customize"
+  exit 1
+fi
+scp "$LOCAL_CONFIG/user_context.local.json" "zerg:$REMOTE_CONFIG/user_context.json"
+echo "  ✓ User context synced"
+
+# Credentials (required)
+if [ ! -f "$LOCAL_CONFIG/personal_credentials.local.json" ]; then
+  echo "ERROR: $LOCAL_CONFIG/personal_credentials.local.json not found"
+  echo "Copy from personal_credentials.example.json and customize"
+  exit 1
+fi
+scp "$LOCAL_CONFIG/personal_credentials.local.json" "zerg:$REMOTE_CONFIG/personal_credentials.json"
+echo "  ✓ Personal credentials synced"
+
+echo ""
+
 # Get API token from clifford
 echo "Fetching Coolify API token..."
 TOKEN=$(ssh clifford "sudo cat /var/lib/docker/data/coolify-api/token.env 2>/dev/null | sed -n 's/^COOLIFY_API_TOKEN=//p'" 2>/dev/null || true)

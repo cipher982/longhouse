@@ -424,6 +424,7 @@ class SupervisorToolStore {
         this.updateNestedTool(toolCallId, data.toolCallId, {
           status: 'completed',
           durationMs: data.durationMs,
+          resultPreview: data.resultPreview,
         });
         logger.debug(`[SupervisorToolStore] Nested tool completed: ${data.toolName}`);
       }
