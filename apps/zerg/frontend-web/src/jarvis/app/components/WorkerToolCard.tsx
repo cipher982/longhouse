@@ -21,6 +21,7 @@ import {
   CircleIcon,
   LoaderIcon,
 } from '../../../components/icons';
+import { extractCommandPreview } from '../../lib/tool-display';
 import './WorkerToolCard.css';
 
 interface WorkerToolCardProps {
@@ -121,10 +122,12 @@ function ToolStatusIcon({ status }: { status: NestedToolCall['status'] }) {
 function NestedToolItem({ tool }: { tool: NestedToolCall }) {
   const statusClass = `nested-tool-status-${tool.status}`;
   const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
+  const command = extractCommandPreview(tool.toolName, tool.argsPreview);
+  const primaryLabel = command ?? tool.toolName;
 
   // Show args preview if running, error preview if failed
   let preview = '';
-  if (tool.status === 'running' && tool.argsPreview) {
+  if (tool.status === 'running' && tool.argsPreview && !command) {
     preview = truncatePreview(tool.argsPreview, 50);
   } else if (tool.status === 'failed' && tool.error) {
     preview = truncatePreview(tool.error, 50);
@@ -135,7 +138,8 @@ function NestedToolItem({ tool }: { tool: NestedToolCall }) {
       <span className="nested-tool-icon">
         <ToolStatusIcon status={tool.status} />
       </span>
-      <span className="nested-tool-name">{tool.toolName}</span>
+      <span className={`nested-tool-name${command ? ' nested-tool-name--command' : ''}`}>{primaryLabel}</span>
+      {command && <span className="nested-tool-meta">{tool.toolName}</span>}
       {preview && <span className="nested-tool-preview">{preview}</span>}
       <span className="nested-tool-duration">{duration}</span>
     </div>
