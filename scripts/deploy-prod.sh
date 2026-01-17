@@ -133,13 +133,13 @@ if [[ $ELAPSED -ge $MAX_WAIT ]]; then
 fi
 
 # Force-seed config into the database
-# Use docker cp to copy files into container /tmp, then run seed scripts with explicit paths
-# This avoids Coolify volume mount complexity entirely
+# Pipes files via stdin into container /tmp, then runs seed scripts with explicit paths
+# This avoids Coolify volume mount complexity (read-only rootfs blocks docker cp)
 echo ""
 echo "Applying config to database..."
 
-# Find backend container by APP_UUID (not broad pattern match)
-BACKEND_CONTAINER=$(ssh zerg "docker ps --format '{{.Names}}' | grep -F 'backend-${APP_UUID}' | head -1")
+# Find newest backend container by APP_UUID (handles rollover during deploy)
+BACKEND_CONTAINER=$(ssh zerg "docker ps --filter 'name=backend-${APP_UUID}' --format '{{.ID}} {{.Names}}' | sort -r | head -1 | awk '{print \$2}'")
 if [[ -z "$BACKEND_CONTAINER" ]]; then
   echo "ERROR: No backend container found matching APP_UUID ${APP_UUID}"
   exit 1
@@ -150,6 +150,12 @@ echo "  Using container: $BACKEND_CONTAINER"
 echo "  Copying config files into container..."
 ssh zerg "cat ~/.config/zerg/user_context.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/user_context.json'"
 ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/personal_credentials.json'"
+
+# Validate files landed and are non-empty before seeding
+ssh zerg "docker exec '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_context.json && test -s /tmp/personal_credentials.json'" || {
+  echo "ERROR: Config files missing or empty in container"
+  exit 1
+}
 
 # Force-seed with explicit paths and user context (ensures correct HOME)
 echo "  Running seed scripts with --force..."
