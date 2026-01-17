@@ -261,7 +261,9 @@ Don't dump raw output. Focus on outcomes.
 
 ## Error Handling
 
-If a command fails, report the error. Don't retry endlessly - if sudo fails, note it and move on.
+If a command fails, report the error. Don't retry endlessly.
+**If runner_exec fails**, immediately try **ssh_exec once** using the server details below.
+If ssh_exec also fails (or is unavailable), report both failures and stop.
 
 ---
 
