@@ -46,6 +46,11 @@ class ToolName(str, Enum):
     LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
     LIST_WORKERS = "list_workers"
     MATH_EVAL = "math_eval"
+    MEMORY_DELETE = "memory_delete"
+    MEMORY_LS = "memory_ls"
+    MEMORY_READ = "memory_read"
+    MEMORY_SEARCH = "memory_search"
+    MEMORY_WRITE = "memory_write"
     NOTION_APPEND_BLOCKS = "notion_append_blocks"
     NOTION_CREATE_PAGE = "notion_create_page"
     NOTION_GET_PAGE = "notion_get_page"
@@ -93,6 +98,7 @@ class ServerName(str, Enum):
     KNOWLEDGE = "knowledge"
     LINEAR = "linear"
     MATH = "math"
+    MEMORY = "memory"
     NOTION = "notion"
     PERSONAL = "personal"
     RUNNER = "runner"
@@ -147,6 +153,11 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
     ToolName.LIST_WORKERS: ServerName.SUPERVISOR,
     ToolName.MATH_EVAL: ServerName.MATH,
+    ToolName.MEMORY_DELETE: ServerName.MEMORY,
+    ToolName.MEMORY_LS: ServerName.MEMORY,
+    ToolName.MEMORY_READ: ServerName.MEMORY,
+    ToolName.MEMORY_SEARCH: ServerName.MEMORY,
+    ToolName.MEMORY_WRITE: ServerName.MEMORY,
     ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
     ToolName.NOTION_CREATE_PAGE: ServerName.NOTION,
     ToolName.NOTION_GET_PAGE: ServerName.NOTION,
