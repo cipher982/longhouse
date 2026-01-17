@@ -97,3 +97,38 @@ export function extractExitCode(resultPreview?: string | null, error?: string | 
 
   return null;
 }
+
+export type ExecSource = 'Runner' | 'SSH' | 'Container';
+
+export function extractExecSource(toolName: string): ExecSource | null {
+  const normalized = toolName.toLowerCase();
+  if (normalized === 'runner_exec') return 'Runner';
+  if (normalized === 'ssh_exec') return 'SSH';
+  if (normalized === 'container_exec') return 'Container';
+  return null;
+}
+
+export function extractOfflineReason(error?: string | null, resultPreview?: string | null): string | null {
+  // Scan both fields - error may exist but not match while resultPreview does
+  const texts = [error, resultPreview].filter(Boolean).map(t => t!.toLowerCase());
+  if (texts.length === 0) return null;
+
+  const patterns: Array<[RegExp, string]> = [
+    [/runner.*not found/i, 'Runner not found'],
+    [/runner.*offline/i, 'Runner offline'],
+    [/no runners configured/i, 'No runners'],
+    [/connection refused/i, 'Connection refused'],
+    [/ssh.*timeout/i, 'SSH timeout'],
+    [/timeout.*ssh/i, 'SSH timeout'],
+    [/host.*unreachable/i, 'Host unreachable'],
+    [/network.*unreachable/i, 'Network unreachable'],
+  ];
+
+  for (const text of texts) {
+    for (const [pattern, reason] of patterns) {
+      if (pattern.test(text)) return reason;
+    }
+  }
+
+  return null;
+}
