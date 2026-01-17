@@ -130,6 +130,21 @@ if [[ $ELAPSED -ge $MAX_WAIT ]]; then
   exit 1
 fi
 
+# Coolify converts bind mounts to Docker volumes, so we need to copy config files
+# into the volume after deployment. The volume name follows Coolify's naming convention.
+echo ""
+echo "Syncing config into Docker volume..."
+VOLUME_NAME="${APP_UUID}_homeconfigzerg"
+
+# Copy files from host ~/.config/zerg into the Docker volume
+ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${VOLUME_NAME}:/dest alpine sh -c 'cp -r /src/. /dest/ && chmod 644 /dest/*.json'"
+
+# Restart backend to trigger auto_seed with new config
+echo "Restarting backend to apply config..."
+ssh zerg "docker restart \$(docker ps -q --filter 'name=backend-${APP_UUID}')" > /dev/null
+
+echo "  ✓ Config applied to running container"
+
 # Run smoke tests
 if [[ "$SKIP_SMOKE" == "false" ]]; then
   echo ""
