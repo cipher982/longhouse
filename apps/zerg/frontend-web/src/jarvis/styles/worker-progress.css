@@ -124,6 +124,26 @@
 .jarvis-container .worker-tool .tool-name {
   font-weight: 500;
   color: var(--color-text-primary);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jarvis-container .worker-tool .tool-name--command {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-muted);
+  color: var(--color-text-primary);
+}
+
+.jarvis-container .worker-tool .tool-meta {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
 .jarvis-container .worker-tool .tool-preview {

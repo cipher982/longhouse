@@ -48,6 +48,9 @@ e2e/playwright-report/
 **/*.log
 **/logs/
 
+# Local data directories (LLM audit logs, debug dumps - can be gigabytes)
+apps/zerg/backend/data/
+
 # Temporary files
 **/tmp/
 **/temp/

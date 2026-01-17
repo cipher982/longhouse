@@ -14,6 +14,7 @@
 import { useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { workerProgressStore, type WorkerState, type ToolCall } from '../../lib/worker-progress-store';
+import { extractCommandPreview } from '../../lib/tool-display';
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -100,10 +101,12 @@ function WorkerStatusIcon({ status }: { status: string }) {
 function ToolCallItem({ tool }: { tool: ToolCall }) {
   const statusClass = `tool-status-${tool.status}`;
   const duration = getElapsedTime(tool.startedAt, tool.status, tool.durationMs);
+  const command = extractCommandPreview(tool.toolName, tool.argsPreview);
+  const primaryLabel = command ?? tool.toolName;
 
   // Show args preview if running, result/error preview if done
   let preview = '';
-  if (tool.status === 'running' && tool.argsPreview) {
+  if (tool.status === 'running' && tool.argsPreview && !command) {
     preview = truncatePreview(tool.argsPreview, 50);
   } else if (tool.status === 'failed' && tool.error) {
     preview = truncatePreview(tool.error, 50);
@@ -114,7 +117,8 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
       <span className="tool-icon">
         <ToolStatusIcon status={tool.status} />
       </span>
-      <span className="tool-name">{tool.toolName}</span>
+      <span className={`tool-name${command ? ' tool-name--command' : ''}`}>{primaryLabel}</span>
+      {command && <span className="tool-meta">{tool.toolName}</span>}
       {preview && <span className="tool-preview">{preview}</span>}
       <span className="tool-duration">{duration}</span>
     </div>
