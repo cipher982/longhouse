@@ -19,24 +19,128 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 from typing import Sequence
 
+from langchain_core.messages import BaseMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from sqlalchemy.orm import Session
 
 from zerg.callbacks.token_stream import set_current_thread_id
+from zerg.config import get_settings
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.connectors.status_builder import build_agent_context
 from zerg.crud import crud
+from zerg.crud import knowledge_crud
 from zerg.models.models import Agent as AgentModel
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.prompts.connector_protocols import get_connector_protocols
+from zerg.services import memory_embeddings
+from zerg.services import memory_search as memory_search_service
 from zerg.services.thread_service import ThreadService
+from zerg.tools.builtin.knowledge_tools import extract_snippets
 
 logger = logging.getLogger(__name__)
+
+
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]\s*")
+
+
+def _strip_timestamp_prefix(text: str) -> str:
+    return _TIMESTAMP_PREFIX_RE.sub("", text or "").strip()
+
+
+def _truncate(text: str, max_chars: int = 220) -> str:
+    if not text:
+        return ""
+    clean = " ".join(text.split())
+    if len(clean) <= max_chars:
+        return clean
+    return clean[:max_chars].rstrip() + "…"
+
+
+def _build_memory_context(
+    db: Session,
+    *,
+    owner_id: int,
+    query: str | None,
+    memory_limit: int = 3,
+    knowledge_limit: int = 3,
+) -> str | None:
+    if not query:
+        return None
+
+    settings = get_settings()
+    use_embeddings = memory_embeddings.embeddings_enabled(settings)
+
+    try:
+        memory_hits = memory_search_service.search_memory_files(
+            db,
+            owner_id=owner_id,
+            query=query,
+            limit=memory_limit,
+            use_embeddings=use_embeddings,
+        )
+    except Exception as e:
+        logger.warning("Memory search failed: %s", e)
+        memory_hits = []
+
+    try:
+        knowledge_hits = knowledge_crud.search_knowledge_documents(
+            db,
+            owner_id=owner_id,
+            query=query,
+            limit=knowledge_limit,
+        )
+    except Exception as e:
+        logger.warning("Knowledge search failed: %s", e)
+        knowledge_hits = []
+
+    if not memory_hits and not knowledge_hits:
+        return None
+
+    lines = ["[MEMORY CONTEXT]"]
+
+    if memory_hits:
+        lines.append("Memory Files:")
+        for hit in memory_hits:
+            snippet = ""
+            snippets = hit.get("snippets") or []
+            if snippets:
+                snippet = _truncate(snippets[0])
+            lines.append(f"- {hit.get('path')}: {snippet}".rstrip())
+
+    if knowledge_hits:
+        lines.append("Knowledge Base:")
+        for doc, source in knowledge_hits:
+            snippets = extract_snippets(doc.content_text, query, max_snippets=1)
+            snippet = _truncate(snippets[0]) if snippets else ""
+            lines.append(f"- {source.name} :: {doc.path}: {snippet}".rstrip())
+
+    return "\n".join(lines)
+
+
+def _latest_user_query(
+    *,
+    unprocessed_rows: list[ThreadMessageModel] | None = None,
+    conversation_msgs: list[BaseMessage] | None = None,
+) -> str | None:
+    if unprocessed_rows:
+        for row in reversed(unprocessed_rows):
+            if row.role == "user" and not getattr(row, "internal", False):
+                return (row.content or "").strip() or None
+
+    if conversation_msgs:
+        for msg in reversed(conversation_msgs):
+            if isinstance(msg, HumanMessage):
+                return _strip_timestamp_prefix(msg.content)
+
+    return None
 
 
 class AgentInterrupted(Exception):
@@ -135,7 +239,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         # This ensures the agent always runs with current instructions,
         # even after history clears or prompt updates
         # ------------------------------------------------------------------
-        from langchain_core.messages import SystemMessage
 
         # Load agent from DB to get current system_instructions
         agent_row = crud.get_agent(db, self.agent.id)
@@ -171,8 +274,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             # Inject as SystemMessage - this is background context, NOT user input
             # The agent should be aware of connector status but not discuss it
             # unless the user explicitly asks about integrations
-            from langchain_core.messages import SystemMessage
-
             context_system_msg = SystemMessage(content=f"[INTERNAL CONTEXT - Do not mention unless asked]\n{context_text}")
 
             # Insert after main system message (index 0) if it exists
@@ -202,6 +303,26 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         if not unprocessed_rows:
             logger.info("No unprocessed messages for thread %s", thread.id, extra={"tag": "AGENT"})
             return []  # Return empty list if no work
+
+        # ------------------------------------------------------------------
+        # Inject memory recall context (episodic + knowledge) before LLM call
+        # ------------------------------------------------------------------
+        memory_query = _latest_user_query(
+            unprocessed_rows=unprocessed_rows,
+            conversation_msgs=conversation_msgs,
+        )
+        memory_context = _build_memory_context(
+            db,
+            owner_id=self.agent.owner_id,
+            query=memory_query,
+        )
+        if memory_context:
+            memory_msg = SystemMessage(content=memory_context)
+            insert_at = 1
+            if len(original_msgs) > 1 and getattr(original_msgs[1], "type", None) == "system":
+                insert_at = 2
+            original_msgs = original_msgs[:insert_at] + [memory_msg] + original_msgs[insert_at:]
+            logger.debug("[AgentRunner] Injected memory context for thread %s", thread.id)
 
         # ------------------------------------------------------------------
         # Token-streaming context handling: set the *current* thread so the
@@ -474,7 +595,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         Raises:
             AgentInterrupted: If spawn_worker is called again (sequential workers).
         """
-        from langchain_core.messages import SystemMessage
         from langchain_core.messages import ToolMessage
 
         from zerg.connectors.context import reset_credential_resolver
@@ -577,6 +697,21 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 e,
                 exc_info=True,
             )
+
+        # Inject memory recall context (use latest user message)
+        memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
+        memory_context = _build_memory_context(
+            db,
+            owner_id=self.agent.owner_id,
+            query=memory_query,
+        )
+        if memory_context:
+            memory_msg = SystemMessage(content=memory_context)
+            insert_at = 1
+            if len(full_messages) > 1 and getattr(full_messages[1], "type", None) == "system":
+                insert_at = 2
+            full_messages = full_messages[:insert_at] + [memory_msg] + full_messages[insert_at:]
+            logger.debug("[AgentRunner] Injected memory context for continuation thread %s", thread.id)
 
         messages_with_context = len(full_messages)
 
@@ -724,7 +859,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
         Raises:
             AgentInterrupted: If spawn_worker is called again (new batch of workers).
         """
-        from langchain_core.messages import SystemMessage
         from langchain_core.messages import ToolMessage
 
         from zerg.connectors.context import reset_credential_resolver
@@ -831,6 +965,21 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 e,
                 exc_info=True,
             )
+
+        # Inject memory recall context (use latest user message)
+        memory_query = _latest_user_query(conversation_msgs=conversation_msgs)
+        memory_context = _build_memory_context(
+            db,
+            owner_id=self.agent.owner_id,
+            query=memory_query,
+        )
+        if memory_context:
+            memory_msg = SystemMessage(content=memory_context)
+            insert_at = 1
+            if len(full_messages) > 1 and getattr(full_messages[1], "type", None) == "system":
+                insert_at = 2
+            full_messages = full_messages[:insert_at] + [memory_msg] + full_messages[insert_at:]
+            logger.debug("[AgentRunner] Injected memory context for batch continuation thread %s", thread.id)
 
         messages_with_context = len(full_messages)
 
