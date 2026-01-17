@@ -917,6 +917,18 @@ class SupervisorService:
             )
             reset_seq(run.id)
 
+            # Auto-summary -> Memory Files (async, best-effort)
+            from zerg.services.memory_summarizer import schedule_run_summary
+
+            schedule_run_summary(
+                owner_id=owner_id,
+                thread_id=thread.id,
+                run_id=run.id,
+                task=task,
+                result_text=result_text or "",
+                trace_id=str(run.trace_id) if run.trace_id else None,
+            )
+
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
             return SupervisorRunResult(

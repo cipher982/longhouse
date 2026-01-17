@@ -15,6 +15,7 @@ from zerg.connectors.context import get_credential_resolver
 from zerg.context import get_worker_context
 from zerg.crud import memory_crud
 from zerg.database import db_session
+from zerg.services import memory_embeddings
 from zerg.services import memory_search as memory_search_service
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
@@ -74,6 +75,14 @@ def memory_write(
             content=content,
             tags=tags,
             metadata=metadata,
+        )
+
+        # Best-effort embedding update (skips in tests/disabled envs)
+        memory_embeddings.maybe_upsert_embedding(
+            db,
+            owner_id=owner_id,
+            memory_file_id=row.id,
+            content=row.content,
         )
 
         result = {

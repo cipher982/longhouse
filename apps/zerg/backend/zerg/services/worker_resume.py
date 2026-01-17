@@ -328,6 +328,30 @@ async def resume_supervisor_batch(
             },
         )
 
+        # Auto-summary -> Memory Files (async, best-effort)
+        from zerg.models.models import ThreadMessage
+        from zerg.services.memory_summarizer import schedule_run_summary
+
+        task_row = (
+            db.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.role == "user",
+                ThreadMessage.internal.is_(False),
+            )
+            .order_by(ThreadMessage.sent_at.desc())
+            .first()
+        )
+        task_text = task_row.content if task_row else ""
+        schedule_run_summary(
+            owner_id=owner_id,
+            thread_id=thread.id,
+            run_id=run.id,
+            task=task_text or "",
+            result_text=final_response or "",
+            trace_id=str(run.trace_id) if run.trace_id else None,
+        )
+
         reset_seq(run.id)
         logger.info("Successfully batch resumed supervisor run %s", run_id)
         return {"status": "success", "result": final_response}
@@ -775,6 +799,30 @@ async def _continue_supervisor_langgraph_free(
                 "thread_id": thread.id,
                 "owner_id": owner_id,
             },
+        )
+
+        # Auto-summary -> Memory Files (async, best-effort)
+        from zerg.models.models import ThreadMessage
+        from zerg.services.memory_summarizer import schedule_run_summary
+
+        task_row = (
+            db.query(ThreadMessage)
+            .filter(
+                ThreadMessage.thread_id == thread.id,
+                ThreadMessage.role == "user",
+                ThreadMessage.internal.is_(False),
+            )
+            .order_by(ThreadMessage.sent_at.desc())
+            .first()
+        )
+        task_text = task_row.content if task_row else ""
+        schedule_run_summary(
+            owner_id=owner_id,
+            thread_id=thread.id,
+            run_id=run.id,
+            task=task_text or "",
+            result_text=final_response or "",
+            trace_id=str(run.trace_id) if run.trace_id else None,
         )
 
         reset_seq(run.id)

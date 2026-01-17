@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Iterable
 
 import numpy as np
@@ -21,7 +22,11 @@ _client: OpenAI | None = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI()
+        client_kwargs = {}
+        base_url = os.getenv("OPENAI_BASE_URL")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        _client = OpenAI(**client_kwargs)
     return _client
 
 
@@ -67,6 +72,15 @@ def embed_texts(texts: Iterable[str]) -> np.ndarray:
     return np.vstack([_normalize(v) for v in vectors])
 
 
+def embeddings_enabled(settings) -> bool:
+    """Return True if embeddings can be generated in current environment."""
+    if getattr(settings, "testing", False):
+        return False
+    if getattr(settings, "llm_disabled", False):
+        return False
+    return bool(getattr(settings, "openai_api_key", None))
+
+
 def upsert_memory_embedding(
     db: Session,
     *,
@@ -104,6 +118,39 @@ def upsert_memory_embedding(
     db.commit()
     db.refresh(row)
     return row
+
+
+def maybe_upsert_embedding(
+    db: Session,
+    *,
+    owner_id: int,
+    memory_file_id: int,
+    content: str,
+    model: str = EMBEDDING_MODEL,
+) -> bool:
+    """Generate and upsert an embedding for a memory file if enabled.
+
+    Returns True if an embedding was written, False if skipped.
+    """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    if not embeddings_enabled(settings):
+        return False
+
+    try:
+        vectors = embed_texts([content])
+        upsert_memory_embedding(
+            db,
+            owner_id=owner_id,
+            memory_file_id=memory_file_id,
+            model=model,
+            embedding=vectors[0],
+        )
+        return True
+    except Exception as e:
+        logger.warning("Failed to generate memory embedding: %s", e)
+        return False
 
 
 def search_memory_embeddings(
