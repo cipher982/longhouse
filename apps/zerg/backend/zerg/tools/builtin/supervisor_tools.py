@@ -194,6 +194,7 @@ async def spawn_worker_async(
                         "task": task[:100],
                         "model": worker_model,
                         "owner_id": owner_id,
+                        "trace_id": trace_id,
                     },
                 )
 

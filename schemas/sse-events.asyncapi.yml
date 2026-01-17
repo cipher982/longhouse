@@ -376,6 +376,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorTokenPayload:
       type: object
@@ -394,6 +398,10 @@ components:
           type: string
           format: uuid
           description: Unique identifier for the assistant message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorCompletePayload:
       type: object
@@ -461,6 +469,10 @@ components:
           type: string
           format: uuid
           description: Unique identifier for the assistant message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorWaitingPayload:
       type: object
@@ -490,6 +502,10 @@ components:
           type: string
           format: uuid
           description: Unique identifier for the assistant message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorResumedPayload:
       type: object
@@ -508,6 +524,10 @@ components:
           type: string
           format: uuid
           description: Unique identifier for the assistant message
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
     # Error Payloads
@@ -553,6 +573,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     WorkerStartedPayload:
       type: object
@@ -571,6 +595,10 @@ components:
         task:
           type: string
           description: Worker task (may be truncated)
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     WorkerCompletePayload:
       type: object
@@ -593,6 +621,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     WorkerSummaryReadyPayload:
       type: object
@@ -611,6 +643,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
     # Worker Tool Monitoring Payloads
@@ -636,6 +672,10 @@ components:
           type: integer
           minimum: 1
           description: Required for security (prevents cross-run leakage)
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     WorkerToolCompletedPayload:
       type: object
@@ -659,6 +699,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     WorkerToolFailedPayload:
       type: object
@@ -683,6 +727,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     # ---------------------------------------------------------------------------
     # Supervisor Tool Monitoring Payloads
@@ -708,6 +756,10 @@ components:
           type: integer
           minimum: 1
           description: Supervisor run ID for correlation
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorToolProgressPayload:
       type: object
@@ -734,6 +786,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorToolCompletedPayload:
       type: object
@@ -757,6 +813,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
     SupervisorToolFailedPayload:
       type: object
@@ -781,6 +841,10 @@ components:
         run_id:
           type: integer
           minimum: 1
+        trace_id:
+          type: string
+          format: uuid
+          description: End-to-end trace ID for debugging
 
 # ---------------------------------------------------------------------------
 # Extensions for code generation

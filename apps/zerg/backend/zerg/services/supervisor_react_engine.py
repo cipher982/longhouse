@@ -676,6 +676,7 @@ async def _execute_tools_parallel(
                 run_id=ctx.run_id,
                 owner_id=ctx.owner_id,
                 message_id=ctx.message_id,
+                trace_id=ctx.trace_id,
             )
 
         if not resolver:
