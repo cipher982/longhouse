@@ -15,6 +15,8 @@
  * For worker flow testing with spawn_worker, see TODO: worker_flow.spec.ts
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { test, expect, type Page } from '../fixtures';
 
 /**
@@ -98,6 +100,7 @@ test.describe('Core User Journey - Scripted LLM', () => {
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'hello jarvis',
+        message_id: randomUUID(),
         model: 'gpt-scripted',
         client_correlation_id: 'e2e-core-journey-test',
       },
@@ -135,9 +138,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
     const result = completePayload?.result || '';
     console.log('[Core Journey] Result:', result.substring(0, 200));
 
-    // The generic_supervisor scenario response contains "scripted response"
-    expect(result.toLowerCase()).toContain('mock assistant');
-    console.log('[Core Journey] Expected mock response text found');
+    // The generic_fallback scenario returns a deterministic "ok"
+    expect(result.toLowerCase()).toBe('ok');
+    console.log('[Core Journey] Expected scripted response text found');
 
     // Step 6: Query events API to verify run execution was recorded
     // Use polling instead of sleep to wait for event persistence (per banana handoff)
@@ -185,6 +188,67 @@ test.describe('Core User Journey - Scripted LLM', () => {
 
     console.log('[Status Indicator] Test completed successfully');
   });
+
+  test('worker tool rows display command preview', async ({ page }) => {
+    console.log('[Worker Tool UI] Starting test');
+
+    await navigateToChatPage(page);
+
+    // Ensure dev-only event bus is available (Playwright uses Vite dev server).
+    await page.waitForFunction(() => (window as any).__jarvis?.eventBus != null, null, { timeout: 15000 });
+
+    const runId = 101;
+    const toolCallId = 'call-spawn-1';
+    const workerId = 'e2e-worker-1';
+    const jobId = 9001;
+
+    await page.evaluate(
+      ({ runId, toolCallId, workerId, jobId }) => {
+        const bus = (window as any).__jarvis.eventBus;
+        const now = Date.now();
+
+        bus.emit('supervisor:started', { runId, task: 'Test task', timestamp: now });
+        bus.emit('supervisor:tool_started', {
+          runId,
+          toolName: 'spawn_worker',
+          toolCallId,
+          argsPreview: 'spawn_worker args',
+          args: { task: 'Check disk space on cube' },
+          timestamp: now + 1,
+        });
+        bus.emit('supervisor:worker_spawned', {
+          jobId,
+          task: 'Check disk space on cube',
+          toolCallId,
+          timestamp: now + 2,
+        });
+        bus.emit('supervisor:worker_started', {
+          jobId,
+          workerId,
+          timestamp: now + 3,
+        });
+        bus.emit('worker:tool_started', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-1',
+          argsPreview: "{'target':'cube','command':'df -h'}",
+          timestamp: now + 4,
+        });
+      },
+      { runId, toolCallId, workerId, jobId }
+    );
+
+    const workerCard = page.locator('.worker-tool-card').first();
+    await expect(workerCard).toBeVisible({ timeout: 2000 });
+
+    const commandLabel = workerCard.locator('.nested-tool-name--command');
+    await expect(commandLabel).toContainText('df -h', { timeout: 2000 });
+
+    const toolMeta = workerCard.locator('.nested-tool-meta');
+    await expect(toolMeta).toContainText('runner_exec', { timeout: 2000 });
+
+    console.log('[Worker Tool UI] Command preview verified');
+  });
 });
 
 test.describe('Core Journey - API Flow', () => {
@@ -195,6 +259,7 @@ test.describe('Core Journey - API Flow', () => {
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'hello',
+        message_id: randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'e2e-api-test',
       },
@@ -224,6 +289,7 @@ test.describe('Core Journey - API Flow', () => {
     const chatResponse = await request.post('/api/jarvis/chat', {
       data: {
         message: 'test message',
+        message_id: randomUUID(),
         model: 'gpt-mock',
         client_correlation_id: 'e2e-events-test',
       },
