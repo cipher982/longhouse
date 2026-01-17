@@ -2,18 +2,18 @@ import { useState, useEffect } from "react";
 import { SwarmLogo } from "../SwarmLogo";
 import { useAuth } from "../../lib/auth";
 import config from "../../lib/config";
-import { HeroVisual } from "./HeroVisual";
+import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 interface HeroSectionProps {
-  onScrollToScenarios: () => void;
+  onScrollToHowItWorks: () => void;
   heroAnimationsEnabled: boolean;
 }
 
-export function HeroSection({ onScrollToScenarios, heroAnimationsEnabled }: HeroSectionProps) {
+export function HeroSection({ onScrollToHowItWorks, heroAnimationsEnabled: _heroAnimationsEnabled }: HeroSectionProps) {
   const [showLogin, setShowLogin] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
 
-  const handleStartFree = () => {
+  const handleGetStarted = () => {
     // Track CTA click
     if (window.SwarmletFunnel) {
       window.SwarmletFunnel.track('cta_clicked', { location: 'hero' });
@@ -76,29 +76,43 @@ export function HeroSection({ onScrollToScenarios, heroAnimationsEnabled }: Hero
 
   return (
     <section className="landing-hero">
-      <div className="landing-hero-content">
-        <div className="landing-hero-visual-wrapper">
-          <HeroVisual hideCore={true} animationsDisabled={!heroAnimationsEnabled} />
-          <SwarmLogo size={120} className="landing-hero-logo" />
+      <div className="landing-hero-split">
+        {/* Left: Text content */}
+        <div className="landing-hero-text">
+          <div className="landing-hero-badge">
+            <span className="landing-hero-badge-dot" />
+            Free during beta
+          </div>
+
+          <h1 className="landing-hero-headline">
+            Your AI That Actually <span className="gradient-text">Knows You</span>
+          </h1>
+
+          <p className="landing-hero-subhead">
+            Connect your health, calendar, and inbox.
+            Get an AI that remembers everything and acts on it.
+          </p>
+
+          <div className="landing-hero-ctas">
+            <button className="btn-primary btn-lg landing-cta-main" onClick={handleGetStarted}>
+              Get My AI Assistant
+            </button>
+            <button className="btn-text btn-lg" onClick={onScrollToHowItWorks}>
+              See How It Works <span className="btn-text-arrow">↓</span>
+            </button>
+          </div>
         </div>
 
-        <h1 className="landing-hero-headline">
-          Your own <span className="gradient-text">super-Siri</span> for email,
-          <br />health, chats, and home.
-        </h1>
-
-        <p className="landing-hero-subhead">
-          Link your health data, location, inboxes, chats, and smart home into one brain.
-          Get one place where your AI sees everything and quietly handles the annoying stuff.
-        </p>
-
-        <div className="landing-hero-ctas">
-          <button className="btn-primary btn-lg landing-cta-main" onClick={handleStartFree}>
-            Start Free
-          </button>
-          <button className="btn-text btn-lg" onClick={onScrollToScenarios}>
-            See it in action <span className="btn-text-arrow">↓</span>
-          </button>
+        {/* Right: Product screenshot */}
+        <div className="landing-hero-visual">
+          <AppScreenshotFrame
+            src="/images/landing/chat-preview.png"
+            alt="Swarmlet AI chat interface"
+            title="Swarmlet"
+            aspectRatio="4/3"
+            showChrome={true}
+            className="landing-hero-screenshot"
+          />
         </div>
       </div>
 

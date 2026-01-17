@@ -26,7 +26,7 @@ export function FooterCTA() {
             Life is noisy. You deserve a brain that pays attention for you.
           </blockquote>
           <button className="btn-primary btn-lg landing-cta-main" onClick={handleStartFree}>
-            Start Free
+            Get Started Now
           </button>
         </div>
 
@@ -40,9 +40,9 @@ export function FooterCTA() {
           <nav className="landing-footer-nav">
             <div className="landing-footer-nav-group">
               <h4>Product</h4>
-              <a href="#scenarios">Features</a>
+              <a href="#how-it-works">How It Works</a>
               <a href="#integrations">Integrations</a>
-              <Link to="/pricing">Pricing</Link>
+              <a href="#pricing">Pricing</a>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Resources</h4>
