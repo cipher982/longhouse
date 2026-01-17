@@ -54,15 +54,14 @@ def generate_voiceover(scenario_name: str, scene_filter: str | None = None) -> d
             scene_id = scene["id"]
             print(f"  Generating: {scene_id}")
 
-            # Generate speech
-            response = client.audio.speech.create(
+            # Generate speech using streaming response (correct SDK pattern)
+            output_path = output_dir / f"{scene_id}.mp3"
+            with client.audio.speech.with_streaming_response.create(
                 model=model,
                 voice=voice,  # type: ignore
                 input=script.strip(),
-            )
-
-            output_path = output_dir / f"{scene_id}.mp3"
-            response.stream_to_file(str(output_path))
+            ) as response:
+                response.stream_to_file(output_path)
 
             # Measure actual duration
             audio = MP3(str(output_path))

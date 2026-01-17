@@ -46,7 +46,7 @@ def load_audio_durations(scenario_name: str) -> dict[str, float]:
 
 def inject_click_indicator(page: Page) -> None:
     """Add visual ripple effect on clicks for video recording."""
-    page.evaluate("""
+    page.evaluate("""(() => {
         // Only inject once
         if (window.__clickIndicatorInjected) return;
         window.__clickIndicatorInjected = true;
@@ -81,7 +81,7 @@ def inject_click_indicator(page: Page) -> None:
             `;
             document.head.appendChild(style);
         }
-    """)
+    })()""")
 
 
 def execute_step(page: Page, step: dict, audio_duration: float | None) -> None:
