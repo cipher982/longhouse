@@ -159,12 +159,13 @@ ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_cont
 }
 
 # Force-seed with explicit paths (single-user system; add --email if multi-user needed)
+# Cleanup runs regardless of seed success/failure via trap
+cleanup_tmp() { ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' rm -f /tmp/user_context.json /tmp/personal_credentials.json" 2>/dev/null || true; }
+trap cleanup_tmp EXIT
+
 echo "  Running seed scripts with --force..."
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_user_context.py /tmp/user_context.json --force"
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py /tmp/personal_credentials.json --force"
-
-# Clean up temp files (credentials shouldn't linger in /tmp)
-ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' rm -f /tmp/user_context.json /tmp/personal_credentials.json"
 echo "  ✓ Database updated"
 
 # Run smoke tests
