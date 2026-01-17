@@ -213,3 +213,6 @@ apps/zerg/backend/data/
 
 # Work-in-progress docs
 apps/zerg/backend/docs/work/
+
+# Video generation (temporary build artifacts)
+videos/

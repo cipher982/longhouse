@@ -99,6 +99,38 @@ if (isMarketingMode) {
   document.body.classList.add("marketing-mode");
 }
 
+// Deterministic mode flags for video recording
+// ?clock=frozen - freeze time display (Apple-style 9:41 AM)
+const clockFrozen = params.get("clock") === "frozen";
+if (clockFrozen) {
+  // Expose frozen time globally for components to use
+  (window as Window & { __FROZEN_TIME?: Date }).__FROZEN_TIME = new Date("2026-01-15T09:41:00");
+  document.body.classList.add("clock-frozen");
+}
+
+// ?seed=X - seed random values for consistent layout (deterministic)
+const randomSeed = params.get("seed");
+if (randomSeed) {
+  // Simple seeded PRNG (mulberry32)
+  const seed = randomSeed.split("").reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+  let t = seed >>> 0;
+  const seededRandom = () => {
+    t = (t + 0x6d2b79f5) | 0;
+    let r = Math.imul(t ^ (t >>> 15), t | 1);
+    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+  Math.random = seededRandom;
+  (window as Window & { __RANDOM_SEED?: string }).__RANDOM_SEED = randomSeed;
+}
+
+// ?replay=X - replay scenario name (passed to backend for deterministic responses)
+const replayScenario = params.get("replay");
+if (replayScenario) {
+  (window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO = replayScenario;
+  document.body.classList.add("replay-mode");
+}
+
 const queryClient = new QueryClient();
 
 ReactDOM.createRoot(container).render(
