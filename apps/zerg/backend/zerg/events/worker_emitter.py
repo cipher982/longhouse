@@ -68,6 +68,7 @@ class WorkerEmitter:
     owner_id: int | None
     run_id: int | None
     job_id: int | None
+    trace_id: str | None = None
 
     # Tool tracking (existing WorkerContext functionality)
     tool_calls: list[ToolCall] = field(default_factory=list)
@@ -148,6 +149,7 @@ class WorkerEmitter:
                     "tool_name": tool_name,
                     "tool_call_id": tool_call_id,
                     "tool_args_preview": tool_args_preview,
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -184,6 +186,7 @@ class WorkerEmitter:
                     "tool_call_id": tool_call_id,
                     "duration_ms": duration_ms,
                     "result_preview": result_preview,
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -219,6 +222,7 @@ class WorkerEmitter:
                     "tool_call_id": tool_call_id,
                     "duration_ms": duration_ms,
                     "error": error[:500] if error else None,  # Truncate for safety
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )

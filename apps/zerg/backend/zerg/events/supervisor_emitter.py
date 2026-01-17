@@ -43,6 +43,7 @@ class SupervisorEmitter:
     run_id: int
     owner_id: int
     message_id: str
+    trace_id: str | None = None
 
     @property
     def is_worker(self) -> bool:
@@ -77,6 +78,7 @@ class SupervisorEmitter:
                     "tool_call_id": tool_call_id,
                     "tool_args_preview": tool_args_preview,
                     "tool_args": tool_args,  # Full args for persistence/raw view
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -119,6 +121,7 @@ class SupervisorEmitter:
                     "duration_ms": duration_ms,
                     "result_preview": result_preview,
                     "result": result_payload,
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -149,6 +152,7 @@ class SupervisorEmitter:
                     "duration_ms": duration_ms,
                     "error": error[:500] if error else None,  # Truncate for safety
                     "error_details": {"raw_error": error},
+                    "trace_id": self.trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )

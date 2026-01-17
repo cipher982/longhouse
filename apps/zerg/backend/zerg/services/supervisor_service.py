@@ -493,12 +493,20 @@ class SupervisorService:
         # Emit supervisor started event
         from zerg.services.event_store import emit_run_event
 
+        # Resolve trace_id early for downstream event payloads and context
+        effective_trace_id = trace_id or (str(run.trace_id) if run.trace_id else None)
+        if not effective_trace_id:
+            effective_trace_id = str(uuid.uuid4())
+            # Persist to run for consistency
+            run.trace_id = uuid.UUID(effective_trace_id)
+            self.db.commit()
+
         started_payload: dict = {
             "thread_id": thread.id,
             "task": task,
             "owner_id": owner_id,
             "message_id": message_id,
-            "trace_id": str(run.trace_id) if run.trace_id else None,
+            "trace_id": effective_trace_id,
         }
         if continuation_of_message_id:
             started_payload["continuation_of_message_id"] = continuation_of_message_id
@@ -551,20 +559,13 @@ class SupervisorService:
                 payload={
                     "message": "Analyzing your request...",
                     "owner_id": owner_id,
+                    "trace_id": effective_trace_id,
                 },
             )
 
             # Set supervisor run context for spawn_worker correlation and tool event emission
             from zerg.services.supervisor_context import reset_supervisor_context
             from zerg.services.supervisor_context import set_supervisor_context
-
-            # Resolve trace_id: use provided, or from run, or generate new
-            effective_trace_id = trace_id or (str(run.trace_id) if run.trace_id else None)
-            if not effective_trace_id:
-                effective_trace_id = str(uuid.uuid4())
-                # Also persist to run for consistency
-                run.trace_id = uuid.UUID(effective_trace_id)
-                self.db.commit()
 
             _supervisor_ctx_token = set_supervisor_context(
                 run_id=run.id,
@@ -586,6 +587,7 @@ class SupervisorService:
                 run_id=run.id,
                 owner_id=owner_id,
                 message_id=message_id,
+                trace_id=effective_trace_id,
             )
             _emitter_token = set_emitter(_supervisor_emitter)
 
@@ -628,6 +630,7 @@ class SupervisorService:
                         "attach_url": f"/api/jarvis/runs/{run.id}/stream",
                         "owner_id": owner_id,
                         "message_id": message_id,
+                        "trace_id": effective_trace_id,
                     },
                 )
 
@@ -744,6 +747,7 @@ class SupervisorService:
                                 "task": task,
                                 "model": job.model,
                                 "owner_id": owner_id,
+                                "trace_id": effective_trace_id,
                             },
                         )
                     logger.info(f"Emitted {len(created_jobs)} worker_spawned events")
@@ -816,6 +820,7 @@ class SupervisorService:
                         "owner_id": owner_id,
                         "message_id": message_id,
                         "close_stream": False,  # Keep SSE open for resume
+                        "trace_id": effective_trace_id,
                     },
                 )
 
