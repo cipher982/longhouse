@@ -33,11 +33,13 @@ echo ""
 # Sync user context and credentials to prod (before rebuild)
 echo "Syncing user config to prod..."
 
-LOCAL_CONFIG="apps/zerg/backend/scripts"
-REMOTE_CONFIG="~/.config/zerg"
+# Use SCRIPT_DIR to find repo root (script is in scripts/, repo root is parent)
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCAL_CONFIG="$REPO_ROOT/apps/zerg/backend/scripts"
+REMOTE_CONFIG=".config/zerg"
 
 # Ensure remote dir exists
-ssh zerg "mkdir -p $REMOTE_CONFIG"
+ssh zerg "mkdir -p ~/$REMOTE_CONFIG"
 
 # User context (required)
 if [ ! -f "$LOCAL_CONFIG/user_context.local.json" ]; then
@@ -45,7 +47,7 @@ if [ ! -f "$LOCAL_CONFIG/user_context.local.json" ]; then
   echo "Copy from user_context.example.json and customize"
   exit 1
 fi
-scp "$LOCAL_CONFIG/user_context.local.json" "zerg:$REMOTE_CONFIG/user_context.json"
+scp "$LOCAL_CONFIG/user_context.local.json" "zerg:~/$REMOTE_CONFIG/user_context.json"
 echo "  ✓ User context synced"
 
 # Credentials (required)
@@ -54,7 +56,7 @@ if [ ! -f "$LOCAL_CONFIG/personal_credentials.local.json" ]; then
   echo "Copy from personal_credentials.example.json and customize"
   exit 1
 fi
-scp "$LOCAL_CONFIG/personal_credentials.local.json" "zerg:$REMOTE_CONFIG/personal_credentials.json"
+scp "$LOCAL_CONFIG/personal_credentials.local.json" "zerg:~/$REMOTE_CONFIG/personal_credentials.json"
 echo "  ✓ Personal credentials synced"
 
 echo ""
@@ -130,20 +132,34 @@ if [[ $ELAPSED -ge $MAX_WAIT ]]; then
   exit 1
 fi
 
-# Coolify converts bind mounts to Docker volumes, so we need to copy config files
-# into the volume after deployment. The volume name follows Coolify's naming convention.
+# Sync config into Docker volume and force-seed the database
+# Coolify converts bind mounts to Docker volumes, so we copy files into the volume
+# then run the seed scripts with --force to actually update the DB (zero-drift)
 echo ""
-echo "Syncing config into Docker volume..."
-VOLUME_NAME="${APP_UUID}_homeconfigzerg"
+echo "Applying config to database..."
 
-# Copy files from host ~/.config/zerg into the Docker volume
-ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${VOLUME_NAME}:/dest alpine sh -c 'cp -r /src/. /dest/ && chmod 644 /dest/*.json'"
+# Find backend container (dynamic lookup, not hardcoded name pattern)
+BACKEND_CONTAINER=$(ssh zerg "docker ps --format '{{.Names}}' | grep -E '^backend-' | head -1")
+if [[ -z "$BACKEND_CONTAINER" ]]; then
+  echo "ERROR: No backend container found"
+  exit 1
+fi
 
-# Restart backend to trigger auto_seed with new config
-echo "Restarting backend to apply config..."
-ssh zerg "docker restart \$(docker ps -q --filter 'name=backend-${APP_UUID}')" > /dev/null
+# Get the config volume name from the running container (dynamic, not hardcoded)
+CONFIG_VOLUME=$(ssh zerg "docker inspect '$BACKEND_CONTAINER' --format '{{range .Mounts}}{{if eq .Destination \"/home/zerg/.config/zerg\"}}{{.Name}}{{end}}{{end}}'")
+if [[ -z "$CONFIG_VOLUME" ]]; then
+  echo "WARNING: No config volume mounted, skipping volume sync"
+else
+  # Copy files from host into Docker volume (600 perms for credentials security)
+  ssh zerg "docker run --rm -v ~/.config/zerg:/src:ro -v ${CONFIG_VOLUME}:/dest alpine sh -c 'cp /src/user_context.json /dest/ && chmod 644 /dest/user_context.json && cp /src/personal_credentials.json /dest/ && chmod 600 /dest/personal_credentials.json'"
+  echo "  ✓ Config files synced to volume"
+fi
 
-echo "  ✓ Config applied to running container"
+# Force-seed directly via docker exec (this is what makes zero-drift real)
+echo "  Running seed scripts with --force..."
+ssh zerg "docker exec '$BACKEND_CONTAINER' python scripts/seed_user_context.py --force"
+ssh zerg "docker exec '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py --force"
+echo "  ✓ Database updated"
 
 # Run smoke tests
 if [[ "$SKIP_SMOKE" == "false" ]]; then
@@ -151,9 +167,9 @@ if [[ "$SKIP_SMOKE" == "false" ]]; then
   echo "=== Running Smoke Tests ==="
   echo ""
 
-  # Wait for backend health check to pass (has 60s start-period)
-  echo "Waiting 60s for backend health checks..."
-  sleep 60
+  # Brief pause for any async operations to settle
+  echo "Waiting 10s for backend to settle..."
+  sleep 10
 
   if "${SCRIPT_DIR}/smoke-prod.sh"; then
     echo ""
