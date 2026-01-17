@@ -95,11 +95,14 @@ if [ "$HAS_AUDIO" = true ]; then
             "$VIDEO_DIR/voiceover.mp3" 2>/dev/null
 
         # Combine video + audio
+        # Note: Must re-encode video (not copy) for -shortest to work correctly
+        # Stream copy doesn't respect -shortest flag properly
         echo "  Combining video + audio..."
         ffmpeg -y \
             -i "$VIDEO_DIR/combined.mp4" \
             -i "$VIDEO_DIR/voiceover.mp3" \
-            -c:v copy -c:a aac -b:a 128k \
+            -c:v libx264 -crf 23 -preset fast \
+            -c:a aac -b:a 128k \
             -map 0:v -map 1:a \
             -shortest \
             "$VIDEO_DIR/with-audio.mp4" 2>/dev/null
