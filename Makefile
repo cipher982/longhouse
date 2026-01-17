@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch
+.PHONY: help dev dev-bg stop logs logs-app logs-db doctor dev-clean dev-reset-db reset test test-unit test-e2e test-e2e-core test-all test-chat-e2e test-e2e-single test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-perf test-zerg-unit test-zerg-e2e test-frontend-unit test-prompts eval eval-live eval-compare eval-critical eval-fast eval-all eval-tool-selection generate-sdk seed-agents seed-credentials seed-marketing marketing-capture marketing-single marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod smoke-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage
 
 
 # ---------------------------------------------------------------------------
@@ -553,3 +553,11 @@ debug-trace: ## Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 
 		echo "         make debug-trace RECENT=1"; \
 		exit 1; \
 	fi
+
+trace-coverage: ## Trace coverage report (usage: make trace-coverage [SINCE_HOURS=24] [MIN=95] [MIN_EVENTS=90] [JSON=1])
+	@cd apps/zerg/backend && uv run python scripts/trace_coverage.py \
+		$(if $(SINCE_HOURS),--since-hours $(SINCE_HOURS),) \
+		$(if $(MIN),--min-percent $(MIN),) \
+		$(if $(MIN_EVENTS),--min-event-percent $(MIN_EVENTS),) \
+		$(if $(JSON),--json,) \
+		$(if $(NO_EVENTS),--no-events,)
