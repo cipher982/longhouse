@@ -234,6 +234,14 @@ test.describe('Core User Journey - Scripted LLM', () => {
           argsPreview: "{'target':'cube','command':'df -h'}",
           timestamp: now + 4,
         });
+        bus.emit('worker:tool_completed', {
+          workerId,
+          toolName: 'runner_exec',
+          toolCallId: 'call-tool-1',
+          durationMs: 12,
+          resultPreview: "{'exit_code': 0, 'stdout': 'ok'}",
+          timestamp: now + 5,
+        });
       },
       { runId, toolCallId, workerId, jobId }
     );
@@ -246,6 +254,8 @@ test.describe('Core User Journey - Scripted LLM', () => {
 
     const toolMeta = workerCard.locator('.nested-tool-meta');
     await expect(toolMeta).toContainText('runner_exec', { timeout: 2000 });
+    await expect(toolMeta).toContainText('target: cube', { timeout: 2000 });
+    await expect(toolMeta).toContainText('exit 0', { timeout: 2000 });
 
     console.log('[Worker Tool UI] Command preview verified');
   });
