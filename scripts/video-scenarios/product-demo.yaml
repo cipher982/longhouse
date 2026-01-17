@@ -10,8 +10,8 @@ name: product-demo
 description: Full product demo showcasing Dashboard, Chat, and Canvas features
 
 voiceover:
-  voice: "nova"  # Options: alloy, echo, fable, onyx, nova, shimmer
-  model: "tts-1-hd"  # Higher quality model
+  voice: "nova"  # Options: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse
+  model: "gpt-4o-mini-tts"  # Latest model (March 2025+)
 
 # Golden conversation data for replay mode
 # These get inserted as real ThreadMessage rows when replay mode is active
