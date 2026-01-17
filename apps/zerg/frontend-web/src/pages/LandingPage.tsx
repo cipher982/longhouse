@@ -8,12 +8,10 @@ import "../styles/landing.css";
 
 // Section components
 import { HeroSection } from "../components/landing/HeroSection";
-import { PASSection } from "../components/landing/PASSection";
-import { ScenariosSection } from "../components/landing/ScenariosSection";
+import { HowItWorksSection } from "../components/landing/HowItWorksSection";
 import { DemoSection } from "../components/landing/DemoSection";
-import { DifferentiationSection } from "../components/landing/DifferentiationSection";
-import { NerdSection } from "../components/landing/NerdSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
+import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { FooterCTA } from "../components/landing/FooterCTA";
 
@@ -166,8 +164,8 @@ export default function LandingPage() {
     );
   }
 
-  const scrollToScenarios = () => {
-    document.getElementById("scenarios")?.scrollIntoView({ behavior: "smooth" });
+  const scrollToHowItWorks = () => {
+    document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
@@ -179,13 +177,11 @@ export default function LandingPage() {
       <div className="landing-glow-orb" />
 
       <main className="landing-main">
-        <HeroSection onScrollToScenarios={scrollToScenarios} heroAnimationsEnabled={heroAnimationsEnabled} />
-        <PASSection />
-        <ScenariosSection />
+        <HeroSection onScrollToHowItWorks={scrollToHowItWorks} heroAnimationsEnabled={heroAnimationsEnabled} />
+        <HowItWorksSection />
         <DemoSection />
-        <DifferentiationSection />
-        <NerdSection />
         <IntegrationsSection />
+        <PricingSection />
         <TrustSection />
         <FooterCTA />
       </main>
