@@ -87,6 +87,7 @@ services:
       ALLOWED_CORS_ORIGINS: "*"
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-1}
+      REPLAY_MODE_ENABLED: ${REPLAY_MODE_ENABLED:-false}
       SWARMLET_DATA_PATH: /app/data/workers
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       RELOAD: "true"
