@@ -375,6 +375,45 @@ marketing-list: ## List available marketing screenshots
 	@uv run --with pyyaml scripts/capture_marketing.py --list
 
 # ---------------------------------------------------------------------------
+# Video Generation (Audio-First Pipeline)
+# ---------------------------------------------------------------------------
+.PHONY: video-audio video-record video-process video-all video-clean video-list
+
+video-audio: ## Generate voiceover audio (RUN FIRST)
+	@echo "🎙️  Generating voiceover audio..."
+	@uv run --with openai --with mutagen --with pyyaml scripts/generate_voiceover.py product-demo
+	@echo "✅ Audio generated. Check videos/product-demo/audio/"
+
+video-record: ## Record video scenes (requires audio + dev stack)
+	@echo "📹 Recording video scenes..."
+	@if [ ! -f videos/product-demo/audio/durations.json ]; then \
+		echo "❌ Audio not found. Run 'make video-audio' first"; \
+		exit 1; \
+	fi
+	@if ! curl -sf http://localhost:30080/health >/dev/null 2>&1; then \
+		echo "❌ Dev stack not running. Start with 'make dev'"; \
+		exit 1; \
+	fi
+	@$(MAKE) seed-marketing
+	@REPLAY_MODE_ENABLED=true uv run --with playwright --with pyyaml scripts/capture_demo_video.py product-demo
+
+video-process: ## Post-process (combine, add audio, compress)
+	@echo "🎬 Processing video..."
+	@bash scripts/process_video.sh product-demo
+
+video-all: video-audio video-record video-process ## Full video pipeline (audio → record → process)
+	@echo "✅ Video generation complete!"
+	@echo "   Output: apps/zerg/frontend-web/public/videos/product-demo.mp4"
+
+video-clean: ## Remove generated video files
+	@echo "🧹 Cleaning video files..."
+	@rm -rf videos/product-demo
+	@echo "✅ Cleaned"
+
+video-list: ## List available video scenarios
+	@uv run --with pyyaml scripts/capture_demo_video.py --list
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 validate: ## Run all validation checks

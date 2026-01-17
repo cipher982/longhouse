@@ -36,6 +36,45 @@ class JarvisChatRequest(BaseModel):
     message_id: str = Field(..., description="Client-generated message ID (UUID)")
     model: Optional[str] = Field(None, description="Model to use for this request (e.g., gpt-5.2)")
     reasoning_effort: Optional[str] = Field(None, description="Reasoning effort: none, low, medium, high")
+    replay_scenario: Optional[str] = Field(None, description="Replay scenario name (dev only, requires REPLAY_MODE_ENABLED=true)")
+
+
+async def _replay_stream_generator(
+    run_id: int,
+    owner_id: int,
+    thread_id: int,
+    message: str,
+    message_id: str,
+    trace_id: str,
+    replay_scenario: str,
+):
+    """Generate SSE events for replay mode (deterministic video recording).
+
+    This generator emits pre-defined events from a scenario file instead of
+    running the real supervisor. Used for creating reproducible demo videos.
+    """
+    from zerg.services.replay_service import run_replay_conversation
+
+    task_started = False
+    async for event in stream_run_events(run_id, owner_id):
+        yield event
+
+        if not task_started:
+            task_started = True
+            logger.info(f"Replay SSE: starting replay for run {run_id}, scenario={replay_scenario}", extra={"tag": "JARVIS"})
+
+            # Run replay in background
+            asyncio.create_task(
+                run_replay_conversation(
+                    scenario_name=replay_scenario,
+                    user_message=message,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    owner_id=owner_id,
+                    message_id=message_id,
+                    trace_id=trace_id,
+                )
+            )
 
 
 async def _chat_stream_generator(
@@ -244,6 +283,26 @@ async def jarvis_chat(
         f"message: {request.message[:50]}..., model: {model_to_use}, reasoning: {reasoning_effort}",
         extra={"tag": "JARVIS"},
     )
+
+    # Check for replay mode (deterministic video recording)
+    from zerg.services.replay_service import is_replay_enabled
+
+    if request.replay_scenario and is_replay_enabled():
+        logger.info(
+            f"Jarvis chat: using REPLAY MODE for run {run_id}, scenario={request.replay_scenario}",
+            extra={"tag": "JARVIS"},
+        )
+        return EventSourceResponse(
+            _replay_stream_generator(
+                run_id,
+                current_user.id,
+                thread_id,
+                request.message,
+                request.message_id,
+                trace_id_str,
+                request.replay_scenario,
+            )
+        )
 
     # Return SSE stream - background task is started inside the generator
     # to avoid race conditions with event subscriptions
