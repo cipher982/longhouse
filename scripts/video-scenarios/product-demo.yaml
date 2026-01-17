@@ -123,6 +123,11 @@ scenes:
       and prioritizes your tasks. All from a simple question.
     golden_conversation: morning-briefing
     steps:
+      - action: navigate
+        url: /chat?thread=briefing&marketing=true&replay=product-demo&effects=off&clock=frozen
+        wait_for: '[data-testid="chat-input"]'
+      - action: pause
+        duration_ms: 500
       - action: type
         selector: '[data-testid="chat-input"]'
         text: "Good morning! Give me a quick briefing on my day."
@@ -149,6 +154,11 @@ scenes:
       and builds the workflow for you behind the scenes.
     golden_conversation: automate-reports
     steps:
+      - action: navigate
+        url: /chat?thread=automation&marketing=true&replay=product-demo&effects=off&clock=frozen
+        wait_for: '[data-testid="chat-input"]'
+      - action: pause
+        duration_ms: 500
       - action: type
         selector: '[data-testid="chat-input"]'
         text: "Can you set up an automation to send me weekly reports every Monday?"
@@ -189,7 +199,7 @@ scenes:
     steps:
       - action: navigate
         url: /landing?marketing=true&effects=off
-        wait_for: '[data-ready="true"]'
+        wait_for: 'button:has-text("Get My AI Assistant")'
       - action: pause
         duration_ms: 500
       - action: pause_for_audio
