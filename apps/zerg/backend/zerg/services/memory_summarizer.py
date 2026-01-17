@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import json
 import os
 import re
@@ -97,7 +96,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
         return None
 
     model = os.getenv("JARVIS_MEMORY_SUMMARY_MODEL", "gpt-5-mini")
-    reasoning_effort = os.getenv("JARVIS_MEMORY_SUMMARY_REASONING_EFFORT", "none")
+    reasoning_effort = os.getenv("JARVIS_MEMORY_SUMMARY_REASONING_EFFORT", "minimal")
     base_url = os.getenv("OPENAI_BASE_URL")
 
     client_kwargs = {"api_key": settings.openai_api_key}
@@ -232,14 +231,29 @@ async def persist_run_summary(
 
 def schedule_run_summary(**kwargs: Any) -> None:
     """Schedule summary persistence without blocking caller."""
+    import logging
+
+    logger = logging.getLogger(__name__)
     settings = get_settings()
+
     if settings.testing or settings.llm_disabled:
+        logger.debug("Skipping memory summary: testing=%s, llm_disabled=%s", settings.testing, settings.llm_disabled)
         return
 
-    asyncio.create_task(
-        persist_run_summary(**kwargs),
-        context=contextvars.Context(),
-    )
+    logger.info("Scheduling memory summary for run %s", kwargs.get("run_id"))
+
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(persist_run_summary(**kwargs))
+        task.add_done_callback(
+            lambda t: logger.info("Memory summary task completed for run %s", kwargs.get("run_id"))
+            if not t.exception()
+            else logger.error("Memory summary failed: %s", t.exception())
+        )
+    except RuntimeError:
+        # No running loop - spawn in thread
+        logger.warning("No event loop, running summary synchronously")
+        asyncio.run(persist_run_summary(**kwargs))
 
 
 def _truncate(text: str | None, max_chars: int = 220) -> str:
