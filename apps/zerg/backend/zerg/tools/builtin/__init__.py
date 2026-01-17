@@ -18,6 +18,7 @@ from zerg.tools.builtin.jira_tools import TOOLS as JIRA_TOOLS
 from zerg.tools.builtin.knowledge_tools import TOOLS as KNOWLEDGE_TOOLS
 from zerg.tools.builtin.linear_tools import TOOLS as LINEAR_TOOLS
 from zerg.tools.builtin.math_tools import TOOLS as MATH_TOOLS
+from zerg.tools.builtin.memory_tools import TOOLS as MEMORY_TOOLS
 from zerg.tools.builtin.notion_tools import TOOLS as NOTION_TOOLS
 from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
 from zerg.tools.builtin.runner_setup_tools import TOOLS as RUNNER_SETUP_TOOLS
@@ -48,6 +49,7 @@ BUILTIN_TOOLS = (
     + KNOWLEDGE_TOOLS
     + LINEAR_TOOLS
     + MATH_TOOLS
+    + MEMORY_TOOLS
     + NOTION_TOOLS
     + PERSONAL_TOOLS
     + RUNNER_TOOLS

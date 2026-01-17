@@ -56,6 +56,11 @@ components:
         - list_imessage_messages
         - list_workers
         - math_eval
+        - memory_delete
+        - memory_ls
+        - memory_read
+        - memory_search
+        - memory_write
         - notion_append_blocks
         - notion_create_page
         - notion_get_page
@@ -103,6 +108,7 @@ components:
         - knowledge
         - linear
         - math
+        - memory
         - notion
         - personal
         - runner
@@ -232,6 +238,16 @@ components:
               const: supervisor
             math_eval:
               const: math
+            memory_delete:
+              const: memory
+            memory_ls:
+              const: memory
+            memory_read:
+              const: memory
+            memory_search:
+              const: memory
+            memory_write:
+              const: memory
             notion_append_blocks:
               const: notion
             notion_create_page:

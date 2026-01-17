@@ -66,6 +66,7 @@ CATEGORY_PREFIXES = {
     "container_": "infrastructure",
     "task_": "tasks",
     "agent_memory_": "memory",
+    "memory_": "memory",
     "knowledge_": "knowledge",
     "web_": "web",
     "http_": "web",

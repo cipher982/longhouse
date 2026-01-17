@@ -8,6 +8,7 @@ from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
+from sqlalchemy import LargeBinary
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
@@ -701,3 +702,66 @@ class AgentMemoryKV(Base):
 
     # Relationships
     user = relationship("User", backref="agent_memory")
+
+
+# ---------------------------------------------------------------------------
+# Memory Files – Virtual filesystem for long-term agent memory
+# ---------------------------------------------------------------------------
+
+
+class MemoryFile(Base):
+    """Durable memory file backed by Postgres.
+
+    Acts as a virtual filesystem entry (path + content) scoped per user.
+    """
+
+    __tablename__ = "memory_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Ownership
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Virtual filesystem path (unique per owner)
+    path = Column(String(512), nullable=False)
+
+    # Optional metadata
+    title = Column(String(255), nullable=True)
+    content = Column(Text, nullable=False)
+    tags = Column(MutableList.as_mutable(JSON), nullable=True, default=lambda: [])
+    file_metadata = Column(MutableDict.as_mutable(JSON), nullable=True, default=lambda: {})
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    last_accessed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    owner = relationship("User", backref="memory_files")
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "path", name="uq_memory_owner_path"),
+        Index("ix_memory_owner_path", "owner_id", "path"),
+    )
+
+
+class MemoryEmbedding(Base):
+    """Embeddings for MemoryFile content (stored separately for modularity)."""
+
+    __tablename__ = "memory_embeddings"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    memory_file_id = Column(Integer, ForeignKey("memory_files.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    model = Column(String(128), nullable=False)
+    embedding = Column(LargeBinary, nullable=False)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    owner = relationship("User", backref="memory_embeddings")
+    memory_file = relationship("MemoryFile", backref="embeddings")
+
+    __table_args__ = (UniqueConstraint("owner_id", "memory_file_id", "model", name="uq_memory_embedding"),)

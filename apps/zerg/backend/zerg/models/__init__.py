@@ -13,6 +13,8 @@ from .models import CanvasLayout
 from .models import ConnectorCredential
 from .models import KnowledgeDocument
 from .models import KnowledgeSource
+from .models import MemoryEmbedding
+from .models import MemoryFile
 from .models import NodeExecutionState
 from .models import Runner
 from .models import RunnerEnrollToken
@@ -54,6 +56,8 @@ __all__ = [
     "ConnectorCredential",
     "KnowledgeDocument",
     "KnowledgeSource",
+    "MemoryEmbedding",
+    "MemoryFile",
     "NodeExecutionState",
     "Runner",
     "RunnerEnrollToken",
