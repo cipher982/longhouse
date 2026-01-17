@@ -138,26 +138,26 @@ fi
 echo ""
 echo "Applying config to database..."
 
-# Find newest backend container by APP_UUID (handles rollover during deploy)
-BACKEND_CONTAINER=$(ssh zerg "docker ps --filter 'name=backend-${APP_UUID}' --format '{{.ID}} {{.Names}}' | sort -r | head -1 | awk '{print \$2}'")
+# Find backend container by APP_UUID (docker ps returns newest first by default)
+BACKEND_CONTAINER=$(ssh zerg "docker ps --filter 'name=backend-${APP_UUID}' --format '{{.Names}}' | head -1")
 if [[ -z "$BACKEND_CONTAINER" ]]; then
   echo "ERROR: No backend container found matching APP_UUID ${APP_UUID}"
   exit 1
 fi
 echo "  Using container: $BACKEND_CONTAINER"
 
-# Copy config files into container /tmp via stdin (docker cp doesn't work with read-only rootfs)
+# Copy config files into container /tmp via stdin as uid 1000 (ensures readability)
 echo "  Copying config files into container..."
-ssh zerg "cat ~/.config/zerg/user_context.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/user_context.json'"
-ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i '$BACKEND_CONTAINER' sh -c 'cat > /tmp/personal_credentials.json'"
+ssh zerg "cat ~/.config/zerg/user_context.json | docker exec -i -u 1000 '$BACKEND_CONTAINER' sh -c 'cat > /tmp/user_context.json'"
+ssh zerg "cat ~/.config/zerg/personal_credentials.json | docker exec -i -u 1000 '$BACKEND_CONTAINER' sh -c 'cat > /tmp/personal_credentials.json'"
 
 # Validate files landed and are non-empty before seeding
-ssh zerg "docker exec '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_context.json && test -s /tmp/personal_credentials.json'" || {
+ssh zerg "docker exec -u 1000 '$BACKEND_CONTAINER' sh -c 'test -s /tmp/user_context.json && test -s /tmp/personal_credentials.json'" || {
   echo "ERROR: Config files missing or empty in container"
   exit 1
 }
 
-# Force-seed with explicit paths and user context (ensures correct HOME)
+# Force-seed with explicit paths (single-user system; add --email if multi-user needed)
 echo "  Running seed scripts with --force..."
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_user_context.py /tmp/user_context.json --force"
 ssh zerg "docker exec -u 1000 -e HOME=/home/zerg '$BACKEND_CONTAINER' python scripts/seed_personal_credentials.py /tmp/personal_credentials.json --force"
