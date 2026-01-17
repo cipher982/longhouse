@@ -103,9 +103,20 @@ if (isMarketingMode) {
 // ?clock=frozen - freeze time display (Apple-style 9:41 AM)
 const clockFrozen = params.get("clock") === "frozen";
 if (clockFrozen) {
+  const frozenTime = new Date("2026-01-15T09:41:00");
+  const frozenTimestamp = frozenTime.getTime();
+
   // Expose frozen time globally for components to use
-  (window as Window & { __FROZEN_TIME?: Date }).__FROZEN_TIME = new Date("2026-01-15T09:41:00");
+  (window as Window & { __FROZEN_TIME?: Date }).__FROZEN_TIME = frozenTime;
   document.body.classList.add("clock-frozen");
+
+  // Monkey-patch Date.now() to return frozen time
+  // This is simpler and covers most use cases (timestamps, relative time)
+  const OriginalDateNow = Date.now;
+  Date.now = () => frozenTimestamp;
+
+  // Store original for potential restoration
+  (window as Window & { __ORIGINAL_DATE_NOW?: typeof Date.now }).__ORIGINAL_DATE_NOW = OriginalDateNow;
 }
 
 // ?seed=X - seed random values for consistent layout (deterministic)

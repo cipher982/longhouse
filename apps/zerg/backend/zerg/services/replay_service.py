@@ -9,7 +9,7 @@ Usage:
     1. Set REPLAY_MODE_ENABLED=true in environment
     2. Create scenario YAML files in scripts/video-scenarios/
     3. Pass ?replay=scenario-name in the chat URL
-    4. Frontend passes replay scenario to backend via request header
+    4. Frontend passes replay scenario to backend via request body
 """
 
 import asyncio
@@ -61,8 +61,9 @@ class ReplayService:
 
         Looks for scenarios in scripts/video-scenarios/ relative to repo root.
         """
-        # Navigate from backend/zerg/services/ to repo root
-        repo_root = Path(__file__).parents[4]
+        # Navigate from apps/zerg/backend/zerg/services/ to repo root
+        # parents: [0]=services, [1]=zerg, [2]=backend, [3]=zerg, [4]=apps, [5]=repo_root
+        repo_root = Path(__file__).parents[5]
         path = repo_root / "scripts" / "video-scenarios" / f"{name}.yaml"
 
         if not path.exists():
