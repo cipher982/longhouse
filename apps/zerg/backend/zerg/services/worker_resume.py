@@ -355,6 +355,10 @@ async def resume_supervisor_batch(
             trace_id=str(run.trace_id) if run.trace_id else None,
         )
 
+        from zerg.services.lifehub_shipper import schedule_lifehub_shipping
+
+        schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+
         reset_seq(run.id)
         logger.info("Successfully batch resumed supervisor run %s", run_id)
         return {"status": "success", "result": final_response}
@@ -551,6 +555,10 @@ async def resume_supervisor_batch(
         )
 
         reset_seq(run.id)
+        from zerg.services.lifehub_shipper import schedule_lifehub_shipping
+
+        schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+
         return {"status": "error", "error": str(e)}
 
     finally:
@@ -835,6 +843,10 @@ async def _continue_supervisor_langgraph_free(
             trace_id=str(run.trace_id) if run.trace_id else None,
         )
 
+        from zerg.services.lifehub_shipper import schedule_lifehub_shipping
+
+        schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+
         reset_seq(run.id)
         logger.info("Successfully resumed supervisor run %s", run_id)
         return {"status": "success", "result": final_response}
@@ -928,6 +940,10 @@ async def _continue_supervisor_langgraph_free(
         )
 
         reset_seq(run.id)
+        from zerg.services.lifehub_shipper import schedule_lifehub_shipping
+
+        schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
+
         return {"status": "error", "error": str(e)}
 
     finally:
