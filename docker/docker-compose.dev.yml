@@ -93,9 +93,8 @@ services:
       RELOAD: "true"
       DEBUG: ${DEBUG:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Life Hub integration
+      # Life Hub integration (URL default is in backend config)
       LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
-      LIFE_HUB_URL: ${LIFE_HUB_URL:-}
       LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
       # E2E test tool stubbing (optional - only set when running E2E tests)
       ZERG_TOOL_STUBS_PATH: ${ZERG_TOOL_STUBS_PATH:-}
