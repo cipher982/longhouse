@@ -34,8 +34,10 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ## Highlights
 
 - **Durable Runs (v2.2):** Runs survive disconnects and timeouts. `asyncio.shield()` prevents server-side cancellation on client timeout; `DEFERRED` state for long-running work.
+- **Progressive Disclosure:** Large tool outputs stored by reference with markers; worker evidence fetched on-demand via `get_worker_evidence()`. Context trimming keeps LLM prompts within budget.
 - **Worker supervision (v2.1):** tool events, activity ticker, roundabout monitoring (heuristic warnings, no auto-cancel), fail-fast critical errors.
 - **Supervisor tool visibility (v2.2):** supervisor-direct tool calls emit SSE tool events and render as inline ToolCards in chat.
+- **Lazy tool loading:** 65+ tools available via `search_tools()`, ~14 core tools always bound.
 - **Unified frontend (v2.1):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
 - **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.
 - **Same-origin auth (dev):** `AUTH_DISABLED=1` backend, `VITE_AUTH_ENABLED=false` in `docker/docker-compose.dev.yml`; enable auth in prod.
@@ -77,14 +79,11 @@ scripts/                # Dev tools + generators
 
 ## Docs to know
 
-- `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
 - `docs/specs/durable-runs-v2.2.md` – durable runs (current core architecture).
+- `docs/agent-improvements-progress.md` – context management & progressive disclosure (phases 1-4 complete).
+- `docs/specs/worker-supervision-roundabout.md` – phases 1–6 complete, matches code.
 - `docs/specs/jarvis-supervisor-unification-v2.1.md` – supervisor/Jarvis unification (v2.1).
 - `docs/archive/super-siri-architecture.md` – v2.0 overall vision (historical).
-- `docs/completed/frontend-merge-jarvis-into-zerg-spa.md` – unified SPA merge notes (completed).
-- `docs/completed/frontend-alignment-spec.md` – frontend alignment plan (completed).
-- `docs/PERFORMANCE_ANALYSIS.md` – Jarvis chat performance investigation + replication notes.
-- `docs/specs/supervisor-ui-spec.md` – pending (future UI work).
 - `docs/DEPLOYMENT.md` – production deployment guide (Coolify + `docker/docker-compose.prod.yml`).
 - `docs/DEVELOPMENT.md` – local dev guide (`make dev` + `docker/docker-compose.dev.yml` profile `dev`).
 
