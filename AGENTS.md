@@ -12,7 +12,8 @@ Key principles:
 - **No keyword routing** — Jarvis decides when to delegate, not keyword matching
 - **No specialized workers** — Workers are general-purpose agents with SSH access
 - **Session Durability** — Runs survive disconnects and timeouts; work continues in background
-- **Lazy tool loading** — 65+ tools available via `search_tools()`, only core tools pre-bound
+- **Lazy tool loading** — 65+ tools available via `search_tools()`, ~14 core tools pre-bound
+- **Progressive disclosure** — Large outputs stored by reference, evidence fetched on-demand
 - **Event-driven** — Workers notify when done, no polling loops
 
 Full spec: `docs/specs/durable-runs-v2.2.md`
@@ -479,7 +480,9 @@ On failure, shows first 10 failed tests with guidance:
 | `services/supervisor_service.py` | Orchestrates runs, handles `AgentInterrupted` |
 | `services/worker_runner.py` | Executes worker jobs, triggers supervisor resume |
 | `services/worker_resume.py` | Resumes supervisor after worker completion |
-| `tools/builtin/supervisor_tools.py` | `spawn_worker` tool definition |
+| `tools/builtin/supervisor_tools.py` | `spawn_worker`, `get_worker_evidence`, `get_tool_output`, `done` tools |
+| `services/evidence_compiler.py` | Compiles worker artifacts within byte budgets |
+| `services/tool_output_store.py` | Stores large tool outputs by reference |
 | `tools/tool_search.py` | Semantic search with OpenAI embeddings |
 | `tools/catalog.py` | Tool catalog with CORE_TOOLS list |
 | `tools/lazy_binder.py` | Lazy binding with allowlist support |
@@ -489,7 +492,7 @@ On failure, shows first 10 failed tests with guidance:
 
 **Lazy Tool Loading** (Claude Code pattern):
 
-Agents have access to 65+ tools but only ~10 "core tools" are pre-bound to the LLM. Non-core tools are discovered via `search_tools()`:
+Agents have access to 65+ tools but only ~14 "core tools" are pre-bound to the LLM. Non-core tools are discovered via `search_tools()`:
 
 ```
 User: "Where am I?"
@@ -505,7 +508,7 @@ LLM → get_current_location
 ✅ Works!
 ```
 
-Core tools (always loaded): `spawn_worker`, `contact_user`, `web_search`, `http_request`, `list_workers`, `read_worker_result`, `get_worker_metadata`, `grep_workers`, `search_tools`, `list_tools`
+Core tools (always loaded): `spawn_worker`, `list_workers`, `read_worker_result`, `get_worker_evidence`, `get_tool_output`, `done`, `grep_workers`, `get_worker_metadata`, `contact_user`, `search_tools`, `list_tools`, `web_search`, `http_request`
 
 Embeddings cached to: `apps/zerg/backend/data/tool_embeddings.npz`
 
@@ -671,6 +674,19 @@ Copy `.env.example` to `.env` and fill in:
 Run `make env-check` to validate your environment before starting.
 
 Dev auth defaults (`AUTH_DISABLED=1`, `VITE_AUTH_ENABLED=false`) are set in compose. For production, set `AUTH_DISABLED=0` and configure Google OAuth credentials.
+
+### Supervisor Context Management (Optional)
+
+These env vars control context trimming and progressive disclosure for supervisor runs:
+
+| Env Var | Default | Purpose |
+|---------|---------|---------|
+| `SUPERVISOR_CONTEXT_MAX_USER_TURNS` | 0 (disabled) | Max user turns to keep in context (oldest dropped first) |
+| `SUPERVISOR_CONTEXT_MAX_CHARS` | 0 (disabled) | Total character budget for context |
+| `SUPERVISOR_TOOL_OUTPUT_MAX_CHARS` | 8000 | Tool outputs larger than this are stored by reference |
+| `SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS` | 1200 | Preview size shown when output is stored |
+
+When tool outputs exceed `SUPERVISOR_TOOL_OUTPUT_MAX_CHARS`, they're stored on disk and replaced with a marker like `[TOOL_OUTPUT:artifact_id=...,tool=...,bytes=...]`. The LLM can fetch full content via `get_tool_output(artifact_id)`.
 
 ## Auto-Seeding (User Context & Credentials)
 
