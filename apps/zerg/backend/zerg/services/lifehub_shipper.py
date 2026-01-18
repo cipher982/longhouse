@@ -29,9 +29,6 @@ async def ship_run_to_lifehub(run_id: int, trace_id: str | None) -> None:
     settings = get_settings()
     if settings.testing or not settings.lifehub_shipping_enabled:
         return
-    if not settings.lifehub_api_key:
-        logger.debug("Life Hub shipping enabled but LIFE_HUB_API_KEY is missing")
-        return
 
     try:
         with db_session() as db:
@@ -65,11 +62,15 @@ async def ship_run_to_lifehub(run_id: int, trace_id: str | None) -> None:
             "events": formatted,
         }
 
+        headers = {}
+        if settings.lifehub_api_key:
+            headers["X-API-Key"] = settings.lifehub_api_key
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{settings.lifehub_url}/ingest/agents/events",
                 json=payload,
-                headers={"X-API-Key": settings.lifehub_api_key},
+                headers=headers,
             )
             resp.raise_for_status()
 
@@ -83,9 +84,6 @@ def schedule_lifehub_shipping(run_id: int, trace_id: str | None) -> None:
     """Schedule Life Hub shipping without blocking the caller."""
     settings = get_settings()
     if settings.testing or not settings.lifehub_shipping_enabled:
-        return
-    if not settings.lifehub_api_key:
-        logger.debug("Life Hub shipping enabled but LIFE_HUB_API_KEY is missing")
         return
 
     try:
