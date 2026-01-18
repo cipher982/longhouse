@@ -31,6 +31,7 @@ components:
         - get_current_time
         - get_whoop_data
         - get_worker_evidence
+        - get_tool_output
         - get_worker_metadata
         - github_add_comment
         - github_create_issue
@@ -189,6 +190,8 @@ components:
               const: personal
             get_worker_evidence:
               const: supervisor
+            get_tool_output:
+              const: supervisor
             get_worker_metadata:
               const: supervisor
             github_add_comment:
@@ -320,6 +323,7 @@ components:
             - get_current_time
             - get_whoop_data
             - get_worker_evidence
+            - get_tool_output
             - get_worker_metadata
             - github_add_comment
             - github_create_issue

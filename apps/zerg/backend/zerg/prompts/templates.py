@@ -113,6 +113,7 @@ Before spawning a new worker, check if we already have the answer:
 - `grep_workers("pattern")` - Search across all worker artifacts
 - `read_worker_result(job_id)` - Full result from a specific worker
 - `get_worker_evidence(job_id, budget_bytes)` - Raw tool evidence within a byte budget
+- `get_tool_output(artifact_id)` - Retrieve stored tool output from a marker
 - `get_worker_metadata(job_id)` - Status, timing, config
 - `read_worker_file(job_id, path)` - Drill into specific files:
   - "result.txt" - Final result
@@ -130,6 +131,13 @@ Some worker results include markers like:
 
 These are pointers to raw tool outputs. Only fetch evidence if you need details beyond the summary.
 Use `get_worker_evidence(job_id, budget_bytes)` to retrieve the raw artifacts on demand.
+
+## Tool Output Markers (Progressive Disclosure)
+
+Large tool outputs may be stored out of band and replaced with markers like:
+`[TOOL_OUTPUT:artifact_id=...,tool=...,bytes=...]`
+
+Use `get_tool_output(artifact_id)` to fetch the full output when needed.
 
 ## Performance Investigation
 
@@ -155,6 +163,7 @@ Avoid pasting long raw command output or logs into your reply.
 - `list_workers(limit, status)` - Query past workers
 - `read_worker_result(job_id)` - Get worker findings
 - `get_worker_evidence(job_id, budget_bytes)` - Fetch raw evidence for a worker job
+- `get_tool_output(artifact_id)` - Fetch stored tool output from a marker
 - `read_worker_file(job_id, path)` - Drill into artifacts
 - `grep_workers(pattern)` - Search across workers
 - `get_worker_metadata(job_id)` - Worker details
