@@ -23,9 +23,9 @@
 - [x] Basic test/validation
 
 ### Phase 2 — Deterministic Context Budget
-- [ ] Add pre-LLM trimming step (system + last N turns + recent tool results)
-- [ ] Configurable via env
-- [ ] Guardrails to keep tool-call pairs intact
+- [x] Add pre-LLM trimming step (system + last N turns + recent tool results)
+- [x] Configurable via env (`SUPERVISOR_CONTEXT_MAX_USER_TURNS`, `SUPERVISOR_CONTEXT_MAX_CHARS`)
+- [x] Guardrails to keep tool-call pairs intact
 
 ### Phase 3 — Large Tool Outputs by Reference
 - [ ] Store large tool outputs and return marker + preview
@@ -39,3 +39,4 @@
 - 2026-01-18: Initialized plan and progress tracking doc.
 - 2026-01-18: Phase 1 implemented (progressive evidence tool + prompt update).
 - 2026-01-18: Added automated tests for evidence compiler + supervisor tool; `make test MINIMAL=1` passed.
+- 2026-01-18: Phase 2 implemented (deterministic context trimming + tests); `make test MINIMAL=1` passed.
