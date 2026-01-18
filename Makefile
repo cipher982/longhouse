@@ -395,7 +395,7 @@ video-record: ## Record video scenes (requires audio + dev stack)
 		exit 1; \
 	fi
 	@$(MAKE) seed-marketing
-	@REPLAY_MODE_ENABLED=true uv run --with playwright --with pyyaml scripts/capture_demo_video.py product-demo
+	@REPLAY_MODE_ENABLED=true uv run --with playwright --with pyyaml scripts/capture_demo_video.py product-demo --record-mode screen
 
 video-process: ## Post-process (combine, add audio, compress)
 	@echo "🎬 Processing video..."

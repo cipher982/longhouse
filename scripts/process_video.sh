@@ -3,9 +3,9 @@
 # Process video: concatenate scenes, add audio, compress for web
 #
 # Outputs:
-#   videos/<scenario>/master.webm    - Raw quality, lossless concat
-#   videos/<scenario>/master.mp4     - High quality with audio (crf 18)
-#   public/videos/<scenario>.mp4     - Web optimized (crf 23)
+#   videos/<scenario>/master-raw.<ext> - Raw concat (lossless stream copy)
+#   videos/<scenario>/master.mp4       - High quality with audio (crf 18)
+#   public/videos/<scenario>.mp4       - Web optimized (crf 23)
 #
 # Usage:
 #   ./scripts/process_video.sh product-demo
@@ -20,8 +20,10 @@ FLAG="${2:-}"
 VIDEO_DIR="videos/$SCENARIO"
 OUTPUT_DIR="apps/zerg/frontend-web/public/videos"
 WEB_OUTPUT="$OUTPUT_DIR/$SCENARIO.mp4"
-MASTER_WEBM="$VIDEO_DIR/master.webm"
+MASTER_RAW=""
 MASTER_MP4="$VIDEO_DIR/master.mp4"
+
+WEB_SCALE_FILTER="scale='min(1920,iw)':-2"
 
 echo "🎬 Processing $SCENARIO..."
 
@@ -37,9 +39,9 @@ if ! command -v ffmpeg &> /dev/null; then
 fi
 
 # =============================================================================
-# Step 1: Concatenate raw webm files (LOSSLESS - stream copy)
+# Step 1: Concatenate scene videos (LOSSLESS - stream copy)
 # =============================================================================
-echo "  [1/4] Concatenating raw scenes (lossless)..."
+echo "  [1/4] Concatenating scenes (lossless)..."
 CONCAT_INPUT="$VIDEO_DIR/concat.txt"
 
 rm -f "$CONCAT_INPUT"
@@ -57,13 +59,18 @@ if [ ! -s "$CONCAT_INPUT" ]; then
     exit 1
 fi
 
+FIRST_LINE=$(head -n 1 "$VIDEO_DIR/scenes.txt")
+FIRST_FILE=$(echo "$FIRST_LINE" | sed "s/file '//;s/'//")
+EXT="${FIRST_FILE##*.}"
+MASTER_RAW="$VIDEO_DIR/master-raw.$EXT"
+
 # Lossless concat (stream copy, no re-encoding)
 ffmpeg -y -f concat -safe 0 -i "$CONCAT_INPUT" \
     -c copy \
-    "$MASTER_WEBM" 2>/dev/null
+    "$MASTER_RAW" 2>/dev/null
 
-MASTER_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$MASTER_WEBM" 2>/dev/null)
-echo "    ✓ master.webm (${MASTER_DURATION%.*}s, raw quality)"
+MASTER_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$MASTER_RAW" 2>/dev/null)
+echo "    ✓ $(basename "$MASTER_RAW") (${MASTER_DURATION%.*}s, raw quality)"
 
 # =============================================================================
 # Step 2: Prepare audio track
@@ -79,8 +86,10 @@ if [ "$FLAG" != "--skip-audio" ] && [ -d "$AUDIO_DIR" ] && [ "$(ls -A "$AUDIO_DI
     rm -f "$AUDIO_CONCAT"
 
     while read -r line; do
-        filename=$(echo "$line" | sed "s/file '//;s/'//;s/.webm//")
-        audio_file="$AUDIO_DIR/$filename.mp3"
+        filename=$(echo "$line" | sed "s/file '//;s/'//")
+        base_name=$(basename "$filename")
+        base_name="${base_name%.*}"
+        audio_file="$AUDIO_DIR/$base_name.mp3"
         if [ -f "$audio_file" ]; then
             echo "file '$(pwd)/$audio_file'" >> "$AUDIO_CONCAT"
         fi
@@ -104,14 +113,14 @@ fi
 # =============================================================================
 if [ "$FLAG" = "--web-only" ]; then
     echo "  [3/4] Skipping master.mp4 (--web-only)"
-    ENCODE_SOURCE="$MASTER_WEBM"
+    ENCODE_SOURCE="$MASTER_RAW"
 else
     echo "  [3/4] Creating master.mp4 (high quality, crf 18)..."
 
     if [ "$HAS_AUDIO" = true ]; then
         # Use -t to trim video to audio duration (more reliable than -shortest with stream copy)
         ffmpeg -y \
-            -i "$MASTER_WEBM" \
+            -i "$MASTER_RAW" \
             -i "$VIDEO_DIR/voiceover.mp3" \
             -t "$AUDIO_DURATION" \
             -c:v libx264 -crf 18 -preset slow \
@@ -121,7 +130,7 @@ else
             "$MASTER_MP4" 2>/dev/null
     else
         ffmpeg -y \
-            -i "$MASTER_WEBM" \
+            -i "$MASTER_RAW" \
             -c:v libx264 -crf 18 -preset slow \
             -pix_fmt yuv420p \
             "$MASTER_MP4" 2>/dev/null
@@ -139,11 +148,12 @@ echo "  [4/4] Creating web output (crf 23, faststart)..."
 mkdir -p "$OUTPUT_DIR"
 
 if [ "$FLAG" = "--web-only" ] && [ "$HAS_AUDIO" = true ]; then
-    # Single encode from raw webm + audio
+    # Single encode from raw + audio
     ffmpeg -y \
-        -i "$MASTER_WEBM" \
+        -i "$MASTER_RAW" \
         -i "$VIDEO_DIR/voiceover.mp3" \
         -t "$AUDIO_DURATION" \
+        -vf "$WEB_SCALE_FILTER" \
         -c:v libx264 -crf 23 -preset medium \
         -c:a aac -b:a 128k \
         -map 0:v -map 1:a \
@@ -153,6 +163,7 @@ if [ "$FLAG" = "--web-only" ] && [ "$HAS_AUDIO" = true ]; then
 else
     # Re-encode from master (already has audio baked in)
     ffmpeg -y -i "$ENCODE_SOURCE" \
+        -vf "$WEB_SCALE_FILTER" \
         -c:v libx264 -crf 23 -preset medium \
         -c:a aac -b:a 128k \
         -movflags +faststart \
@@ -166,15 +177,19 @@ fi
 WEB_SIZE=$(du -h "$WEB_OUTPUT" | cut -f1)
 WEB_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$WEB_OUTPUT" 2>/dev/null | cut -d. -f1)
 
-echo ""
-echo "✅ Done!"
-echo ""
+# Always show master even if web-only skipped
+MASTER_RAW_BASENAME=$(basename "$MASTER_RAW")
+
+printf "\n✅ Done!\n\n"
+
 echo "   Outputs:"
-echo "   ├── $MASTER_WEBM (raw, lossless concat)"
+echo "   ├── $VIDEO_DIR/$MASTER_RAW_BASENAME (raw, lossless concat)"
 if [ "$FLAG" != "--web-only" ]; then
-echo "   ├── $MASTER_MP4 (high quality, crf 18)"
+    echo "   ├── $MASTER_MP4 (high quality, crf 18)"
 fi
 echo "   └── $WEB_OUTPUT ($WEB_SIZE, ${WEB_DURATION}s)"
 echo ""
 echo "Preview: mpv $WEB_OUTPUT"
-echo "Master:  mpv $MASTER_MP4"
+if [ "$FLAG" != "--web-only" ]; then
+    echo "Master:  mpv $MASTER_MP4"
+fi
