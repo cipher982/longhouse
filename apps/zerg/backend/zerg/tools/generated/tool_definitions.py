@@ -20,6 +20,7 @@ class ToolName(str, Enum):
     GET_CURRENT_LOCATION = "get_current_location"
     GET_CURRENT_TIME = "get_current_time"
     GET_WHOOP_DATA = "get_whoop_data"
+    GET_WORKER_EVIDENCE = "get_worker_evidence"
     GET_WORKER_METADATA = "get_worker_metadata"
     GITHUB_ADD_COMMENT = "github_add_comment"
     GITHUB_CREATE_ISSUE = "github_create_issue"
@@ -127,6 +128,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
     ToolName.GET_WHOOP_DATA: ServerName.PERSONAL,
+    ToolName.GET_WORKER_EVIDENCE: ServerName.SUPERVISOR,
     ToolName.GET_WORKER_METADATA: ServerName.SUPERVISOR,
     ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
     ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,

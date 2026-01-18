@@ -395,6 +395,69 @@ def read_worker_result(job_id: str) -> str:
     return run_async_safely(read_worker_result_async(job_id))
 
 
+async def get_worker_evidence_async(job_id: str, budget_bytes: int = 32000) -> str:
+    """Compile evidence for a worker job within a byte budget.
+
+    This dereferences evidence markers like:
+    [EVIDENCE:run_id=...,job_id=...,worker_id=...]
+
+    Args:
+        job_id: The worker job ID (integer as string)
+        budget_bytes: Total byte budget for evidence (default 32KB)
+
+    Returns:
+        Evidence text compiled from worker artifacts
+    """
+    from zerg.crud import crud
+    from zerg.services.evidence_compiler import EvidenceCompiler
+
+    # Get owner_id from context for security filtering
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot fetch evidence - no credential context available"
+
+    db = resolver.db
+
+    # Clamp budget to reasonable limits
+    safe_budget = max(1024, min(int(budget_bytes or 0), 200_000))
+
+    try:
+        job_id_int = int(job_id)
+    except ValueError:
+        return f"Error: Invalid job ID format: {job_id}"
+
+    try:
+        job = db.query(crud.WorkerJob).filter(crud.WorkerJob.id == job_id_int, crud.WorkerJob.owner_id == resolver.owner_id).first()
+        if not job:
+            return f"Error: Worker job {job_id} not found"
+
+        if not job.worker_id:
+            return f"Error: Worker job {job_id} has not started execution yet"
+
+        compiler = EvidenceCompiler(db=db)
+        evidence = compiler.compile_for_job(
+            job_id=job.id,
+            worker_id=job.worker_id,
+            owner_id=resolver.owner_id,
+            budget_bytes=safe_budget,
+        )
+
+        return f"Evidence for worker job {job_id} (worker {job.worker_id}, budget={safe_budget}B):\n\n{evidence}"
+
+    except PermissionError:
+        return f"Error: Access denied to worker job {job_id}"
+    except Exception as e:
+        logger.exception(f"Failed to compile evidence for worker job: {job_id}")
+        return f"Error compiling evidence for worker job {job_id}: {e}"
+
+
+def get_worker_evidence(job_id: str, budget_bytes: int = 32000) -> str:
+    """Sync wrapper for get_worker_evidence_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(get_worker_evidence_async(job_id, budget_bytes))
+
+
 async def read_worker_file_async(job_id: str, file_path: str) -> str:
     """Read a specific file from a worker job's artifacts.
 
@@ -653,6 +716,13 @@ TOOLS: List[StructuredTool] = [
         name="read_worker_result",
         description="Read the final result from a completed worker job. "
         "Provide the job ID (integer) to get the natural language result text.",
+    ),
+    StructuredTool.from_function(
+        func=get_worker_evidence,
+        coroutine=get_worker_evidence_async,
+        name="get_worker_evidence",
+        description="Compile raw tool evidence for a worker job within a byte budget. "
+        "Use this to dereference [EVIDENCE:...] markers when you need full artifact details.",
     ),
     StructuredTool.from_function(
         func=read_worker_file,
