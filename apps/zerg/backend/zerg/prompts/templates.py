@@ -156,6 +156,11 @@ Avoid pasting long raw command output or logs into your reply.
 - If the user explicitly asks for raw output/logs, include only a small excerpt inline and point to the worker artifacts:
   - `read_worker_file(job_id, "tool_calls/<...>.txt")`
 
+## Completion Signal (Optional)
+
+If you are ready to provide a final response, you may call `done()` first to signal completion.
+This is telemetry only; you must still send the final response after the tool call.
+
 ## Your Tools
 
 **Delegation:**
@@ -163,6 +168,7 @@ Avoid pasting long raw command output or logs into your reply.
 - `list_workers(limit, status)` - Query past workers
 - `read_worker_result(job_id)` - Get worker findings
 - `get_worker_evidence(job_id, budget_bytes)` - Fetch raw evidence for a worker job
+- `done()` - Optional completion signal (telemetry only)
 - `get_tool_output(artifact_id)` - Fetch stored tool output from a marker
 - `read_worker_file(job_id, path)` - Drill into artifacts
 - `grep_workers(pattern)` - Search across workers

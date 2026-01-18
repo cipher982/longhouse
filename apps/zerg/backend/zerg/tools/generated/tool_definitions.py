@@ -15,6 +15,7 @@ class ToolName(str, Enum):
     AGENT_MEMORY_SET = "agent_memory_set"
     CONTACT_USER = "contact_user"
     CONTAINER_EXEC = "container_exec"
+    DONE = "done"
     DATETIME_DIFF = "datetime_diff"
     GENERATE_UUID = "generate_uuid"
     GET_CURRENT_LOCATION = "get_current_location"
@@ -124,6 +125,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.AGENT_MEMORY_SET: ServerName.AGENT_MEMORY,
     ToolName.CONTACT_USER: ServerName.CONTACT_USER,
     ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
+    ToolName.DONE: ServerName.SUPERVISOR,
     ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.GENERATE_UUID: ServerName.UUID,
     ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,

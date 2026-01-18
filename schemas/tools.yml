@@ -25,6 +25,7 @@ components:
         - agent_memory_set
         - contact_user
         - container_exec
+        - done
         - datetime_diff
         - generate_uuid
         - get_current_location
@@ -178,6 +179,8 @@ components:
               const: contact_user
             container_exec:
               const: container
+            done:
+              const: supervisor
             datetime_diff:
               const: datetime
             generate_uuid:
@@ -317,6 +320,7 @@ components:
             - agent_memory_set
             - contact_user
             - container_exec
+            - done
             - datetime_diff
             - generate_uuid
             - get_current_location
