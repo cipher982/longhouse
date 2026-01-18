@@ -2,17 +2,28 @@
 """
 Capture product demo video with audio-driven timing.
 
+Default recording mode is high-quality screen capture via ffmpeg (macOS).
+Fallback to Playwright recording with --record-mode playwright.
+
 PREREQUISITE: Run `uv run scripts/generate_voiceover.py product-demo` first!
 
 Usage:
     uv run scripts/capture_demo_video.py product-demo
     uv run scripts/capture_demo_video.py product-demo --scene chat-briefing
+    uv run scripts/capture_demo_video.py product-demo --record-mode playwright
+    uv run scripts/capture_demo_video.py product-demo --screen 1 --crf 12 --fps 30
     uv run scripts/capture_demo_video.py --list
 """
 
 import argparse
 import json
 import logging
+import platform
+import re
+import shutil
+import signal
+import subprocess
+import time
 from pathlib import Path
 
 import yaml
@@ -23,7 +34,12 @@ logger = logging.getLogger(__name__)
 
 SCENARIO_DIR = Path(__file__).parent / "video-scenarios"
 BASE_URL = "http://localhost:30080"
+VIEWPORT = {"width": 1920, "height": 1080}
 
+
+# -----------------------------------------------------------------------------
+# Scenario helpers
+# -----------------------------------------------------------------------------
 
 def load_scenario(name: str) -> dict:
     """Load scenario YAML file."""
@@ -46,7 +62,8 @@ def load_audio_durations(scenario_name: str) -> dict[str, float]:
 
 def inject_click_indicator(page: Page) -> None:
     """Add visual ripple effect on clicks for video recording."""
-    page.evaluate("""(() => {
+    page.evaluate(
+        """(() => {
         // Only inject once
         if (window.__clickIndicatorInjected) return;
         window.__clickIndicatorInjected = true;
@@ -81,7 +98,8 @@ def inject_click_indicator(page: Page) -> None:
             `;
             document.head.appendChild(style);
         }
-    })()""")
+    })()"""
+    )
 
 
 def execute_step(page: Page, step: dict, audio_duration: float | None) -> None:
@@ -146,70 +164,257 @@ def execute_step(page: Page, step: dict, audio_duration: float | None) -> None:
         logger.warning(f"  Unknown action: {action}")
 
 
+# -----------------------------------------------------------------------------
+# Screen recording helpers (macOS + ffmpeg)
+# -----------------------------------------------------------------------------
+
+def _find_default_screen_device() -> str | None:
+    """Return the first AVFoundation screen device index (as string)."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+
+    output = (result.stderr or "") + (result.stdout or "")
+    for line in output.splitlines():
+        match = re.search(r"\[(\d+)\]\s+Capture screen", line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _compute_crop_filter(page: Page) -> str | None:
+    """Compute ffmpeg crop filter for the browser window (screen recording)."""
+    try:
+        bounds = page.evaluate(
+            """() => {
+            const dpr = window.devicePixelRatio || 1;
+            const x = window.screenX;
+            const y = window.screenY;
+            return { x, y, w: window.outerWidth, h: window.outerHeight, dpr };
+        }"""
+        )
+    except Exception:
+        return None
+
+    if not bounds:
+        return None
+
+    dpr = bounds.get("dpr", 1) or 1
+    x = max(0, int(bounds.get("x", 0) * dpr))
+    y = max(0, int(bounds.get("y", 0) * dpr))
+    w = int(bounds.get("w", 0) * dpr)
+    h = int(bounds.get("h", 0) * dpr)
+
+    # Ensure even dimensions for H.264
+    if w % 2 != 0:
+        w -= 1
+    if h % 2 != 0:
+        h -= 1
+
+    if w <= 0 or h <= 0:
+        return None
+
+    return f"crop={w}:{h}:{x}:{y}"
+
+
+def _start_screen_recording(output_path: Path, fps: int, crf: int, screen_index: str | None, crop_filter: str | None):
+    """Start ffmpeg screen recording (macOS only)."""
+    if platform.system() != "Darwin":
+        raise RuntimeError("Screen recording is only supported on macOS (avfoundation).")
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found. Install with: brew install ffmpeg")
+
+    device = screen_index or _find_default_screen_device()
+    if not device:
+        raise RuntimeError("No screen capture device found. Run: ffmpeg -f avfoundation -list_devices true -i \"\"")
+
+    logger.info(f"  Screen capture device: {device} | fps: {fps} | crf: {crf}")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "avfoundation",
+        "-framerate",
+        str(fps),
+        "-i",
+        device,
+    ]
+
+    if crop_filter:
+        cmd += ["-vf", crop_filter]
+
+    cmd += [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "slow",
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    # Give ffmpeg a moment to initialize
+    time.sleep(0.2)
+    return proc
+
+
+def _stop_screen_recording(proc: subprocess.Popen | None) -> None:
+    """Stop ffmpeg screen recording."""
+    if not proc:
+        return
+
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    if proc.returncode not in (0, None):
+        stderr = ""
+        try:
+            stderr = proc.stderr.read().decode().strip() if proc.stderr else ""
+        except Exception:
+            stderr = ""
+        if stderr:
+            logger.error(f"ffmpeg error: {stderr}")
+
+
+# -----------------------------------------------------------------------------
+# Recording
+# -----------------------------------------------------------------------------
+
 def record_scene(
     browser,
     scene: dict,
     audio_duration: float | None,
     output_dir: Path,
-    viewport: dict,
-) -> Path:
+    record_mode: str,
+    screen_index: str | None,
+    fps: int,
+    crf: int,
+) -> Path | None:
     """Record a single scene."""
     scene_id = scene["id"]
     logger.info(f"Recording scene: {scene_id}")
 
-    context = browser.new_context(
-        record_video_dir=str(output_dir / "raw"),
-        record_video_size=viewport,
-        viewport=viewport,
-    )
+    if record_mode == "playwright":
+        context = browser.new_context(
+            record_video_dir=str(output_dir / "raw"),
+            record_video_size=VIEWPORT,
+            viewport=VIEWPORT,
+        )
+    else:
+        context = browser.new_context(
+            viewport=VIEWPORT,
+            device_scale_factor=1,
+        )
+
     page = context.new_page()
+    page.bring_to_front()
 
-    # Inject click indicator at start
-    inject_click_indicator(page)
+    recorder = None
+    output_path = None
 
-    if audio_duration:
-        logger.info(f"  Audio duration: {audio_duration:.1f}s")
-    else:
-        logger.info("  No audio for this scene")
+    try:
+        if record_mode == "screen":
+            # Ensure window metrics are available for cropping
+            page.goto("about:blank")
+            crop_filter = _compute_crop_filter(page)
+            if crop_filter:
+                logger.info(f"  Crop filter: {crop_filter}")
+            else:
+                logger.info("  Crop filter: none (full screen)")
+            output_path = output_dir / f"{scene_id}.mp4"
+            recorder = _start_screen_recording(output_path, fps, crf, screen_index, crop_filter)
 
-    for step in scene["steps"]:
-        execute_step(page, step, audio_duration)
+        # Inject click indicator at start
+        inject_click_indicator(page)
 
-    # Small buffer at end
-    page.wait_for_timeout(500)
+        if audio_duration:
+            logger.info(f"  Audio duration: {audio_duration:.1f}s")
+        else:
+            logger.info("  No audio for this scene")
 
-    # Close context to finalize video
-    context.close()
+        for step in scene["steps"]:
+            execute_step(page, step, audio_duration)
 
-    # Get the video path (Playwright saves with random name)
-    video_path = page.video.path()
+        # Small buffer at end
+        page.wait_for_timeout(500)
 
-    # Rename to scene ID
-    if video_path:
-        video_path = Path(video_path)
-        final_path = output_dir / f"{scene_id}.webm"
-        video_path.rename(final_path)
-        logger.info(f"  Saved: {final_path}")
-        return final_path
-    else:
+    finally:
+        if record_mode == "screen":
+            _stop_screen_recording(recorder)
+        context.close()
+
+    if record_mode == "playwright":
+        # Get the video path (Playwright saves with random name)
+        video_path = page.video.path()
+
+        if video_path:
+            video_path = Path(video_path)
+            final_path = output_dir / f"{scene_id}.webm"
+            video_path.rename(final_path)
+            logger.info(f"  Saved: {final_path}")
+            return final_path
+
         logger.error(f"  No video recorded for scene: {scene_id}")
         return None
 
+    if record_mode == "screen":
+        if output_path and output_path.exists():
+            size_mb = output_path.stat().st_size / (1024 * 1024)
+            logger.info(f"  Saved: {output_path} ({size_mb:.1f}MB)")
+            return output_path
 
-def record_scenario(scenario_name: str, scene_filter: str | None = None, headless: bool = False) -> list[Path]:
+        logger.error(f"  No video recorded for scene: {scene_id}")
+        return None
+
+    return None
+
+
+def record_scenario(
+    scenario_name: str,
+    scene_filter: str | None = None,
+    headless: bool = False,
+    record_mode: str = "screen",
+    screen_index: str | None = None,
+    fps: int = 30,
+    crf: int = 12,
+) -> list[Path]:
     """Record all scenes with audio-driven timing.
 
     Args:
         scenario_name: Name of the scenario to record
         scene_filter: Optional scene ID to record only that scene
         headless: Run browser in headless mode (for CI/servers)
+        record_mode: screen | playwright | none
     """
     scenario = load_scenario(scenario_name)
     audio_durations = load_audio_durations(scenario_name)
 
     output_dir = Path("videos") / scenario_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "raw").mkdir(exist_ok=True)
+    if record_mode == "playwright":
+        (output_dir / "raw").mkdir(exist_ok=True)
 
     scenes = scenario["scenes"]
     if scene_filter:
@@ -218,17 +423,40 @@ def record_scenario(scenario_name: str, scene_filter: str | None = None, headles
             raise ValueError(f"Scene not found: {scene_filter}")
 
     logger.info(f"Recording {len(scenes)} scene(s) for scenario: {scenario_name}")
-    logger.info(f"Headless mode: {headless}")
+    logger.info(f"Mode: {record_mode} | headless: {headless} | fps: {fps} | crf: {crf}")
 
-    viewport = {"width": 1920, "height": 1080}
-    video_paths = []
+    if record_mode == "screen" and headless:
+        raise ValueError("Screen recording requires headful mode (omit --headless)")
+
+    launch_args = []
+    if record_mode == "screen":
+        launch_args = [
+            "--window-size=1920,1080",
+            "--window-position=0,0",
+            "--app=http://localhost:30080/",
+        ]
+
+    video_paths: list[Path] = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = p.chromium.launch(headless=headless, args=launch_args)
 
         for scene in scenes:
+            if record_mode == "none":
+                logger.info(f"Driving scene without recording: {scene['id']}")
+                context = browser.new_context(viewport=VIEWPORT, device_scale_factor=1)
+                page = context.new_page()
+                page.bring_to_front()
+                inject_click_indicator(page)
+                audio_dur = audio_durations.get(scene["id"])
+                for step in scene["steps"]:
+                    execute_step(page, step, audio_dur)
+                page.wait_for_timeout(500)
+                context.close()
+                continue
+
             audio_dur = audio_durations.get(scene["id"])
-            path = record_scene(browser, scene, audio_dur, output_dir, viewport)
+            path = record_scene(browser, scene, audio_dur, output_dir, record_mode, screen_index, fps, crf)
             if path:
                 video_paths.append(path)
 
@@ -242,8 +470,17 @@ def record_scenario(scenario_name: str, scene_filter: str | None = None, headles
 
     logger.info(f"Recorded {len(video_paths)} videos")
     logger.info(f"Manifest: {manifest_path}")
+
+    if video_paths:
+        total_size = sum(p.stat().st_size for p in video_paths) / (1024 * 1024)
+        logger.info(f"Total size: {total_size:.1f}MB")
+
     return video_paths
 
+
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 
 def list_scenarios() -> None:
     """List available scenarios."""
@@ -264,6 +501,15 @@ def main():
     parser.add_argument("scenario", default="product-demo", nargs="?", help="Scenario name (default: product-demo)")
     parser.add_argument("--scene", help="Record specific scene only")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (for CI/servers)")
+    parser.add_argument(
+        "--record-mode",
+        choices=["screen", "playwright", "none"],
+        default="screen",
+        help="Recording mode (default: screen)",
+    )
+    parser.add_argument("--screen", help="AVFoundation screen device index (default: first Capture screen)")
+    parser.add_argument("--crf", type=int, default=12, help="H.264 CRF for screen capture (lower=better, default: 12)")
+    parser.add_argument("--fps", type=int, default=30, help="Frames per second for screen capture (default: 30)")
     parser.add_argument("--list", action="store_true", help="List available scenarios")
     args = parser.parse_args()
 
@@ -271,7 +517,15 @@ def main():
         list_scenarios()
         return
 
-    record_scenario(args.scenario, args.scene, headless=args.headless)
+    record_scenario(
+        args.scenario,
+        scene_filter=args.scene,
+        headless=args.headless,
+        record_mode=args.record_mode,
+        screen_index=args.screen,
+        fps=args.fps,
+        crf=args.crf,
+    )
 
 
 if __name__ == "__main__":
