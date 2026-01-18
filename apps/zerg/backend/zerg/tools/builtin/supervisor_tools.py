@@ -24,6 +24,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.services.supervisor_context import get_supervisor_context
 from zerg.services.tool_output_store import ToolOutputStore
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 
@@ -459,6 +460,30 @@ def get_worker_evidence(job_id: str, budget_bytes: int = 32000) -> str:
     return run_async_safely(get_worker_evidence_async(job_id, budget_bytes))
 
 
+async def done_async(note: str | None = None) -> str:
+    """Signal completion (telemetry only)."""
+    ctx = get_supervisor_context()
+    if ctx:
+        logger.info(
+            "[Supervisor] done() tool called (run_id=%s, owner_id=%s, note=%s)",
+            ctx.run_id,
+            ctx.owner_id,
+            note,
+            extra={"tag": "AGENT"},
+        )
+    else:
+        logger.info("[Supervisor] done() tool called outside supervisor context", extra={"tag": "AGENT"})
+
+    return "Done."
+
+
+def done(note: str | None = None) -> str:
+    """Sync wrapper for done_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(done_async(note))
+
+
 async def get_tool_output_async(artifact_id: str) -> str:
     """Fetch a stored tool output by artifact_id.
 
@@ -781,6 +806,12 @@ TOOLS: List[StructuredTool] = [
         name="get_worker_evidence",
         description="Compile raw tool evidence for a worker job within a byte budget. "
         "Use this to dereference [EVIDENCE:...] markers when you need full artifact details.",
+    ),
+    StructuredTool.from_function(
+        func=done,
+        coroutine=done_async,
+        name="done",
+        description="Signal completion. Telemetry only; you should still provide a final response after calling this.",
     ),
     StructuredTool.from_function(
         func=get_tool_output,

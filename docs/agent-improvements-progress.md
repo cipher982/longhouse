@@ -32,8 +32,8 @@
 - [x] Add tool to fetch full output by marker
 
 ### Phase 4 — Optional `done()` Tool
-- [ ] Add `done()` tool (telemetry signal only)
-- [ ] Track usage in run metadata / logs
+- [x] Add `done()` tool (telemetry signal only)
+- [x] Track usage in run metadata / logs
 
 ## Status Log
 - 2026-01-18: Initialized plan and progress tracking doc.
@@ -41,3 +41,4 @@
 - 2026-01-18: Added automated tests for evidence compiler + supervisor tool; `make test MINIMAL=1` passed.
 - 2026-01-18: Phase 2 implemented (deterministic context trimming + tests); `make test MINIMAL=1` passed.
 - 2026-01-18: Phase 3 implemented (tool output storage by reference + retrieval tool + tests).
+- 2026-01-18: Phase 4 implemented (done tool + metadata/logging).
