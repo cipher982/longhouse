@@ -24,6 +24,7 @@ from langchain_core.tools import StructuredTool
 
 from zerg.connectors.context import get_credential_resolver
 from zerg.models_config import DEFAULT_WORKER_MODEL_ID
+from zerg.services.tool_output_store import ToolOutputStore
 from zerg.services.worker_artifact_store import WorkerArtifactStore
 
 logger = logging.getLogger(__name__)
@@ -458,6 +459,63 @@ def get_worker_evidence(job_id: str, budget_bytes: int = 32000) -> str:
     return run_async_safely(get_worker_evidence_async(job_id, budget_bytes))
 
 
+async def get_tool_output_async(artifact_id: str) -> str:
+    """Fetch a stored tool output by artifact_id.
+
+    Use this to dereference markers like:
+    [TOOL_OUTPUT:artifact_id=...,tool=...,bytes=...]
+    """
+    resolver = get_credential_resolver()
+    if not resolver:
+        return "Error: Cannot fetch tool output - no credential context available"
+
+    try:
+        store = ToolOutputStore()
+        content = store.read_output(owner_id=resolver.owner_id, artifact_id=artifact_id)
+
+        metadata = None
+        try:
+            metadata = store.read_metadata(owner_id=resolver.owner_id, artifact_id=artifact_id)
+        except FileNotFoundError:
+            metadata = None
+
+        header_parts: list[str] = []
+        if metadata:
+            tool_name = metadata.get("tool_name")
+            if tool_name:
+                header_parts.append(f"tool={tool_name}")
+            run_id = metadata.get("run_id")
+            if run_id is not None:
+                header_parts.append(f"run_id={run_id}")
+            tool_call_id = metadata.get("tool_call_id")
+            if tool_call_id:
+                header_parts.append(f"tool_call_id={tool_call_id}")
+            size_bytes = metadata.get("size_bytes")
+            if size_bytes is not None:
+                header_parts.append(f"bytes={size_bytes}")
+
+        header = f"Tool output {artifact_id}"
+        if header_parts:
+            header = f"{header} ({', '.join(header_parts)})"
+
+        return f"{header}:\n\n{content}"
+
+    except ValueError:
+        return f"Error: Invalid artifact_id: {artifact_id}"
+    except FileNotFoundError:
+        return f"Error: Tool output {artifact_id} not found"
+    except Exception as e:
+        logger.exception("Failed to read tool output: %s", artifact_id)
+        return f"Error reading tool output {artifact_id}: {e}"
+
+
+def get_tool_output(artifact_id: str) -> str:
+    """Sync wrapper for get_tool_output_async. Used for CLI/tests."""
+    from zerg.utils.async_utils import run_async_safely
+
+    return run_async_safely(get_tool_output_async(artifact_id))
+
+
 async def read_worker_file_async(job_id: str, file_path: str) -> str:
     """Read a specific file from a worker job's artifacts.
 
@@ -723,6 +781,12 @@ TOOLS: List[StructuredTool] = [
         name="get_worker_evidence",
         description="Compile raw tool evidence for a worker job within a byte budget. "
         "Use this to dereference [EVIDENCE:...] markers when you need full artifact details.",
+    ),
+    StructuredTool.from_function(
+        func=get_tool_output,
+        coroutine=get_tool_output_async,
+        name="get_tool_output",
+        description="Fetch a stored tool output by artifact_id. " "Use this to dereference [TOOL_OUTPUT:...] markers for full tool output.",
     ),
     StructuredTool.from_function(
         func=read_worker_file,

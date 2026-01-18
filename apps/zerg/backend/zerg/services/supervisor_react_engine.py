@@ -640,8 +640,77 @@ async def _execute_tool(
     if result_content is None:
         result_content = "(No result)"
 
-    # Check for errors
-    is_error, error_msg = check_tool_error(result_content)
+    raw_result_content = str(result_content)
+
+    # Check for errors on the raw content (before any truncation)
+    is_error, error_msg = check_tool_error(raw_result_content)
+
+    # Optionally store large tool outputs out-of-band
+    from zerg.config import get_settings
+    from zerg.services.tool_output_store import ToolOutputStore
+
+    settings = get_settings()
+    max_chars = max(0, int(settings.supervisor_tool_output_max_chars or 0))
+    preview_chars = max(0, int(settings.supervisor_tool_output_preview_chars or 0))
+
+    result_content = raw_result_content
+
+    should_store = max_chars > 0 and len(raw_result_content) > max_chars and tool_name != "get_tool_output"
+
+    if should_store:
+        if preview_chars <= 0:
+            preview_chars = min(200, max_chars)
+        else:
+            preview_chars = min(preview_chars, max_chars)
+
+        stored = False
+        artifact_id = None
+        store_reason = None
+
+        if owner_id is None:
+            store_reason = "no owner_id available"
+        else:
+            try:
+                store = ToolOutputStore()
+                artifact_id = store.save_output(
+                    owner_id=owner_id,
+                    tool_name=tool_name,
+                    content=raw_result_content,
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                )
+                stored = True
+            except Exception:
+                store_reason = "storage failed"
+                logger.exception("Failed to store tool output for %s", tool_name)
+
+        preview = raw_result_content[:preview_chars]
+
+        if stored and artifact_id:
+            size_bytes = len(raw_result_content.encode("utf-8"))
+            marker = f"[TOOL_OUTPUT:artifact_id={artifact_id},tool={tool_name},bytes={size_bytes}]"
+            error_line = ""
+            if is_error:
+                error_line = f"\nTool error detected: {safe_preview(error_msg or raw_result_content, 500)}"
+
+            result_content = (
+                f"{marker}\n"
+                f"Tool output exceeded {max_chars} characters and was stored out of band."
+                f"{error_line}\n"
+                f"Preview (first {preview_chars} chars):\n"
+                f"{preview}\n\n"
+                "Use get_tool_output(artifact_id) to fetch the full output."
+            )
+        else:
+            reason_line = "Full output was not stored."
+            if store_reason:
+                reason_line = f"Full output was not stored ({store_reason})."
+            result_content = (
+                f"(Tool output truncated; exceeded {max_chars} characters.)\n"
+                f"{reason_line}\n"
+                f"Preview (first {preview_chars} chars):\n"
+                f"{preview}"
+            )
 
     # Emit COMPLETED/FAILED event
     if emitter:

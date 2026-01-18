@@ -79,6 +79,8 @@ def _mock_settings_with_allowlist(allowed_model: str):
         roundabout_llm_timeout=real_settings.roundabout_llm_timeout,
         supervisor_context_max_user_turns=real_settings.supervisor_context_max_user_turns,
         supervisor_context_max_chars=real_settings.supervisor_context_max_chars,
+        supervisor_tool_output_max_chars=real_settings.supervisor_tool_output_max_chars,
+        supervisor_tool_output_preview_chars=real_settings.supervisor_tool_output_preview_chars,
         e2e_use_postgres_schemas=real_settings.e2e_use_postgres_schemas,
         e2e_worker_id=real_settings.e2e_worker_id,
     )

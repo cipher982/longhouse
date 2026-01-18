@@ -10,6 +10,7 @@ from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.tools.builtin.supervisor_tools import get_worker_metadata
 from zerg.tools.builtin.supervisor_tools import get_worker_evidence
+from zerg.tools.builtin.supervisor_tools import get_tool_output
 from zerg.tools.builtin.supervisor_tools import grep_workers
 from zerg.tools.builtin.supervisor_tools import list_workers
 from zerg.tools.builtin.supervisor_tools import read_worker_file
@@ -272,6 +273,14 @@ def test_read_worker_result_not_found(temp_artifact_path):
     assert "no credential context" in result
 
 
+def test_get_tool_output_no_context():
+    """Tool output should require credential context."""
+    result = get_tool_output("deadbeef")
+
+    assert "Error" in result
+    assert "no credential context" in result
+
+
 def test_read_worker_file_metadata(credential_context, temp_artifact_path, db_session):
     """Test reading worker file (queued job not yet executed)."""
     import re
@@ -401,6 +410,33 @@ def test_grep_workers_case_insensitive(credential_context, temp_artifact_path, d
 
     # Should find the match despite case difference
     assert "match" in result.lower() or "found" in result.lower()
+
+
+def test_get_tool_output_success(credential_context, tmp_path, monkeypatch):
+    """Fetch stored tool output using artifact_id."""
+    from zerg.services.tool_output_store import ToolOutputStore
+    from zerg.tools.builtin import supervisor_tools
+
+    store = ToolOutputStore(base_path=str(tmp_path))
+    artifact_id = store.save_output(
+        owner_id=credential_context.owner_id,
+        tool_name="runner_exec",
+        content="output payload",
+        run_id=12,
+        tool_call_id="call-42",
+    )
+
+    class TestStore(ToolOutputStore):
+        def __init__(self):
+            super().__init__(base_path=str(tmp_path))
+
+    monkeypatch.setattr(supervisor_tools, "ToolOutputStore", TestStore)
+
+    result = get_tool_output(artifact_id)
+
+    assert "Tool output" in result
+    assert "runner_exec" in result
+    assert "output payload" in result
 
 
 def test_multiple_workers_workflow(credential_context, temp_artifact_path, db_session):
