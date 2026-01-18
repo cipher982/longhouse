@@ -127,6 +127,54 @@ class TestEvidenceCompiler:
         assert "--- Evidence for Worker" in evidence[job.id]
         assert "--- End Evidence ---" in evidence[job.id]
 
+    def test_compile_for_job_single_worker(
+        self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
+    ):
+        """Test compile_for_job returns evidence for a single worker."""
+        worker_id = temp_artifact_store.create_worker(
+            task="Check uptime",
+            config={"model": "gpt-4"},
+            owner_id=sample_agent.owner_id,
+        )
+
+        uptime_output = json.dumps(
+            {
+                "ok": True,
+                "data": {
+                    "host": "server1",
+                    "command": "uptime",
+                    "exit_code": 0,
+                    "stdout": "up 10 days,  2:34, 3 users",
+                    "stderr": "",
+                    "duration_ms": 50,
+                },
+            }
+        )
+        temp_artifact_store.save_tool_output(worker_id, "ssh_exec", uptime_output, sequence=1)
+
+        job = WorkerJob(
+            owner_id=sample_agent.owner_id,
+            supervisor_run_id=supervisor_run.id,
+            task="Check uptime",
+            status="success",
+            worker_id=worker_id,
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        compiler = EvidenceCompiler(artifact_store=temp_artifact_store, db=db_session)
+        evidence = compiler.compile_for_job(
+            job_id=job.id,
+            worker_id=worker_id,
+            owner_id=sample_agent.owner_id,
+            budget_bytes=5000,
+        )
+
+        assert "tool_calls/001_ssh_exec.txt" in evidence
+        assert "uptime" in evidence
+        assert "--- Evidence for Worker" in evidence
+        assert "--- End Evidence ---" in evidence
+
     def test_prioritization_failures_first(
         self, db_session: Session, sample_agent, supervisor_run: AgentRun, temp_artifact_store: WorkerArtifactStore
     ):

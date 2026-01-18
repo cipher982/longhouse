@@ -130,6 +130,48 @@ class EvidenceCompiler:
 
         return evidence_map
 
+    def compile_for_job(
+        self,
+        *,
+        job_id: int,
+        worker_id: str,
+        owner_id: int,
+        budget_bytes: int = 32000,
+    ) -> str:
+        """Compile evidence for a single worker job within budget.
+
+        Parameters
+        ----------
+        job_id
+            Worker job ID
+        worker_id
+            Worker ID (filesystem directory name)
+        owner_id
+            User ID for security scoping
+        budget_bytes
+            Budget in bytes for this worker's evidence
+
+        Returns
+        -------
+        str
+            Formatted evidence string (with safe fallbacks on error)
+        """
+        try:
+            return self._compile_worker_evidence(
+                job_id=job_id,
+                worker_id=worker_id,
+                owner_id=owner_id,
+                budget=budget_bytes,
+            )
+        except FileNotFoundError:
+            logger.warning("Worker artifacts not found for job %s (worker_id=%s)", job_id, worker_id)
+            return f"[Evidence unavailable: worker artifacts not found for job {job_id}]"
+        except PermissionError:
+            return f"[Access denied to worker {worker_id}]"
+        except Exception as e:
+            logger.error("Failed to compile evidence for job %s: %s", job_id, e, exc_info=True)
+            return f"[Evidence compilation failed: {e}]"
+
     def _compile_worker_evidence(
         self,
         job_id: int,
