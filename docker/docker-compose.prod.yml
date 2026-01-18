@@ -56,6 +56,10 @@ services:
       ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-0}
+      # Life Hub integration
+      LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
+      LIFE_HUB_URL: ${LIFE_HUB_URL:-}
+      LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
     volumes:
       - backend_static:/app/static
       # Writable data directory (container root is read-only)
