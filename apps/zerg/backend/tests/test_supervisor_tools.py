@@ -9,6 +9,7 @@ from tests.conftest import TEST_WORKER_MODEL
 from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.tools.builtin.supervisor_tools import get_worker_metadata
+from zerg.tools.builtin.supervisor_tools import get_worker_evidence
 from zerg.tools.builtin.supervisor_tools import grep_workers
 from zerg.tools.builtin.supervisor_tools import list_workers
 from zerg.tools.builtin.supervisor_tools import read_worker_file
@@ -196,6 +197,52 @@ def test_list_workers_with_time_filter(credential_context, temp_artifact_path, d
     # List workers from last 0 hours (should be empty or close to it)
     result = list_workers(since_hours=0)
     # May or may not find it depending on timing, just check no error
+
+
+def test_get_worker_evidence_success(credential_context, temp_artifact_path, db_session, test_user):
+    """Test compiling evidence for a worker job via tool."""
+    import json
+
+    from zerg.models.models import WorkerJob
+    from zerg.services.worker_artifact_store import WorkerArtifactStore
+
+    artifact_store = WorkerArtifactStore()
+    worker_id = artifact_store.create_worker(
+        task="Check disk usage",
+        config={"model": "gpt-4"},
+        owner_id=test_user.id,
+    )
+
+    tool_output = json.dumps(
+        {
+            "ok": True,
+            "data": {
+                "host": "server1",
+                "command": "df -h",
+                "exit_code": 0,
+                "stdout": "Filesystem      Size  Used Avail Use%\\n/dev/sda1       100G   45G   55G  45%",
+                "stderr": "",
+                "duration_ms": 234,
+            },
+        }
+    )
+    artifact_store.save_tool_output(worker_id, "ssh_exec", tool_output, sequence=1)
+
+    job = WorkerJob(
+        owner_id=test_user.id,
+        supervisor_run_id=None,
+        task="Check disk usage",
+        status="success",
+        worker_id=worker_id,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    evidence = get_worker_evidence(str(job.id), budget_bytes=5000)
+
+    assert "Evidence for worker job" in evidence
+    assert "tool_calls/001_ssh_exec.txt" in evidence
+    assert "df -h" in evidence
 
 
 def test_read_worker_result_success(credential_context, temp_artifact_path, db_session):
