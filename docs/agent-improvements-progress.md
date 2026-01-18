@@ -28,8 +28,8 @@
 - [x] Guardrails to keep tool-call pairs intact
 
 ### Phase 3 — Large Tool Outputs by Reference
-- [ ] Store large tool outputs and return marker + preview
-- [ ] Add tool to fetch full output by marker
+- [x] Store large tool outputs and return marker + preview
+- [x] Add tool to fetch full output by marker
 
 ### Phase 4 — Optional `done()` Tool
 - [ ] Add `done()` tool (telemetry signal only)
@@ -40,3 +40,4 @@
 - 2026-01-18: Phase 1 implemented (progressive evidence tool + prompt update).
 - 2026-01-18: Added automated tests for evidence compiler + supervisor tool; `make test MINIMAL=1` passed.
 - 2026-01-18: Phase 2 implemented (deterministic context trimming + tests); `make test MINIMAL=1` passed.
+- 2026-01-18: Phase 3 implemented (tool output storage by reference + retrieval tool + tests).
