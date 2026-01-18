@@ -2,18 +2,26 @@
 #
 # Process video: concatenate scenes, add audio, compress for web
 #
+# Outputs:
+#   videos/<scenario>/master.webm    - Raw quality, lossless concat
+#   videos/<scenario>/master.mp4     - High quality with audio (crf 18)
+#   public/videos/<scenario>.mp4     - Web optimized (crf 23)
+#
 # Usage:
 #   ./scripts/process_video.sh product-demo
 #   ./scripts/process_video.sh product-demo --skip-audio
+#   ./scripts/process_video.sh product-demo --web-only    # Skip master, just web output
 #
 
 set -e
 
 SCENARIO="${1:-product-demo}"
-SKIP_AUDIO="${2:-}"
+FLAG="${2:-}"
 VIDEO_DIR="videos/$SCENARIO"
 OUTPUT_DIR="apps/zerg/frontend-web/public/videos"
-OUTPUT="$OUTPUT_DIR/$SCENARIO.mp4"
+WEB_OUTPUT="$OUTPUT_DIR/$SCENARIO.mp4"
+MASTER_WEBM="$VIDEO_DIR/master.webm"
+MASTER_MP4="$VIDEO_DIR/master.mp4"
 
 echo "🎬 Processing $SCENARIO..."
 
@@ -23,25 +31,24 @@ if [ ! -f "$VIDEO_DIR/scenes.txt" ]; then
     exit 1
 fi
 
-# Check for ffmpeg
 if ! command -v ffmpeg &> /dev/null; then
     echo "❌ Error: ffmpeg not found. Install with: brew install ffmpeg"
     exit 1
 fi
 
-# 1. Concatenate scene videos
-echo "  Concatenating scenes..."
+# =============================================================================
+# Step 1: Concatenate raw webm files (LOSSLESS - stream copy)
+# =============================================================================
+echo "  [1/4] Concatenating raw scenes (lossless)..."
 CONCAT_INPUT="$VIDEO_DIR/concat.txt"
 
-# Build concat file with absolute paths
 rm -f "$CONCAT_INPUT"
 while read -r line; do
-    # Extract filename from "file 'name.webm'"
     filename=$(echo "$line" | sed "s/file '//;s/'//")
     if [ -f "$VIDEO_DIR/$filename" ]; then
         echo "file '$(pwd)/$VIDEO_DIR/$filename'" >> "$CONCAT_INPUT"
     else
-        echo "  Warning: Video not found: $VIDEO_DIR/$filename"
+        echo "    Warning: Video not found: $VIDEO_DIR/$filename"
     fi
 done < "$VIDEO_DIR/scenes.txt"
 
@@ -50,36 +57,28 @@ if [ ! -s "$CONCAT_INPUT" ]; then
     exit 1
 fi
 
+# Lossless concat (stream copy, no re-encoding)
 ffmpeg -y -f concat -safe 0 -i "$CONCAT_INPUT" \
-    -c:v libx264 -crf 23 -preset medium \
-    "$VIDEO_DIR/combined.mp4" 2>/dev/null
+    -c copy \
+    "$MASTER_WEBM" 2>/dev/null
 
-echo "    Combined video: $VIDEO_DIR/combined.mp4"
+MASTER_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$MASTER_WEBM" 2>/dev/null)
+echo "    ✓ master.webm (${MASTER_DURATION%.*}s, raw quality)"
 
-# 2. Check for audio
+# =============================================================================
+# Step 2: Prepare audio track
+# =============================================================================
 AUDIO_DIR="$VIDEO_DIR/audio"
 HAS_AUDIO=false
+AUDIO_DURATION=""
 
-if [ -d "$AUDIO_DIR" ] && [ "$(ls -A "$AUDIO_DIR"/*.mp3 2>/dev/null)" ]; then
-    HAS_AUDIO=true
-fi
+if [ "$FLAG" != "--skip-audio" ] && [ -d "$AUDIO_DIR" ] && [ "$(ls -A "$AUDIO_DIR"/*.mp3 2>/dev/null)" ]; then
+    echo "  [2/4] Building audio track..."
 
-if [ "$SKIP_AUDIO" = "--skip-audio" ]; then
-    HAS_AUDIO=false
-    echo "  Skipping audio (--skip-audio flag)"
-fi
-
-# 3. Process with or without audio
-if [ "$HAS_AUDIO" = true ]; then
-    echo "  Building audio track..."
-
-    # Generate audio manifest
     AUDIO_CONCAT="$AUDIO_DIR/tracks.txt"
     rm -f "$AUDIO_CONCAT"
 
-    # Get scene order from scenes.txt and match audio files
     while read -r line; do
-        # Extract scene ID from filename (e.g., "dashboard-intro.webm" -> "dashboard-intro")
         filename=$(echo "$line" | sed "s/file '//;s/'//;s/.webm//")
         audio_file="$AUDIO_DIR/$filename.mp3"
         if [ -f "$audio_file" ]; then
@@ -88,54 +87,94 @@ if [ "$HAS_AUDIO" = true ]; then
     done < "$VIDEO_DIR/scenes.txt"
 
     if [ -s "$AUDIO_CONCAT" ]; then
-        # Concatenate audio files
-        echo "  Concatenating audio..."
         ffmpeg -y -f concat -safe 0 -i "$AUDIO_CONCAT" \
-            -c:a libmp3lame -q:a 2 \
+            -c:a libmp3lame -q:a 0 \
             "$VIDEO_DIR/voiceover.mp3" 2>/dev/null
 
-        # Combine video + audio
-        # Note: Must re-encode video (not copy) for -shortest to work correctly
-        # Stream copy doesn't respect -shortest flag properly
-        echo "  Combining video + audio..."
-        ffmpeg -y \
-            -i "$VIDEO_DIR/combined.mp4" \
-            -i "$VIDEO_DIR/voiceover.mp3" \
-            -c:v libx264 -crf 23 -preset fast \
-            -c:a aac -b:a 128k \
-            -map 0:v -map 1:a \
-            -shortest \
-            "$VIDEO_DIR/with-audio.mp4" 2>/dev/null
-
-        INPUT_FOR_COMPRESS="$VIDEO_DIR/with-audio.mp4"
-    else
-        echo "  No matching audio files found, using video only"
-        INPUT_FOR_COMPRESS="$VIDEO_DIR/combined.mp4"
+        AUDIO_DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO_DIR/voiceover.mp3" 2>/dev/null)
+        HAS_AUDIO=true
+        echo "    ✓ voiceover.mp3 (${AUDIO_DURATION%.*}s)"
     fi
 else
-    echo "  No audio track"
-    INPUT_FOR_COMPRESS="$VIDEO_DIR/combined.mp4"
+    echo "  [2/4] Skipping audio"
 fi
 
-# 4. Compress for web
-echo "  Compressing for web..."
+# =============================================================================
+# Step 3: Create master MP4 (high quality, single encode)
+# =============================================================================
+if [ "$FLAG" = "--web-only" ]; then
+    echo "  [3/4] Skipping master.mp4 (--web-only)"
+    ENCODE_SOURCE="$MASTER_WEBM"
+else
+    echo "  [3/4] Creating master.mp4 (high quality, crf 18)..."
+
+    if [ "$HAS_AUDIO" = true ]; then
+        # Use -t to trim video to audio duration (more reliable than -shortest with stream copy)
+        ffmpeg -y \
+            -i "$MASTER_WEBM" \
+            -i "$VIDEO_DIR/voiceover.mp3" \
+            -t "$AUDIO_DURATION" \
+            -c:v libx264 -crf 18 -preset slow \
+            -c:a aac -b:a 192k \
+            -map 0:v -map 1:a \
+            -pix_fmt yuv420p \
+            "$MASTER_MP4" 2>/dev/null
+    else
+        ffmpeg -y \
+            -i "$MASTER_WEBM" \
+            -c:v libx264 -crf 18 -preset slow \
+            -pix_fmt yuv420p \
+            "$MASTER_MP4" 2>/dev/null
+    fi
+
+    MASTER_SIZE=$(du -h "$MASTER_MP4" | cut -f1)
+    echo "    ✓ master.mp4 ($MASTER_SIZE)"
+    ENCODE_SOURCE="$MASTER_MP4"
+fi
+
+# =============================================================================
+# Step 4: Create web-optimized output (smaller file, fast start)
+# =============================================================================
+echo "  [4/4] Creating web output (crf 23, faststart)..."
 mkdir -p "$OUTPUT_DIR"
 
-ffmpeg -y -i "$INPUT_FOR_COMPRESS" \
-    -c:v libx264 -crf 26 -preset slow \
-    -c:a aac -b:a 128k \
-    -movflags +faststart \
-    -pix_fmt yuv420p \
-    "$OUTPUT" 2>/dev/null
+if [ "$FLAG" = "--web-only" ] && [ "$HAS_AUDIO" = true ]; then
+    # Single encode from raw webm + audio
+    ffmpeg -y \
+        -i "$MASTER_WEBM" \
+        -i "$VIDEO_DIR/voiceover.mp3" \
+        -t "$AUDIO_DURATION" \
+        -c:v libx264 -crf 23 -preset medium \
+        -c:a aac -b:a 128k \
+        -map 0:v -map 1:a \
+        -movflags +faststart \
+        -pix_fmt yuv420p \
+        "$WEB_OUTPUT" 2>/dev/null
+else
+    # Re-encode from master (already has audio baked in)
+    ffmpeg -y -i "$ENCODE_SOURCE" \
+        -c:v libx264 -crf 23 -preset medium \
+        -c:a aac -b:a 128k \
+        -movflags +faststart \
+        -pix_fmt yuv420p \
+        "$WEB_OUTPUT" 2>/dev/null
+fi
 
-# Get file size
-SIZE=$(du -h "$OUTPUT" | cut -f1)
-DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUTPUT" 2>/dev/null | cut -d. -f1)
+# =============================================================================
+# Summary
+# =============================================================================
+WEB_SIZE=$(du -h "$WEB_OUTPUT" | cut -f1)
+WEB_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$WEB_OUTPUT" 2>/dev/null | cut -d. -f1)
 
 echo ""
 echo "✅ Done!"
-echo "   Output: $OUTPUT"
-echo "   Size: $SIZE"
-echo "   Duration: ${DURATION}s"
 echo ""
-echo "Preview with: mpv $OUTPUT"
+echo "   Outputs:"
+echo "   ├── $MASTER_WEBM (raw, lossless concat)"
+if [ "$FLAG" != "--web-only" ]; then
+echo "   ├── $MASTER_MP4 (high quality, crf 18)"
+fi
+echo "   └── $WEB_OUTPUT ($WEB_SIZE, ${WEB_DURATION}s)"
+echo ""
+echo "Preview: mpv $WEB_OUTPUT"
+echo "Master:  mpv $MASTER_MP4"
