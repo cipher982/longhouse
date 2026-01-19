@@ -36,7 +36,7 @@ This document is the source of truth for the remediation plan and status.
 - [x] Runner metadata docker_available always false → add test + detect docker.
 
 ## Workstream: Docs
-- [ ] Email connector PRD marked completed but TODOs remain → update status language.
+- [x] Email connector PRD marked completed but TODOs remain → update status language.
 
 ## Log
 - 2026-01-19: Initialized remediation plan.
@@ -44,3 +44,4 @@ This document is the source of truth for the remediation plan and status.
 - 2026-01-19: Updated WorkerRunner timeout docstring to match enforced behavior.
 - 2026-01-19: Added docker availability detection in runner metadata with unit tests.
 - 2026-01-19: Switched install-runner to versioned release tarballs with validation + script tests.
+- 2026-01-19: Clarified email connector PRD as partially complete.
