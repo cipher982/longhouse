@@ -392,8 +392,8 @@ video-audio: ## Generate voiceover audio (RUN FIRST)
 	@uv run --with openai --with mutagen --with pyyaml scripts/generate_voiceover.py product-demo
 	@echo "✅ Audio generated. Check videos/product-demo/audio/"
 
-video-record: ## Record video scenes (requires audio + dev stack)
-	@echo "📹 Recording video scenes..."
+video-record: ## Record video scenes (headless, requires audio + dev stack)
+	@echo "📹 Recording video scenes (headless)..."
 	@if [ ! -f videos/product-demo/audio/durations.json ]; then \
 		echo "❌ Audio not found. Run 'make video-audio' first"; \
 		exit 1; \
@@ -403,7 +403,7 @@ video-record: ## Record video scenes (requires audio + dev stack)
 		exit 1; \
 	fi
 	@$(MAKE) seed-marketing
-	@REPLAY_MODE_ENABLED=true uv run --with playwright --with pyyaml scripts/capture_demo_video.py product-demo --record-mode screen
+	@REPLAY_MODE_ENABLED=true uv run --with playwright --with pyyaml scripts/capture_demo_video.py product-demo --headless
 
 video-process: ## Post-process (combine, add audio, compress)
 	@echo "🎬 Processing video..."

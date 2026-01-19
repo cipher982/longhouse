@@ -2,16 +2,28 @@
 """
 Capture product demo video with audio-driven timing.
 
-Default recording mode is high-quality screen capture via ffmpeg (macOS).
-Fallback to Playwright recording with --record-mode playwright.
+Default recording mode is headless frame capture (screenshots → ffmpeg H.264).
+This produces high-quality video without needing a visible browser window.
+
+Recording modes:
+  - frames (default): Headless CDP screenshots piped to ffmpeg. High quality, no GUI needed.
+  - screen: macOS screen capture. Requires visible browser window.
+  - playwright: Playwright's built-in recorder. Low quality (VP8).
+  - none: Drive browser without recording (for testing).
 
 PREREQUISITE: Run `uv run scripts/generate_voiceover.py product-demo` first!
 
 Usage:
-    uv run scripts/capture_demo_video.py product-demo
-    uv run scripts/capture_demo_video.py product-demo --scene chat-briefing
-    uv run scripts/capture_demo_video.py product-demo --record-mode playwright
-    uv run scripts/capture_demo_video.py product-demo --screen 1 --crf 12 --fps 30
+    # Headless high-quality (default)
+    uv run scripts/capture_demo_video.py product-demo --headless
+
+    # Single scene test
+    uv run scripts/capture_demo_video.py product-demo --headless --scene dashboard-intro
+
+    # Screen capture (requires visible window)
+    uv run scripts/capture_demo_video.py product-demo --record-mode screen
+
+    # List scenarios
     uv run scripts/capture_demo_video.py --list
 """
 
@@ -102,9 +114,24 @@ def inject_click_indicator(page: Page) -> None:
     )
 
 
-def execute_step(page: Page, step: dict, audio_duration: float | None) -> None:
-    """Execute a single scenario step."""
+def execute_step(
+    page: Page,
+    step: dict,
+    audio_duration: float | None,
+    frame_recorder: "FrameCaptureRecorder | None" = None,
+) -> None:
+    """Execute a single scenario step.
+
+    If frame_recorder is provided, captures frames during waits/pauses.
+    """
     action = step["action"]
+
+    def wait_with_frames(duration_ms: int) -> None:
+        """Wait while capturing frames if recorder is active."""
+        if frame_recorder:
+            frame_recorder.capture_for_duration(duration_ms)
+        else:
+            page.wait_for_timeout(duration_ms)
 
     if action == "navigate":
         url = step["url"]
@@ -119,46 +146,68 @@ def execute_step(page: Page, step: dict, audio_duration: float | None) -> None:
             logger.info(f"  Waiting for: {wait_for}")
             page.wait_for_selector(wait_for, timeout=15000)
 
+        # Capture a few frames after navigation settles
+        if frame_recorder:
+            wait_with_frames(200)
+
     elif action == "type":
         selector = step["selector"]
         text = step["text"]
         delay = step.get("delay_ms", 50)
         logger.info(f"  Typing into {selector}: {text[:30]}...")
-        page.type(selector, text, delay=delay)
+
+        if frame_recorder:
+            # Capture frames while typing (one frame per character roughly)
+            for char in text:
+                page.type(selector, char, delay=0)
+                frame_recorder.capture_frame()
+                time.sleep(delay / 1000.0)
+        else:
+            page.type(selector, text, delay=delay)
 
     elif action == "click":
         selector = step["selector"]
         logger.info(f"  Clicking: {selector}")
+        if frame_recorder:
+            frame_recorder.capture_frame()  # Before click
         page.click(selector)
+        if frame_recorder:
+            wait_with_frames(100)  # Brief pause after click to show result
 
     elif action == "wait":
         selector = step["selector"]
         timeout = step.get("timeout_ms", 30000)
         logger.info(f"  Waiting for: {selector}")
         page.wait_for_selector(selector, timeout=timeout)
+        if frame_recorder:
+            frame_recorder.capture_frame()
 
     elif action == "pause":
         duration_ms = step["duration_ms"]
         logger.info(f"  Pausing for {duration_ms}ms")
-        page.wait_for_timeout(duration_ms)
+        wait_with_frames(duration_ms)
 
     elif action == "pause_for_audio":
         # KEY: Use actual audio duration + buffer
         if audio_duration:
             wait_ms = int((audio_duration + 0.5) * 1000)
             logger.info(f"  Pausing for audio: {audio_duration:.1f}s + 0.5s buffer = {wait_ms}ms")
-            page.wait_for_timeout(wait_ms)
+            wait_with_frames(wait_ms)
         else:
             # Fallback when no audio
             logger.info("  No audio duration, using 3s fallback")
-            page.wait_for_timeout(3000)
+            wait_with_frames(3000)
 
     elif action == "scroll":
         direction = step.get("direction", "down")
         amount = step.get("amount", 300)
         delta = amount if direction == "down" else -amount
         logger.info(f"  Scrolling {direction} by {amount}px")
+        if frame_recorder:
+            frame_recorder.capture_frame()  # Before scroll
         page.mouse.wheel(0, delta)
+        if frame_recorder:
+            wait_with_frames(300)  # Capture smooth scroll
 
     else:
         logger.warning(f"  Unknown action: {action}")
@@ -299,6 +348,120 @@ def _stop_screen_recording(proc: subprocess.Popen | None) -> None:
 
 
 # -----------------------------------------------------------------------------
+# Headless frame capture (CDP screenshots → ffmpeg)
+# -----------------------------------------------------------------------------
+
+
+class FrameCaptureRecorder:
+    """Capture screenshots at target FPS and encode to ProRes.
+
+    Always outputs raw ProRes 422 HQ - the source of truth.
+    Compression/encoding for distribution is a separate pipeline step.
+
+    Uses cooperative capture (main thread) instead of background thread because
+    Playwright's sync API uses greenlets and isn't thread-safe.
+    """
+
+    def __init__(self, output_path: Path, fps: int, viewport: dict):
+        self.output_path = output_path.with_suffix(".mov")
+        self.fps = fps
+        self.viewport = viewport
+        self.page: Page | None = None
+        self._ffmpeg_proc: subprocess.Popen | None = None
+        self._frame_count = 0
+        self._frame_interval = 1.0 / fps
+
+    def start(self, page: Page) -> None:
+        """Initialize ffmpeg process for receiving frames."""
+        self.page = page
+        self._frame_count = 0
+
+        # Always output ProRes 422 HQ - raw source files
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f", "image2pipe",
+            "-framerate", str(self.fps),
+            "-i", "-",
+            "-c:v", "prores_ks",
+            "-profile:v", "3",  # HQ profile
+            "-pix_fmt", "yuv422p10le",
+            "-vf", f"scale={self.viewport['width']}:{self.viewport['height']}:force_original_aspect_ratio=decrease,pad={self.viewport['width']}:{self.viewport['height']}:(ow-iw)/2:(oh-ih)/2",
+            str(self.output_path),
+        ]
+
+        self._ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+        # Give ffmpeg a moment to initialize
+        time.sleep(0.1)
+        logger.info(f"  Recording: {self.fps} fps, ProRes 422 HQ")
+
+    def capture_frame(self) -> None:
+        """Capture a single frame (called from main thread)."""
+        if not self.page or not self._ffmpeg_proc or not self._ffmpeg_proc.stdin:
+            return
+
+        try:
+            png_data = self.page.screenshot(type="png")
+            self._ffmpeg_proc.stdin.write(png_data)
+            self._frame_count += 1
+        except Exception as e:
+            logger.warning(f"Frame capture error: {e}")
+
+    def capture_for_duration(self, duration_ms: int) -> None:
+        """Capture frames for a given duration at target FPS.
+
+        This replaces page.wait_for_timeout() with frame-aware waiting.
+        """
+        if duration_ms <= 0:
+            return
+
+        duration_sec = duration_ms / 1000.0
+        frames_needed = int(duration_sec * self.fps)
+
+        for _ in range(frames_needed):
+            start = time.monotonic()
+            self.capture_frame()
+            elapsed = time.monotonic() - start
+
+            # Sleep remaining time in frame interval
+            sleep_time = self._frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def stop(self) -> None:
+        """Finalize video encoding."""
+        if self._ffmpeg_proc:
+            if self._ffmpeg_proc.stdin:
+                try:
+                    self._ffmpeg_proc.stdin.close()
+                except Exception:
+                    pass
+
+            try:
+                self._ffmpeg_proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self._ffmpeg_proc.kill()
+                self._ffmpeg_proc.wait(timeout=5)
+
+            if self._ffmpeg_proc.returncode not in (0, None):
+                stderr = ""
+                try:
+                    stderr = self._ffmpeg_proc.stderr.read().decode().strip() if self._ffmpeg_proc.stderr else ""
+                except Exception:
+                    pass
+                if stderr:
+                    logger.error(f"ffmpeg error: {stderr[:500]}")
+
+        logger.info(f"  Captured {self._frame_count} frames")
+
+
+# -----------------------------------------------------------------------------
 # Recording
 # -----------------------------------------------------------------------------
 
@@ -329,9 +492,11 @@ def record_scene(
         )
 
     page = context.new_page()
-    page.bring_to_front()
+    if record_mode == "screen":
+        page.bring_to_front()
 
     recorder = None
+    frame_recorder = None
     output_path = None
 
     try:
@@ -346,6 +511,19 @@ def record_scene(
             output_path = output_dir / f"{scene_id}.mp4"
             recorder = _start_screen_recording(output_path, fps, crf, screen_index, crop_filter)
 
+        elif record_mode == "frames":
+            output_path = output_dir / f"{scene_id}.mov"
+            frame_recorder = FrameCaptureRecorder(output_path, fps, VIEWPORT)
+            # Navigate to first page before starting capture (ensures page is ready)
+            first_nav = next((s for s in scene["steps"] if s["action"] == "navigate"), None)
+            if first_nav:
+                url = first_nav["url"]
+                full_url = f"{BASE_URL}{url}" if url.startswith("/") else url
+                page.goto(full_url)
+                if wait_for := first_nav.get("wait_for"):
+                    page.wait_for_selector(wait_for, timeout=15000)
+            frame_recorder.start(page)
+
         # Inject click indicator at start
         inject_click_indicator(page)
 
@@ -355,14 +533,22 @@ def record_scene(
             logger.info("  No audio for this scene")
 
         for step in scene["steps"]:
-            execute_step(page, step, audio_duration)
+            # Skip the first navigate if we already did it for frames mode
+            if record_mode == "frames" and step["action"] == "navigate" and step == scene["steps"][0]:
+                continue
+            execute_step(page, step, audio_duration, frame_recorder)
 
         # Small buffer at end
-        page.wait_for_timeout(500)
+        if frame_recorder:
+            frame_recorder.capture_for_duration(500)
+        else:
+            page.wait_for_timeout(500)
 
     finally:
         if record_mode == "screen":
             _stop_screen_recording(recorder)
+        elif record_mode == "frames" and frame_recorder:
+            frame_recorder.stop()
         context.close()
 
     if record_mode == "playwright":
@@ -379,7 +565,7 @@ def record_scene(
         logger.error(f"  No video recorded for scene: {scene_id}")
         return None
 
-    if record_mode == "screen":
+    if record_mode in ("screen", "frames"):
         if output_path and output_path.exists():
             size_mb = output_path.stat().st_size / (1024 * 1024)
             logger.info(f"  Saved: {output_path} ({size_mb:.1f}MB)")
@@ -395,18 +581,22 @@ def record_scenario(
     scenario_name: str,
     scene_filter: str | None = None,
     headless: bool = False,
-    record_mode: str = "screen",
+    record_mode: str = "frames",
     screen_index: str | None = None,
     fps: int = 30,
     crf: int = 12,
 ) -> list[Path]:
     """Record all scenes with audio-driven timing.
 
+    Outputs raw ProRes 422 HQ files (.mov) - source of truth.
+    Compression for distribution is a separate pipeline step.
+
     Args:
         scenario_name: Name of the scenario to record
         scene_filter: Optional scene ID to record only that scene
         headless: Run browser in headless mode (for CI/servers)
-        record_mode: screen | playwright | none
+        record_mode: frames (headless ProRes), screen (macOS capture), playwright (low quality), none
+        crf: Only used for screen mode (H.264)
     """
     scenario = load_scenario(scenario_name)
     audio_durations = load_audio_durations(scenario_name)
@@ -423,10 +613,10 @@ def record_scenario(
             raise ValueError(f"Scene not found: {scene_filter}")
 
     logger.info(f"Recording {len(scenes)} scene(s) for scenario: {scenario_name}")
-    logger.info(f"Mode: {record_mode} | headless: {headless} | fps: {fps} | crf: {crf}")
+    logger.info(f"Mode: {record_mode} | headless: {headless} | fps: {fps}")
 
     if record_mode == "screen" and headless:
-        raise ValueError("Screen recording requires headful mode (omit --headless)")
+        raise ValueError("Screen recording requires headful mode. Use --record-mode frames for headless high-quality capture.")
 
     launch_args = []
     if record_mode == "screen":
@@ -503,13 +693,13 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (for CI/servers)")
     parser.add_argument(
         "--record-mode",
-        choices=["screen", "playwright", "none"],
-        default="screen",
-        help="Recording mode (default: screen)",
+        choices=["screen", "frames", "playwright", "none"],
+        default="frames",
+        help="Recording mode: frames (headless ProRes), screen (macOS window capture), playwright (low quality), none (default: frames)",
     )
-    parser.add_argument("--screen", help="AVFoundation screen device index (default: first Capture screen)")
-    parser.add_argument("--crf", type=int, default=12, help="H.264 CRF for screen capture (lower=better, default: 12)")
-    parser.add_argument("--fps", type=int, default=30, help="Frames per second for screen capture (default: 30)")
+    parser.add_argument("--screen", help="AVFoundation screen device index (for --record-mode screen)")
+    parser.add_argument("--crf", type=int, default=12, help="H.264 CRF for --record-mode screen (lower=better, default: 12)")
+    parser.add_argument("--fps", type=int, default=30, help="Frames per second (default: 30)")
     parser.add_argument("--list", action="store_true", help="List available scenarios")
     args = parser.parse_args()
 
