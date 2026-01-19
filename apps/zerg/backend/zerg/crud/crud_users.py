@@ -1,12 +1,18 @@
 """CRUD operations for Users."""
 
+import logging
+import threading
 from typing import Any
 from typing import Dict
 from typing import Optional
 
+import httpx
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.models import User
+
+logger = logging.getLogger(__name__)
 
 
 def get_user(db: Session, user_id: int) -> Optional[User]:
@@ -50,31 +56,27 @@ def create_user(
     db.commit()
     db.refresh(new_user)
 
-    # Send Discord notification for new user signup
-    import asyncio
-    import threading
-
-    from zerg.services.ops_discord import send_user_signup_alert
-
-    # Get total user count for the notification
+    # Send Discord notification for new user signup (background thread, sync httpx)
     try:
         total_users = count_users(db)
     except Exception:
         total_users = None
 
-    # Fire-and-forget Discord notification in background thread
-    def _send_discord_notification():
+    def _send_signup_alert():
+        settings = get_settings()
+        if not settings.discord_enable_alerts or not settings.discord_webhook_url:
+            return
+        count_info = f" (#{total_users} total)" if total_users else ""
+        content = f"@here 🎉 **New User Signup!** {email} just joined Swarmlet{count_info}"
         try:
-            asyncio.run(send_user_signup_alert(email, total_users))
-        except Exception:
-            # Don't fail user creation if Discord notification fails
-            pass
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.post(settings.discord_webhook_url, json={"content": content})
+                if resp.status_code >= 300:
+                    logger.warning("Discord webhook returned %s: %s", resp.status_code, resp.text)
+        except Exception as exc:
+            logger.warning("Discord signup alert failed: %s", exc)
 
-    try:
-        threading.Thread(target=_send_discord_notification, daemon=True).start()
-    except Exception:
-        # Don't fail user creation if Discord notification fails
-        pass
+    threading.Thread(target=_send_signup_alert, daemon=True).start()
 
     return new_user
 
