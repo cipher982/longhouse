@@ -385,6 +385,14 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop worker_job_processor")
 
+            # Shutdown MCP stdio processes (subprocess-based MCP servers)
+            try:
+                from zerg.tools.mcp_adapter import MCPManager
+
+                await MCPManager().shutdown_stdio_processes()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to shutdown MCP stdio processes")
+
         # E2E tests: stop worker_job_processor if it was started
         if _settings.testing and _settings.environment == "test:e2e":
             try:
