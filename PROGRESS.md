@@ -1,6 +1,35 @@
-# Zerg 0-1 Review Remediation Progress
+# Email Connector TODO Remediation Progress
 
-This document is the source of truth for the remediation plan and status.
+This document is the source of truth for completing the remaining Email Connector TODOs listed in `docs/completed/email_connector_prd.md`.
+
+## Goals
+- Add/verify tests for each TODO item.
+- Implement fixes or refactors when tests reveal gaps.
+- Commit each item separately.
+
+## Status Legend
+- [ ] Not started
+- [~] In progress
+- [x] Done
+- [!] Blocked
+
+## Workstream: Email Connector TODOs
+- [x] Pub/Sub Gmail flow: connector stores `emailAddress`, Pub/Sub webhook mapping, topic-based watch registration.
+- [ ] Connector-level watch renewal service: renew expiring watches and persist updated metadata.
+- [ ] Observability metrics/gauges: history_id + watch_expiry updates, Pub/Sub processing counters.
+- [ ] Test hygiene: scope `raise_server_exceptions=False` only where needed; connectors API tests present.
+- [ ] Clean legacy EmailTriggerService: remove stub poller and update references.
+- [ ] Docs + config updates: `.env.example` + webhook retry semantics + Pub/Sub notes.
+
+## Log
+- 2026-01-19: Initialized Email Connector TODO remediation plan.
+- 2026-01-19: Added Pub/Sub watch + emailAddress test coverage for Gmail connect flow.
+
+---
+
+# Archive: Zerg 0-1 Review Remediation Progress
+
+This section preserves the prior remediation record for reference.
 
 ## Goals
 - Add a failing test for each confirmed issue.
