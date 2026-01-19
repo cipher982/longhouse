@@ -30,7 +30,7 @@ from zerg.services import knowledge_sync_service
 logger = logging.getLogger(__name__)
 
 # Supported source types
-ALLOWED_SOURCE_TYPES = {"url", "github_repo"}
+ALLOWED_SOURCE_TYPES = {"url", "github_repo", "user_text"}
 
 # Allowed URL schemes for URL sources (security: prevent javascript: and other dangerous schemes)
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -98,6 +98,15 @@ async def create_source(
         # Security: Validate URL scheme to prevent javascript:, data:, etc.
         _validate_url_scheme(source_in.config["url"])
 
+    # Validate user_text source config
+    if source_in.source_type == "user_text":
+        content = source_in.config.get("content")
+        if not content or not isinstance(content, str):
+            raise HTTPException(
+                status_code=400,
+                detail="User text source requires non-empty 'content' in config",
+            )
+
     # Validate GitHub repo source config
     if source_in.source_type == "github_repo":
         required_fields = ["owner", "repo"]
@@ -124,6 +133,19 @@ async def create_source(
         config=source_in.config,
         sync_schedule=source_in.sync_schedule,
     )
+
+    # Create immediate document for user_text sources
+    if source_in.source_type == "user_text":
+        knowledge_crud.upsert_knowledge_document(
+            db,
+            source_id=source.id,
+            owner_id=current_user.id,
+            path=f"user_text:{source.id}",
+            content_text=source_in.config.get("content", ""),
+            title=source_in.name,
+            doc_metadata={"source_type": "user_text"},
+        )
+        knowledge_crud.update_source_sync_status(db, source.id, status="success")
 
     return source
 
