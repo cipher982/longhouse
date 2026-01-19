@@ -270,7 +270,7 @@ def _load_embeddings_cache(
         return None
 
     try:
-        data = np.load(EMBEDDING_CACHE_FILE, allow_pickle=True)
+        data = np.load(EMBEDDING_CACHE_FILE, allow_pickle=False)
 
         # Validate cache
         cached_hash = str(data.get("catalog_hash", ""))
