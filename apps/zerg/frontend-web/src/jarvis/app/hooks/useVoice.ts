@@ -7,6 +7,7 @@
 
 import { useCallback, useRef, useEffect } from 'react'
 import { useAppState, useAppDispatch } from '../context'
+import { voiceController, type VoiceEvent } from '../../lib/voice-controller'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string, isFinal: boolean) => void
@@ -37,6 +38,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
       micStreamRef.current = stream
       dispatch({ type: 'SET_MIC_STREAM', stream })
+      voiceController.setMicrophoneStream(stream)
       return stream
     } catch (error) {
       console.error('Failed to get microphone access:', error)
@@ -61,28 +63,22 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
     const stream = await requestMicAccess()
     if (!stream) return
-
-    dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
-
-    // TODO: Connect to OpenAI realtime session when available
-    // For now, simulate listening state
-  }, [dispatch, requestMicAccess])
+    if (!voiceController.isConnected()) {
+      console.warn('[useVoice] Voice controller not connected')
+    }
+    voiceController.startPTT()
+  }, [requestMicAccess])
 
   // Stop listening (PTT release or VAD deactivation)
   const stopListening = useCallback(() => {
     console.log('[useVoice] stopListening')
-    dispatch({ type: 'SET_VOICE_STATUS', status: 'processing' })
-
-    // TODO: Send audio to OpenAI realtime session
-    // For now, simulate processing -> ready transition
-    setTimeout(() => {
-      dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
-    }, 500)
-  }, [dispatch])
+    voiceController.stopPTT()
+  }, [])
 
   // Toggle voice mode (PTT <-> Hands-free)
   const toggleMode = useCallback(() => {
     const newMode = voiceMode === 'push-to-talk' ? 'hands-free' : 'push-to-talk'
+    voiceController.setHandsFree(newMode === 'hands-free')
     dispatch({ type: 'SET_VOICE_MODE', mode: newMode })
     console.log('[useVoice] Mode changed to:', newMode)
   }, [dispatch, voiceMode])
@@ -100,6 +96,29 @@ export function useVoice(options: UseVoiceOptions = {}) {
       stopListening()
     }
   }, [voiceMode, voiceStatus, stopListening])
+
+  // Wire voice controller events into React state
+  useEffect(() => {
+    const handleVoiceEvent = (event: VoiceEvent) => {
+      if (event.type === 'stateChange') {
+        const state = event.state
+        if (state.active || state.vadActive) {
+          dispatch({ type: 'SET_VOICE_STATUS', status: 'listening' })
+        } else if (voiceController.isConnected()) {
+          dispatch({ type: 'SET_VOICE_STATUS', status: 'ready' })
+        } else {
+          dispatch({ type: 'SET_VOICE_STATUS', status: 'idle' })
+        }
+      }
+      if (event.type === 'error') {
+        dispatch({ type: 'SET_VOICE_STATUS', status: 'error' })
+        options.onError?.(event.error)
+      }
+    }
+
+    voiceController.addListener(handleVoiceEvent)
+    return () => voiceController.removeListener(handleVoiceEvent)
+  }, [dispatch, options])
 
   // Cleanup on unmount
   useEffect(() => {
