@@ -42,3 +42,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added `test_read_threads_excludes_messages` in `apps/zerg/backend/tests/test_threads.py`.
 - Fix: Added `ThreadSummary` schema for list responses, updated `/api/threads` to use it, and made `crud.get_threads` opt-in for eager messages.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 5: Tool search cache allow_pickle risk
+- Test: Added `test_tool_search_cache_disallows_pickle` in `apps/zerg/backend/tests/unit/test_tool_search_cache.py`.
+- Fix: Switched embeddings cache load to `allow_pickle=False`.
+- Status: DONE (make test MINIMAL=1).
