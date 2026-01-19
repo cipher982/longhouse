@@ -4,17 +4,21 @@ Public endpoints for collecting email signups for features not yet available.
 No authentication required.
 """
 
+import asyncio
 import re
 
 from fastapi import APIRouter
+from fastapi import BackgroundTasks
 from fastapi import Depends
 from pydantic import BaseModel
 from pydantic import field_validator
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.models import WaitlistEntry
+from zerg.services.ops_discord import send_waitlist_signup_alert
 
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
 
@@ -44,8 +48,17 @@ class WaitlistResponse(BaseModel):
     message: str
 
 
+def _send_discord_alert(email: str, source: str, count: int) -> None:
+    """Run async Discord alert in background."""
+    asyncio.run(send_waitlist_signup_alert(email, source, count))
+
+
 @router.post("", response_model=WaitlistResponse)
-def join_waitlist(request: WaitlistRequest, db: Session = Depends(get_db)) -> WaitlistResponse:
+def join_waitlist(
+    request: WaitlistRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> WaitlistResponse:
     """Add email to waitlist.
 
     This endpoint is public (no auth required) since we want to collect
@@ -66,6 +79,12 @@ def join_waitlist(request: WaitlistRequest, db: Session = Depends(get_db)) -> Wa
             success=True,
             message="You're already on the waitlist! We'll notify you when Pro launches.",
         )
+
+    # Get total count for Discord alert
+    total_count = db.query(func.count(WaitlistEntry.id)).scalar()
+
+    # Send Discord notification in background
+    background_tasks.add_task(_send_discord_alert, request.email.lower(), request.source, total_count)
 
     return WaitlistResponse(
         success=True,
