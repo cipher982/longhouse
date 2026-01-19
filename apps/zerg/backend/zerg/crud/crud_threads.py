@@ -7,12 +7,14 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
+from zerg.models import Agent
 from zerg.models import Thread
 from zerg.utils.time import utc_now_naive
 
 
 def get_threads(
     db: Session,
+    owner_id: Optional[int] = None,
     agent_id: Optional[int] = None,
     thread_type: Optional[str] = None,
     title: Optional[str] = None,
@@ -21,6 +23,8 @@ def get_threads(
 ):
     """Get threads, optionally filtered by agent_id, thread_type, and/or title"""
     query = db.query(Thread).options(selectinload(Thread.messages))
+    if owner_id is not None:
+        query = query.join(Agent, Agent.id == Thread.agent_id).filter(Agent.owner_id == owner_id)
     if agent_id is not None:
         query = query.filter(Thread.agent_id == agent_id)
     if thread_type is not None:
