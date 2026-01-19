@@ -6,7 +6,7 @@
 > This spec proposed auto-mounting evidence at the LLM-call boundary. The actual implementation
 > (2026-01-18) uses **on-demand tool calls** instead:
 > - `get_worker_evidence(job_id, budget_bytes)` — fetch worker artifacts when needed
-> - `get_tool_output(artifact_id)` — fetch large tool outputs stored by reference
+> - `get_tool_output(artifact_id, max_bytes)` — fetch large tool outputs stored by reference (default 32KB truncation)
 >
 > This "pull" model aligns better with the Claude Code pattern of progressive disclosure
 > and avoids unconditionally inflating context. The core principles (pointers over raw data,

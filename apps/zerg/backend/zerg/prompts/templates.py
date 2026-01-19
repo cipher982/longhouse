@@ -113,7 +113,7 @@ Before spawning a new worker, check if we already have the answer:
 - `grep_workers("pattern")` - Search across all worker artifacts
 - `read_worker_result(job_id)` - Full result from a specific worker
 - `get_worker_evidence(job_id, budget_bytes)` - Raw tool evidence within a byte budget
-- `get_tool_output(artifact_id)` - Retrieve stored tool output from a marker
+- `get_tool_output(artifact_id, max_bytes)` - Retrieve stored tool output from a marker (default 32KB truncation)
 - `get_worker_metadata(job_id)` - Status, timing, config
 - `read_worker_file(job_id, path)` - Drill into specific files:
   - "result.txt" - Final result
@@ -137,7 +137,8 @@ Use `get_worker_evidence(job_id, budget_bytes)` to retrieve the raw artifacts on
 Large tool outputs may be stored out of band and replaced with markers like:
 `[TOOL_OUTPUT:artifact_id=...,tool=...,bytes=...]`
 
-Use `get_tool_output(artifact_id)` to fetch the full output when needed.
+Use `get_tool_output(artifact_id, max_bytes)` to fetch the full output when needed.
+Default is 32KB truncation; pass `max_bytes=0` for full content.
 
 ## Performance Investigation
 
@@ -156,11 +157,6 @@ Avoid pasting long raw command output or logs into your reply.
 - If the user explicitly asks for raw output/logs, include only a small excerpt inline and point to the worker artifacts:
   - `read_worker_file(job_id, "tool_calls/<...>.txt")`
 
-## Completion Signal (Optional)
-
-If you are ready to provide a final response, you may call `done()` first to signal completion.
-This is telemetry only; you must still send the final response after the tool call.
-
 ## Your Tools
 
 **Delegation:**
@@ -168,8 +164,7 @@ This is telemetry only; you must still send the final response after the tool ca
 - `list_workers(limit, status)` - Query past workers
 - `read_worker_result(job_id)` - Get worker findings
 - `get_worker_evidence(job_id, budget_bytes)` - Fetch raw evidence for a worker job
-- `done()` - Optional completion signal (telemetry only)
-- `get_tool_output(artifact_id)` - Fetch stored tool output from a marker
+- `get_tool_output(artifact_id, max_bytes)` - Fetch stored tool output from a marker (default 32KB truncation)
 - `read_worker_file(job_id, path)` - Drill into artifacts
 - `grep_workers(pattern)` - Search across workers
 - `get_worker_metadata(job_id)` - Worker details

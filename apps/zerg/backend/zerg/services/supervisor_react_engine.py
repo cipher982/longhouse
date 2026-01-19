@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING
 
 from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
-from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
@@ -62,104 +61,6 @@ _llm_usage_var: contextvars.ContextVar[dict | None] = contextvars.ContextVar("ll
 
 # Maximum iterations in the ReAct loop to prevent infinite loops
 MAX_REACT_ITERATIONS = 50
-
-
-def _message_text_length(msg: BaseMessage) -> int:
-    """Estimate message length for context budgeting (chars)."""
-    content = getattr(msg, "content", "")
-    if isinstance(content, list):
-        total = 0
-        for part in content:
-            if isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str):
-                    total += len(text)
-            elif isinstance(part, str):
-                total += len(part)
-        return total
-    if content is None:
-        return 0
-    return len(str(content))
-
-
-def _split_message_segments(messages: list[BaseMessage]) -> tuple[list[BaseMessage], list[list[BaseMessage]]]:
-    """Split messages into leading system messages + user-turn segments."""
-    system_msgs: list[BaseMessage] = []
-    idx = 0
-    while idx < len(messages):
-        msg = messages[idx]
-        if getattr(msg, "type", None) == "system":
-            system_msgs.append(msg)
-            idx += 1
-            continue
-        break
-
-    rest = messages[idx:]
-    segments: list[list[BaseMessage]] = []
-    current: list[BaseMessage] = []
-
-    for msg in rest:
-        if isinstance(msg, HumanMessage):
-            if current:
-                segments.append(current)
-            current = [msg]
-        else:
-            if not current:
-                current = [msg]
-            else:
-                current.append(msg)
-
-    if current:
-        segments.append(current)
-
-    return system_msgs, segments
-
-
-def _trim_messages_for_context(
-    messages: list[BaseMessage],
-    *,
-    max_user_turns: int,
-    max_chars: int,
-) -> list[BaseMessage]:
-    """Trim messages deterministically by user turns and/or char budget."""
-    if max_user_turns <= 0 and max_chars <= 0:
-        return messages
-
-    system_msgs, segments = _split_message_segments(messages)
-
-    # Trim by user turns (count only segments that start with HumanMessage)
-    if max_user_turns > 0 and segments:
-
-        def _is_user_segment(seg: list[BaseMessage]) -> bool:
-            return bool(seg) and isinstance(seg[0], HumanMessage)
-
-        user_segments = sum(1 for seg in segments if _is_user_segment(seg))
-        while user_segments > max_user_turns and len(segments) > 1:
-            dropped = segments.pop(0)
-            if _is_user_segment(dropped):
-                user_segments -= 1
-
-    # Trim by char budget (drop oldest segments until within budget)
-    if max_chars > 0:
-
-        def _total_len() -> int:
-            total = sum(_message_text_length(m) for m in system_msgs)
-            for seg in segments:
-                total += sum(_message_text_length(m) for m in seg)
-            return total
-
-        total_len = _total_len()
-        while total_len > max_chars and len(segments) > 1:
-            segments.pop(0)
-            total_len = _total_len()
-
-    # Flatten back
-    trimmed: list[BaseMessage] = []
-    trimmed.extend(system_msgs)
-    for seg in segments:
-        trimmed.extend(seg)
-
-    return trimmed
 
 
 def _empty_usage() -> dict:
@@ -1118,13 +1019,6 @@ async def run_supervisor_loop(
     cfg = getattr(agent_row, "config", {}) or {}
     reasoning_effort = (cfg.get("reasoning_effort") or "none").lower()
 
-    # Context trimming config (deterministic)
-    from zerg.config import get_settings
-
-    settings = get_settings()
-    max_user_turns = settings.supervisor_context_max_user_turns
-    max_chars = settings.supervisor_context_max_chars
-
     # Reset usage tracking
     reset_llm_usage()
 
@@ -1137,13 +1031,6 @@ async def run_supervisor_loop(
         )
 
         current_messages = list(messages)  # Copy to avoid mutation
-
-        def _prepare_messages_for_llm(msgs: list[BaseMessage]) -> list[BaseMessage]:
-            return _trim_messages_for_context(
-                msgs,
-                max_user_turns=max_user_turns,
-                max_chars=max_chars,
-            )
 
         # Helper to get tool and handle lazy loading
         def get_tool_for_execution(tool_name: str) -> BaseTool | None:
@@ -1258,7 +1145,7 @@ async def run_supervisor_loop(
 
                     # Call LLM with tool results
                     llm_response = await _call_llm(
-                        _prepare_messages_for_llm(current_messages),
+                        current_messages,
                         llm_with_tools,
                         phase="resume_synthesis",
                         run_id=run_id,
@@ -1270,7 +1157,7 @@ async def run_supervisor_loop(
                 else:
                     # All tool calls responded, proceed normally
                     llm_response = await _call_llm(
-                        _prepare_messages_for_llm(current_messages),
+                        current_messages,
                         llm_with_tools,
                         phase="initial",
                         run_id=run_id,
@@ -1282,7 +1169,7 @@ async def run_supervisor_loop(
             else:
                 # No pending tool calls
                 llm_response = await _call_llm(
-                    _prepare_messages_for_llm(current_messages),
+                    current_messages,
                     llm_with_tools,
                     phase="initial",
                     run_id=run_id,
@@ -1294,7 +1181,7 @@ async def run_supervisor_loop(
         else:
             # Empty messages (shouldn't happen in production)
             llm_response = await _call_llm(
-                _prepare_messages_for_llm(current_messages),
+                current_messages,
                 llm_with_tools,
                 phase="initial",
                 run_id=run_id,
@@ -1330,7 +1217,7 @@ async def run_supervisor_loop(
                     )
                 )
                 llm_response = await _call_llm(
-                    _prepare_messages_for_llm(current_messages),
+                    current_messages,
                     _make_llm(
                         model=model,
                         tools=bound_tools,
@@ -1416,7 +1303,7 @@ async def run_supervisor_loop(
 
             # Call LLM again
             llm_response = await _call_llm(
-                _prepare_messages_for_llm(current_messages),
+                current_messages,
                 llm_with_tools,
                 phase="tool_iteration",
                 run_id=run_id,

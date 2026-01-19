@@ -23,17 +23,17 @@
 - [x] Basic test/validation
 
 ### Phase 2 — Deterministic Context Budget
-- [x] Add pre-LLM trimming step (system + last N turns + recent tool results)
-- [x] Configurable via env (`SUPERVISOR_CONTEXT_MAX_USER_TURNS`, `SUPERVISOR_CONTEXT_MAX_CHARS`)
-- [x] Guardrails to keep tool-call pairs intact
+- [ ] Add pre-LLM trimming step (system + last N turns + recent tool results) — removed 2026-01-19
+- [ ] Configurable via env (`SUPERVISOR_CONTEXT_MAX_USER_TURNS`, `SUPERVISOR_CONTEXT_MAX_CHARS`) — removed 2026-01-19
+- [ ] Guardrails to keep tool-call pairs intact — removed 2026-01-19
 
 ### Phase 3 — Large Tool Outputs by Reference
 - [x] Store large tool outputs and return marker + preview
 - [x] Add tool to fetch full output by marker
 
 ### Phase 4 — Optional `done()` Tool
-- [x] Add `done()` tool (telemetry signal only)
-- [x] Track usage in run metadata / logs
+- [ ] Add `done()` tool (telemetry signal only) — removed 2026-01-19
+- [ ] Track usage in run metadata / logs — removed 2026-01-19
 
 ## Status Log
 - 2026-01-18: Initialized plan and progress tracking doc.
@@ -42,3 +42,4 @@
 - 2026-01-18: Phase 2 implemented (deterministic context trimming + tests); `make test MINIMAL=1` passed.
 - 2026-01-18: Phase 3 implemented (tool output storage by reference + retrieval tool + tests).
 - 2026-01-18: Phase 4 implemented (done tool + metadata/logging).
+- 2026-01-19: Removed context trimming and done tool; updated prompts/allowlists to match implicit termination.

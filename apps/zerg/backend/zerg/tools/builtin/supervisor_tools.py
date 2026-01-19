@@ -56,7 +56,6 @@ async def spawn_worker_async(
         spawn_worker("Research vacuums and recommend the best one")
     """
     from zerg.models.models import WorkerJob
-    from zerg.services.supervisor_context import get_supervisor_context
 
     # Get database session from credential resolver context
     resolver = get_credential_resolver()
@@ -460,35 +459,63 @@ def get_worker_evidence(job_id: str, budget_bytes: int = 32000) -> str:
     return run_async_safely(get_worker_evidence_async(job_id, budget_bytes))
 
 
-async def done_async(note: str | None = None) -> str:
-    """Signal completion (telemetry only)."""
-    ctx = get_supervisor_context()
-    if ctx:
-        logger.info(
-            "[Supervisor] done() tool called (run_id=%s, owner_id=%s, note=%s)",
-            ctx.run_id,
-            ctx.owner_id,
-            note,
-            extra={"tag": "AGENT"},
-        )
-    else:
-        logger.info("[Supervisor] done() tool called outside supervisor context", extra={"tag": "AGENT"})
+def _truncate_head_tail(content: str, max_bytes: int, head_size: int = 1024) -> str:
+    """Truncate content using head+tail strategy with marker.
 
-    return "Done."
+    Reuses the truncation strategy from evidence_compiler:
+    - First `head_size` bytes (default 1KB) always included
+    - Remaining budget goes to tail
+    - Marker indicates truncated bytes in the middle
+
+    Args:
+        content: Content to truncate
+        max_bytes: Maximum bytes for output
+        head_size: Size of head portion in bytes (default 1KB)
+
+    Returns:
+        Truncated content with marker if needed
+    """
+    content_bytes = content.encode("utf-8")
+    total_bytes = len(content_bytes)
+
+    if total_bytes <= max_bytes:
+        return content
+
+    # Reserve space for truncation marker (approximate)
+    marker_template = "\n[...truncated {truncated_bytes} bytes...]\n"
+    marker_estimate = marker_template.format(truncated_bytes=999999)
+    marker_bytes = len(marker_estimate.encode("utf-8"))
+
+    available = max_bytes - marker_bytes
+    if available < head_size * 2:
+        # Budget too small for head+tail, just return truncated head
+        head_bytes = content_bytes[:max_bytes]
+        return head_bytes.decode("utf-8", errors="replace") + "..."
+
+    actual_head_size = min(head_size, available // 2)
+    tail_size = available - actual_head_size
+
+    head_bytes = content_bytes[:actual_head_size]
+    tail_bytes = content_bytes[-tail_size:]
+
+    head = head_bytes.decode("utf-8", errors="replace")
+    tail = tail_bytes.decode("utf-8", errors="replace")
+
+    truncated_bytes = total_bytes - actual_head_size - tail_size
+    marker = marker_template.format(truncated_bytes=truncated_bytes)
+
+    return f"{head}{marker}{tail}"
 
 
-def done(note: str | None = None) -> str:
-    """Sync wrapper for done_async. Used for CLI/tests."""
-    from zerg.utils.async_utils import run_async_safely
-
-    return run_async_safely(done_async(note))
-
-
-async def get_tool_output_async(artifact_id: str) -> str:
+async def get_tool_output_async(artifact_id: str, max_bytes: int = 32000) -> str:
     """Fetch a stored tool output by artifact_id.
 
     Use this to dereference markers like:
     [TOOL_OUTPUT:artifact_id=...,tool=...,bytes=...]
+
+    Args:
+        artifact_id: The artifact ID from the tool output marker
+        max_bytes: Maximum bytes to return (default 32KB, 0 for unlimited)
     """
     resolver = get_credential_resolver()
     if not resolver:
@@ -523,6 +550,10 @@ async def get_tool_output_async(artifact_id: str) -> str:
         if header_parts:
             header = f"{header} ({', '.join(header_parts)})"
 
+        # Apply truncation if max_bytes > 0
+        if max_bytes > 0:
+            content = _truncate_head_tail(content, max_bytes)
+
         return f"{header}:\n\n{content}"
 
     except ValueError:
@@ -534,11 +565,11 @@ async def get_tool_output_async(artifact_id: str) -> str:
         return f"Error reading tool output {artifact_id}: {e}"
 
 
-def get_tool_output(artifact_id: str) -> str:
+def get_tool_output(artifact_id: str, max_bytes: int = 32000) -> str:
     """Sync wrapper for get_tool_output_async. Used for CLI/tests."""
     from zerg.utils.async_utils import run_async_safely
 
-    return run_async_safely(get_tool_output_async(artifact_id))
+    return run_async_safely(get_tool_output_async(artifact_id, max_bytes))
 
 
 async def read_worker_file_async(job_id: str, file_path: str) -> str:
@@ -808,16 +839,12 @@ TOOLS: List[StructuredTool] = [
         "Use this to dereference [EVIDENCE:...] markers when you need full artifact details.",
     ),
     StructuredTool.from_function(
-        func=done,
-        coroutine=done_async,
-        name="done",
-        description="Signal completion. Telemetry only; you should still provide a final response after calling this.",
-    ),
-    StructuredTool.from_function(
         func=get_tool_output,
         coroutine=get_tool_output_async,
         name="get_tool_output",
-        description="Fetch a stored tool output by artifact_id. " "Use this to dereference [TOOL_OUTPUT:...] markers for full tool output.",
+        description="Fetch a stored tool output by artifact_id. "
+        "Use this to dereference [TOOL_OUTPUT:...] markers. "
+        "Returns truncated output by default (max_bytes=32KB). Pass max_bytes=0 for full content.",
     ),
     StructuredTool.from_function(
         func=read_worker_file,
