@@ -27,3 +27,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added coverage in `apps/zerg/backend/tests/test_thread_ownership.py` for list/update/delete ownership.
 - Fix: Scoped `/api/threads` list by owner (admin sees all). Added owner checks to update/delete.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 2: Internal message leakage from /threads/{id}/messages
+- Test: Added `test_read_thread_messages_excludes_internal` in `apps/zerg/backend/tests/test_threads.py`.
+- Fix: Added `include_internal` flag to `crud.get_thread_messages` and set `include_internal=False` in the threads API.
+- Status: DONE (make test MINIMAL=1).
