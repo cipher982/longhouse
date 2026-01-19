@@ -178,6 +178,34 @@ class TestGetRunStatus:
         assert data["result"] == "Message 3"
 
 
+class TestListJarvisRuns:
+    def test_list_runs_avoids_agent_n_plus_one(self, client, db_session, test_user, monkeypatch):
+        service = SupervisorService(db_session)
+        agent = service.get_or_create_supervisor_agent(test_user.id)
+        thread = service.get_or_create_supervisor_thread(test_user.id, agent)
+
+        run = AgentRun(
+            agent_id=agent.id,
+            thread_id=thread.id,
+            status=RunStatus.SUCCESS,
+            trigger=RunTrigger.API,
+        )
+        db_session.add(run)
+        db_session.commit()
+
+        from zerg.routers import jarvis_runs
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("crud.get_agent should not be called")
+
+        monkeypatch.setattr(jarvis_runs.crud, "get_agent", _boom)
+
+        response = client.get("/api/jarvis/runs")
+        assert response.status_code == status.HTTP_200_OK
+        payload = response.json()
+        assert payload[0]["agent_name"] == agent.name
+
+
 import httpx
 import pytest_asyncio
 
