@@ -57,8 +57,6 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
       const isAuthed = await client.isAuthenticated()
       if (isAuthed) {
         console.log('[useJarvisClient] Already authenticated')
-        dispatch({ type: 'SET_CONNECTED', connected: true })
-        options.onConnected?.()
       }
 
       return client
@@ -69,20 +67,33 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
     }
   }, [dispatch, options])
 
-  // Connect to Zerg backend
+  // Connect to Zerg backend (SSE event stream)
   const connect = useCallback(async () => {
     if (!clientRef.current) {
       await initialize()
     }
 
-    // TODO: Implement actual connection logic
-    // For now, just mark as connected
-    dispatch({ type: 'SET_CONNECTED', connected: true })
-    options.onConnected?.()
+    if (!clientRef.current) {
+      console.warn('[useJarvisClient] Client not initialized')
+      return
+    }
+
+    clientRef.current.connectEventStream({
+      onConnected: () => {
+        dispatch({ type: 'SET_CONNECTED', connected: true })
+        options.onConnected?.()
+      },
+      onError: (error) => {
+        dispatch({ type: 'SET_CONNECTED', connected: false })
+        options.onError?.(new Error('Jarvis event stream error'))
+        console.error('[useJarvisClient] Event stream error:', error)
+      },
+    })
   }, [dispatch, initialize, options])
 
   // Disconnect
   const disconnect = useCallback(() => {
+    clientRef.current?.disconnectEventStream()
     dispatch({ type: 'SET_CONNECTED', connected: false })
     options.onDisconnected?.()
   }, [dispatch, options])
@@ -95,17 +106,15 @@ export function useJarvisClient(options: UseJarvisClientOptions = {}) {
     }
 
     try {
-      // TODO: Fetch agents from backend
-      // const agents = await clientRef.current.getAgents()
-      // dispatch({ type: 'SET_CACHED_AGENTS', agents })
-      // return agents
-      return cachedAgents
+      const agents = await clientRef.current.listAgents()
+      dispatch({ type: 'SET_CACHED_AGENTS', agents })
+      return agents
     } catch (error) {
       console.error('[useJarvisClient] Failed to fetch agents:', error)
       options.onError?.(error as Error)
       return []
     }
-  }, [cachedAgents, options])
+  }, [dispatch, options])
 
   // Auto-connect on mount if enabled
   useEffect(() => {
