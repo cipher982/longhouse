@@ -32,7 +32,7 @@ This document is the source of truth for the remediation plan and status.
 - [ ] Workflow status indicator test skipped → unskip, fix UI/test, make pass.
 
 ## Workstream: Runner / Ops
-- [ ] Runner install script uses repo HEAD → add test/verification + switch to versioned release artifact.
+- [x] Runner install script uses repo HEAD → add test/verification + switch to versioned release artifact.
 - [x] Runner metadata docker_available always false → add test + detect docker.
 
 ## Workstream: Docs
@@ -43,3 +43,4 @@ This document is the source of truth for the remediation plan and status.
 - 2026-01-19: Implemented user_text knowledge sources end-to-end with API + UI tests.
 - 2026-01-19: Updated WorkerRunner timeout docstring to match enforced behavior.
 - 2026-01-19: Added docker availability detection in runner metadata with unit tests.
+- 2026-01-19: Switched install-runner to versioned release tarballs with validation + script tests.
