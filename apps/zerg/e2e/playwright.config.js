@@ -92,6 +92,7 @@ const frontendServer = {
   env: {
     ...process.env,
     VITE_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}`,
+    VITE_WS_BASE_URL: `ws://127.0.0.1:${BACKEND_PORT}`,
     // E2E should bypass auth gating.
     VITE_AUTH_ENABLED: 'false',
   },
