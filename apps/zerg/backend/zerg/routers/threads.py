@@ -34,6 +34,7 @@ from zerg.schemas.schemas import Thread
 from zerg.schemas.schemas import ThreadCreate
 from zerg.schemas.schemas import ThreadMessageCreate
 from zerg.schemas.schemas import ThreadMessageResponse
+from zerg.schemas.schemas import ThreadSummary
 from zerg.schemas.schemas import ThreadUpdate
 from zerg.services.quota import assert_can_start_run
 from zerg.services.run_history import execute_thread_run_with_history
@@ -53,8 +54,8 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=List[Thread])
-@router.get("", response_model=List[Thread])
+@router.get("/", response_model=List[ThreadSummary])
+@router.get("", response_model=List[ThreadSummary])
 def read_threads(
     agent_id: Optional[int] = None,
     thread_type: Optional[str] = None,

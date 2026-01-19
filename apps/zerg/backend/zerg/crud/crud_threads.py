@@ -20,9 +20,13 @@ def get_threads(
     title: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    *,
+    include_messages: bool = False,
 ):
     """Get threads, optionally filtered by agent_id, thread_type, and/or title"""
-    query = db.query(Thread).options(selectinload(Thread.messages))
+    query = db.query(Thread)
+    if include_messages:
+        query = query.options(selectinload(Thread.messages))
     if owner_id is not None:
         query = query.join(Agent, Agent.id == Thread.agent_id).filter(Agent.owner_id == owner_id)
     if agent_id is not None:

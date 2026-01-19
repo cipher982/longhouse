@@ -79,6 +79,21 @@ def test_read_threads(client: TestClient, sample_thread: Thread):
     assert threads[0]["memory_strategy"] == sample_thread.memory_strategy
 
 
+def test_read_threads_excludes_messages(client: TestClient, db_session, sample_thread: Thread):
+    """Thread list should not include full message history."""
+    crud.create_thread_message(
+        db=db_session,
+        thread_id=sample_thread.id,
+        role="user",
+        content="hello",
+    )
+    response = client.get("/api/threads")
+    assert response.status_code == 200
+    threads = response.json()
+    assert len(threads) == 1
+    assert "messages" not in threads[0]
+
+
 def test_read_threads_filter_by_agent(client: TestClient, sample_agent: Agent, sample_thread: Thread):
     """Test filtering threads by agent_id"""
     response = client.get(f"/api/threads?agent_id={sample_agent.id}")

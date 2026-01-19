@@ -37,3 +37,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Extended `test_update_thread` in `apps/zerg/backend/tests/test_threads.py` to assert thread_type updates.
 - Fix: Added `thread_type` handling in `crud.update_thread` and passed through in the threads API.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 4: Reduce thread list payloads
+- Test: Added `test_read_threads_excludes_messages` in `apps/zerg/backend/tests/test_threads.py`.
+- Fix: Added `ThreadSummary` schema for list responses, updated `/api/threads` to use it, and made `crud.get_threads` opt-in for eager messages.
+- Status: DONE (make test MINIMAL=1).

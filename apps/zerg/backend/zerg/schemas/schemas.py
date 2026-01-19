@@ -170,6 +170,17 @@ class Thread(ThreadBase):
     messages: List[ThreadMessageResponse] = []
 
 
+class ThreadSummary(ThreadBase):
+    """Thread summary for list endpoints (no messages payload)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    agent_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class Agent(AgentBase):
     model_config = ConfigDict(from_attributes=True)
 
