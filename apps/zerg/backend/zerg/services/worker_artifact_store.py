@@ -22,7 +22,7 @@ Directory structure:
             ├── 002_http_request.json
             └── ...
 
-The worker_id format is: "{timestamp}_{slug}" e.g., "2024-12-03T14-32-00_disk-check"
+The worker_id format is: "{timestamp}_{slug}_{suffix}" e.g., "2024-12-03T14-32-00_disk-check_a1b2c3"
 where the slug is derived from the task description (first 30 chars, kebab-case).
 """
 
@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
@@ -136,7 +137,8 @@ class WorkerArtifactStore:
         """
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
         slug = self._slugify(task)
-        return f"{timestamp}_{slug}"
+        suffix = uuid.uuid4().hex[:6]
+        return f"{timestamp}_{slug}_{suffix}"
 
     def _get_worker_dir(self, worker_id: str) -> Path:
         """Get the directory path for a worker.
