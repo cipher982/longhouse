@@ -1,4 +1,5 @@
 import logging
+import time
 from time import perf_counter
 from typing import Any
 from typing import List
@@ -108,9 +109,14 @@ from zerg.dependencies.auth import get_current_user  # noqa: E402
 router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
 
 # Simple in-memory idempotency cache
-# Maps (idempotency_key, user_id) -> agent_id
+# Maps (idempotency_key, user_id) -> (agent_id, created_at)
 # For production, use Redis or database table
-IDEMPOTENCY_CACHE: dict[tuple[str, int], int] = {}
+IDEMPOTENCY_TTL_SECS = 600
+IDEMPOTENCY_CACHE: dict[tuple[str, int], tuple[int, float]] = {}
+
+
+def _now() -> float:
+    return time.time()
 
 
 def _get_agents_for_scope(
@@ -137,8 +143,12 @@ def _get_agents_for_scope(
 def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Agent]:
     """Check if this request was already processed."""
     cache_key = (key, user_id)
-    if cache_key in IDEMPOTENCY_CACHE:
-        agent_id = IDEMPOTENCY_CACHE[cache_key]
+    entry = IDEMPOTENCY_CACHE.get(cache_key)
+    if entry:
+        agent_id, created_at = entry
+        if _now() - created_at > IDEMPOTENCY_TTL_SECS:
+            IDEMPOTENCY_CACHE.pop(cache_key, None)
+            return None
         agent = crud.get_agent(db, agent_id)
         if agent:
             logger.info(f"Idempotency: Returning existing agent {agent_id} for key {key}")
@@ -149,7 +159,7 @@ def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Ag
 def _store_idempotency_cache(key: str, user_id: int, agent_id: int) -> None:
     """Store successful agent creation in cache."""
     cache_key = (key, user_id)
-    IDEMPOTENCY_CACHE[cache_key] = agent_id
+    IDEMPOTENCY_CACHE[cache_key] = (agent_id, _now())
 
 
 # ---------------------------------------------------------------------------
