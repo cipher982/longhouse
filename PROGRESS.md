@@ -19,7 +19,7 @@ This document is the source of truth for the remediation plan and status.
 - [x] Worker ID collisions on same-second + same-task → add deterministic test + fix ID generation.
 - [x] http_request SSRF risk → add URL validation tests + block private/unsafe targets.
 - [x] Title generator uses max_output_tokens → add request-payload test + remove token caps.
-- [ ] WorkerRunner timeout docs drift → add doc check or update docs.
+- [x] WorkerRunner timeout docs drift → add doc check or update docs.
 
 ## Workstream: Frontend
 - [x] useJarvisClient sets connected without real connection + cached agent fetch only → add hook tests + implement real SSE connect + fetch.
@@ -41,3 +41,4 @@ This document is the source of truth for the remediation plan and status.
 ## Log
 - 2026-01-19: Initialized remediation plan.
 - 2026-01-19: Implemented user_text knowledge sources end-to-end with API + UI tests.
+- 2026-01-19: Updated WorkerRunner timeout docstring to match enforced behavior.
