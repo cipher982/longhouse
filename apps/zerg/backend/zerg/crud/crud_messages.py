@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session
 from zerg.models import ThreadMessage
 
 
-def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int = 100):
+def get_thread_messages(
+    db: Session,
+    thread_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    *,
+    include_internal: bool = True,
+):
     """
     Get all messages for a specific thread, ordered strictly by database ID.
 
@@ -28,7 +35,10 @@ def get_thread_messages(db: Session, thread_id: int, skip: int = 0, limit: int =
 
     See the API endpoint documentation in zerg.routers.threads.read_thread_messages().
     """
-    return db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread_id).order_by(ThreadMessage.id).offset(skip).limit(limit).all()
+    query = db.query(ThreadMessage).filter(ThreadMessage.thread_id == thread_id)
+    if not include_internal:
+        query = query.filter(ThreadMessage.internal.is_(False))
+    return query.order_by(ThreadMessage.id).offset(skip).limit(limit).all()
 
 
 def create_thread_message(

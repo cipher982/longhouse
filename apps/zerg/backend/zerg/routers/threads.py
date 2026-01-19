@@ -205,7 +205,7 @@ def read_thread_messages(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
 
     # Fetch ORM messages and map to response schema including tool metadata
-    orm_msgs = crud.get_thread_messages(db, thread_id=thread_id, skip=skip, limit=limit)
+    orm_msgs = crud.get_thread_messages(db, thread_id=thread_id, skip=skip, limit=limit, include_internal=False)
     if not orm_msgs:
         return []
     result: List[ThreadMessageResponse] = []
