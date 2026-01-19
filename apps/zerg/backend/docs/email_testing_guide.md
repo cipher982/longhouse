@@ -62,6 +62,18 @@ Webhook-driven flows (Gmail push → your `/api/email/*` endpoints) require a pu
 
 For local dev stack, the backend is typically reachable at `http://localhost:47300` (host port mapped to the backend container). Point your tunnel at the host-exposed port you’re using.
 
+## Pub/Sub push (production flow)
+
+Gmail push notifications are delivered via Cloud Pub/Sub. Configure:
+
+- `GMAIL_PUBSUB_TOPIC` (projects/<id>/topics/<name>)
+- `PUBSUB_AUDIENCE` (OIDC audience for Pub/Sub push)
+- `PUBSUB_SA_EMAIL` (optional service account email allowlist)
+
+Pub/Sub pushes to `POST /api/email/webhook/google/pubsub`. The endpoint returns **202** quickly and processes the connector asynchronously. Pub/Sub retries non-2xx responses, so invalid auth or malformed payloads will be retried until fixed.
+
+History IDs are monotonically increasing; repeated notifications are safe because the connector only advances `history_id` forward.
+
 ## Notes
 
 - Prefer adding coverage with unit/integration tests before relying on live OAuth/webhook flows.
