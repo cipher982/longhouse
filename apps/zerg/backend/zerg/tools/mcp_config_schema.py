@@ -1,7 +1,7 @@
 """Configuration schema for MCP server integration.
 
-This module defines the configuration structure for MCP servers, supporting both
-preset-based and custom configurations with clear type discrimination.
+This module defines the configuration structure for MCP servers, supporting
+preset-based, custom HTTP, and stdio (subprocess) configurations.
 """
 
 from typing import Any
@@ -23,7 +23,7 @@ class MCPPresetConfig(TypedDict):
 
 
 class MCPCustomConfig(TypedDict):
-    """Custom MCP server configuration."""
+    """Custom HTTP-based MCP server configuration."""
 
     type: Literal["custom"]
     name: str  # Server name (used as prefix for tools)
@@ -34,8 +34,20 @@ class MCPCustomConfig(TypedDict):
     max_retries: Optional[int]  # Maximum number of retries
 
 
+class MCPStdioConfig(TypedDict):
+    """Stdio-based MCP server configuration (subprocess transport)."""
+
+    type: Literal["stdio"]
+    name: str  # Server name (used as prefix for tools)
+    command: str  # Command to spawn the MCP server (shell-parsed)
+    env: Optional[Dict[str, str]]  # Additional environment variables
+    allowed_tools: Optional[List[str]]  # List of allowed tools (None = all)
+    timeout: Optional[float]  # Request timeout in seconds
+    max_retries: Optional[int]  # Maximum number of retries
+
+
 # Union type for all valid MCP configurations
-MCPConfig = Union[MCPPresetConfig, MCPCustomConfig]
+MCPConfig = Union[MCPPresetConfig, MCPCustomConfig, MCPStdioConfig]
 
 
 def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -52,17 +64,21 @@ def normalize_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     # If type is already specified, validate it
     if "type" in config:
-        if config["type"] not in ("preset", "custom"):
+        if config["type"] not in ("preset", "custom", "stdio"):
             raise ValueError(f"Invalid configuration type: {config['type']}")
         return config
 
     # Infer type based on presence of fields
     if "preset" in config:
         return {"type": "preset", **config}
+    elif "command" in config and "name" in config:
+        # Stdio transport: has command and name, no url
+        return {"type": "stdio", **config}
     elif "name" in config and "url" in config:
+        # HTTP transport: has url and name
         return {"type": "custom", **config}
     else:
-        raise ValueError("Configuration must either specify a 'preset' or include both 'name' and 'url'")
+        raise ValueError("Configuration must specify a 'preset', 'name' and 'command' (stdio), or 'name' and 'url' (http)")
 
 
 def validate_mcp_configs(configs: List[Dict[str, Any]]) -> List[MCPConfig]:
@@ -94,7 +110,7 @@ EXAMPLE_MCP_CONFIG = {
     "mcp_servers": [
         # Preset configuration
         {"type": "preset", "preset": "github", "auth_token": "ghp_xxxxx"},
-        # Custom configuration
+        # Custom HTTP configuration
         {
             "type": "custom",
             "name": "custom_api",
@@ -104,7 +120,17 @@ EXAMPLE_MCP_CONFIG = {
             "timeout": 60.0,
             "max_retries": 5,
         },
-        # Legacy format (still supported via normalization)
+        # Stdio (subprocess) configuration
+        {
+            "type": "stdio",
+            "name": "local_server",
+            "command": "python -m my_mcp_server",
+            "env": {"DEBUG": "1"},
+            "allowed_tools": ["read_file", "write_file"],
+            "timeout": 30.0,
+        },
+        # Legacy formats (still supported via normalization)
         {"preset": "linear", "auth_token": "lin_xxxxx"},
+        {"name": "inferred_stdio", "command": "npx @some/mcp-server"},  # Infers stdio from command
     ]
 }
