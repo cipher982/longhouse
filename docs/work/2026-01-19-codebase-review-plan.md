@@ -66,3 +66,20 @@ Follow-up fixes from the full review. For each item:
 ## Item 9: Doc status clarity for email connector PRD
 - Update: Added explicit status note at top of `docs/completed/email_connector_prd.md` to reflect remaining TODOs.
 - Status: DONE.
+
+## Item 10: Core ThreadService O(n) thread fetch
+- Issue: `ThreadService.get_threads()` iterated over each agent and fetched threads individually (O(n) queries).
+- Fix: Added `owner_id` parameter to `Database.get_threads()` interface and implementations. Now uses single query with join.
+- Status: DONE (make test MINIMAL=1).
+
+## Item 11: Idempotency cache size limit
+- Issue: Cache had TTL but no size limit, could grow unbounded with many unique keys.
+- Fix: Added `IDEMPOTENCY_MAX_SIZE=1000` and `_cleanup_idempotency_cache()` that removes expired entries and evicts oldest when at capacity.
+- Test: Added `test_idempotency_cache_enforces_size_limit`.
+- Status: DONE (make test MINIMAL=1).
+
+## Item 12: Core router clarification
+- Issue: `zerg/core/routers.py` appears unused in production (not mounted in main.py).
+- Analysis: It IS used by `test_main.py` for E2E test isolation via `create_app()` from factory.
+- Decision: Keep as-is. The core DI architecture provides test isolation; removing it would break E2E tests.
+- Status: DOCUMENTED (no code change needed).

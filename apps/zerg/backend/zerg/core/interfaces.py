@@ -80,8 +80,8 @@ class Database(ABC):
 
     # Thread operations
     @abstractmethod
-    def get_threads(self, agent_id: Optional[int] = None) -> List[Thread]:
-        """Get threads, optionally filtered by agent."""
+    def get_threads(self, agent_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
+        """Get threads, optionally filtered by agent or owner."""
         pass
 
     @abstractmethod
