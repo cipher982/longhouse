@@ -23,7 +23,7 @@ This document is the source of truth for the remediation plan and status.
 
 ## Workstream: Frontend
 - [x] useJarvisClient sets connected without real connection + cached agent fetch only → add hook tests + implement real SSE connect + fetch.
-- [ ] useVoice stubbed flow → add hook tests + connect to voiceController (no fake timers).
+- [x] useVoice stubbed flow → add hook tests + connect to voiceController (no fake timers).
 - [ ] Knowledge Sources “Add Context” no-op → add UI/service test + implement API call.
 
 ## Workstream: E2E
