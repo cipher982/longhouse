@@ -33,6 +33,7 @@ from .thread import ThreadMessage
 from .trigger import Trigger
 from .trigger_config import TriggerConfig
 from .user import User
+from .waitlist import WaitlistEntry
 from .worker_barrier import BarrierJob
 from .worker_barrier import WorkerBarrier
 
@@ -48,6 +49,7 @@ __all__ = [
     "ThreadMessage",
     "Trigger",
     "User",
+    "WaitlistEntry",
     "WorkerBarrier",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",

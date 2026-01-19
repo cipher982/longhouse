@@ -73,6 +73,7 @@ from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
+from zerg.routers.waitlist import router as waitlist_router
 from zerg.routers.websocket import router as websocket_router
 from zerg.routers.workflow_executions import router as workflow_executions_router
 from zerg.routers.workflows import router as workflows_router
@@ -576,6 +577,7 @@ app.include_router(agent_config_router, prefix=f"{API_PREFIX}")
 app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent connector credentials
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
+app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
