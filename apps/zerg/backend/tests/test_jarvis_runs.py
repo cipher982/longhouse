@@ -195,14 +195,19 @@ class TestListJarvisRuns:
 
         from zerg.routers import jarvis_runs
 
-        def _boom(*_args, **_kwargs):
-            raise AssertionError("crud.get_agent should not be called")
+        selectinload_called = {"value": False}
+        real_selectinload = jarvis_runs.selectinload
 
-        monkeypatch.setattr(jarvis_runs.crud, "get_agent", _boom)
+        def _track_selectinload(*args, **kwargs):
+            selectinload_called["value"] = True
+            return real_selectinload(*args, **kwargs)
+
+        monkeypatch.setattr(jarvis_runs, "selectinload", _track_selectinload)
 
         response = client.get("/api/jarvis/runs")
         assert response.status_code == status.HTTP_200_OK
         payload = response.json()
+        assert selectinload_called["value"] is True
         assert payload[0]["agent_name"] == agent.name
 
 
