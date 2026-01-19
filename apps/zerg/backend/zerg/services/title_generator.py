@@ -148,7 +148,6 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
             {"role": "system", "content": [{"type": "input_text", "text": TITLE_SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "input_text", "text": transcript}]},
         ],
-        "max_output_tokens": 200,
         "text": {
             "verbosity": "low",
             "format": {
@@ -178,22 +177,6 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         result = response.json()
 
         output_text = _extract_output_text(result)
-
-        # Retry with higher token cap if output was truncated
-        if not output_text and result.get("status") == "incomplete":
-            incomplete_details = result.get("incomplete_details", {})
-            if incomplete_details.get("reason") == "max_output_tokens":
-                payload["max_output_tokens"] = 400
-                response = await client.post(
-                    "https://api.openai.com/v1/responses",
-                    headers={
-                        "Authorization": f"Bearer {settings.openai_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                if response.is_success:
-                    output_text = _extract_output_text(response.json())
 
         # Parse the JSON output
         parsed = _safe_parse_json_object(output_text)
