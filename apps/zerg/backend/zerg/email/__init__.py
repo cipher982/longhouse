@@ -1,13 +1,8 @@
 """Email provider abstraction layer.
 
 This namespace introduces a *very thin* interface that unifies provider-
-specific logic (Gmail today, Outlook/IMAP tomorrow) so that the
-``EmailTriggerService`` can delegate provider-specific operations instead of
-embedding conditional branches.
-
-Only *skeletons* are added for now – functionality is delegated to the
-existing Gmail helpers so behaviour remains **unchanged** while we migrate in
-small, reviewable steps.
+specific logic (Gmail today, Outlook/IMAP tomorrow) so core services can
+delegate provider-specific operations without conditional branches.
 """
 
 from __future__ import annotations

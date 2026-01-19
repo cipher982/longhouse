@@ -18,7 +18,7 @@ This document is the source of truth for completing the remaining Email Connecto
 - [x] Connector-level watch renewal service: renew expiring watches and persist updated metadata.
 - [x] Observability metrics/gauges: history_id + watch_expiry updates, Pub/Sub processing counters.
 - [x] Test hygiene: scope `raise_server_exceptions=False` only where needed; connectors API tests present.
-- [ ] Clean legacy EmailTriggerService: remove stub poller and update references.
+- [x] Clean legacy EmailTriggerService: remove stub poller and update references.
 - [ ] Docs + config updates: `.env.example` + webhook retry semantics + Pub/Sub notes.
 
 ## Log
@@ -27,6 +27,7 @@ This document is the source of truth for completing the remaining Email Connecto
 - 2026-01-19: Added watch renewal service test coverage for expiring Gmail connectors.
 - 2026-01-19: Added Gmail history_id metric update test coverage.
 - 2026-01-19: Scoped unauthenticated TestClient exception handling with fixture tests.
+- 2026-01-19: Removed legacy EmailTriggerService and cleaned references with guard test.
 
 ---
 
