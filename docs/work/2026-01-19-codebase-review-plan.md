@@ -52,3 +52,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added `TestListJarvisRuns.test_list_runs_avoids_agent_n_plus_one` in `apps/zerg/backend/tests/test_jarvis_runs.py`.
 - Fix: Prefetched agents via `selectinload` and removed per-run `crud.get_agent` calls.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 7: Core ThreadService ownership
+- Test: Added core service tests in `apps/zerg/backend/tests/unit/test_core_thread_service.py` for list scoping + create ownership.
+- Fix: Enforced ownership checks in `zerg.core.services.ThreadService` and mapped PermissionError to 403 in core router.
+- Status: DONE (make test MINIMAL=1).

@@ -185,7 +185,10 @@ def list_threads(
     thread_service: ThreadService = Depends(get_thread_service),
 ) -> List[Thread]:
     """List threads for the current user."""
-    return thread_service.get_threads(current_user, agent_id=agent_id)
+    try:
+        return thread_service.get_threads(current_user, agent_id=agent_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
 # User Router

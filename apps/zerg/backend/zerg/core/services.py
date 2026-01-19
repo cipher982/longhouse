@@ -180,11 +180,32 @@ class ThreadService:
 
     def get_threads(self, user: User, agent_id: Optional[int] = None) -> List[Thread]:
         """Get threads for user, optionally filtered by agent."""
-        return self.database.get_threads(agent_id=agent_id)
+        is_admin = getattr(user, "role", "USER") == "ADMIN"
+
+        if agent_id is not None:
+            agent = self.database.get_agent(agent_id)
+            if agent is None:
+                return []
+            if not is_admin and agent.owner_id != user.id:
+                raise PermissionError("Access denied to agent")
+            return self.database.get_threads(agent_id=agent_id)
+
+        if is_admin:
+            return self.database.get_threads()
+
+        threads: List[Thread] = []
+        for agent in self.database.get_agents(owner_id=user.id):
+            threads.extend(self.database.get_threads(agent_id=agent.id))
+        return threads
 
     def create_thread(self, user: User, agent_id: int, title: str) -> Thread:
         """Create new thread."""
-        # TODO: Add ownership validation
+        is_admin = getattr(user, "role", "USER") == "ADMIN"
+        agent = self.database.get_agent(agent_id)
+        if agent is None:
+            raise ValueError("Agent not found")
+        if not is_admin and agent.owner_id != user.id:
+            raise PermissionError("Access denied to agent")
         return self.database.create_thread(agent_id, title)
 
 
