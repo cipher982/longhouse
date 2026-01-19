@@ -15,7 +15,7 @@ This document is the source of truth for completing the remaining Email Connecto
 
 ## Workstream: Email Connector TODOs
 - [x] Pub/Sub Gmail flow: connector stores `emailAddress`, Pub/Sub webhook mapping, topic-based watch registration.
-- [ ] Connector-level watch renewal service: renew expiring watches and persist updated metadata.
+- [x] Connector-level watch renewal service: renew expiring watches and persist updated metadata.
 - [ ] Observability metrics/gauges: history_id + watch_expiry updates, Pub/Sub processing counters.
 - [ ] Test hygiene: scope `raise_server_exceptions=False` only where needed; connectors API tests present.
 - [ ] Clean legacy EmailTriggerService: remove stub poller and update references.
@@ -24,6 +24,7 @@ This document is the source of truth for completing the remaining Email Connecto
 ## Log
 - 2026-01-19: Initialized Email Connector TODO remediation plan.
 - 2026-01-19: Added Pub/Sub watch + emailAddress test coverage for Gmail connect flow.
+- 2026-01-19: Added watch renewal service test coverage for expiring Gmail connectors.
 
 ---
 
