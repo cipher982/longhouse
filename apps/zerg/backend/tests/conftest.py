@@ -172,16 +172,6 @@ _db_mod.get_session_factory = lambda: TestingSessionLocal  # type: ignore[assign
 # Ensure websocket router uses the same Postgres session factory
 _ws_router.get_session_factory = lambda: TestingSessionLocal  # type: ignore[attr-defined]
 
-# Ensure *EmailTriggerService* uses the same Postgres session factory
-try:
-    from zerg.services.email_trigger_service import email_trigger_service as _ets  # noqa: WPS433 – test-time import
-
-    _ets._session_factory = TestingSessionLocal  # type: ignore[attr-defined]
-except ImportError:
-    # In some collector runs the service may not be imported yet; tests that
-    # need it will import later and patch manually via the fixture.
-    pass
-
 # Mock the OpenAI module before importing main app
 # EXCEPTION: When EVAL_MODE=live, skip mocking to allow real API calls
 import os as _os_early
@@ -878,38 +868,6 @@ def mock_langchain_openai():
         mock_chat = MagicMock()
         mock_chat_openai.return_value = mock_chat
         yield mock_chat_openai
-
-
-# ---------------------------------------------------------------------------
-# Cleanup: stop EmailTriggerService poll loop so pytest can exit immediately
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True, scope="session")
-def _shutdown_email_trigger_service():
-    """Ensure background poller is stopped at the end of the test session."""
-
-    from zerg.services.email_trigger_service import email_trigger_service  # noqa: WPS433
-
-    yield  # run tests
-
-    # Cancel poll loop if still running (ignore event-loop already closed)
-    try:
-
-        async def _stop_email_service():
-            await email_trigger_service.stop()
-
-        try:
-            # Try to get running loop first (for async test contexts)
-            loop = asyncio.get_running_loop()
-            # If we're in a running loop, schedule the stop as a task
-            loop.create_task(_stop_email_service())
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run()
-            asyncio.run(_stop_email_service())
-    except Exception:
-        # Service already stopped or event-loop closed – no action needed
-        pass
 
 
 # ---------------------------------------------------------------------------
