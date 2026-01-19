@@ -24,7 +24,7 @@ This document is the source of truth for the remediation plan and status.
 ## Workstream: Frontend
 - [x] useJarvisClient sets connected without real connection + cached agent fetch only → add hook tests + implement real SSE connect + fetch.
 - [x] useVoice stubbed flow → add hook tests + connect to voiceController (no fake timers).
-- [ ] Knowledge Sources “Add Context” no-op → add UI/service test + implement API call.
+- [x] Knowledge Sources “Add Context” no-op → add UI/service test + implement API call.
 
 ## Workstream: E2E
 - [ ] Core worker flow E2E (spawn_worker) missing → add test + make pass.
@@ -40,3 +40,4 @@ This document is the source of truth for the remediation plan and status.
 
 ## Log
 - 2026-01-19: Initialized remediation plan.
+- 2026-01-19: Implemented user_text knowledge sources end-to-end with API + UI tests.
