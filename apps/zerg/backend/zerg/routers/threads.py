@@ -62,12 +62,23 @@ def read_threads(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """Get all threads, optionally filtered by agent_id, thread_type, and/or title.
 
     If `title` is provided, returns threads matching that title.
     """
-    threads = crud.get_threads(db, agent_id=agent_id, thread_type=thread_type, title=title, skip=skip, limit=limit)
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    owner_id = None if is_admin else current_user.id
+    threads = crud.get_threads(
+        db,
+        owner_id=owner_id,
+        agent_id=agent_id,
+        thread_type=thread_type,
+        title=title,
+        skip=skip,
+        limit=limit,
+    )
     if not threads:
         return []
     return threads
@@ -126,8 +137,17 @@ def read_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depe
 
 
 @router.put("/{thread_id}", response_model=Thread)
-def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(get_db)):
+def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Update a thread"""
+    db_thread = crud.get_thread(db, thread_id=thread_id)
+    if db_thread is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+
+    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and agent and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
+
     db_thread = crud.update_thread(
         db,
         thread_id=thread_id,
@@ -136,14 +156,21 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
         agent_state=thread.agent_state,
         memory_strategy=thread.memory_strategy,
     )
-    if db_thread is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     return db_thread
 
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_thread(thread_id: int, db: Session = Depends(get_db)):
+def delete_thread(thread_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Delete a thread"""
+    db_thread = crud.get_thread(db, thread_id=thread_id)
+    if db_thread is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+
+    agent = crud.get_agent(db, agent_id=db_thread.agent_id)
+    is_admin = getattr(current_user, "role", "USER") == "ADMIN"
+    if not is_admin and agent and agent.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden: not thread owner")
+
     if not crud.delete_thread(db, thread_id=thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     return None
