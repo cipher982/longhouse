@@ -7,11 +7,13 @@ No authentication required.
 import re
 
 from fastapi import APIRouter
+from fastapi import Depends
 from pydantic import BaseModel
 from pydantic import field_validator
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from zerg.database import get_db_session
+from zerg.database import get_db
 from zerg.models import WaitlistEntry
 
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
@@ -43,28 +45,27 @@ class WaitlistResponse(BaseModel):
 
 
 @router.post("", response_model=WaitlistResponse)
-async def join_waitlist(request: WaitlistRequest) -> WaitlistResponse:
+def join_waitlist(request: WaitlistRequest, db: Session = Depends(get_db)) -> WaitlistResponse:
     """Add email to waitlist.
 
     This endpoint is public (no auth required) since we want to collect
     signups from visitors who haven't signed up yet.
     """
-    async with get_db_session() as session:
-        entry = WaitlistEntry(
-            email=request.email.lower(),
-            source=request.source,
-            notes=request.notes,
+    entry = WaitlistEntry(
+        email=request.email.lower(),
+        source=request.source,
+        notes=request.notes,
+    )
+    db.add(entry)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Email already exists
+        db.rollback()
+        return WaitlistResponse(
+            success=True,
+            message="You're already on the waitlist! We'll notify you when Pro launches.",
         )
-        session.add(entry)
-        try:
-            await session.commit()
-        except IntegrityError:
-            # Email already exists
-            await session.rollback()
-            return WaitlistResponse(
-                success=True,
-                message="You're already on the waitlist! We'll notify you when Pro launches.",
-            )
 
     return WaitlistResponse(
         success=True,
