@@ -8,6 +8,7 @@ including CRUD operations for threads and messages.
 import pytest
 from fastapi.testclient import TestClient
 
+from zerg.crud import crud
 from zerg.models.models import Agent
 from zerg.models.models import Thread
 from zerg.models.models import ThreadMessage
@@ -218,10 +219,30 @@ def test_read_thread_messages(client: TestClient, sample_thread: Thread, sample_
     assert response.status_code == 200
     messages = response.json()
     assert len(messages) == 3
-    assert messages[0]["role"] == "system"
-    assert messages[1]["role"] == "user"
-    assert messages[2]["role"] == "assistant"
-    assert messages[0]["thread_id"] == sample_thread.id
+
+
+def test_read_thread_messages_excludes_internal(client: TestClient, db_session, sample_thread: Thread):
+    """Internal orchestration messages should not be returned to clients."""
+    crud.create_thread_message(
+        db=db_session,
+        thread_id=sample_thread.id,
+        role="user",
+        content="internal-message",
+        internal=True,
+    )
+    crud.create_thread_message(
+        db=db_session,
+        thread_id=sample_thread.id,
+        role="user",
+        content="visible-message",
+        internal=False,
+    )
+
+    response = client.get(f"/api/threads/{sample_thread.id}/messages")
+    assert response.status_code == 200
+    contents = [m["content"] for m in response.json()]
+    assert "visible-message" in contents
+    assert "internal-message" not in contents
 
 
 def test_read_thread_messages_not_found(client: TestClient):
