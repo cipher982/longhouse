@@ -18,7 +18,7 @@ This document is the source of truth for the remediation plan and status.
 - [x] Worker artifact index updates are non-atomic → add locking + concurrency test.
 - [x] Worker ID collisions on same-second + same-task → add deterministic test + fix ID generation.
 - [x] http_request SSRF risk → add URL validation tests + block private/unsafe targets.
-- [ ] Title generator uses max_output_tokens → add request-payload test + remove token caps.
+- [x] Title generator uses max_output_tokens → add request-payload test + remove token caps.
 - [ ] WorkerRunner timeout docs drift → add doc check or update docs.
 
 ## Workstream: Frontend
