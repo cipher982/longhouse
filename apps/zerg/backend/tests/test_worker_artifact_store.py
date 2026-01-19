@@ -396,6 +396,57 @@ def test_index_persistence(temp_store):
     assert index[0]["finished_at"] is not None
 
 
+def test_index_updates_are_atomic_under_concurrency(temp_store, monkeypatch):
+    """Test that concurrent index updates don't clobber each other."""
+    import threading
+    import time
+
+    original_read = temp_store._read_index
+    original_write = temp_store._write_index
+
+    barrier = threading.Barrier(2)
+    both_read = threading.Event()
+    proceed = threading.Event()
+
+    def blocked_read():
+        data = original_read()
+        try:
+            barrier.wait(timeout=0.5)
+            both_read.set()
+            proceed.wait(timeout=0.5)
+        except threading.BrokenBarrierError:
+            # Locking may serialize access; proceed without forcing interleave.
+            pass
+        return data
+
+    def blocked_write(index):
+        return original_write(index)
+
+    monkeypatch.setattr(temp_store, "_read_index", blocked_read)
+    monkeypatch.setattr(temp_store, "_write_index", blocked_write)
+
+    def update(worker_id):
+        temp_store._update_index(worker_id, {"worker_id": worker_id, "status": "created"})
+
+    t1 = threading.Thread(target=update, args=("worker-one",))
+    t2 = threading.Thread(target=update, args=("worker-two",))
+
+    t1.start()
+    t2.start()
+
+    # If both threads reached the read barrier, allow them to proceed together.
+    if both_read.wait(timeout=0.5):
+        proceed.set()
+
+    t1.join(timeout=2)
+    t2.join(timeout=2)
+
+    # Final index must contain both entries
+    final_index = original_read()
+    worker_ids = {entry.get("worker_id") for entry in final_index}
+    assert {"worker-one", "worker-two"}.issubset(worker_ids)
+
+
 def test_multiple_stores_same_path():
     """Test that multiple store instances can access same data."""
     with tempfile.TemporaryDirectory() as tmpdir:
