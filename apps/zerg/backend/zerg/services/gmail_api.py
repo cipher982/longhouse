@@ -1,4 +1,4 @@
-"""Light-weight Gmail REST helpers used by *EmailTriggerService*.
+"""Light-weight Gmail REST helpers used by the Gmail connector flow.
 
 All functions are *safe* for the CI environment which has **no external
 network access**:
