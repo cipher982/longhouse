@@ -653,6 +653,33 @@ const handleToolPointerDown = useCallback(
     onStreamingMessage: handleStreamingMessage,
   });
 
+  // Fallback polling: ensure execution status updates even if WS events are missed.
+  useEffect(() => {
+    if (!currentExecution?.execution_id || currentExecution.phase !== 'running') {
+      return;
+    }
+
+    let cancelled = false;
+    const intervalId = window.setInterval(() => {
+      getExecutionStatus(currentExecution.execution_id)
+        .then((status) => {
+          if (cancelled) return;
+          if (status.phase !== 'running') {
+            setCurrentExecution(status);
+            window.clearInterval(intervalId);
+          }
+        })
+        .catch((err) => {
+          console.error('[CanvasPage] Failed to poll execution status:', err);
+        });
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [currentExecution?.execution_id, currentExecution?.phase]);
+
   // Subscribe to workflow execution topic when execution starts
   useEffect(() => {
     if (!currentExecution?.execution_id) return;

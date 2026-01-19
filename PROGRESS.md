@@ -27,9 +27,9 @@ This document is the source of truth for the remediation plan and status.
 - [x] Knowledge Sources “Add Context” no-op → add UI/service test + implement API call.
 
 ## Workstream: E2E
-- [ ] Core worker flow E2E (spawn_worker) missing → add test + make pass.
-- [ ] Workflow logs drawer streaming test skipped → unskip, fix UI/test, make pass.
-- [ ] Workflow status indicator test skipped → unskip, fix UI/test, make pass.
+- [x] Core worker flow E2E (spawn_worker) missing → add test + make pass.
+- [x] Workflow logs drawer streaming test skipped → unskip, fix UI/test, make pass.
+- [x] Workflow status indicator test skipped → unskip, fix UI/test, make pass.
 
 ## Workstream: Runner / Ops
 - [x] Runner install script uses repo HEAD → add test/verification + switch to versioned release artifact.
@@ -45,3 +45,4 @@ This document is the source of truth for the remediation plan and status.
 - 2026-01-19: Added docker availability detection in runner metadata with unit tests.
 - 2026-01-19: Switched install-runner to versioned release tarballs with validation + script tests.
 - 2026-01-19: Clarified email connector PRD as partially complete.
+- 2026-01-19: Added core worker flow E2E and fixed workflow logs/status E2E with WS config + status polling.
