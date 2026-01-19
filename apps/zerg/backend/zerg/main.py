@@ -55,6 +55,7 @@ from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
+from zerg.routers.hindsight import router as hindsight_router
 from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.jarvis_internal import router as jarvis_internal_router
 from zerg.routers.knowledge import router as knowledge_router
@@ -586,6 +587,7 @@ app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent con
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
+app.include_router(hindsight_router, prefix=f"{API_PREFIX}")  # Hindsight session analysis
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
