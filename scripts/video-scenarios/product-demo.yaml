@@ -136,14 +136,8 @@ scenes:
         duration_ms: 300
       - action: click
         selector: '[data-testid="send-message-btn"]'
-      - action: wait
-        selector: '[data-testid="worker-tool-card"]'
-        timeout_ms: 10000
       - action: pause
-        duration_ms: 2000
-      - action: wait
-        selector: '.message-group:last-child .message.assistant'
-        timeout_ms: 15000
+        duration_ms: 3000
       - action: pause_for_audio
 
   # Scene 4: Automation Request
@@ -167,14 +161,8 @@ scenes:
         duration_ms: 300
       - action: click
         selector: '[data-testid="send-message-btn"]'
-      - action: wait
-        selector: '[data-testid="worker-tool-card"]'
-        timeout_ms: 10000
       - action: pause
-        duration_ms: 2500
-      - action: wait
-        selector: '.message-group:last-child .message.assistant'
-        timeout_ms: 15000
+        duration_ms: 3500
       - action: pause_for_audio
 
   # Scene 5: Canvas Workflow View
