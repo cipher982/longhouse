@@ -4,9 +4,10 @@ Public endpoints for collecting email signups for features not yet available.
 No authentication required.
 """
 
-import asyncio
+import logging
 import re
 
+import httpx
 from fastapi import APIRouter
 from fastapi import BackgroundTasks
 from fastapi import Depends
@@ -16,10 +17,11 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.models import WaitlistEntry
-from zerg.services.ops_discord import send_waitlist_signup_alert
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/waitlist", tags=["waitlist"])
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -48,9 +50,24 @@ class WaitlistResponse(BaseModel):
     message: str
 
 
-def _send_discord_alert(email: str, source: str, count: int) -> None:
-    """Run async Discord alert in background."""
-    asyncio.run(send_waitlist_signup_alert(email, source, count))
+def _send_discord_alert_sync(email: str, source: str, count: int) -> None:
+    """Send Discord alert synchronously (for background tasks)."""
+    settings = get_settings()
+    webhook_url = settings.discord_webhook_url
+    alerts_enabled = settings.discord_enable_alerts
+
+    if not alerts_enabled or not webhook_url:
+        return
+
+    content = f"📋 **Waitlist Signup!** {email} joined the {source} waitlist (#{count} on waitlist)"
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.post(webhook_url, json={"content": content})
+            if resp.status_code >= 300:
+                logger.warning("Discord webhook returned %s: %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.warning("Discord webhook error: %s", exc)
 
 
 @router.post("", response_model=WaitlistResponse)
@@ -84,7 +101,7 @@ def join_waitlist(
     total_count = db.query(func.count(WaitlistEntry.id)).scalar()
 
     # Send Discord notification in background
-    background_tasks.add_task(_send_discord_alert, request.email.lower(), request.source, total_count)
+    background_tasks.add_task(_send_discord_alert_sync, request.email.lower(), request.source, total_count)
 
     return WaitlistResponse(
         success=True,
