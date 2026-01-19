@@ -115,7 +115,7 @@ class WorkerRunner:
         agent_config
             Optional config overrides (model, tools, system prompt, etc.)
         timeout
-            Maximum execution time in seconds (not yet enforced)
+            Maximum execution time in seconds (enforced via asyncio.wait_for)
 
         Returns
         -------
