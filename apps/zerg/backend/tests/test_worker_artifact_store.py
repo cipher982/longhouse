@@ -28,11 +28,12 @@ def test_create_worker(temp_store):
 
     # Verify worker_id format
     assert "_" in worker_id
-    timestamp_part, slug_part = worker_id.split("_", 1)
+    timestamp_part, slug_part, suffix = worker_id.split("_", 2)
     assert "T" in timestamp_part  # ISO timestamp format
     # Slug is truncated to 30 chars, may vary depending on task length
     assert slug_part.startswith("check-disk-space")
     assert len(slug_part) <= 30
+    assert len(suffix) == 6
 
     # Verify directory structure
     worker_dir = temp_store.base_path / worker_id
@@ -70,7 +71,7 @@ def test_slugify(temp_store):
 
     for task, expected_slug in test_cases:
         worker_id = temp_store.create_worker(task)
-        _, slug_part = worker_id.split("_", 1)
+        _, slug_part, _ = worker_id.split("_", 2)
         # Slug is truncated to 30 chars max
         expected_truncated = expected_slug[:30]
         assert slug_part == expected_truncated
@@ -372,6 +373,25 @@ def test_worker_collision(temp_store):
         # Should raise ValueError on collision
         with pytest.raises(ValueError, match="Worker directory already exists"):
             temp_store.create_worker("Test task")
+
+
+def test_worker_id_unique_with_same_timestamp(monkeypatch, temp_store):
+    """Worker IDs should remain unique even with identical timestamps."""
+    fixed_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001 - test helper
+            return fixed_time
+
+    monkeypatch.setattr("zerg.services.worker_artifact_store.datetime", FixedDatetime)
+
+    worker1 = temp_store.create_worker("Same task")
+    worker2 = temp_store.create_worker("Same task")
+
+    assert worker1 != worker2
+    assert (temp_store.base_path / worker1).exists()
+    assert (temp_store.base_path / worker2).exists()
 
 
 def test_index_persistence(temp_store):
