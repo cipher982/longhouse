@@ -18,6 +18,7 @@ Key changes compared to the PoC version:
 3.  ✅  Public helpers `load_mcp_tools()` (async) and
     `load_mcp_tools_sync()` (sync) make it trivial to load tools from within
     both asynchronous and synchronous code paths.
+4.  ✅  Dual transport support: HTTP (default) and stdio (subprocess-based).
 
 See `docs/mcp_integration_requirements.md` for the end-to-end design.
 """
@@ -25,7 +26,6 @@ See `docs/mcp_integration_requirements.md` for the end-to-end design.
 import asyncio
 import logging
 import threading
-from dataclasses import dataclass
 from typing import Any
 from typing import Callable
 from typing import Dict
@@ -33,7 +33,6 @@ from typing import List
 from typing import Optional
 from typing import Tuple
 
-import httpx
 import jsonschema
 
 from zerg.tools.mcp_config_schema import normalize_config
@@ -42,8 +41,9 @@ from zerg.tools.mcp_exceptions import MCPConfigurationError
 from zerg.tools.mcp_exceptions import MCPConnectionError
 from zerg.tools.mcp_exceptions import MCPToolExecutionError
 from zerg.tools.mcp_exceptions import MCPValidationError
-
-# from zerg.tools.registry import register_tool
+from zerg.tools.mcp_transport import MCPServerConfig
+from zerg.tools.mcp_transport import MCPTransport
+from zerg.tools.mcp_transport import create_transport
 
 # ---------------------------------------------------------------------------
 # Logging helper
@@ -55,150 +55,42 @@ logger = logging.getLogger(__name__)
 # dependency (`mcp_presets` imports :pyclass:`MCPServerConfig` from this very
 # module).  The mapping is loaded **lazily** in :pyfunc:`MCPManager._get_presets`.
 
-
-@dataclass
-class MCPServerConfig:
-    """Configuration for an MCP server connection."""
-
-    name: str
-    url: str
-    auth_token: Optional[str] = None
-    allowed_tools: Optional[List[str]] = None
-    timeout: float = 30.0
-    max_retries: int = 3
+# Re-export MCPServerConfig for backwards compatibility
+__all__ = ["MCPServerConfig", "MCPClient", "MCPToolAdapter", "MCPManager", "load_mcp_tools", "load_mcp_tools_sync"]
 
 
 class MCPClient:
-    """Enhanced MCP client with connection pooling and retry logic."""
+    """MCP client that delegates to transport implementations.
+
+    Supports both HTTP and stdio transports through the transport abstraction.
+    For stdio transport, clients should be pooled via MCPManager to avoid
+    spawning new processes per tool call.
+    """
 
     def __init__(self, config: MCPServerConfig):
         self.config = config
-        # Enable HTTP/2 for better multiplexing.  When the optional *h2*
-        # dependency is missing **httpx** raises an ``ImportError``.  This is
-        # perfectly fine in our unit-test environment where we don’t actually
-        # perform any network I/O – gracefully fall back to classic HTTP/1.1
-        # instead of failing the entire request pipeline.
-
-        try:
-            self.client = httpx.AsyncClient(
-                timeout=config.timeout,
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-                http2=True,
-            )
-        except ImportError:  # pragma: no cover – only triggered in minimal envs
-            self.client = httpx.AsyncClient(
-                timeout=config.timeout,
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
-                http2=False,
-            )
-        self._health_check_passed = False
+        self.transport: MCPTransport = create_transport(config)
 
     async def __aenter__(self):
-        """Context manager entry."""
+        """Context manager entry - connect transport."""
+        await self.transport.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - ensure client is closed."""
-        await self.client.aclose()
+        """Context manager exit - disconnect transport."""
+        await self.transport.disconnect()
 
     async def health_check(self) -> bool:
         """Check if the MCP server is reachable and responsive."""
-        if self._health_check_passed:
-            return True
-
-        headers = self._get_headers()
-        try:
-            response = await self.client.get(f"{self.config.url}/health", headers=headers, timeout=5.0)
-            response.raise_for_status()
-            self._health_check_passed = True
-            logger.info(f"Health check passed for MCP server '{self.config.name}'")
-            return True
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 401:
-                raise MCPAuthenticationError(self.config.name, "Invalid authentication token")
-            logger.warning(f"Health check failed for MCP server '{self.config.name}': HTTP {e.response.status_code}")
-            return False
-        except Exception as e:
-            logger.warning(f"Health check failed for MCP server '{self.config.name}': {e}")
-            return False
-
-    def _get_headers(self) -> Dict[str, str]:
-        """Get common headers including auth."""
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if self.config.auth_token:
-            headers["Authorization"] = f"Bearer {self.config.auth_token}"
-        return headers
-
-    async def _request_with_retry(self, method: str, path: str, **kwargs) -> httpx.Response:
-        """Make HTTP request with retry logic."""
-        url = f"{self.config.url}{path}"
-        headers = kwargs.pop("headers", {})
-        headers.update(self._get_headers())
-
-        last_exception = None
-        for attempt in range(self.config.max_retries):
-            try:
-                if method == "GET":
-                    response = await self.client.get(url, headers=headers, **kwargs)
-                elif method == "POST":
-                    response = await self.client.post(url, headers=headers, **kwargs)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
-
-                response.raise_for_status()
-                return response
-
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 401:
-                    raise MCPAuthenticationError(self.config.name, "Invalid authentication token")
-                elif e.response.status_code < 500:
-                    # Don't retry client errors
-                    raise
-                last_exception = e
-
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
-                last_exception = e
-
-            if attempt < self.config.max_retries - 1:
-                wait_time = 2**attempt  # Exponential backoff
-                logger.debug(f"Retrying request to {url} in {wait_time}s (attempt {attempt + 1}/{self.config.max_retries})")
-                await asyncio.sleep(wait_time)
-
-        raise MCPConnectionError(self.config.name, self.config.url, last_exception)
+        return await self.transport.health_check()
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """List available tools from the MCP server."""
-        try:
-            response = await self._request_with_retry("GET", "/tools/list")
-            data = response.json()
-            return data.get("tools", [])
-        except MCPConnectionError:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to list MCP tools from '{self.config.name}': {e}")
-            raise MCPConnectionError(self.config.name, self.config.url, e)
+        return await self.transport.list_tools()
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         """Call a tool on the MCP server."""
-        try:
-            response = await self._request_with_retry("POST", "/tools/call", json={"name": tool_name, "arguments": arguments})
-            result = response.json()
-
-            # Extract content from MCP response format
-            if "content" in result and isinstance(result["content"], list):
-                # Concatenate text content blocks
-                text_parts = []
-                for block in result["content"]:
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                return "\n".join(text_parts)
-
-            return result
-
-        except MCPConnectionError:
-            raise
-        except Exception as e:
-            raise MCPToolExecutionError(tool_name, self.config.name, e)
+        return await self.transport.call_tool(tool_name, arguments)
 
 
 class MCPToolAdapter:
@@ -286,9 +178,16 @@ class MCPToolAdapter:
 
             # Execute the tool
             try:
-                async with MCPClient(self.config) as client:
+                # For stdio transport, use pooled client from MCPManager
+                # For HTTP transport, create a new client per call (existing behavior)
+                if self.config.transport == "stdio":
+                    client = await MCPManager().get_pooled_client(self.config)
                     result = await client.call_tool(tool_name, kwargs)
                     return str(result)
+                else:
+                    async with MCPClient(self.config) as client:
+                        result = await client.call_tool(tool_name, kwargs)
+                        return str(result)
             except MCPToolExecutionError as e:
                 logger.error(f"Tool execution failed: {e}")
                 return f"Error: {e}"
@@ -336,7 +235,11 @@ class MCPToolAdapter:
 
 
 class MCPManager:
-    """Singleton that tracks *one* ``MCPToolAdapter`` per unique server."""
+    """Singleton that tracks *one* ``MCPToolAdapter`` per unique server.
+
+    For stdio transport, also maintains a pool of long-lived subprocess clients
+    to avoid spawning a new process per tool call.
+    """
 
     _instance: Optional["MCPManager"] = None
     _lock = threading.Lock()
@@ -346,6 +249,8 @@ class MCPManager:
             if cls._instance is None:
                 cls._instance = super().__new__(cls)
                 cls._instance._adapters: Dict[Tuple[str, str], MCPToolAdapter] = {}
+                cls._instance._stdio_clients: Dict[str, MCPClient] = {}  # Pool for stdio clients
+                cls._instance._stdio_client_locks: Dict[str, asyncio.Lock] = {}
         return cls._instance
 
     def run_in_loop(self, coro):
@@ -363,12 +268,102 @@ class MCPManager:
         except Exception:
             return False
 
+    def _get_adapter_key(self, cfg: MCPServerConfig) -> Tuple[str, str]:
+        """Generate cache key for adapter based on transport type."""
+        if cfg.transport == "stdio":
+            return (f"stdio:{cfg.name}:{cfg.command}", "")
+        else:
+            return (cfg.url or "", cfg.auth_token or "")
+
+    def _get_stdio_client_key(self, cfg: MCPServerConfig) -> str:
+        """Generate cache key for stdio client pool."""
+        # Include env vars in key since they affect process behavior
+        env_hash = hash(tuple(sorted((cfg.env or {}).items())))
+        return f"{cfg.name}:{cfg.command}:{env_hash}"
+
+    def _get_stdio_client_lock(self, key: str) -> asyncio.Lock:
+        """Get or create a lock for a stdio client pool entry."""
+        if key not in self._stdio_client_locks:
+            self._stdio_client_locks[key] = asyncio.Lock()
+        return self._stdio_client_locks[key]
+
+    # ------------------------------------------------------------------
+    # Stdio client pool management
+    # ------------------------------------------------------------------
+
+    async def get_pooled_client(self, cfg: MCPServerConfig) -> MCPClient:
+        """Get or create a pooled stdio client.
+
+        For stdio transport, maintains long-lived process connections to avoid
+        the overhead of spawning a new subprocess per tool call.
+        """
+        if cfg.transport != "stdio":
+            raise ValueError("get_pooled_client only supports stdio transport")
+
+        key = self._get_stdio_client_key(cfg)
+        lock = self._get_stdio_client_lock(key)
+
+        async with lock:
+            if key not in self._stdio_clients:
+                client = MCPClient(cfg)
+                await client.transport.connect()
+                self._stdio_clients[key] = client
+                logger.info(f"Created pooled stdio client for MCP server '{cfg.name}'")
+
+            # Check if process is still alive, reconnect if needed
+            client = self._stdio_clients[key]
+            if not await client.health_check():
+                logger.warning(f"Stdio client for '{cfg.name}' is unhealthy, reconnecting...")
+                await client.transport.disconnect()
+                await client.transport.connect()
+
+            return client
+
+    async def shutdown_stdio_processes(self) -> None:
+        """Shutdown all pooled stdio processes.
+
+        Call this on application shutdown to cleanly terminate all MCP server
+        subprocesses.
+        """
+        for key, client in list(self._stdio_clients.items()):
+            try:
+                logger.info(f"Shutting down stdio client: {key}")
+                await client.transport.disconnect()
+            except Exception as e:
+                logger.warning(f"Error shutting down stdio client {key}: {e}")
+        self._stdio_clients.clear()
+        self._stdio_client_locks.clear()
+
+    async def shutdown_stdio_process_for_config(self, cfg: MCPServerConfig) -> None:
+        """Shutdown a single pooled stdio process, if present."""
+        key = self._get_stdio_client_key(cfg)
+        lock = self._get_stdio_client_lock(key)
+
+        async with lock:
+            client = self._stdio_clients.pop(key, None)
+            if client is None:
+                return
+            try:
+                logger.info(f"Shutting down stdio client: {key}")
+                await client.transport.disconnect()
+            except Exception as e:
+                logger.warning(f"Error shutting down stdio client {key}: {e}")
+        self._stdio_client_locks.pop(key, None)
+
+    def shutdown_stdio_process_for_config_sync(self, cfg: MCPServerConfig) -> None:
+        """Synchronous wrapper for shutdown_stdio_process_for_config."""
+        self.run_in_loop(self.shutdown_stdio_process_for_config(cfg))
+
+    def shutdown_stdio_processes_sync(self) -> None:
+        """Synchronous wrapper for shutdown_stdio_processes."""
+        self.run_in_loop(self.shutdown_stdio_processes())
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     async def _init_adapter(self, cfg: MCPServerConfig):
-        key = (cfg.url, cfg.auth_token or "")
+        key = self._get_adapter_key(cfg)
         if key in self._adapters:
             return  # Already initialised
 
@@ -437,13 +432,30 @@ class MCPManager:
 
             cfg = MCPServerConfig(
                 name=base_cfg.name,
+                transport=getattr(base_cfg, "transport", "http"),
                 url=base_cfg.url,
                 auth_token=auth_token,
+                command=getattr(base_cfg, "command", None),
+                env=getattr(base_cfg, "env", None),
                 allowed_tools=normalized_config.get("allowed_tools", base_cfg.allowed_tools),
                 timeout=normalized_config.get("timeout", base_cfg.timeout),
                 max_retries=normalized_config.get("max_retries", base_cfg.max_retries),
             )
-        else:  # type == "custom"
+        elif normalized_config["type"] == "stdio":
+            # Handle stdio transport configuration
+            try:
+                cfg = MCPServerConfig(
+                    name=normalized_config["name"],
+                    transport="stdio",
+                    command=normalized_config["command"],
+                    env=normalized_config.get("env"),
+                    allowed_tools=normalized_config.get("allowed_tools"),
+                    timeout=normalized_config.get("timeout", 30.0),
+                    max_retries=normalized_config.get("max_retries", 3),
+                )
+            except (KeyError, TypeError) as exc:
+                raise MCPConfigurationError(f"Invalid stdio configuration: {exc}")
+        else:  # type == "custom" (HTTP)
             try:
                 # Decrypt auth token if it looks encrypted
                 auth_token = normalized_config.get("auth_token")
@@ -458,6 +470,7 @@ class MCPManager:
 
                 cfg = MCPServerConfig(
                     name=normalized_config["name"],
+                    transport="http",
                     url=normalized_config["url"],
                     auth_token=auth_token,
                     allowed_tools=normalized_config.get("allowed_tools"),

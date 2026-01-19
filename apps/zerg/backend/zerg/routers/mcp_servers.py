@@ -4,6 +4,7 @@ import logging
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Optional
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -24,6 +25,7 @@ from zerg.tools.mcp_exceptions import MCPAuthenticationError
 from zerg.tools.mcp_exceptions import MCPConfigurationError
 from zerg.tools.mcp_exceptions import MCPConnectionError
 from zerg.tools.mcp_presets import PRESET_MCP_SERVERS
+from zerg.tools.mcp_transport import MCPServerConfig
 from zerg.tools.unified_access import get_tool_resolver
 from zerg.utils import crypto
 from zerg.utils.json_helpers import set_json_field
@@ -41,12 +43,19 @@ router = APIRouter(
 class MCPServerAddRequest(BaseModel):
     """Request model for adding an MCP server."""
 
+    # Transport type - determines which fields are required
+    transport: str = Field("http", description="Transport type: 'http' (default) or 'stdio'")
+
     # For preset servers
     preset: str = Field(None, description="Name of a preset MCP server (e.g., 'github', 'linear')")
 
-    # For custom servers
-    url: str = Field(None, description="URL of the custom MCP server")
-    name: str = Field(None, description="Name for the custom MCP server")
+    # For custom HTTP servers
+    url: str = Field(None, description="URL of the custom MCP server (http transport)")
+    name: str = Field(None, description="Name for the MCP server")
+
+    # For stdio servers
+    command: str = Field(None, description="Command to spawn the MCP server (stdio transport)")
+    env: Dict[str, str] = Field(None, description="Environment variables for stdio server")
 
     # Common fields
     auth_token: str = Field(None, description="Authentication token for the MCP server")
@@ -54,21 +63,37 @@ class MCPServerAddRequest(BaseModel):
 
     # Custom validation
     def model_post_init(self, __context: Any) -> None:
-        """Validate that either preset or (url, name) is provided."""
-        if self.preset and (self.url or self.name):
-            raise ValueError("Cannot specify both 'preset' and custom server fields")
-        if not self.preset and not (self.url and self.name):
-            raise ValueError("Must specify either 'preset' or both 'url' and 'name'")
+        """Validate based on transport type."""
+        if self.preset:
+            # Preset mode - no other server fields needed
+            if self.url or self.command:
+                raise ValueError("Cannot specify both 'preset' and custom server fields")
+            return
+
+        if self.transport == "stdio":
+            # Stdio transport requires command and name
+            if not self.command or not self.name:
+                raise ValueError("Stdio transport requires both 'command' and 'name'")
+            if self.url:
+                raise ValueError("Cannot specify 'url' for stdio transport")
+        else:  # http transport
+            # HTTP transport requires url and name
+            if not self.url or not self.name:
+                raise ValueError("HTTP transport requires both 'url' and 'name'")
+            if self.command:
+                raise ValueError("Cannot specify 'command' for http transport")
 
 
 class MCPServerResponse(BaseModel):
     """Response model for MCP server info."""
 
     name: str
-    url: str
+    transport: str = "http"  # http or stdio
+    url: Optional[str] = Field(None, description="Server URL (http transport)")
+    command: Optional[str] = Field(None, description="Server command (stdio transport)")
     tools: List[str]
     status: str = "online"  # online, offline, error
-    error: str = Field(None, description="Error message if status is 'error'")
+    error: Optional[str] = Field(None, description="Error message if status is 'error'")
 
 
 class MCPTestConnectionResponse(BaseModel):
@@ -124,16 +149,27 @@ async def list_mcp_servers(
             if preset_name in PRESET_MCP_SERVERS:
                 preset = PRESET_MCP_SERVERS[preset_name]
                 name = preset.name
-                url = preset.url
+                transport = getattr(preset, "transport", "http")
+                url = getattr(preset, "url", None)
+                command = getattr(preset, "command", None)
             else:
                 # Unknown preset – still include it in the list so the UI
                 # can show *offline* status and allow the user to troubleshoot
                 # or remove the entry.
                 name = preset_name
+                transport = "http"
                 url = "unknown"
+                command = None
         else:
             name = server_config.get("name", "unknown")
-            url = server_config.get("url", "unknown")
+            transport = server_config.get("transport", "http")
+            if server_config.get("type") == "stdio" or transport == "stdio":
+                transport = "stdio"
+                url = None
+                command = server_config.get("command", "unknown")
+            else:
+                url = server_config.get("url", "unknown")
+                command = None
 
         # Get tools for this server
         tool_prefix = f"mcp_{name}_"
@@ -142,7 +178,9 @@ async def list_mcp_servers(
         response.append(
             MCPServerResponse(
                 name=name,
+                transport=transport,
                 url=url,
+                command=command,
                 tools=tools,
                 status="online" if tools else "offline",
             )
@@ -191,12 +229,22 @@ async def add_mcp_server(
         # Encrypt auth token if provided
         if request.auth_token:
             server_config["auth_token"] = crypto.encrypt(request.auth_token)
+    elif request.transport == "stdio":
+        # Stdio transport - command-based subprocess
+        server_config = {
+            "type": "stdio",
+            "name": request.name,
+            "command": request.command,
+        }
+        if request.env:
+            server_config["env"] = request.env
     else:
-        # Validate HTTPS URL for security
+        # HTTP transport - validate HTTPS URL for security
         if not request.url.startswith("https://"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="MCP server URL must use HTTPS for security")
 
         server_config = {
+            "type": "custom",
             "url": request.url,
             "name": request.name,
         }
@@ -218,7 +266,12 @@ async def add_mcp_server(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Preset '{request.preset}' is already configured for this agent",
             )
-        elif not request.preset and existing.get("url") == request.url:
+        elif request.transport == "stdio" and existing.get("command") == request.command:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Server with command '{request.command}' is already configured for this agent",
+            )
+        elif request.transport == "http" and not request.preset and existing.get("url") == request.url:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Server URL '{request.url}' is already configured for this agent",
@@ -273,12 +326,16 @@ async def remove_mcp_server(
     found = False
     updated_servers = []
 
+    removed_configs: List[Dict[str, Any]] = []
+
     for server_config in mcp_servers:
         if "preset" in server_config and server_config["preset"] == server_name:
             found = True
+            removed_configs.append(server_config)
             continue  # Skip this server
         elif server_config.get("name") == server_name:
             found = True
+            removed_configs.append(server_config)
             continue  # Skip this server
         updated_servers.append(server_config)
 
@@ -288,6 +345,25 @@ async def remove_mcp_server(
     # Update agent config
     set_json_field(agent, "config", {"mcp_servers": updated_servers})
     db.commit()
+
+    # If any removed servers were stdio transport, shut down their processes
+    for removed in removed_configs:
+        transport = removed.get("transport")
+        if removed.get("type") == "stdio" or transport == "stdio" or "command" in removed:
+            try:
+                manager = MCPManager()
+                cfg = MCPServerConfig(
+                    name=removed.get("name", server_name),
+                    transport="stdio",
+                    command=removed.get("command"),
+                    env=removed.get("env"),
+                    allowed_tools=removed.get("allowed_tools"),
+                    timeout=removed.get("timeout", 30.0),
+                    max_retries=removed.get("max_retries", 3),
+                )
+                manager.shutdown_stdio_process_for_config_sync(cfg)
+            except Exception:
+                logger.exception("Failed to shutdown removed stdio MCP server '%s'", server_name)
 
     return None
 
@@ -314,6 +390,14 @@ async def test_mcp_connection(
             "preset": request.preset,
             "auth_token": request.auth_token,
         }
+    elif request.transport == "stdio":
+        server_config = {
+            "type": "stdio",
+            "name": request.name,
+            "command": request.command,
+        }
+        if request.env:
+            server_config["env"] = request.env
     else:
         server_config = {
             "url": request.url,
