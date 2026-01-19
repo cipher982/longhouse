@@ -110,10 +110,10 @@ class SQLAlchemyDatabase(Database):
         with db_session(self.session_factory) as db:
             return crud.create_user(db, email=email, **kwargs)
 
-    def get_threads(self, agent_id: Optional[int] = None) -> List[Thread]:
-        """Get threads, optionally filtered by agent."""
+    def get_threads(self, agent_id: Optional[int] = None, owner_id: Optional[int] = None) -> List[Thread]:
+        """Get threads, optionally filtered by agent or owner."""
         with db_session(self.session_factory) as db:
-            return crud.get_threads(db, agent_id=agent_id)
+            return crud.get_threads(db, agent_id=agent_id, owner_id=owner_id)
 
     def create_thread(self, agent_id: int, title: str) -> Thread:
         """Create new thread."""

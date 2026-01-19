@@ -193,10 +193,8 @@ class ThreadService:
         if is_admin:
             return self.database.get_threads()
 
-        threads: List[Thread] = []
-        for agent in self.database.get_agents(owner_id=user.id):
-            threads.extend(self.database.get_threads(agent_id=agent.id))
-        return threads
+        # Single query with owner_id join (avoids O(n) agent iteration)
+        return self.database.get_threads(owner_id=user.id)
 
     def create_thread(self, user: User, agent_id: int, title: str) -> Thread:
         """Create new thread."""
