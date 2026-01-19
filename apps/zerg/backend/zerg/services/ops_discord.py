@@ -95,3 +95,21 @@ async def send_user_signup_alert(user_email: str, user_count: Optional[int] = No
 
     # Fire-and-forget
     asyncio.create_task(_post_discord(url, content))
+
+
+async def send_waitlist_signup_alert(email: str, source: str, waitlist_count: Optional[int] = None) -> None:
+    """Send a waitlist signup notification to Discord.
+
+    Fire-and-forget; respects DISCORD_ENABLE_ALERTS and webhook presence.
+    """
+    if not _alerts_enabled():
+        return
+    url = _webhook_url()
+    if not url:
+        return
+
+    count_info = f" (#{waitlist_count} on waitlist)" if waitlist_count else ""
+    content = f"📋 **Waitlist Signup!** {email} joined the {source} waitlist{count_info}"
+
+    # Fire-and-forget
+    asyncio.create_task(_post_discord(url, content))
