@@ -59,3 +59,144 @@ def test_read_thread_ownership_enforced(client, db_session):
     finally:
         with contextlib.suppress(Exception):
             del app.dependency_overrides[get_current_user]
+
+
+def test_list_threads_scoped_to_owner(client, db_session):
+    owner = _user(db_session, "owner-list@local", "USER")
+    other = _user(db_session, "other-list@local", "USER")
+
+    owner_agent = crud.create_agent(
+        db_session,
+        owner_id=owner.id,
+        name="owner-agent",
+        system_instructions="sys",
+        task_instructions="task",
+        model=TEST_WORKER_MODEL,
+        schedule=None,
+        config={},
+    )
+    other_agent = crud.create_agent(
+        db_session,
+        owner_id=other.id,
+        name="other-agent",
+        system_instructions="sys",
+        task_instructions="task",
+        model=TEST_WORKER_MODEL,
+        schedule=None,
+        config={},
+    )
+
+    owner_thread = crud.create_thread(
+        db=db_session,
+        agent_id=owner_agent.id,
+        title="owner-thread",
+        active=True,
+        agent_state={},
+        memory_strategy="buffer",
+    )
+    other_thread = crud.create_thread(
+        db=db_session,
+        agent_id=other_agent.id,
+        title="other-thread",
+        active=True,
+        agent_state={},
+        memory_strategy="buffer",
+    )
+
+    from zerg.dependencies.auth import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        resp = client.get("/api/threads")
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        ids = {t["id"] for t in payload}
+        assert owner_thread.id in ids
+        assert other_thread.id not in ids
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
+
+
+def test_update_thread_ownership_enforced(client, db_session):
+    owner = _user(db_session, "owner-update@local", "USER")
+    other = _user(db_session, "other-update@local", "USER")
+
+    agent = crud.create_agent(
+        db_session,
+        owner_id=owner.id,
+        name="owning-agent-update",
+        system_instructions="sys",
+        task_instructions="task",
+        model=TEST_WORKER_MODEL,
+        schedule=None,
+        config={},
+    )
+    thread = crud.create_thread(
+        db=db_session,
+        agent_id=agent.id,
+        title="t",
+        active=True,
+        agent_state={},
+        memory_strategy="buffer",
+    )
+
+    from zerg.dependencies.auth import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: other
+    try:
+        resp = client.put(f"/api/threads/{thread.id}", json={"title": "nope"})
+        assert resp.status_code == 403, resp.text
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
+
+    app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        resp = client.put(f"/api/threads/{thread.id}", json={"title": "ok"})
+        assert resp.status_code == 200, resp.text
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
+
+
+def test_delete_thread_ownership_enforced(client, db_session):
+    owner = _user(db_session, "owner-delete@local", "USER")
+    other = _user(db_session, "other-delete@local", "USER")
+
+    agent = crud.create_agent(
+        db_session,
+        owner_id=owner.id,
+        name="owning-agent-delete",
+        system_instructions="sys",
+        task_instructions="task",
+        model=TEST_WORKER_MODEL,
+        schedule=None,
+        config={},
+    )
+    thread = crud.create_thread(
+        db=db_session,
+        agent_id=agent.id,
+        title="t",
+        active=True,
+        agent_state={},
+        memory_strategy="buffer",
+    )
+
+    from zerg.dependencies.auth import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: other
+    try:
+        resp = client.delete(f"/api/threads/{thread.id}")
+        assert resp.status_code == 403, resp.text
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
+
+    app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        resp = client.delete(f"/api/threads/{thread.id}")
+        assert resp.status_code == 204, resp.text
+    finally:
+        with contextlib.suppress(Exception):
+            del app.dependency_overrides[get_current_user]
