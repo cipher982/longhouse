@@ -14,9 +14,9 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 
-from zerg.crud import crud
 from zerg.database import get_db
 from zerg.models.agent_run_event import AgentRunEvent
 from zerg.models.enums import RunStatus
@@ -70,7 +70,12 @@ def list_jarvis_runs(
     # For now, get all runs and filter/sort in memory
 
     # Multi-tenant SaaS: Jarvis shows only the logged-in user's runs.
-    query = db.query(AgentRun).join(Agent, Agent.id == AgentRun.agent_id).filter(Agent.owner_id == current_user.id)
+    query = (
+        db.query(AgentRun)
+        .options(selectinload(AgentRun.agent))
+        .join(Agent, Agent.id == AgentRun.agent_id)
+        .filter(Agent.owner_id == current_user.id)
+    )
 
     if agent_id:
         query = query.filter(AgentRun.agent_id == agent_id)
@@ -79,9 +84,7 @@ def list_jarvis_runs(
 
     summaries = []
     for run in runs:
-        # Get agent name
-        agent = crud.get_agent(db, run.agent_id)
-        agent_name = agent.name if agent else f"Agent {run.agent_id}"
+        agent_name = run.agent.name if run.agent else f"Agent {run.agent_id}"
 
         # Extract summary from run (will be populated in Phase 2.3)
         summary = getattr(run, "summary", None)
