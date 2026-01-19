@@ -10,12 +10,14 @@
 #   curl -sSL https://swarmlet.com/install-runner.sh | bash -s -- \
 #     --name cube \
 #     --token <enrollment-token> \
-#     --url wss://api.swarmlet.com
+#     --url wss://api.swarmlet.com \
+#     --version v0.1.0
 #
 # Options:
 #   --name    Runner name (required)
 #   --token   Enrollment token from Swarmlet platform (required)
 #   --url     Swarmlet API URL (default: wss://api.swarmlet.com)
+#   --version Runner release tag to install (default: latest)
 #   --insecure  Allow non-WSS URLs (ws://) for local development
 #   --capabilities  Comma-separated capabilities (default: exec.readonly)
 #
@@ -29,7 +31,8 @@ CONFIG_DIR="/etc/swarmlet"
 CONFIG_FILE="${CONFIG_DIR}/runner.env"
 SERVICE_NAME="swarmlet-runner"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-REPO_URL="https://github.com/daverosedavis/zerg.git"  # TODO: Replace with versioned release tarball from GitHub releases
+GITHUB_REPO="daverosedavis/zerg"
+RUNNER_VERSION="${RUNNER_VERSION:-latest}"
 
 # ----- Colors for output -----
 RED='\033[0;31m'
@@ -93,6 +96,71 @@ validate_url() {
   fi
 }
 
+validate_runner_version() {
+  local version="$1"
+  if [[ -z "$version" ]]; then
+    log_error "Runner version is required (--version or RUNNER_VERSION)"
+    exit 1
+  fi
+
+  if [[ "$version" == "main" || "$version" == "master" || "$version" == "HEAD" ]]; then
+    log_error "Runner version must be a release tag (not $version)"
+    exit 1
+  fi
+}
+
+resolve_runner_release_tag() {
+  if [[ "$RUNNER_VERSION" != "latest" ]]; then
+    echo "$RUNNER_VERSION"
+    return 0
+  fi
+
+  local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+  local tag
+  tag=$(curl -fsSL "$api_url" | grep -m 1 '"tag_name"' | cut -d'"' -f4 || true)
+  if [[ -z "$tag" ]]; then
+    log_error "Failed to resolve latest runner release tag"
+    log_info "Set --version <tag> to install a specific release."
+    exit 1
+  fi
+
+  echo "$tag"
+}
+
+build_runner_archive_url() {
+  local tag="$1"
+  echo "https://github.com/${GITHUB_REPO}/archive/refs/tags/${tag}.tar.gz"
+}
+
+normalize_runner_version() {
+  local version="$1"
+  version="${version#v}"
+  version="${version#runner-}"
+  version="${version#runner-v}"
+  echo "$version"
+}
+
+verify_runner_package_version() {
+  local runner_dir="$1"
+  if [[ "$RUNNER_VERSION" == "latest" ]]; then
+    return 0
+  fi
+
+  local pkg_version
+  pkg_version=$(grep -m 1 '"version"' "$runner_dir/package.json" | cut -d'"' -f4 || true)
+  if [[ -z "$pkg_version" ]]; then
+    log_error "Failed to read runner package version for verification"
+    exit 1
+  fi
+
+  local normalized_version
+  normalized_version=$(normalize_runner_version "$RUNNER_VERSION")
+  if [[ "$pkg_version" != "$normalized_version" ]]; then
+    log_error "Runner version mismatch: expected ${normalized_version}, got ${pkg_version}"
+    exit 1
+  fi
+}
+
 install_bun() {
   if command -v bun &> /dev/null; then
     log_info "Bun is already installed: $(bun --version)"
@@ -138,21 +206,42 @@ download_runner_code() {
     rm -rf "$INSTALL_DIR"
   fi
 
-  # Create temporary directory for cloning
+  # Create temporary directory for download and extraction
   local temp_dir
   temp_dir=$(mktemp -d)
   trap "rm -rf '$temp_dir'" EXIT
 
-  # Clone repo
-  log_info "Cloning repository..."
-  if ! git clone --depth 1 "$REPO_URL" "$temp_dir"; then
-    log_error "Failed to clone repository"
+  local release_tag
+  release_tag=$(resolve_runner_release_tag)
+  local archive_url
+  archive_url=$(build_runner_archive_url "$release_tag")
+
+  log_info "Fetching runner release ${release_tag}..."
+  if ! curl -fsSL "$archive_url" -o "$temp_dir/runner.tar.gz"; then
+    log_error "Failed to download runner release: $archive_url"
     exit 1
   fi
 
+  local root_dir
+  root_dir=$(tar -tzf "$temp_dir/runner.tar.gz" | head -n 1 | cut -d"/" -f1)
+  if [[ -z "$root_dir" ]]; then
+    log_error "Failed to inspect runner archive"
+    exit 1
+  fi
+
+  tar -xzf "$temp_dir/runner.tar.gz" -C "$temp_dir"
+
+  local runner_dir="$temp_dir/$root_dir/apps/runner"
+  if [[ ! -d "$runner_dir" ]]; then
+    log_error "Runner directory not found in release archive"
+    exit 1
+  fi
+
+  verify_runner_package_version "$runner_dir"
+
   # Copy only the runner app
   mkdir -p "$INSTALL_DIR"
-  cp -r "$temp_dir/apps/runner/"* "$INSTALL_DIR/"
+  cp -r "$runner_dir/"* "$INSTALL_DIR/"
 
   # Install dependencies
   log_info "Installing dependencies..."
@@ -342,6 +431,7 @@ main() {
   local swarmlet_url="wss://api.swarmlet.com"
   local allow_insecure="false"
   local capabilities="exec.readonly"
+  local runner_version="$RUNNER_VERSION"
 
   # Parse arguments
   while [[ $# -gt 0 ]]; do
@@ -358,6 +448,10 @@ main() {
         swarmlet_url="$2"
         shift 2
         ;;
+      --version)
+        runner_version="$2"
+        shift 2
+        ;;
       --insecure)
         allow_insecure="true"
         shift
@@ -368,7 +462,7 @@ main() {
         ;;
       *)
         log_error "Unknown option: $1"
-        log_info "Usage: $0 --name <name> --token <token> [--url <url>] [--insecure] [--capabilities <caps>]"
+        log_info "Usage: $0 --name <name> --token <token> [--url <url>] [--version <tag>] [--insecure] [--capabilities <caps>]"
         exit 1
         ;;
     esac
@@ -396,6 +490,8 @@ main() {
   check_root "$@"
   validate_token "$enrollment_token"
   validate_url "$swarmlet_url" "$allow_insecure"
+  RUNNER_VERSION="$runner_version"
+  validate_runner_version "$RUNNER_VERSION"
 
   # Installation steps
   log_info "Starting installation for runner: $runner_name"
@@ -421,6 +517,7 @@ main() {
   echo "Runner Name:    $runner_name"
   echo "Swarmlet URL:   $swarmlet_url"
   echo "Capabilities:   $capabilities"
+  echo "Runner Version: $RUNNER_VERSION"
   echo ""
   echo "Service Status:"
   systemctl status "$SERVICE_NAME" --no-pager | head -n 10
@@ -433,4 +530,6 @@ main() {
   echo ""
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
