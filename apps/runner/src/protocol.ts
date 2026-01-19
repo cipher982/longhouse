@@ -2,6 +2,10 @@
  * WebSocket protocol message types for runner communication.
  */
 
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 // Runner -> Server messages
 
 export interface HelloMessage {
@@ -70,12 +74,39 @@ export interface RunnerMetadata {
   capabilities?: string[];
 }
 
+function detectDockerAvailable(): boolean {
+  const dockerHost = process.env.DOCKER_HOST;
+  if (dockerHost) {
+    if (dockerHost.startsWith('unix://')) {
+      const socketPath = dockerHost.slice('unix://'.length);
+      if (!socketPath) {
+        return false;
+      }
+      return existsSync(socketPath);
+    }
+    // For tcp:// or other schemes, assume availability if explicitly configured.
+    return true;
+  }
+
+  const candidates: string[] = [
+    '/var/run/docker.sock',
+    '/run/docker.sock',
+    join(homedir(), '.docker/run/docker.sock'),
+  ];
+
+  if (process.env.XDG_RUNTIME_DIR) {
+    candidates.push(join(process.env.XDG_RUNTIME_DIR, 'docker.sock'));
+  }
+
+  return candidates.some((socketPath) => existsSync(socketPath));
+}
+
 export function getRunnerMetadata(): RunnerMetadata {
   return {
     hostname: process.env.HOSTNAME || 'unknown',
     platform: process.platform,
     arch: process.arch,
     runner_version: '0.1.0',
-    docker_available: false, // TODO: Detect docker in Phase 3
+    docker_available: detectDockerAvailable(),
   };
 }
