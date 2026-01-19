@@ -57,3 +57,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added core service tests in `apps/zerg/backend/tests/unit/test_core_thread_service.py` for list scoping + create ownership.
 - Fix: Enforced ownership checks in `zerg.core.services.ThreadService` and mapped PermissionError to 403 in core router.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 8: Agent idempotency cache TTL
+- Test: Added `test_idempotency_cache_expires` in `apps/zerg/backend/tests/unit/test_agent_idempotency_cache.py`.
+- Fix: Added TTL + timestamped entries to agent idempotency cache and expiry on lookup.
+- Status: DONE (make test MINIMAL=1).
