@@ -155,6 +155,7 @@ def update_thread(thread_id: int, thread: ThreadUpdate, db: Session = Depends(ge
         active=thread.active,
         agent_state=thread.agent_state,
         memory_strategy=thread.memory_strategy,
+        thread_type=thread.thread_type,
     )
     return db_thread
 

@@ -79,6 +79,7 @@ def update_thread(
     active: Optional[bool] = None,
     agent_state: Optional[Dict[str, Any]] = None,
     memory_strategy: Optional[str] = None,
+    thread_type: Optional[str] = None,
 ):
     """Update a thread"""
     db_thread = db.query(Thread).filter(Thread.id == thread_id).first()
@@ -97,6 +98,8 @@ def update_thread(
         db_thread.agent_state = agent_state
     if memory_strategy is not None:
         db_thread.memory_strategy = memory_strategy
+    if thread_type is not None:
+        db_thread.thread_type = thread_type
 
     db_thread.updated_at = utc_now_naive()
     db.commit()

@@ -32,3 +32,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added `test_read_thread_messages_excludes_internal` in `apps/zerg/backend/tests/test_threads.py`.
 - Fix: Added `include_internal` flag to `crud.get_thread_messages` and set `include_internal=False` in the threads API.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 3: Thread update ignores thread_type
+- Test: Extended `test_update_thread` in `apps/zerg/backend/tests/test_threads.py` to assert thread_type updates.
+- Fix: Added `thread_type` handling in `crud.update_thread` and passed through in the threads API.
+- Status: DONE (make test MINIMAL=1).
