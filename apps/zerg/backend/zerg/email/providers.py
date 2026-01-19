@@ -1,17 +1,8 @@
 """Provider abstraction for *email* triggers.
 
-The concrete Gmail implementation is just a **thin wrapper** around the
-existing helper methods inside :pymod:`zerg.services.email_trigger_service`
-and :pymod:`zerg.services.gmail_api`.  No runtime behaviour changes are
-introduced – we only expose a common interface so that new providers (e.g.
-Outlook, generic IMAP) can be added incrementally without further bloating
-``EmailTriggerService``.
-
-Why a separate module instead of baking the classes into
-``email_trigger_service``?
-    * Avoid circular imports once ``EmailTriggerService`` depends on the
-      registry provided here.
-    * Keep the provider implementations easily discoverable.
+The Gmail implementation delegates to connector-centric helpers in
+``zerg.services.gmail_api`` and keeps the provider interface small so new
+providers (Outlook, IMAP) can be added without bloating the core services.
 
 The **registry pattern** keeps initialisation trivial: a global dictionary
 maps the provider identifier (string) to a *singleton* provider instance.  We
@@ -51,9 +42,8 @@ class EmailProvider(Protocol):
         2. Detecting new messages / events
         3. Publishing ``TRIGGER_FIRED`` and scheduling the agent run
 
-        The signature intentionally matches the existing private helper
-        ``EmailTriggerService._handle_gmail_trigger`` so we can migrate the
-        internal call-sites with minimal diff.
+        The signature keeps call-sites uniform across providers so the
+        trigger scheduler can delegate without branching.
         """
 
 
@@ -65,8 +55,7 @@ class EmailProvider(Protocol):
 class GmailProvider:  # noqa: D101 – obvious from context
     """Concrete EmailProvider implementation for **Gmail**.
 
-    The implementation was migrated from the legacy private helper
-    ``EmailTriggerService._handle_gmail_trigger`` so that the full handling
+    The implementation was migrated from legacy trigger handling so that the full handling
     logic now lives inside the provider itself.  This removes the
     cross-service dependency and makes the call-sites uniform across all
     current and future providers.
@@ -75,9 +64,8 @@ class GmailProvider:  # noqa: D101 – obvious from context
     name = "gmail"
 
     # A tiny in-memory cache that maps *refresh_token* → (access_token, expiry
-    # epoch).  We purposely keep it **per-process** – the EmailTriggerService
-    # as well as webhook callbacks live inside the same interpreter so a
-    # shared dictionary is sufficient.
+    # epoch).  We purposely keep it **per-process** because webhook callbacks
+    # and background services run in the same interpreter.
     _token_cache: dict[str, tuple[str, float]]
 
     def __init__(self) -> None:  # noqa: D401 – small helper

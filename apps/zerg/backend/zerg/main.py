@@ -81,7 +81,7 @@ from zerg.routers.workflows import router as workflows_router
 # Email trigger polling service (stub for now)
 # Background services ---------------------------------------------------------
 #
-# Long-running polling loops like *SchedulerService* and *EmailTriggerService*
+# Long-running polling loops like *SchedulerService*
 # keep the asyncio event-loop alive.  When the backend is imported by *pytest*
 # those tasks cause the test runner to **hang** after the last test finishes
 # unless they are stopped explicitly.  To make the entire test-suite

@@ -44,15 +44,8 @@ from zerg.database import get_db
 # Replace direct env look-up with unified Settings helper
 _settings = get_settings()
 
-# Event publication and agent execution are handled inside
-# `EmailTriggerService` from now on.  The router only enqueues the service
-# call so we keep webhook latency minimal.
-
-# Note: we *do not* start/stop the service here – it is already mounted by
-# `zerg.main` during application start.
-
-# Trigger processing moved into EmailTriggerService so webhook no longer
-# schedules agent runs directly.
+# Event publication and agent execution are handled by the Gmail provider.
+# The router keeps webhook latency minimal by enqueuing connector processing.
 
 logger = logging.getLogger(__name__)
 
