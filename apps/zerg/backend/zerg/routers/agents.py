@@ -112,11 +112,28 @@ router = APIRouter(tags=["agents"], dependencies=[Depends(get_current_user)])
 # Maps (idempotency_key, user_id) -> (agent_id, created_at)
 # For production, use Redis or database table
 IDEMPOTENCY_TTL_SECS = 600
+IDEMPOTENCY_MAX_SIZE = 1000
 IDEMPOTENCY_CACHE: dict[tuple[str, int], tuple[int, float]] = {}
 
 
 def _now() -> float:
     return time.time()
+
+
+def _cleanup_idempotency_cache() -> None:
+    """Remove expired entries and enforce size limit (called before storing new entry)."""
+    now = _now()
+    # Remove expired entries
+    expired = [k for k, (_, ts) in IDEMPOTENCY_CACHE.items() if now - ts > IDEMPOTENCY_TTL_SECS]
+    for k in expired:
+        IDEMPOTENCY_CACHE.pop(k, None)
+
+    # If at or over size limit, remove oldest entries to make room for new entry
+    if len(IDEMPOTENCY_CACHE) >= IDEMPOTENCY_MAX_SIZE:
+        sorted_keys = sorted(IDEMPOTENCY_CACHE.keys(), key=lambda k: IDEMPOTENCY_CACHE[k][1])
+        to_remove = len(IDEMPOTENCY_CACHE) - IDEMPOTENCY_MAX_SIZE + 1
+        for k in sorted_keys[:to_remove]:
+            IDEMPOTENCY_CACHE.pop(k, None)
 
 
 def _get_agents_for_scope(
@@ -158,6 +175,7 @@ def _check_idempotency_cache(key: str, user_id: int, db: Session) -> Optional[Ag
 
 def _store_idempotency_cache(key: str, user_id: int, agent_id: int) -> None:
     """Store successful agent creation in cache."""
+    _cleanup_idempotency_cache()
     cache_key = (key, user_id)
     IDEMPOTENCY_CACHE[cache_key] = (agent_id, _now())
 
