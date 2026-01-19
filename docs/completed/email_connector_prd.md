@@ -2,6 +2,7 @@
 
 > **Note:** This feature has been implemented. Implementation details may have evolved since this document was written.
 > For current documentation, see the root `docs/` directory.
+> **Status update (2026-01-19):** The status tracker below still lists open TODOs (Pub/Sub flow, watch renewal, observability). Treat this as *partially complete* until those items are closed.
 
 ---
 

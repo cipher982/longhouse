@@ -62,3 +62,7 @@ Follow-up fixes from the full review. For each item:
 - Test: Added `test_idempotency_cache_expires` in `apps/zerg/backend/tests/unit/test_agent_idempotency_cache.py`.
 - Fix: Added TTL + timestamped entries to agent idempotency cache and expiry on lookup.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 9: Doc status clarity for email connector PRD
+- Update: Added explicit status note at top of `docs/completed/email_connector_prd.md` to reflect remaining TODOs.
+- Status: DONE.
