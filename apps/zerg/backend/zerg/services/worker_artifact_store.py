@@ -32,6 +32,8 @@ import json
 import logging
 import os
 import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -40,6 +42,17 @@ from typing import Any
 from zerg.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+try:
+    import fcntl  # type: ignore
+
+    _HAS_FCNTL = True
+except ImportError:  # pragma: no cover - Windows/fallback path
+    fcntl = None
+    _HAS_FCNTL = False
+
+_INDEX_LOCKS: dict[str, threading.Lock] = {}
+_INDEX_LOCKS_GUARD = threading.Lock()
 
 
 class WorkerArtifactStore:
@@ -148,6 +161,11 @@ class WorkerArtifactStore:
         list[dict]
             List of worker metadata entries
         """
+        with self._index_lock():
+            return self._read_index_unlocked()
+
+    def _read_index_unlocked(self) -> list[dict[str, Any]]:
+        """Read the master index file without acquiring a lock."""
         try:
             with open(self.index_path, "r") as f:
                 return json.load(f)
@@ -162,6 +180,11 @@ class WorkerArtifactStore:
         index
             List of worker metadata entries
         """
+        with self._index_lock():
+            self._write_index_unlocked(index)
+
+    def _write_index_unlocked(self, index: list[dict[str, Any]]) -> None:
+        """Write the master index file without acquiring a lock."""
         with open(self.index_path, "w") as f:
             json.dump(index, f, indent=2)
 
@@ -175,17 +198,45 @@ class WorkerArtifactStore:
         metadata
             Worker metadata to store
         """
-        index = self._read_index()
+        with self._index_lock():
+            index = self._read_index_unlocked()
 
-        # Find existing entry or append new one
-        for i, entry in enumerate(index):
-            if entry.get("worker_id") == worker_id:
-                index[i] = metadata
-                break
-        else:
-            index.append(metadata)
+            # Find existing entry or append new one
+            for i, entry in enumerate(index):
+                if entry.get("worker_id") == worker_id:
+                    index[i] = metadata
+                    break
+            else:
+                index.append(metadata)
 
-        self._write_index(index)
+            self._write_index_unlocked(index)
+
+    def _get_process_lock(self) -> threading.Lock:
+        """Return a process-local lock for the index path."""
+        key = str(self.index_path.resolve())
+        with _INDEX_LOCKS_GUARD:
+            lock = _INDEX_LOCKS.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                _INDEX_LOCKS[key] = lock
+            return lock
+
+    @contextmanager
+    def _index_lock(self):
+        """Acquire an exclusive lock for index read/write operations."""
+        if _HAS_FCNTL:
+            lock_path = self.index_path.with_suffix(self.index_path.suffix + ".lock")
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(lock_path, "a") as lock_file:
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+        else:  # pragma: no cover - fallback on platforms without fcntl
+            lock = self._get_process_lock()
+            with lock:
+                yield
 
     def create_worker(
         self,
@@ -622,14 +673,15 @@ class WorkerArtifactStore:
         updates
             Dictionary of fields to update (merged into existing entry)
         """
-        index = self._read_index()
+        with self._index_lock():
+            index = self._read_index_unlocked()
 
-        for entry in index:
-            if entry.get("worker_id") == worker_id:
-                entry.update(updates)
-                break
+            for entry in index:
+                if entry.get("worker_id") == worker_id:
+                    entry.update(updates)
+                    break
 
-        self._write_index(index)
+            self._write_index_unlocked(index)
 
     def update_summary(self, worker_id: str, summary: str, summary_meta: dict[str, Any]) -> None:
         """Update worker metadata with extracted summary.
