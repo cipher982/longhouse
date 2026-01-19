@@ -47,3 +47,8 @@ Follow-up fixes from the full review. For each item:
 - Test: Added `test_tool_search_cache_disallows_pickle` in `apps/zerg/backend/tests/unit/test_tool_search_cache.py`.
 - Fix: Switched embeddings cache load to `allow_pickle=False`.
 - Status: DONE (make test MINIMAL=1).
+
+## Item 6: Jarvis runs N+1 agent lookup
+- Test: Added `TestListJarvisRuns.test_list_runs_avoids_agent_n_plus_one` in `apps/zerg/backend/tests/test_jarvis_runs.py`.
+- Fix: Prefetched agents via `selectinload` and removed per-run `crud.get_agent` calls.
+- Status: DONE (make test MINIMAL=1).
