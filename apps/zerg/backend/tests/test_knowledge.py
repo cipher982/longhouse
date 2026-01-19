@@ -432,6 +432,25 @@ class TestKnowledgeSyncService:
         assert source.sync_status == "success"
 
     @pytest.mark.asyncio
+    async def test_sync_user_text_source(self, db_session: Session, _dev_user: User):
+        """Test syncing a user_text source."""
+        source = knowledge_crud.create_knowledge_source(
+            db_session,
+            owner_id=_dev_user.id,
+            name="User Notes",
+            source_type="user_text",
+            config={"content": "Remember to rotate keys."},
+        )
+
+        await knowledge_sync_service.sync_knowledge_source(db_session, source.id)
+        db_session.refresh(source)
+        assert source.sync_status == "success"
+
+        docs = knowledge_crud.get_knowledge_documents(db_session, owner_id=_dev_user.id, source_id=source.id)
+        assert len(docs) == 1
+        assert docs[0].content_text == "Remember to rotate keys."
+
+    @pytest.mark.asyncio
     async def test_sync_knowledge_source_not_found(self, db_session: Session):
         """Test sync with non-existent source."""
         with pytest.raises(ValueError, match="not found"):
@@ -500,6 +519,26 @@ class TestKnowledgeAPI:
         assert data["source_type"] == "url"
         assert data["sync_status"] == "pending"
 
+    def test_create_source_user_text(self, client, db_session: Session, _dev_user: User):
+        """Test creating a user_text knowledge source."""
+        response = client.post(
+            "/api/knowledge/sources",
+            json={
+                "name": "My Notes",
+                "source_type": "user_text",
+                "config": {"content": "Important context"},
+            },
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "My Notes"
+        assert data["source_type"] == "user_text"
+        assert data["sync_status"] == "success"
+
+        docs = knowledge_crud.get_knowledge_documents(db_session, owner_id=_dev_user.id, source_id=data["id"])
+        assert len(docs) == 1
+        assert docs[0].content_text == "Important context"
+
     def test_create_source_invalid_type(self, client, _dev_user: User):
         """Test creating source with unsupported type."""
         response = client.post(
@@ -512,6 +551,19 @@ class TestKnowledgeAPI:
         )
         assert response.status_code == 400
         assert "Unsupported source_type" in response.json()["detail"]
+
+    def test_create_source_user_text_missing_content(self, client, _dev_user: User):
+        """Test creating user_text source without content."""
+        response = client.post(
+            "/api/knowledge/sources",
+            json={
+                "name": "Empty Notes",
+                "source_type": "user_text",
+                "config": {},
+            },
+        )
+        assert response.status_code == 400
+        assert "content" in response.json()["detail"].lower()
 
     def test_create_source_missing_url(self, client, _dev_user: User):
         """Test creating URL source without URL in config."""

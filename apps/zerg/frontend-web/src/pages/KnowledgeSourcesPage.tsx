@@ -3,6 +3,7 @@ import {
   useKnowledgeSources,
   useDeleteKnowledgeSource,
   useSyncKnowledgeSource,
+  useCreateKnowledgeSource,
 } from "../hooks/useKnowledgeSources";
 import { KnowledgeSourceCard } from "../components/KnowledgeSourceCard";
 import { AddKnowledgeSourceModal } from "../components/AddKnowledgeSourceModal";
@@ -26,6 +27,7 @@ export default function KnowledgeSourcesPage() {
   const { data: sources, isLoading, error } = useKnowledgeSources();
   const deleteMutation = useDeleteKnowledgeSource();
   const syncMutation = useSyncKnowledgeSource();
+  const createMutation = useCreateKnowledgeSource();
 
   const handleSync = async (id: number) => {
     setSyncingIds((prev) => new Set(prev).add(id));
@@ -53,10 +55,12 @@ export default function KnowledgeSourcesPage() {
     }
   };
 
-  // Phase 1: Mock handler - will wire up API in Phase 2
   const handleContextSubmit = async (title: string, content: string) => {
-    console.log("AddContextModal submit:", { title, content });
-    // TODO: Call API to create knowledge source with source_type: "user_text"
+    await createMutation.mutateAsync({
+      name: title,
+      source_type: "user_text",
+      config: { content } as unknown as Record<string, never>,
+    });
   };
 
   // Ready signal - indicates page is interactive (even if empty)

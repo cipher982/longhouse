@@ -349,6 +349,46 @@ async def sync_url_source(db: Session, source: KnowledgeSource) -> None:
         raise
 
 
+async def sync_user_text_source(db: Session, source: KnowledgeSource) -> None:
+    """Sync a user_text knowledge source.
+
+    Stores the user-provided content as a single KnowledgeDocument.
+
+    Args:
+        db: Database session
+        source: KnowledgeSource to sync (must be type="user_text")
+
+    Raises:
+        ValueError: If source_type is not "user_text" or content is missing
+    """
+    if source.source_type != "user_text":
+        raise ValueError(f"Expected source_type='user_text', got '{source.source_type}'")
+
+    content = source.config.get("content")
+    if not content or not isinstance(content, str):
+        error_msg = "User text source missing 'content' in config"
+        knowledge_crud.update_source_sync_status(db, source.id, status="failed", error=error_msg)
+        raise ValueError(error_msg)
+
+    try:
+        knowledge_crud.upsert_knowledge_document(
+            db,
+            source_id=source.id,
+            owner_id=source.owner_id,
+            path=f"user_text:{source.id}",
+            content_text=content,
+            title=source.name,
+            doc_metadata={"source_type": "user_text"},
+        )
+
+        knowledge_crud.update_source_sync_status(db, source.id, status="success")
+    except Exception as exc:
+        error_msg = f"Unexpected error syncing user_text source {source.id}: {exc}"
+        logger.exception(error_msg)
+        knowledge_crud.update_source_sync_status(db, source.id, status="failed", error=error_msg)
+        raise
+
+
 async def sync_knowledge_source(db: Session, source_id: int) -> None:
     """Sync a knowledge source by ID.
 
@@ -374,6 +414,8 @@ async def sync_knowledge_source(db: Session, source_id: int) -> None:
         await sync_url_source(db, source)
     elif source.source_type == "github_repo":
         await sync_github_repo_source(db, source)
+    elif source.source_type == "user_text":
+        await sync_user_text_source(db, source)
     else:
         raise ValueError(f"Unsupported source_type: {source.source_type}")
 
