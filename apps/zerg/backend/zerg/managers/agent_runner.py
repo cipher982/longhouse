@@ -216,34 +216,6 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
 
         self.enable_token_stream = get_settings().llm_token_stream
 
-    @staticmethod
-    def _count_done_tool_calls(messages: Sequence[BaseMessage]) -> int:
-        """Count unique done() tool calls in a message list."""
-        from langchain_core.messages import AIMessage
-        from langchain_core.messages import ToolMessage
-
-        seen_ids: set[str] = set()
-        count = 0
-
-        for msg in messages:
-            if isinstance(msg, AIMessage):
-                for tc in msg.tool_calls or []:
-                    if tc.get("name") != "done":
-                        continue
-                    tc_id = tc.get("id") or f"ai:{id(tc)}"
-                    if tc_id in seen_ids:
-                        continue
-                    seen_ids.add(tc_id)
-                    count += 1
-            elif isinstance(msg, ToolMessage) and msg.name == "done":
-                tc_id = msg.tool_call_id or f"tool:{id(msg)}"
-                if tc_id in seen_ids:
-                    continue
-                seen_ids.add(tc_id)
-                count += 1
-
-        return count
-
     # ------------------------------------------------------------------
     # Public API – asynchronous
     # ------------------------------------------------------------------
@@ -471,27 +443,16 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                             "total_tokens": self.usage_total_tokens,
                             "reasoning_tokens": self.usage_reasoning_tokens,
                         }
-                        done_calls = self._count_done_tool_calls(new_messages)
-                        if any(v is not None for v in usage_payload.values()) or done_calls:
+                        if any(v is not None for v in usage_payload.values()):
                             last_assistant_row = next(
                                 (row for row in reversed(created_rows) if row.role == "assistant"),
                                 None,
                             )
                             if last_assistant_row is not None:
                                 existing_meta = dict(last_assistant_row.message_metadata or {})
-                                if any(v is not None for v in usage_payload.values()):
-                                    existing_meta["usage"] = usage_payload
-                                if done_calls:
-                                    existing_meta["done_signal"] = True
-                                    existing_meta["done_calls"] = done_calls
+                                existing_meta["usage"] = usage_payload
                                 last_assistant_row.message_metadata = existing_meta
                                 db.commit()
-                                if done_calls:
-                                    logger.info(
-                                        "[AgentRunner] done() tool called %s time(s) in interrupted run",
-                                        done_calls,
-                                        extra={"tag": "AGENT"},
-                                    )
 
                 # Mark user messages processed
                 self.thread_service.mark_messages_processed(db, (row.id for row in unprocessed_rows))
@@ -570,25 +531,14 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
             "total_tokens": self.usage_total_tokens,
             "reasoning_tokens": self.usage_reasoning_tokens,
         }
-        done_calls = self._count_done_tool_calls(new_messages)
-        if any(v is not None for v in usage_payload.values()) or done_calls:
+        if any(v is not None for v in usage_payload.values()):
             last_assistant_row = next((row for row in reversed(created_rows) if row.role == "assistant"), None)
             if last_assistant_row is not None:
                 existing_meta = dict(last_assistant_row.message_metadata or {})
-                if any(v is not None for v in usage_payload.values()):
-                    existing_meta["usage"] = usage_payload
-                if done_calls:
-                    existing_meta["done_signal"] = True
-                    existing_meta["done_calls"] = done_calls
+                existing_meta["usage"] = usage_payload
                 last_assistant_row.message_metadata = existing_meta
                 db.commit()
                 logger.debug("[AgentRunner] Stored metadata on assistant message row id=%s", last_assistant_row.id)
-                if done_calls:
-                    logger.info(
-                        "[AgentRunner] done() tool called %s time(s) in run",
-                        done_calls,
-                        extra={"tag": "AGENT"},
-                    )
 
         # Mark user messages processed
         logger.debug(f"[AgentRunner] Marking {len(unprocessed_rows)} user messages as processed")
@@ -858,27 +808,16 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 "total_tokens": self.usage_total_tokens,
                 "reasoning_tokens": self.usage_reasoning_tokens,
             }
-            done_calls = self._count_done_tool_calls(new_messages)
-            if any(v is not None for v in usage_payload.values()) or done_calls:
+            if any(v is not None for v in usage_payload.values()):
                 last_assistant_row = next(
                     (row for row in reversed(created_rows) if row.role == "assistant"),
                     None,
                 )
                 if last_assistant_row is not None:
                     existing_meta = dict(last_assistant_row.message_metadata or {})
-                    if any(v is not None for v in usage_payload.values()):
-                        existing_meta["usage"] = usage_payload
-                    if done_calls:
-                        existing_meta["done_signal"] = True
-                        existing_meta["done_calls"] = done_calls
+                    existing_meta["usage"] = usage_payload
                     last_assistant_row.message_metadata = existing_meta
                     db.commit()
-                    if done_calls:
-                        logger.info(
-                            "[AgentRunner] done() tool called %s time(s) in continuation",
-                            done_calls,
-                            extra={"tag": "AGENT"},
-                        )
 
             # Touch thread timestamp
             self.thread_service.touch_thread_timestamp(db, thread.id)
@@ -1136,27 +1075,16 @@ class AgentRunner:  # noqa: D401 – naming follows project conventions
                 "total_tokens": self.usage_total_tokens,
                 "reasoning_tokens": self.usage_reasoning_tokens,
             }
-            done_calls = self._count_done_tool_calls(new_messages)
-            if any(v is not None for v in usage_payload.values()) or done_calls:
+            if any(v is not None for v in usage_payload.values()):
                 last_assistant_row = next(
                     (row for row in reversed(created_rows) if row.role == "assistant"),
                     None,
                 )
                 if last_assistant_row is not None:
                     existing_meta = dict(last_assistant_row.message_metadata or {})
-                    if any(v is not None for v in usage_payload.values()):
-                        existing_meta["usage"] = usage_payload
-                    if done_calls:
-                        existing_meta["done_signal"] = True
-                        existing_meta["done_calls"] = done_calls
+                    existing_meta["usage"] = usage_payload
                     last_assistant_row.message_metadata = existing_meta
                     db.commit()
-                    if done_calls:
-                        logger.info(
-                            "[AgentRunner] done() tool called %s time(s) in batch continuation",
-                            done_calls,
-                            extra={"tag": "AGENT"},
-                        )
 
             # Touch thread timestamp
             self.thread_service.touch_thread_timestamp(db, thread.id)

@@ -11,7 +11,6 @@ from zerg.connectors.resolver import CredentialResolver
 from zerg.tools.builtin.supervisor_tools import get_worker_metadata
 from zerg.tools.builtin.supervisor_tools import get_worker_evidence
 from zerg.tools.builtin.supervisor_tools import get_tool_output
-from zerg.tools.builtin.supervisor_tools import done
 from zerg.tools.builtin.supervisor_tools import grep_workers
 from zerg.tools.builtin.supervisor_tools import list_workers
 from zerg.tools.builtin.supervisor_tools import read_worker_file
@@ -280,13 +279,6 @@ def test_get_tool_output_no_context():
 
     assert "Error" in result
     assert "no credential context" in result
-
-
-def test_done_tool_returns_ack():
-    """done() should return a simple acknowledgement."""
-    result = done()
-
-    assert "Done" in result
 
 
 def test_read_worker_file_metadata(credential_context, temp_artifact_path, db_session):

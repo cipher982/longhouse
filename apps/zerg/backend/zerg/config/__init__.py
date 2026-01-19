@@ -121,9 +121,7 @@ class Settings:  # noqa: D401 – simple data container
     roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
     roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
 
-    # Supervisor context limits ----------------------------------------
-    supervisor_context_max_user_turns: int  # Max user turns to include (0 = disabled)
-    supervisor_context_max_chars: int  # Max character budget (0 = disabled)
+    # Supervisor tool output storage -----------------------------------
     supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     supervisor_tool_output_preview_chars: int  # Preview size for stored tool outputs
 
@@ -281,9 +279,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Roundabout settings
         roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
-        # Supervisor context limits
-        supervisor_context_max_user_turns=int(os.getenv("SUPERVISOR_CONTEXT_MAX_USER_TURNS", "0")),
-        supervisor_context_max_chars=int(os.getenv("SUPERVISOR_CONTEXT_MAX_CHARS", "0")),
+        # Supervisor tool output storage
         supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
         supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
         # E2E test database isolation
