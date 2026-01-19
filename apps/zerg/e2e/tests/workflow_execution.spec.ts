@@ -2,8 +2,16 @@ import { test, expect, type Page } from './fixtures';
 
 // Helper function to wait for workflow execution to complete
 async function waitForExecutionCompletion(page: Page, timeout = 30000) {
-  // Wait for run button to no longer show loading state
-  // Using polling approach to avoid CSP eval issues
+  const statusIndicator = page.locator('.execution-status');
+  const hasStatus = await statusIndicator.isVisible({ timeout: 5000 }).catch(() => false);
+
+  if (hasStatus) {
+    const finishedStatus = page.locator('.execution-status--finished, .execution-status--cancelled');
+    await expect(finishedStatus).toBeVisible({ timeout });
+    return;
+  }
+
+  // Fallback: Wait for run button to no longer show loading state
   const runBtn = page.locator('.run-button');
   await expect(runBtn).not.toHaveClass(/loading/, { timeout });
 }
@@ -107,10 +115,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
     await expect(runBtn).not.toHaveClass(/loading/);
   });
 
-  test.skip('Workflow execution with real-time log streaming', async ({ page, request }, testInfo) => {
-    // SKIP: Logs drawer selector needs investigation (#execution-logs-drawer not found)
-    // This test documents the expected behavior for real-time log streaming
-    // TODO: Fix logs drawer visibility after execution starts
+  test('Workflow execution with real-time log streaming', async ({ page, request }, testInfo) => {
     const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
@@ -132,21 +137,18 @@ test.describe('Workflow Execution End-to-End Tests', () => {
     // Verify execution starts (button shows loading state)
     await expect(runBtn).toHaveClass(/loading/, { timeout: 5000 });
 
-    // Check if logs button is available
-    const logsButton = page.locator('.logs-button');
-    const hasLogsButton = await logsButton.isVisible({ timeout: 2000 }).catch(() => false);
+    // Logs panel should auto-open on execution start
+    const logsDrawer = page.locator('#execution-logs-drawer');
+    await expect(logsDrawer).toBeVisible({ timeout: 10000 });
 
-    if (hasLogsButton) {
-      await logsButton.click();
-      await page.waitForTimeout(1000);
-
-      // Look for any logs-related UI element
-      const logsUI = await page.locator('[id*="log"], [class*="log"]').first().isVisible({ timeout: 2000 }).catch(() => false);
-
-      if (logsUI) {
-        console.log('✅ Logs UI found - streaming feature is accessible');
-      }
-    }
+    // Wait for at least one log entry to appear
+    const logEntries = logsDrawer.locator('.log-entry');
+    await expect
+      .poll(async () => logEntries.count(), {
+        timeout: 20000,
+        intervals: [500, 1000, 2000],
+      })
+      .toBeGreaterThan(0);
 
     // Wait for execution to complete
     await waitForExecutionCompletion(page, 60000);
@@ -191,10 +193,7 @@ test.describe('Workflow Execution End-to-End Tests', () => {
     await expect(logsDrawer).toBeVisible({ timeout: 2000 });
   });
 
-  test.skip('Workflow execution status indicator updates correctly', async ({ page, request }, testInfo) => {
-    // SKIP: Execution may complete too fast to verify phase transitions in test environment
-    // This test documents expected behavior of execution status indicators
-    // TODO: Investigate why execution phase still shows "Running" after completion
+  test('Workflow execution status indicator updates correctly', async ({ page, request }, testInfo) => {
     const workerId = String(testInfo.parallelIndex);
 
     // Create test agent via API
@@ -213,26 +212,22 @@ test.describe('Workflow Execution End-to-End Tests', () => {
 
     // Wait for execution status to appear
     const executionStatus = page.locator('.execution-status');
-    const hasStatus = await executionStatus.isVisible({ timeout: 5000 }).catch(() => false);
-
-    if (hasStatus) {
-      // Verify execution status UI exists
-      console.log('✅ Execution status indicator found');
-
-      // Check for phase element
-      const runningPhase = page.locator('.execution-phase');
-      const hasPhase = await runningPhase.first().isVisible({ timeout: 2000 }).catch(() => false);
-
-      if (hasPhase) {
-        console.log('✅ Execution phase indicator working');
-      }
-    }
+    await expect(executionStatus).toBeVisible({ timeout: 10000 });
+    await expect(executionStatus).toHaveClass(/execution-status--running/);
 
     // Wait for execution to complete
     await waitForExecutionCompletion(page, 60000);
 
-    // Verify execution completed
-    await expect(runBtn).not.toHaveClass(/loading/);
+    // Verify execution status transitions to finished
+    await expect
+      .poll(async () => executionStatus.getAttribute('class'), {
+        timeout: 10000,
+        intervals: [500, 1000, 2000],
+      })
+      .toContain('execution-status--finished');
+
+    const phaseLabel = executionStatus.locator('.execution-phase');
+    await expect(phaseLabel).toHaveText(/Finished/i);
   });
 
   test('Workflow save and load persistence', async ({ page, request }, testInfo) => {
