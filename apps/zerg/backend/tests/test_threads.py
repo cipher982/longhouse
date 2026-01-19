@@ -166,6 +166,7 @@ def test_update_thread(client: TestClient, sample_thread: Thread):
         "active": False,
         "agent_state": {"updated": "state"},
         "memory_strategy": "summary",
+        "thread_type": "manual",
     }
 
     response = client.put(f"/api/threads/{sample_thread.id}", json=update_data)
@@ -176,6 +177,7 @@ def test_update_thread(client: TestClient, sample_thread: Thread):
     assert updated_thread["active"] == update_data["active"]
     assert updated_thread["agent_state"] == update_data["agent_state"]
     assert updated_thread["memory_strategy"] == update_data["memory_strategy"]
+    assert updated_thread["thread_type"] == update_data["thread_type"]
 
     # Verify the thread was updated in the database
     response = client.get(f"/api/threads/{sample_thread.id}")
