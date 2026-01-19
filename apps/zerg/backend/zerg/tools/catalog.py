@@ -34,7 +34,6 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "read_worker_result",
         "get_worker_evidence",
         "get_tool_output",
-        "done",
         "grep_workers",
         "get_worker_metadata",
         # User interaction
@@ -78,7 +77,6 @@ CATEGORY_PREFIXES = {
     "read_worker": "supervisor",
     "get_worker_evidence": "supervisor",
     "get_tool_output": "supervisor",
-    "done": "supervisor",
     "grep_workers": "supervisor",
     "get_worker": "supervisor",
     "contact_user": "supervisor",
