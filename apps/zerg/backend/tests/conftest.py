@@ -599,6 +599,26 @@ def unauthenticated_client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    with TestClient(app, backend="asyncio") as client:
+        yield client
+
+    app.dependency_overrides = {}
+
+
+@pytest.fixture
+def unauthenticated_client_no_raise(db_session):
+    """
+    Create a FastAPI TestClient that returns error responses instead of raising.
+    """
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+
     with TestClient(app, backend="asyncio", raise_server_exceptions=False) as client:
         yield client
 
