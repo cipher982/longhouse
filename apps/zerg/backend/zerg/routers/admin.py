@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 # Centralised settings
 from zerg.config import get_settings
+from zerg.database import DB_SCHEMA
 
 # Database helpers
 from zerg.database import Base
@@ -120,7 +121,7 @@ def clear_user_data(engine) -> dict[str, any]:
     )
 
     # Discover all tables from SQLAlchemy metadata
-    all_tables = set(Base.metadata.tables.keys())
+    all_tables = {table.name for table in Base.metadata.tables.values()}
 
     # Tables to preserve (infrastructure/auth)
     # Preserve infrastructure/auth tables.
@@ -398,7 +399,7 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
                 return 0
 
         # Use schema discovery instead of hardcoded table list
-        key_tables = list(Base.metadata.tables.keys())
+        key_tables = [table.name for table in Base.metadata.tables.values()]
         tables_before: dict[str, int] = {t: _safe_count(t) for t in key_tables}
         total_before = sum(tables_before.values())
         diagnostics["tables_before_counts"] = tables_before
@@ -419,13 +420,15 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
                     with engine.connect() as ddl_conn:
                         ddl_conn.execute(_t("SET lock_timeout = '3s'"))
                         ddl_conn.execute(_t("SET statement_timeout = '30s'"))
+                        current_schema = ddl_conn.execute(_t("SELECT current_schema()")).scalar() or DB_SCHEMA
 
                         # Log tables before drop
                         tables_before_drop = ddl_conn.execute(
                             _t("""
                             SELECT tablename FROM pg_tables
-                            WHERE schemaname = 'public' AND tablename NOT LIKE 'pg_%'
-                        """)
+                            WHERE schemaname = :schema AND tablename NOT LIKE 'pg_%'
+                        """),
+                            {"schema": current_schema},
                         ).fetchall()
                         logger.info(f"Tables before drop: {[t[0] for t in tables_before_drop]}")
 
@@ -435,8 +438,9 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user, worker_id:
                         tables_after_drop = ddl_conn.execute(
                             _t("""
                             SELECT tablename FROM pg_tables
-                            WHERE schemaname = 'public' AND tablename NOT LIKE 'pg_%'
-                        """)
+                            WHERE schemaname = :schema AND tablename NOT LIKE 'pg_%'
+                        """),
+                            {"schema": current_schema},
                         ).fetchall()
                         logger.info(f"Tables after drop: {[t[0] for t in tables_after_drop]}")
 
@@ -611,10 +615,11 @@ async def fix_database_schema():
 
             # Check if updated_at column exists
             inspector = sa.inspect(engine)
-            if not inspector.has_table("connectors"):
+            current_schema = session.execute(text("SELECT current_schema()")).scalar() or DB_SCHEMA
+            if not inspector.has_table("connectors", schema=current_schema):
                 return {"message": "Connectors table does not exist"}
 
-            columns = [col["name"] for col in inspector.get_columns("connectors")]
+            columns = [col["name"] for col in inspector.get_columns("connectors", schema=current_schema)]
 
             if "updated_at" in columns:
                 return {"message": "updated_at column already exists"}

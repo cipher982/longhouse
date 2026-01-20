@@ -45,6 +45,7 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
 
     # Import Base first to ensure models are registered
 
+    from zerg.database import DB_SCHEMA
     from zerg.database import Base
 
     with engine.begin() as conn:
@@ -60,7 +61,7 @@ def recreate_worker_schema(engine: Engine, worker_id: str) -> str:
         # IMPORTANT: We use schema_translate_map so SQLAlchemy performs both the
         # "does this table exist?" checks and the CREATE TABLE statements in the
         # *target* schema, not the database's default schema (usually public).
-        ddl_conn = conn.execution_options(schema_translate_map={None: schema_name})
+        ddl_conn = conn.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
         Base.metadata.create_all(bind=ddl_conn, checkfirst=False)
 
     logger.debug(f"Recreated schema with fresh state: {schema_name}")
@@ -85,6 +86,7 @@ def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
     # Generate deterministic lock ID from schema name
     lock_id = zlib.crc32(f"ensure_schema_{schema_name}".encode())
 
+    from zerg.database import DB_SCHEMA
     from zerg.database import Base
 
     with engine.begin() as conn:
@@ -99,7 +101,7 @@ def ensure_worker_schema(engine: Engine, worker_id: str) -> str:
         # IMPORTANT: schema_translate_map ensures SQLAlchemy checks/creates tables
         # in *this schema* rather than accidentally treating "public" as the
         # default schema and skipping creation because tables exist there.
-        ddl_conn = conn.execution_options(schema_translate_map={None: schema_name})
+        ddl_conn = conn.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
         Base.metadata.create_all(bind=ddl_conn, checkfirst=True)
 
     logger.debug(f"Ensured schema exists: {schema_name}")
