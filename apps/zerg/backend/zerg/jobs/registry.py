@@ -94,12 +94,13 @@ class JobRegistry:
         return False
 
     async def run_job(self, job_id: str) -> JobRunResult:
-        """Execute a job immediately.
+        """Execute a job immediately with retry support.
 
         Handles:
         - Timeout enforcement
         - Error capture
         - Status tracking
+        - Automatic retries based on max_attempts config
         """
         config = self._jobs.get(job_id)
         if not config:
@@ -118,23 +119,39 @@ class JobRegistry:
         result = None
         error = None
         error_type = None
+        attempts = 0
+        max_attempts = config.max_attempts
 
-        try:
-            # Execute with timeout
-            result = await asyncio.wait_for(
-                config.func(),
-                timeout=config.timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            status = "timeout"
-            error = f"Job exceeded {config.timeout_seconds}s timeout"
-            error_type = "TimeoutError"
-            logger.error("Job %s timed out after %ds", job_id, config.timeout_seconds)
-        except Exception as e:
-            status = "failure"
-            error = str(e)[:5000]  # Truncate long errors
-            error_type = type(e).__name__
-            logger.exception("Job %s failed: %s", job_id, e)
+        while attempts < max_attempts:
+            attempts += 1
+            try:
+                # Execute with timeout
+                result = await asyncio.wait_for(
+                    config.func(),
+                    timeout=config.timeout_seconds,
+                )
+                # Success - break out of retry loop
+                status = "success"
+                error = None
+                error_type = None
+                break
+            except asyncio.TimeoutError:
+                status = "timeout"
+                error = f"Job exceeded {config.timeout_seconds}s timeout (attempt {attempts}/{max_attempts})"
+                error_type = "TimeoutError"
+                logger.error("Job %s timed out after %ds (attempt %d/%d)", job_id, config.timeout_seconds, attempts, max_attempts)
+            except Exception as e:
+                status = "failure"
+                error = f"{str(e)[:5000]} (attempt {attempts}/{max_attempts})"
+                error_type = type(e).__name__
+                logger.exception("Job %s failed (attempt %d/%d): %s", job_id, attempts, max_attempts, e)
+
+            # If we haven't exhausted retries and failed, wait before retry
+            if attempts < max_attempts and status != "success":
+                # Exponential backoff: 2^attempt seconds (2, 4, 8, ...)
+                backoff = min(2**attempts, 30)  # Cap at 30 seconds
+                logger.info("Retrying job %s in %ds (attempt %d/%d)", job_id, backoff, attempts + 1, max_attempts)
+                await asyncio.sleep(backoff)
 
         ended_at = datetime.now(UTC)
         duration_ms = int((ended_at - started_at).total_seconds() * 1000)

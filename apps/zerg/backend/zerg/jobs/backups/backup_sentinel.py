@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -221,12 +222,15 @@ async def fetch_last_snapshot_time(
     Parses: [.[] | select(.incomplete == null) | .startTime] | max
     """
     # Build kopia command, optionally with password from file
+    # Use shlex.quote to prevent shell injection from user-controlled paths
     list_all = path == "*"
-    path_arg = "--all" if list_all else path
+    path_arg = "--all" if list_all else shlex.quote(path)
+    safe_kopia_path = shlex.quote(kopia_path)
     if kopia_password_file:
-        command = f"KOPIA_PASSWORD=$(cat {kopia_password_file}) {kopia_path} snapshot list {path_arg} --json"
+        safe_password_file = shlex.quote(kopia_password_file)
+        command = f"KOPIA_PASSWORD=$(cat {safe_password_file}) {safe_kopia_path} snapshot list {path_arg} --json"
     else:
-        command = f"{kopia_path} snapshot list {path_arg} --json"
+        command = f"{safe_kopia_path} snapshot list {path_arg} --json"
 
     logger.debug("Fetching snapshot list from %s:%s", hostname, path)
 
