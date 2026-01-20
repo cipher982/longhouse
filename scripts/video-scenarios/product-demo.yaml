@@ -138,6 +138,9 @@ scenes:
         selector: '[data-testid="send-message-btn"]'
       - action: pause
         duration_ms: 3000
+      - action: wait
+        selector: '.message-group:last-child .message.assistant'
+        timeout_ms: 15000
       - action: pause_for_audio
 
   # Scene 4: Automation Request
@@ -163,6 +166,9 @@ scenes:
         selector: '[data-testid="send-message-btn"]'
       - action: pause
         duration_ms: 3500
+      - action: wait
+        selector: '.message-group:last-child .message.assistant'
+        timeout_ms: 15000
       - action: pause_for_audio
 
   # Scene 5: Canvas Workflow View
