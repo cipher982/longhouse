@@ -760,8 +760,8 @@ job_registry.register(
         id="backup-sentinel",
         cron="0 10 * * *",  # Daily at 10:00 UTC
         func=run,
-        timeout_seconds=600,  # 10 minutes
-        max_attempts=2,
+        timeout_seconds=300,  # 5 minutes (matches Sauron)
+        max_attempts=3,  # Match Sauron's retry policy
         tags=["backup", "monitoring", "critical"],
         project="infrastructure",
         description="Monitor Kopia backup freshness and health across all hosts",
