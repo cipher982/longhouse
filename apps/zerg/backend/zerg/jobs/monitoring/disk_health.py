@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC
@@ -34,8 +35,11 @@ CUBE_TAILSCALE_IP = "100.104.187.47"
 CUBE_SSH_PORT = 2222
 CUBE_BASTION = f"root@{DOCKER_HOST_SSH}"
 
-# State file in container (persisted via volume if needed, otherwise fresh each deploy)
-STATE_DIR = Path("/tmp/zerg-state")
+# State directory for persisting CRC error counts between runs.
+# NOTE: Changed from /tmp/sauron-state to /tmp/zerg-state during migration.
+# If using a volume mount for persistence, update the deployment config to match.
+# Can be overridden via ZERG_STATE_DIR environment variable.
+STATE_DIR = Path(os.getenv("ZERG_STATE_DIR", "/tmp/zerg-state"))
 STATE_FILE = STATE_DIR / "cube-disk-health.json"
 
 
