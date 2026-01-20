@@ -380,7 +380,7 @@ job_registry.register(
         cron="0 12 * * *",  # Daily at 12:00 UTC (matches Sauron schedule)
         func=run,
         timeout_seconds=120,  # 2 minutes
-        max_attempts=2,
+        max_attempts=3,  # Match Sauron's retry policy
         tags=["monitoring", "disk", "hardware"],
         project="infrastructure",
         description="Monitor SMART health data for cube server SATA drives",
