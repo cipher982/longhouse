@@ -112,6 +112,10 @@ DAILY_COST_GLOBAL_CENTS="10000"  # $100/day total
 DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 DISCORD_ENABLE_ALERTS="1"
 
+# State & Storage
+# Path for persistent state (e.g., worker artifacts, logs)
+ZERG_STATE_DIR="/data/swarmlet"
+
 # Environment
 ENVIRONMENT="production"
 AUTH_DISABLED="0"

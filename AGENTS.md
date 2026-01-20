@@ -53,11 +53,13 @@ Three-layer debugging infrastructure for investigating LLM behavior in superviso
 |----------|------|---------|
 | "Debug this trace end-to-end" | **Trace Debugger** | `make debug-trace TRACE=<uuid>` |
 | "What recent traces exist?" | Trace Debugger | `make debug-trace RECENT=1` |
+| "What's the trace coverage?" | Trace Debugger | `make trace-coverage` |
 | "What messages are in the thread?" | Thread Inspector | `make debug-thread THREAD_ID=1` |
 | "Are there duplicate messages?" | Validator | `make debug-validate THREAD_ID=1` |
 | "What's the workflow LangGraph checkpoint state?" | Inspector | `make debug-inspect THREAD_ID=1` |
 | "What did the LLM see/respond?" | Audit Log | `uv run python scripts/debug_run_audit.py --run-id 82` |
 | "Can I replay with different prompts?" | Replay Harness | `uv run python scripts/replay_run.py <run_id>` |
+| "List or trigger scheduled jobs" | Jobs API | `curl localhost:30080/api/jobs/` |
 
 ### Trace-Centric Debugging (Recommended)
 
@@ -78,6 +80,9 @@ make debug-trace TRACE=abc-123-def LEVEL=errors
 
 # List recent traces
 make debug-trace RECENT=1
+
+# Check trace completion coverage
+make trace-coverage
 ```
 
 **What it shows**:
@@ -320,12 +325,24 @@ make marketing-single NAME=chat-preview  # Capture one screenshot
 make marketing-list               # List available screenshots
 make marketing-validate           # Check outputs exist
 
+# Video Generation (Audio-First Pipeline)
+make video-audio       # Generate voiceover audio (RUN FIRST)
+make video-record      # Record scenes (headless, requires audio + dev stack)
+make video-process     # Post-process (combine, add audio, compress)
+make video-all         # Full pipeline (audio -> record -> process)
+
 # Validation (CI checks these)
 make validate      # All validation
 
 # Performance profiling (GPU, macOS only)
 make perf-gpu           # Landing page GPU measurement
 make perf-gpu-dashboard # Dashboard GPU measurement
+
+# Trace Debugging & Jobs
+make debug-trace TRACE=uuid  # Debug a trace end-to-end
+make trace-coverage          # Trace coverage report
+curl localhost:30080/api/jobs/    # List scheduled jobs (admin only)
+curl -X POST localhost:30080/api/jobs/disk_health/run  # Trigger job
 ```
 
 ## Deploying + Coolify Debugging

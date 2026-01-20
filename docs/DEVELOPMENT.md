@@ -65,8 +65,29 @@ make help
 # Quick diagnostics (ports, containers, env)
 make doctor
 
+# Trace Debugging (End-to-End timeline)
+make debug-trace TRACE=<uuid>
+
 # Reset Zerg database (DESTROYS DATA)
 make dev-reset-db
+```
+
+## Marketing & Video
+
+The repo includes tools for generating high-quality marketing assets (screenshots and demo videos).
+
+### Screenshots
+```bash
+make marketing-capture  # Capture all (chat, dashboard, canvas)
+make marketing-list     # List available screenshots
+```
+
+### Video Generation (Audio-First Pipeline)
+```bash
+make video-audio    # 1. Generate voiceover (OpenAI TTS)
+make video-record   # 2. Record scenes (Playwright)
+make video-process  # 3. Combine & compress (FFmpeg)
+make video-all      # Run all steps sequentially
 ```
 
 ---
