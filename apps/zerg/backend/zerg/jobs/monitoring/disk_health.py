@@ -377,7 +377,7 @@ async def run() -> dict[str, Any]:
 job_registry.register(
     JobConfig(
         id="disk-health-cube",
-        cron="0 */6 * * *",  # Every 6 hours
+        cron="0 12 * * *",  # Daily at 12:00 UTC (matches Sauron schedule)
         func=run,
         timeout_seconds=120,  # 2 minutes
         max_attempts=2,
