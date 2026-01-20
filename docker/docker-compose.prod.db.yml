@@ -1,0 +1,40 @@
+# Production Docker Compose - Database Only
+# Deploys as separate Coolify app: zerg-db
+#
+# Uses Coolify's built-in network for inter-service communication.
+# Service name becomes DNS hostname accessible by other Coolify apps.
+#
+# Use: docker compose -f docker/docker-compose.prod.db.yml up -d
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  zerg-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zerg}
+      POSTGRES_USER: ${POSTGRES_USER:-zerg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zerg} -d ${POSTGRES_DB:-zerg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - coolify
+    logging: *default-logging
+
+networks:
+  coolify:
+    external: true
+
+volumes:
+  postgres_data:
+    driver: local
