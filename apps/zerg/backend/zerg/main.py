@@ -58,6 +58,7 @@ from zerg.routers.graph_layout import router as graph_router
 from zerg.routers.hindsight import router as hindsight_router
 from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.jarvis_internal import router as jarvis_internal_router
+from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
@@ -588,6 +589,7 @@ app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
 app.include_router(hindsight_router, prefix=f"{API_PREFIX}")  # Hindsight session analysis
+app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
