@@ -1,0 +1,81 @@
+# Production Docker Compose - Backend API Only
+# Deploys as separate Coolify app: zerg-api
+# Domain: api.swarmlet.com
+#
+# Prerequisites:
+#   - zerg-db must be running (zerg-postgres hostname on coolify network)
+#   - Set ALLOWED_CORS_ORIGINS=https://swarmlet.com in Coolify env
+#
+# Use: docker compose -f docker/docker-compose.prod.backend.yml up -d
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  zerg-backend:
+    build:
+      context: .
+      dockerfile: docker/backend.dockerfile
+      target: production
+      args:
+        BUILD_ENV: production
+    restart: unless-stopped
+    # Note: No ports mapping - Coolify proxy handles external routing
+    environment:
+      ENVIRONMENT: production
+      MODELS_CONFIG_PATH: /config/models.json
+      DATABASE_URL: postgresql://${POSTGRES_USER:-zerg}:${POSTGRES_PASSWORD}@zerg-postgres:5432/${POSTGRES_DB:-zerg}
+      JWT_SECRET: ${JWT_SECRET}
+      FERNET_SECRET: ${FERNET_SECRET}
+      TRIGGER_SIGNING_SECRET: ${TRIGGER_SIGNING_SECRET}
+      AUTH_DISABLED: ${AUTH_DISABLED:-0}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
+      LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
+      DEV_ADMIN: ${DEV_ADMIN:-0}
+      # Life Hub integration
+      LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
+      LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
+      # Job queue (durable job execution via Life Hub DB)
+      JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
+      LIFE_HUB_DB_URL: ${LIFE_HUB_DB_URL:-}
+    volumes:
+      - backend_static:/app/static
+      - backend_data:/data
+      # SSH key access for worker infrastructure tools (ssh_exec)
+      - ${HOME}/.ssh:/home/zerg/.ssh:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - coolify
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+
+networks:
+  coolify:
+    external: true
+
+volumes:
+  backend_static:
+    driver: local
+  backend_data:
+    driver: local

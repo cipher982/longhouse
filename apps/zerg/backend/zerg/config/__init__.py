@@ -106,6 +106,10 @@ class Settings:  # noqa: D401 – simple data container
     lifehub_shipping_enabled: bool
     lifehub_url: str
     lifehub_api_key: str | None
+    lifehub_db_url: str | None  # Direct Postgres connection for job queue
+
+    # Job queue settings -----------------------------------------------
+    job_queue_enabled: bool  # Enable durable job queue (requires LIFE_HUB_DB_URL)
 
     # Container runner settings ----------------------------------------
     container_default_image: str | None
@@ -267,6 +271,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         lifehub_shipping_enabled=_truthy(os.getenv("LIFE_HUB_SHIPPING_ENABLED")),
         lifehub_url=os.getenv("LIFE_HUB_URL", "https://data.drose.io"),
         lifehub_api_key=os.getenv("LIFE_HUB_API_KEY"),
+        lifehub_db_url=os.getenv("LIFE_HUB_DB_URL"),
+        job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
         container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),

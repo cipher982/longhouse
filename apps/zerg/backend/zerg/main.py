@@ -16,6 +16,7 @@ if _settings.e2e_log_suppress:
     silence_info_logs()
 
 # --- TOP: Force silence for E2E or CLI if LOG_LEVEL=WARNING is set ---
+import asyncio
 import logging
 
 # ---------------------------------------------------------------------
@@ -332,6 +333,20 @@ async def lifespan(app: FastAPI):
                 failed.append(f"worker_job_processor ({e})")
                 logger.exception("Failed to start worker_job_processor")
 
+            # Job queue worker (durable job execution via Life Hub DB)
+            if _settings.job_queue_enabled:
+                try:
+                    from zerg.jobs.worker import enqueue_missed_runs
+                    from zerg.jobs.worker import run_queue_worker
+
+                    await enqueue_missed_runs()  # Backfill missed runs
+                    asyncio.create_task(run_queue_worker())  # Background worker loop
+                    started.append("job_queue_worker")
+                    logger.info("Job queue worker started (queue mode)")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"job_queue_worker ({e})")
+                    logger.exception("Failed to start job_queue_worker")
+
             if failed:
                 logger.warning(
                     "Background services partial startup: started=%s failed=%s",
@@ -386,6 +401,15 @@ async def lifespan(app: FastAPI):
                 await worker_job_processor.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop worker_job_processor")
+
+            # Close Life Hub DB pool (job queue)
+            if _settings.job_queue_enabled:
+                try:
+                    from zerg.jobs.lifehub_db import close_pool
+
+                    await close_pool()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Failed to close Life Hub DB pool")
 
             # Shutdown MCP stdio processes (subprocess-based MCP servers)
             try:

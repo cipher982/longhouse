@@ -38,6 +38,7 @@ class JobConfig:
     tags: list[str] = field(default_factory=list)
     project: str | None = None  # Project this job belongs to
     description: str = ""
+    queue_mode: bool = True  # Use durable queue (False = direct execution for debugging)
 
 
 @dataclass
@@ -215,8 +216,12 @@ class JobRegistry:
         except Exception as e:
             logger.error("Failed to ship job run to Life Hub: %s", e)
 
-    def schedule_all(self, scheduler: AsyncIOScheduler) -> int:
+    def schedule_all(self, scheduler: AsyncIOScheduler, use_queue: bool = False) -> int:
         """Schedule all enabled jobs with APScheduler.
+
+        Args:
+            scheduler: APScheduler instance
+            use_queue: If True, enqueue jobs to durable queue instead of running directly
 
         Returns count of jobs scheduled.
         """
@@ -228,18 +233,37 @@ class JobRegistry:
                 continue
 
             try:
-                # Wrap the run_job call for APScheduler
-                async def job_wrapper(job_id: str = config.id) -> None:
-                    await self.run_job(job_id)
+                # Determine if this job should use queue mode
+                job_uses_queue = use_queue and config.queue_mode
 
-                scheduler.add_job(
-                    job_wrapper,
-                    CronTrigger.from_crontab(config.cron),
-                    id=f"job_{config.id}",
-                    replace_existing=True,
-                )
+                if job_uses_queue:
+                    # Queue mode: enqueue to durable queue
+                    async def queue_wrapper(job_id: str = config.id) -> None:
+                        from zerg.jobs.worker import enqueue_scheduled_run
+
+                        await enqueue_scheduled_run(job_id)
+
+                    scheduler.add_job(
+                        queue_wrapper,
+                        CronTrigger.from_crontab(config.cron),
+                        id=f"job_{config.id}",
+                        replace_existing=True,
+                    )
+                    logger.info("Scheduled job %s with cron: %s (queue mode)", config.id, config.cron)
+                else:
+                    # Direct mode: run job immediately
+                    async def job_wrapper(job_id: str = config.id) -> None:
+                        await self.run_job(job_id)
+
+                    scheduler.add_job(
+                        job_wrapper,
+                        CronTrigger.from_crontab(config.cron),
+                        id=f"job_{config.id}",
+                        replace_existing=True,
+                    )
+                    logger.info("Scheduled job %s with cron: %s (direct mode)", config.id, config.cron)
+
                 count += 1
-                logger.info("Scheduled job %s with cron: %s", config.id, config.cron)
 
             except Exception as e:
                 logger.error("Failed to schedule job %s: %s", config.id, e)
@@ -251,12 +275,16 @@ class JobRegistry:
 job_registry = JobRegistry()
 
 
-def register_all_jobs(scheduler: AsyncIOScheduler | None = None) -> int:
+def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool = False) -> int:
     """Register and schedule all jobs.
 
     Call this during startup to:
     1. Import job modules (which register their configs)
     2. Optionally schedule all enabled jobs
+
+    Args:
+        scheduler: APScheduler instance (if None, only registers jobs without scheduling)
+        use_queue: If True and JOB_QUEUE_ENABLED, enqueue jobs to durable queue
 
     Returns count of jobs scheduled.
     """
@@ -273,7 +301,7 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None) -> int:
         logger.warning("Could not import monitoring jobs: %s", e)
 
     if scheduler:
-        return job_registry.schedule_all(scheduler)
+        return job_registry.schedule_all(scheduler, use_queue=use_queue)
 
     return 0
 
