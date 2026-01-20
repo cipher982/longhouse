@@ -116,7 +116,7 @@ Only output JSON objects, one per insight. If the session has nothing notable, o
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "gpt-4o-mini",  # Fast, cheap model for analysis
+                    "model": "gpt-5-mini",  # Fast, cheap model for analysis
                     "messages": [
                         {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
                         {"role": "user", "content": analysis_prompt},
@@ -144,20 +144,18 @@ Only output JSON objects, one per insight. If the session has nothing notable, o
 
 
 def _parse_insights(content: str, session_id: str, project: str | None) -> list[dict[str, Any]]:
-    """Parse insight JSON objects from LLM response."""
-    import json
-    import re
+    """Parse insight JSON objects from LLM response.
+
+    Uses a proper JSON parser that handles nested braces correctly.
+    """
 
     insights = []
 
-    # Find all JSON objects in the response
-    json_pattern = r"\{[^{}]*\}"
-    matches = re.findall(json_pattern, content, re.DOTALL)
+    # Try to find JSON objects using a proper bracket-matching approach
+    json_objects = _extract_json_objects(content)
 
-    for match in matches:
+    for data in json_objects:
         try:
-            data = json.loads(match)
-
             # Validate required fields
             if not all(k in data for k in ["insight_type", "title"]):
                 continue
@@ -178,10 +176,73 @@ def _parse_insights(content: str, session_id: str, project: str | None) -> list[
             }
             insights.append(insight)
 
-        except json.JSONDecodeError:
+        except (TypeError, AttributeError):
             continue
 
     return insights
+
+
+def _extract_json_objects(text: str) -> list[dict[str, Any]]:
+    """Extract JSON objects from text, handling nested braces correctly.
+
+    This parser properly handles nested objects unlike simple regex patterns.
+    """
+    import json
+
+    objects = []
+    i = 0
+
+    while i < len(text):
+        # Find the start of a potential JSON object
+        start = text.find("{", i)
+        if start == -1:
+            break
+
+        # Use bracket counting to find the matching close brace
+        depth = 0
+        in_string = False
+        escape_next = False
+        end = start
+
+        for j in range(start, len(text)):
+            char = text[j]
+
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == "\\":
+                escape_next = True
+                continue
+
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j + 1
+                    break
+
+        if depth == 0 and end > start:
+            try:
+                candidate = text[start:end]
+                obj = json.loads(candidate)
+                if isinstance(obj, dict):
+                    objects.append(obj)
+                i = end
+            except json.JSONDecodeError:
+                i = start + 1
+        else:
+            i = start + 1
+
+    return objects
 
 
 async def ship_insights_to_lifehub(
