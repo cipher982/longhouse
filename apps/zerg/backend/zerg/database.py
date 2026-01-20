@@ -8,6 +8,7 @@ from typing import Iterator
 
 import dotenv
 from sqlalchemy import Engine
+from sqlalchemy import MetaData
 from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.engine.url import make_url
@@ -82,8 +83,12 @@ _settings = get_settings()
 dotenv.load_dotenv(override=True)
 
 
+# Default schema for all Zerg tables (Life Hub-compatible)
+DB_SCHEMA = "zerg"
+_metadata = MetaData(schema=DB_SCHEMA)
+
 # Create Base class
-Base = declarative_base()
+Base = declarative_base(metadata=_metadata)
 
 # Import all models at module level to ensure they are registered with Base
 # This prevents "no such table" errors when worker databases are created
@@ -166,6 +171,22 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     kwargs.setdefault("pool_recycle", 300)
 
     return create_engine(db_url, **kwargs)
+
+
+def _apply_search_path(db_url: str, schema: str) -> str:
+    """Ensure Postgres connections default to the Zerg schema.
+
+    This keeps raw SQL (unqualified table names) pointed at the correct schema.
+    """
+    url = make_url(db_url)
+    query = dict(url.query)
+    existing_options = (query.get("options") or "").strip()
+    search_path_opt = f"-csearch_path={schema},public"
+
+    if "search_path" not in existing_options:
+        query["options"] = f"{existing_options} {search_path_opt}".strip() if existing_options else search_path_opt
+
+    return url.set(query=query).render_as_string(hide_password=False)
 
 
 def make_sessionmaker(engine: Engine) -> sessionmaker:
@@ -295,6 +316,7 @@ def _get_postgres_schema_session(worker_id: str) -> sessionmaker:
     schema_options = f"-csearch_path={schema_name},public"
     query["options"] = f"{existing_options} {schema_options}".strip() if existing_options else schema_options
     engine = make_engine(url.set(query=query).render_as_string(hide_password=False))
+    engine = engine.execution_options(schema_translate_map={DB_SCHEMA: schema_name})
 
     # Create test user for foreign key constraints (E2E tests need a user for agent creation)
     # Use ON CONFLICT DO NOTHING to handle concurrent schema initialization race conditions
@@ -376,7 +398,7 @@ def get_session_factory() -> sessionmaker:
             raise ValueError("DATABASE_URL not set in environment")
 
         logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
-        engine = make_engine(db_url)
+        engine = make_engine(_apply_search_path(db_url, DB_SCHEMA))
         return make_sessionmaker(engine)
 
     # --- Per-worker Postgres schema isolation (E2E tests) ---
@@ -409,7 +431,7 @@ def get_session_factory() -> sessionmaker:
 
 # Create a placeholder engine that will be overridden by tests or used in production
 if _settings.database_url:
-    default_engine = make_engine(_settings.database_url)
+    default_engine = make_engine(_apply_search_path(_settings.database_url, DB_SCHEMA))
     default_session_factory = make_sessionmaker(default_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage
@@ -530,6 +552,14 @@ def initialize_database(engine: Engine = None) -> None:
 
     target_engine = engine or default_engine
 
+    # Ensure schema exists for fresh databases
+    if target_engine is not None and target_engine.dialect.name == "postgresql":
+        from sqlalchemy import text
+
+        with target_engine.connect() as conn:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
+            conn.commit()
+
     # Debug: Check what tables will be created
     if os.getenv("NODE_ENV") == "test":
         table_names = [table.name for table in Base.metadata.tables.values()]
@@ -542,5 +572,8 @@ def initialize_database(engine: Engine = None) -> None:
         from sqlalchemy import inspect
 
         inspector = inspect(target_engine)
-        tables = inspector.get_table_names()
+        if target_engine.dialect.name == "postgresql":
+            tables = inspector.get_table_names(schema=DB_SCHEMA)
+        else:
+            tables = inspector.get_table_names()
         logger.debug("Tables created in database: %s", sorted(tables))
