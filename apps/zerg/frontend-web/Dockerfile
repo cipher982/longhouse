@@ -17,10 +17,14 @@ RUN bun install --frozen-lockfile || bun install
 COPY apps/zerg/frontend-web/ ./
 
 # Build args for Vite env vars (baked into JS bundle at build time)
+ARG VITE_API_BASE_URL
+ARG VITE_WS_BASE_URL
 ARG VITE_UMAMI_WEBSITE_ID
 ARG VITE_UMAMI_SCRIPT_SRC
 ARG VITE_UMAMI_DOMAINS
 
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_WS_BASE_URL=$VITE_WS_BASE_URL
 ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
 ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
 ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
@@ -32,12 +36,14 @@ RUN bun run build
 FROM nginx:alpine AS production
 
 COPY apps/zerg/frontend-web/nginx.conf /etc/nginx/nginx.conf
+COPY apps/zerg/frontend-web/docker-entrypoint.sh /docker-entrypoint.sh
 COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
-RUN test -f /usr/share/nginx/html/index.html
+RUN test -f /usr/share/nginx/html/index.html && \
+    chmod +x /docker-entrypoint.sh
 
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
 # Development target - Vite dev server with hot reload
 FROM oven/bun:alpine AS development

@@ -1,0 +1,61 @@
+# Production Docker Compose - Frontend Only
+# Deploys as separate Coolify app: zerg-web
+# Domain: swarmlet.com
+#
+# Runtime env vars (set in Coolify):
+#   API_BASE_URL=https://api.swarmlet.com/api
+#   WS_BASE_URL=wss://api.swarmlet.com/api/ws
+#
+# Build-time args for analytics (set in Coolify as "Available at Build Time"):
+#   VITE_UMAMI_WEBSITE_ID, VITE_UMAMI_SCRIPT_SRC, VITE_UMAMI_DOMAINS
+#
+# Use: docker compose -f docker/docker-compose.prod.frontend.yml up -d
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  zerg-frontend:
+    build:
+      context: .
+      dockerfile: apps/zerg/frontend-web/Dockerfile
+      target: production
+      args:
+        VITE_UMAMI_WEBSITE_ID: ${VITE_UMAMI_WEBSITE_ID}
+        VITE_UMAMI_SCRIPT_SRC: ${VITE_UMAMI_SCRIPT_SRC}
+        VITE_UMAMI_DOMAINS: ${VITE_UMAMI_DOMAINS}
+    restart: unless-stopped
+    # Note: No ports mapping - Coolify proxy handles external routing
+    environment:
+      # Runtime config - entrypoint generates config.js from these
+      API_BASE_URL: ${API_BASE_URL:-https://api.swarmlet.com/api}
+      WS_BASE_URL: ${WS_BASE_URL:-wss://api.swarmlet.com/api/ws}
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:80/ | grep -q 'Swarmlet'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - coolify
+    logging: *default-logging
+    # Note: read_only omitted because entrypoint generates config.js at startup
+    tmpfs:
+      - /var/cache/nginx:noexec,nosuid,size=50m,uid=1000,gid=1000
+      - /var/log/nginx:noexec,nosuid,size=10m,uid=1000,gid=1000
+      - /var/run:noexec,nosuid,size=10m,uid=1000,gid=1000
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 64M
+          cpus: '0.1'
+
+networks:
+  coolify:
+    external: true

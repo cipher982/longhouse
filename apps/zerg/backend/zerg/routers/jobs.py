@@ -216,3 +216,80 @@ def disable_job(
         project=config.project,
         description=config.description,
     )
+
+
+# Queue state endpoint schemas
+class QueueEntryInfo(BaseModel):
+    """Queue entry information for API responses."""
+
+    id: str
+    job_id: str
+    status: str
+    scheduled_for: str
+    attempts: int
+    max_attempts: int
+    lease_owner: str | None
+    last_error: str | None
+    created_at: str
+    finished_at: str | None
+
+
+class QueueStateResponse(BaseModel):
+    """Response for queue state query."""
+
+    entries: list[QueueEntryInfo]
+    total: int
+    queue_enabled: bool
+
+
+@router.get("/queue/state", response_model=QueueStateResponse)
+async def get_queue_state(
+    limit: int = 20,
+    current_user: UserModel = Depends(require_admin),
+):
+    """Get recent queue entries (admin only).
+
+    Returns recent entries from the job queue for debugging.
+    Queue must be enabled (JOB_QUEUE_ENABLED=1) for entries to exist.
+    """
+    from zerg.config import get_settings
+    from zerg.jobs.lifehub_db import is_lifehub_db_enabled
+
+    settings = get_settings()
+    queue_enabled = settings.job_queue_enabled and is_lifehub_db_enabled()
+
+    if not queue_enabled:
+        return QueueStateResponse(
+            entries=[],
+            total=0,
+            queue_enabled=False,
+        )
+
+    try:
+        from zerg.jobs.queue import get_recent_queue_entries
+
+        rows = await get_recent_queue_entries(limit)
+        entries = [
+            QueueEntryInfo(
+                id=str(row["id"]),
+                job_id=row["job_id"],
+                status=row["status"],
+                scheduled_for=row["scheduled_for"].isoformat() if row["scheduled_for"] else "",
+                attempts=row["attempts"],
+                max_attempts=row["max_attempts"],
+                lease_owner=row["lease_owner"],
+                last_error=row["last_error"],
+                created_at=row["created_at"].isoformat() if row["created_at"] else "",
+                finished_at=row["finished_at"].isoformat() if row["finished_at"] else None,
+            )
+            for row in rows
+        ]
+
+        return QueueStateResponse(
+            entries=entries,
+            total=len(entries),
+            queue_enabled=True,
+        )
+    except Exception as e:
+        logger.error("Failed to fetch queue state: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch queue state: {e}")
