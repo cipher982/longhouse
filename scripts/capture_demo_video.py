@@ -2,8 +2,8 @@
 """
 Capture product demo video with audio-driven timing.
 
-Default recording mode is headless frame capture (screenshots → ffmpeg H.264).
-This produces high-quality video without needing a visible browser window.
+Default recording mode is headless frame capture (screenshots → ffmpeg ProRes).
+This produces raw high-quality video without needing a visible browser window.
 
 Recording modes:
   - frames (default): Headless CDP screenshots piped to ffmpeg. High quality, no GUI needed.
