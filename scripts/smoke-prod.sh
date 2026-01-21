@@ -56,6 +56,25 @@ test_http() {
     fi
 }
 
+# Test HTTP with cookie auth
+test_http_auth() {
+    local name="$1"
+    local url="$2"
+    local expected="$3"
+    local cookie_jar="$4"
+
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" -b "$cookie_jar" "$url" 2>/dev/null || echo "000")
+
+    if [[ "$status" == "$expected" ]]; then
+        pass "$name ($status)"
+        return 0
+    else
+        fail "$name (expected $expected, got $status)"
+        return 1
+    fi
+}
+
 # Test JSON field
 test_json() {
     local name="$1"
@@ -206,6 +225,32 @@ test_config
 echo ""
 echo "--- Infrastructure ---"
 test_caddy
+
+# Authenticated tests (requires SMOKE_TEST_SECRET)
+if [[ -n "$SMOKE_TEST_SECRET" ]]; then
+    echo ""
+    echo "--- Authenticated Flow ---"
+    COOKIE_JAR=$(mktemp)
+
+    # Get session - verify login succeeded
+    LOGIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/api/auth/service-login" \
+        -H "X-Service-Secret: $SMOKE_TEST_SECRET" \
+        -c "$COOKIE_JAR")
+
+    if [[ "$LOGIN_STATUS" == "200" ]]; then
+        pass "Service login ($LOGIN_STATUS)"
+        test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
+        test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
+        test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+    else
+        fail "Service login (got $LOGIN_STATUS)"
+    fi
+
+    rm -f "$COOKIE_JAR"
+else
+    echo ""
+    warn "SMOKE_TEST_SECRET not set - skipping authenticated tests"
+fi
 
 # Summary
 echo ""
