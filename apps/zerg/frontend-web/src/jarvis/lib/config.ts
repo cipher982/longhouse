@@ -184,11 +184,21 @@ export function buildConversationManagerOptions(config: any): ConversationManage
 }
 
 /**
- * Get Zerg API URL - now uses relative path for same-origin calls
+ * Get Zerg API URL
+ * - In split deployment (frontend/backend on different domains): uses window.API_BASE_URL
+ * - In same-origin deployment: uses relative path for nginx proxy
  */
 export function getZergApiUrl(): string {
-  // Use empty string for same-origin API calls through nginx proxy
-  // The JarvisAPIClient already includes /api/ prefix in its endpoint paths
+  // Check for runtime config from /config.js (split deployment)
+  const runtimeApiUrl = typeof window !== 'undefined' && (window as any).API_BASE_URL;
+  if (runtimeApiUrl && typeof runtimeApiUrl === 'string') {
+    // window.API_BASE_URL includes /api suffix, but JarvisAPIClient adds /api/ prefix
+    // So we need the base URL without /api suffix
+    // e.g., "https://api.swarmlet.com/api" → "https://api.swarmlet.com"
+    return runtimeApiUrl.replace(/\/api\/?$/, '');
+  }
+
+  // Same-origin deployment: use empty string for relative paths through nginx proxy
   return '';
 }
 
