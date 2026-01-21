@@ -3,7 +3,7 @@
 # Domain: api.swarmlet.com
 #
 # Prerequisites:
-#   - zerg-db must be running (zerg-postgres hostname on coolify network)
+#   - Set DATABASE_URL to your Postgres instance (Life Hub or standalone)
 #   - Set ALLOWED_CORS_ORIGINS=https://swarmlet.com in Coolify env
 #
 # Use: docker compose -f docker/docker-compose.prod.backend.yml up -d
@@ -27,7 +27,7 @@ services:
     environment:
       ENVIRONMENT: production
       MODELS_CONFIG_PATH: /config/models.json
-      DATABASE_URL: postgresql://${POSTGRES_USER:-zerg}:${POSTGRES_PASSWORD}@zerg-postgres:5432/${POSTGRES_DB:-zerg}
+      DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
       FERNET_SECRET: ${FERNET_SECRET}
       TRIGGER_SIGNING_SECRET: ${TRIGGER_SIGNING_SECRET}
