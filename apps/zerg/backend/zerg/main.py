@@ -66,6 +66,7 @@ from zerg.routers.models import router as models_router
 from zerg.routers.oauth import router as oauth_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
+from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
 from zerg.routers.runs import router as runs_router
 from zerg.routers.stream import router as stream_router
@@ -73,6 +74,7 @@ from zerg.routers.sync import router as sync_router
 from zerg.routers.system import router as system_router
 from zerg.routers.templates import router as templates_router
 from zerg.routers.threads import router as threads_router
+from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.waitlist import router as waitlist_router
@@ -613,6 +615,8 @@ app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
 app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
+app.include_router(traces_router, prefix=f"{API_PREFIX}")  # Trace Explorer (admin only)
+app.include_router(reliability_router, prefix=f"{API_PREFIX}")  # Reliability Dashboard (admin only)
 
 # ---------------------------------------------------------------------------
 # Legacy admin routes without /api prefix – keep at very end so they override
