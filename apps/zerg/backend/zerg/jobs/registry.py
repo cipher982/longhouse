@@ -4,7 +4,6 @@ Provides a centralized registry for all scheduled jobs, with:
 - Job configuration (cron, timeout, retries)
 - Automatic registration with APScheduler
 - Error handling and status tracking
-- Life Hub integration for run history
 """
 
 from __future__ import annotations
@@ -157,7 +156,7 @@ class JobRegistry:
         ended_at = datetime.now(UTC)
         duration_ms = int((ended_at - started_at).total_seconds() * 1000)
 
-        run_result = JobRunResult(
+        return JobRunResult(
             job_id=job_id,
             status=status,
             started_at=started_at,
@@ -167,54 +166,6 @@ class JobRegistry:
             error=error,
             error_type=error_type,
         )
-
-        # Ship to Life Hub (fire-and-forget)
-        await self._ship_to_lifehub(run_result, config)
-
-        return run_result
-
-    async def _ship_to_lifehub(self, result: JobRunResult, config: JobConfig) -> None:
-        """Ship job run result to Life Hub for history tracking."""
-        try:
-            import httpx
-
-            from zerg.config import get_settings
-
-            settings = get_settings()
-            if settings.testing or not settings.lifehub_url:
-                return
-
-            payload = {
-                "job_key": f"zerg:{result.job_id}",
-                "job_id": result.job_id,
-                "scheduler": "zerg",
-                "status": result.status,
-                "started_at": result.started_at.isoformat(),
-                "ended_at": result.ended_at.isoformat(),
-                "duration_ms": result.duration_ms,
-                "error_message": result.error,
-                "error_type": result.error_type,
-                "tags": config.tags,
-                "project": config.project,
-                "metadata": result.result,
-            }
-
-            headers = {}
-            if settings.lifehub_api_key:
-                headers["X-API-Key"] = settings.lifehub_api_key
-
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    f"{settings.lifehub_url}/ingest/jobs/run",
-                    json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
-
-            logger.debug("Shipped job run %s to Life Hub", result.job_id)
-
-        except Exception as e:
-            logger.error("Failed to ship job run to Life Hub: %s", e)
 
     def schedule_all(self, scheduler: AsyncIOScheduler, use_queue: bool = False) -> int:
         """Schedule all enabled jobs with APScheduler.

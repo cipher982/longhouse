@@ -3,7 +3,7 @@
 # Domain: api.swarmlet.com
 #
 # Prerequisites:
-#   - Set DATABASE_URL to your Postgres instance (Life Hub or standalone)
+#   - Set DATABASE_URL to your Postgres instance
 #   - Set ALLOWED_CORS_ORIGINS=https://swarmlet.com in Coolify env
 #
 # Use: docker compose -f docker/docker-compose.prod.backend.yml up -d
@@ -38,9 +38,6 @@ services:
       ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-0}
-      # Life Hub integration
-      LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
-      LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
       # Job queue (durable job execution via ops schema)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
     volumes:

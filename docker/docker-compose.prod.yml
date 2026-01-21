@@ -56,9 +56,6 @@ services:
       ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
       LLM_TOKEN_STREAM: ${LLM_TOKEN_STREAM:-true}
       DEV_ADMIN: ${DEV_ADMIN:-0}
-      # Life Hub integration (URL default is in backend config)
-      LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
-      LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
       # Job queue (durable job execution via ops schema)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
     volumes:

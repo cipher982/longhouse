@@ -56,7 +56,6 @@ from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
 from zerg.routers.graph_layout import router as graph_router
-from zerg.routers.hindsight import router as hindsight_router
 from zerg.routers.jarvis import router as jarvis_router
 from zerg.routers.jarvis_internal import router as jarvis_internal_router
 from zerg.routers.jobs import router as jobs_router
@@ -333,7 +332,7 @@ async def lifespan(app: FastAPI):
                 failed.append(f"worker_job_processor ({e})")
                 logger.exception("Failed to start worker_job_processor")
 
-            # Job queue worker (durable job execution via Life Hub DB)
+            # Job queue worker (durable job execution)
             if _settings.job_queue_enabled:
                 try:
                     from zerg.jobs.worker import enqueue_missed_runs
@@ -402,14 +401,14 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop worker_job_processor")
 
-            # Close Life Hub DB pool (job queue)
+            # Close DB pool (job queue)
             if _settings.job_queue_enabled:
                 try:
-                    from zerg.jobs.lifehub_db import close_pool
+                    from zerg.jobs.ops_db import close_pool
 
                     await close_pool()
                 except Exception:  # noqa: BLE001
-                    logger.exception("Failed to close Life Hub DB pool")
+                    logger.exception("Failed to close DB pool")
 
             # Shutdown MCP stdio processes (subprocess-based MCP servers)
             try:
@@ -612,7 +611,6 @@ app.include_router(agent_connectors_router, prefix=f"{API_PREFIX}")  # Agent con
 app.include_router(account_connectors_router, prefix=f"{API_PREFIX}")  # Account-level connector credentials
 app.include_router(funnel_router, prefix=f"{API_PREFIX}")  # Funnel tracking
 app.include_router(waitlist_router, prefix=f"{API_PREFIX}")  # Public waitlist signup
-app.include_router(hindsight_router, prefix=f"{API_PREFIX}")  # Hindsight session analysis
 app.include_router(jobs_router, prefix=f"{API_PREFIX}")  # Scheduled jobs management
 
 # ---------------------------------------------------------------------------

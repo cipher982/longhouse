@@ -5,10 +5,8 @@ Ported from Sauron for use in scheduled jobs.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
@@ -17,65 +15,6 @@ import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
-
-
-def _record_alert_in_background(
-    message_id: str,
-    alert_type: str,
-    job_id: str,
-    subject: str,
-    metadata: dict[str, Any],
-) -> None:
-    """Fire-and-forget alert recording to Life Hub in background thread.
-
-    Ships alert to Life Hub's ops.sauron_alerts table (shared with Sauron)
-    for reply-based command processing. When a user replies to an alert email,
-    the email-commands job can look up the original alert context.
-    """
-    try:
-        asyncio.run(_ship_alert_to_lifehub(message_id, alert_type, job_id, subject, metadata))
-    except Exception as e:
-        logger.warning("Failed to record email for reply tracking: %s", e)
-
-
-async def _ship_alert_to_lifehub(
-    message_id: str,
-    alert_type: str,
-    job_id: str,
-    subject: str,
-    metadata: dict[str, Any],
-) -> None:
-    """Ship alert to Life Hub for reply tracking."""
-    import httpx
-
-    from zerg.config import get_settings
-
-    settings = get_settings()
-    if settings.testing or not settings.lifehub_url:
-        return
-
-    payload = {
-        "message_id": message_id,
-        "alert_type": alert_type,
-        "job_id": job_id,
-        "subject": subject,
-        "metadata": metadata,
-        "scheduler": "zerg",  # Distinguish from Sauron alerts
-    }
-
-    headers = {}
-    if settings.lifehub_api_key:
-        headers["X-API-Key"] = settings.lifehub_api_key
-
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.post(
-            f"{settings.lifehub_url}/ingest/ops/alert",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-
-    logger.debug("Shipped alert %s to Life Hub", message_id[:20])
 
 
 def _get_ses_client(*, region: str, access_key_id: str, secret_access_key: str):
@@ -154,15 +93,6 @@ def send_email(
         )
         message_id = response.get("MessageId")
         logger.info("Email sent: %s (job=%s)", message_id, job_id)
-
-        # Record for reply tracking (fire-and-forget in background thread)
-        if message_id:
-            thread = threading.Thread(
-                target=_record_alert_in_background,
-                args=(message_id, alert_type, job_id, subject, metadata or {}),
-                daemon=True,
-            )
-            thread.start()
 
         return message_id
 

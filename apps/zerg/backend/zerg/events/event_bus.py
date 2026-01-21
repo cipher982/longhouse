@@ -77,10 +77,7 @@ class EventType(str, Enum):
     SUPERVISOR_HEARTBEAT = "supervisor_heartbeat"
     WORKER_HEARTBEAT = "worker_heartbeat"
 
-    # Hindsight events (session analysis from Life Hub)
     SESSION_ENDED = "session_ended"  # External session (Claude Code, Codex, etc.) ended
-    HINDSIGHT_STARTED = "hindsight_started"  # Analysis worker started
-    HINDSIGHT_COMPLETE = "hindsight_complete"  # Analysis complete with insights
 
 
 class EventBus:
