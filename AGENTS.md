@@ -682,6 +682,12 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
 
 22. **Pre-commit + unstaged files**: If pre-commit hooks auto-fix files while you have unstaged changes, you get conflicts. Stage everything first (`git add -A`) before committing.
 
+23. **Split deployment API URLs**: Frontend uses `window.API_BASE_URL` from `/config.js` for API origin. Key files: `src/jarvis/lib/config.ts` (`toAbsoluteUrl()`), `public/funnel.js`.
+
+24. **Coolify domain port syntax**: Use `https://api.example.com:8000` to route to container port 8000. The `:8000` is for caddy-docker-proxy, not public.
+
+25. **Coolify env var changes need redeploy**: Restart does NOT pick up new env vars. Must redeploy via git push or Coolify UI.
+
 ## Environment Setup
 
 Copy `.env.example` to `.env` and fill in:
@@ -857,14 +863,14 @@ clifford (Coolify master)      zerg (build/runtime)
 
 ### Deployment Commands (Agent-Friendly)
 ```bash
-# Full automated deploy (trigger + poll + smoke tests)
-./scripts/deploy-prod.sh
-
-# Or step by step:
-git push origin main                    # Triggers auto-deploy
+git push origin onboard-sauron          # Triggers auto-deploy
 ./scripts/get-coolify-logs.sh 1         # Check status
-./scripts/smoke-prod.sh                 # Validate endpoints
+./scripts/smoke-prod.sh                 # Validate endpoints (16 checks)
+./scripts/smoke-prod.sh --quick         # Health check only
 ```
+
+**Smoke test covers**: health, CORS, auth (401s), Jarvis API, frontend pages, runtime config, Caddy errors.
+**Limitation**: Can't test authenticated chat flow (no service account yet).
 
 ### Server Access
 - **ssh zerg** - Container logs, runtime state
@@ -896,4 +902,3 @@ Example:
 | `docs/specs/jarvis-supervisor-unification-v2.1.md` | Architecture overview (v2.1) |
 | `docs/archive/super-siri-architecture.md` | Historical architecture (v2.0) |
 | `docs/work/` | Active PRDs (temporary, delete when done) |
-# Tue Jan 20 20:46:14 CST 2026
