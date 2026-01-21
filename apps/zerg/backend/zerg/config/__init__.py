@@ -122,6 +122,10 @@ class Settings:  # noqa: D401 – simple data container
     roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
     roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
 
+    # Bootstrap API settings -------------------------------------------
+    bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
+    skip_file_seed: bool  # Skip file-based auto-seeding (use API instead)
+
     # Supervisor tool output storage -----------------------------------
     supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     supervisor_tool_output_preview_chars: int  # Preview size for stored tool outputs
@@ -279,6 +283,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         # Roundabout settings
         roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
+        # Bootstrap API settings
+        bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
+        skip_file_seed=_truthy(os.getenv("SKIP_FILE_SEED")),
         # Supervisor tool output storage
         supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
         supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),

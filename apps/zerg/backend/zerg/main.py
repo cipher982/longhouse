@@ -47,6 +47,7 @@ from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
+from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agent_config import router as agent_config_router
 from zerg.routers.agent_connectors import router as agent_connectors_router
 from zerg.routers.agents import router as agents_router
@@ -587,6 +588,7 @@ app.include_router(threads_router, prefix=f"{API_PREFIX}{THREADS_PREFIX}")
 app.include_router(models_router, prefix=f"{API_PREFIX}{MODELS_PREFIX}")
 app.include_router(websocket_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
+app.include_router(admin_bootstrap_router, prefix=API_PREFIX)  # Bootstrap API for config seeding
 app.include_router(email_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(pubsub_webhook_router, prefix=f"{API_PREFIX}")
 app.include_router(connectors_router, prefix=f"{API_PREFIX}")

@@ -359,9 +359,26 @@ def run_auto_seed() -> dict:
 
     Called during FastAPI startup. All seeding is idempotent.
 
+    If SKIP_FILE_SEED=1 is set, skips file-based seeding entirely.
+    This is used in production when config is seeded via the bootstrap API.
+
     Returns:
         Dict with seeding results for logging.
     """
+    from zerg.config import get_settings
+
+    settings = get_settings()
+
+    # Skip file-based seeding if configured (use bootstrap API instead)
+    if settings.skip_file_seed:
+        logger.info("SKIP_FILE_SEED=1: Skipping file-based auto-seeding (use /api/admin/bootstrap/* endpoints)")
+        return {
+            "user_context": "skipped (SKIP_FILE_SEED)",
+            "credentials": "skipped (SKIP_FILE_SEED)",
+            "runners": "skipped (SKIP_FILE_SEED)",
+            "server_knowledge": "skipped (SKIP_FILE_SEED)",
+        }
+
     # In dev mode (AUTH_DISABLED=1), many subsystems (runners, user-context, credentials)
     # assume at least one deterministic "dev@local" user exists. Most request paths
     # create it lazily via the auth layer, but runner websockets can connect before
@@ -369,9 +386,6 @@ def run_auto_seed() -> dict:
     #
     # Creating the dev user here makes startup behavior deterministic and reduces log spam.
     try:
-        from zerg.config import get_settings
-
-        settings = get_settings()
         node_env = (os.getenv("NODE_ENV") or "").strip().lower()
         # Unit tests use NODE_ENV=test but don't always set TESTING=1; avoid mutating
         # the database state during tests.
