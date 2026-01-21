@@ -4,6 +4,8 @@
 
 **Zerg** is an AI agent orchestration platform. **Jarvis** is a voice/text UI that connects to Zerg. Together they form a "swarm" system where Jarvis handles user interaction and Zerg manages multi-agent workflows.
 
+**Owner**: david010@gmail.com (David Rose) — primary account for production, admin access, and all integrations. Never make up alternative emails.
+
 ## Architecture Philosophy (v2.2)
 
 **"Trust the AI"** — Modern LLMs are smart enough to figure things out. Give them context and autonomy, not rigid decision trees.
