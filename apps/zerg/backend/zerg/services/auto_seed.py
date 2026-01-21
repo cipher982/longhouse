@@ -175,9 +175,10 @@ def _seed_runners() -> bool:
     from zerg.crud import runner_crud
 
     current_env = (os.getenv("ENVIRONMENT") or "").strip().lower()
-    if current_env == "production":
-        # Runner seeding is meant for dev DX; avoid silently creating runners in production.
-        logger.debug("Skipping runners auto-seed in production environment")
+    seed_runners_enabled = os.getenv("SEED_RUNNERS", "0").strip() == "1"
+    if current_env == "production" and not seed_runners_enabled:
+        # Runner seeding is opt-in in production via SEED_RUNNERS=1
+        logger.debug("Skipping runners auto-seed in production (set SEED_RUNNERS=1 to enable)")
         return True
 
     config_path = _find_config_file(RUNNERS_PATHS)
