@@ -34,11 +34,10 @@ Ports (dev): nginx 30080 external; service ports 47200 (frontend), 47300 (backen
 ## Highlights
 
 - **Durable Runs (v2.2):** Runs survive disconnects and timeouts. `asyncio.shield()` prevents server-side cancellation on client timeout; `DEFERRED` state for long-running work.
-- **Hindsight Session Analysis:** Automated post-session analysis (via Life Hub webhooks) to extract insights and tasks from Claude Code/Codex sessions.
 - **Progressive Disclosure:** Large tool outputs stored by reference with markers; worker evidence fetched on-demand via `get_worker_evidence()`. Context trimming keeps LLM prompts within budget.
 - **Worker supervision (v2.1):** tool events, activity ticker, roundabout monitoring (heuristic warnings, no auto-cancel), fail-fast critical errors.
 - **Supervisor tool visibility (v2.2):** supervisor-direct tool calls emit SSE tool events and render as inline ToolCards in chat.
-- **Jobs Infrastructure:** Scheduled background jobs (backups, monitoring) with manual trigger API and Life Hub integration.
+- **Jobs Infrastructure:** Scheduled background jobs (backups, monitoring) with manual trigger API.
 - **Lazy tool loading:** 65+ tools available via `search_tools()`, ~14 core tools always bound.
 - **Unified frontend (v2.1):** single origin, CORS tightened, cross-nav links, Playwright e2e green.
 - **Bun-only JS workspace:** single `bun.lock`; Python via `uv`.

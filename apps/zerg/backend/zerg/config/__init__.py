@@ -102,10 +102,6 @@ class Settings:  # noqa: D401 – simple data container
     # Jarvis integration ------------------------------------------------
     jarvis_device_secret: str | None
 
-    # Life Hub integration ---------------------------------------------
-    lifehub_shipping_enabled: bool
-    lifehub_url: str
-    lifehub_api_key: str | None
     # Job queue settings -----------------------------------------------
     job_queue_enabled: bool  # Enable durable job queue (uses DATABASE_URL)
 
@@ -266,9 +262,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
         db_reset_password=os.getenv("DB_RESET_PASSWORD"),
         jarvis_device_secret=os.getenv("JARVIS_DEVICE_SECRET"),
-        lifehub_shipping_enabled=_truthy(os.getenv("LIFE_HUB_SHIPPING_ENABLED")),
-        lifehub_url=os.getenv("LIFE_HUB_URL", "https://data.drose.io"),
-        lifehub_api_key=os.getenv("LIFE_HUB_API_KEY"),
         job_queue_enabled=_truthy(os.getenv("JOB_QUEUE_ENABLED")),
         # Container runner defaults
         container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),

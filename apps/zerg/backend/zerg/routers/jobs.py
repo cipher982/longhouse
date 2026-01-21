@@ -144,7 +144,6 @@ async def run_job(
     - Debugging job behavior
 
     The job runs with full retry support and timeout enforcement.
-    Results are shipped to Life Hub for tracking.
     """
     _ensure_jobs_registered()
 
@@ -252,7 +251,7 @@ async def get_queue_state(
     Returns recent entries from the job queue for debugging.
     Queue must be enabled (JOB_QUEUE_ENABLED=1) for entries to exist.
     """
-    from zerg.jobs.lifehub_db import is_job_queue_db_enabled
+    from zerg.jobs.ops_db import is_job_queue_db_enabled
 
     queue_enabled = is_job_queue_db_enabled()
 

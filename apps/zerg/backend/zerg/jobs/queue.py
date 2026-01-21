@@ -19,8 +19,8 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
-from zerg.jobs.lifehub_db import get_job_queue_db_url
-from zerg.jobs.lifehub_db import get_pool
+from zerg.jobs.ops_db import get_job_queue_db_url
+from zerg.jobs.ops_db import get_pool
 
 logger = logging.getLogger(__name__)
 

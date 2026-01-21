@@ -93,9 +93,6 @@ services:
       RELOAD: "true"
       DEBUG: ${DEBUG:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Life Hub integration (URL default is in backend config)
-      LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
-      LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
       # Job queue (durable job execution via ops schema)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
       # E2E test tool stubbing (optional - only set when running E2E tests)

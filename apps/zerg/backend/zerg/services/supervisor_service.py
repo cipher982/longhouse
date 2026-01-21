@@ -937,9 +937,6 @@ class SupervisorService:
                 result_text=result_text or "",
                 trace_id=str(run.trace_id) if run.trace_id else None,
             )
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
-
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
 
             logger.info(f"Supervisor run {run.id} completed in {duration_ms}ms", extra={"tag": "AGENT"})
 
@@ -993,10 +990,6 @@ class SupervisorService:
                 },
             )
 
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
-
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
-
         except Exception as e:
             # Calculate duration
             end_time = datetime.now(timezone.utc)
@@ -1049,10 +1042,6 @@ class SupervisorService:
                 },
             )
             reset_seq(run.id)
-
-            from zerg.services.lifehub_shipper import schedule_lifehub_shipping
-
-            schedule_lifehub_shipping(run.id, str(run.trace_id) if run.trace_id else None)
 
             logger.exception(f"Supervisor run {run.id} failed: {e}")
 
