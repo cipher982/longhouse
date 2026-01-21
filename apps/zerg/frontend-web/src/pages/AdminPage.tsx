@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -895,6 +896,72 @@ function AdminPage() {
                     <span className="info-value">{summary.latency_ms.p50}ms</span>
                   </div>
                 </div>
+              </div>
+            </Card.Body>
+          </Card>
+
+          {/* Developer Tools */}
+          <Card>
+            <Card.Header>
+              <h3 style={{ margin: 0 }}>Developer Tools</h3>
+            </Card.Header>
+            <Card.Body>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--space-4)" }}>
+                <Link to="/traces" style={{ textDecoration: "none" }}>
+                  <div style={{
+                    padding: "var(--space-5)",
+                    borderRadius: "8px",
+                    border: "1px solid var(--color-border)",
+                    backgroundColor: "rgba(168, 85, 247, 0.05)",
+                    transition: "all 0.15s ease",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = "rgba(168, 85, 247, 0.1)";
+                    e.currentTarget.style.borderColor = "rgba(168, 85, 247, 0.3)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "rgba(168, 85, 247, 0.05)";
+                    e.currentTarget.style.borderColor = "var(--color-border)";
+                  }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
+                      <span style={{ fontSize: "1.25rem" }}>🔍</span>
+                      <span style={{ fontWeight: 600, color: "var(--color-text)" }}>Trace Explorer</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
+                      Debug supervisor runs, workers, and LLM calls with unified trace timelines.
+                    </p>
+                  </div>
+                </Link>
+
+                <Link to="/reliability" style={{ textDecoration: "none" }}>
+                  <div style={{
+                    padding: "var(--space-5)",
+                    borderRadius: "8px",
+                    border: "1px solid var(--color-border)",
+                    backgroundColor: "rgba(16, 185, 129, 0.05)",
+                    transition: "all 0.15s ease",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.1)";
+                    e.currentTarget.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.05)";
+                    e.currentTarget.style.borderColor = "var(--color-border)";
+                  }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
+                      <span style={{ fontSize: "1.25rem" }}>📊</span>
+                      <span style={{ fontWeight: 600, color: "var(--color-text)" }}>Reliability Dashboard</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
+                      Monitor system reliability metrics, error rates, and performance trends.
+                    </p>
+                  </div>
+                </Link>
               </div>
             </Card.Body>
           </Card>
