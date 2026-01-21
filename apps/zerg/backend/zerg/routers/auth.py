@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
@@ -280,6 +281,47 @@ def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
     # Set session cookie for browser auth
     _set_session_cookie(response, access_token, expires_in)
 
+    return TokenOut(access_token=access_token, expires_in=expires_in)
+
+
+@router.post("/service-login", response_model=TokenOut, include_in_schema=False)
+def service_login(request: Request, response: Response, db: Session = Depends(get_db)) -> TokenOut:
+    """Service account login for automated testing.
+
+    Requires X-Service-Secret header matching SMOKE_TEST_SECRET env var.
+    Hidden from OpenAPI docs for reduced discoverability.
+    """
+    secret = request.headers.get("X-Service-Secret") or ""
+    expected = _settings.smoke_test_secret or ""
+
+    # Fail closed + constant-time comparison to prevent timing attacks
+    if not expected or not hmac.compare_digest(secret, expected):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    # Get or create service user (handles race condition)
+    user = crud.get_user_by_email(db, "smoke@service.local")
+    if not user:
+        try:
+            user = crud.create_user(
+                db,
+                email="smoke@service.local",
+                provider="service",
+                provider_user_id="smoke-test-1",
+                role="USER",
+            )
+        except Exception:
+            # Race condition - another request created it
+            db.rollback()
+            user = crud.get_user_by_email(db, "smoke@service.local")
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to create service user",
+                )
+
+    expires_in = 30 * 60  # 30 min session
+    access_token = _issue_access_token(user.id, user.email, display_name="Smoke Test")
+    _set_session_cookie(response, access_token, expires_in)
     return TokenOut(access_token=access_token, expires_in=expires_in)
 
 
