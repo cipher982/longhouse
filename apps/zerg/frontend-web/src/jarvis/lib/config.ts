@@ -58,17 +58,36 @@ export const CONFIG = {
 /**
  * Ensure a URL is absolute (helps Node/jsdom tests where undici requires absolute URLs).
  * In the browser, relative URLs are fine, but this keeps behavior consistent.
+ *
+ * For API paths (/api/*), uses window.API_BASE_URL in split deployment (different domains).
  */
 export function toAbsoluteUrl(url: string): string {
   // Already absolute
   if (/^https?:\/\//i.test(url)) return url;
 
-  const origin =
+  const pageOrigin =
     typeof window !== 'undefined' &&
     window?.location?.origin &&
     window.location.origin !== 'null'
       ? window.location.origin
       : 'http://localhost';
+
+  // Split deployment: API is on different domain (e.g., api.swarmlet.com)
+  // window.API_BASE_URL is set by /config.js (e.g., "https://api.swarmlet.com/api")
+  const runtimeApiUrl = typeof window !== 'undefined' && (window as any).API_BASE_URL;
+  const isApiPath = url.startsWith('/api/') || url.startsWith('/api');
+
+  // Determine the correct origin for this URL
+  let origin = pageOrigin;
+  if (isApiPath && runtimeApiUrl && typeof runtimeApiUrl === 'string') {
+    // Extract origin from API_BASE_URL (e.g., "https://api.swarmlet.com/api" → "https://api.swarmlet.com")
+    try {
+      const apiUrl = new URL(runtimeApiUrl);
+      origin = apiUrl.origin;
+    } catch {
+      // Invalid URL, fall back to page origin
+    }
+  }
 
   // Playwright E2E: route HTTP requests to the per-worker SQLite DB even when
   // intermediaries (like Vite dev proxy) drop custom headers.
