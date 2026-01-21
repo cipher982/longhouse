@@ -110,6 +110,9 @@ def test_get_capabilities_for_connector_all_connectors():
         (ConnectorType.LINEAR, "linear_create_issue"),
         (ConnectorType.NOTION, "notion_query_database"),
         (ConnectorType.IMESSAGE, "send_imessage"),
+        (ConnectorType.TRACCAR, "get_location"),
+        (ConnectorType.WHOOP, "get_whoop_recovery"),
+        (ConnectorType.OBSIDIAN, "search_obsidian_notes"),
     ],
 )
 def test_get_tools_for_connector_all_types(connector_type, expected_in_tools):

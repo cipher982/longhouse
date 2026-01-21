@@ -60,8 +60,7 @@ services:
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
       # Runner seeding (opt-in for production)
       SEED_RUNNERS: ${SEED_RUNNERS:-0}
-      # Bootstrap API settings (replaces file-based config seeding)
-      SKIP_FILE_SEED: ${SKIP_FILE_SEED:-1}
+      # Bootstrap API token for CLI-based config seeding
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN}
     volumes:
       - backend_static:/app/static

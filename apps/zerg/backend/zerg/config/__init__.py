@@ -124,7 +124,6 @@ class Settings:  # noqa: D401 – simple data container
 
     # Bootstrap API settings -------------------------------------------
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
-    skip_file_seed: bool  # Skip file-based auto-seeding (use API instead)
 
     # Supervisor tool output storage -----------------------------------
     supervisor_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
@@ -285,7 +284,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
         # Bootstrap API settings
         bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
-        skip_file_seed=_truthy(os.getenv("SKIP_FILE_SEED")),
         # Supervisor tool output storage
         supervisor_tool_output_max_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_MAX_CHARS", "8000")),
         supervisor_tool_output_preview_chars=int(os.getenv("SUPERVISOR_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),

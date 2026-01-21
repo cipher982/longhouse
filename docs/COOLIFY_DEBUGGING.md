@@ -13,7 +13,7 @@ clifford (master)           zerg (build server)
 
 - **Coolify master runs on clifford** - manages deployments, stores logs in PostgreSQL
 - **Builds/containers run on zerg** - target server for Swarmlet deployment
-- **App ID**: 30 by default (see `scripts/get-coolify-logs.sh`, override via `APP_ID=...`)
+- **App IDs**: 48 (zerg-api, default), 51 (zerg-web) - see `scripts/get-coolify-logs.sh`, override via `APP_ID=...`
 
 ## Triggering Deploys (Agent-Friendly)
 
@@ -56,7 +56,7 @@ ssh clifford "curl -s -X POST http://localhost:8000/api/v1/deploy \
 ```
 
 This queries the Coolify database directly:
-- Application ID: 30 (zerg)
+- Application IDs: 48 (zerg-api, default), 51 (zerg-web)
 - Stored on clifford → coolify-db container
 - Full build output (for each of the last N deployments) including all docker compose build stderr
 

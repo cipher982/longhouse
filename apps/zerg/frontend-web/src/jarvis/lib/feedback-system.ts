@@ -43,7 +43,7 @@ class AudioFeedback implements IAudioFeedback {
       try {
         await this.audioContext.resume();
         console.debug('AudioContext resumed from user gesture');
-      } catch (error) {
+      } catch {
         // Silently fail - might not be a user gesture context
       }
     }
@@ -74,7 +74,7 @@ class AudioFeedback implements IAudioFeedback {
 
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.2);
-    } catch (error) {
+    } catch {
       // Silently fail
     }
   }
@@ -102,7 +102,7 @@ class AudioFeedback implements IAudioFeedback {
 
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.05);
-    } catch (error) {
+    } catch {
       // Silently fail
     }
   }
@@ -132,7 +132,7 @@ class AudioFeedback implements IAudioFeedback {
 
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.3);
-    } catch (error) {
+    } catch {
       // Silently fail
     }
   }

@@ -114,6 +114,7 @@ export default function IntegrationsPage() {
   // Group connectors by category
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
+  const personal = connectors?.filter((c) => c.category === "personal") ?? [];
 
   // Ready signal - indicates page is interactive (even if empty)
   useEffect(() => {
@@ -188,6 +189,25 @@ export default function IntegrationsPage() {
                     onDelete={() => handleDelete(connector)}
                     isTesting={testConnector.isPending}
                     isOAuthPending={oauthPending === connector.type}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="connector-group">
+              <h3>Personal Tools</h3>
+              <p className="section-description">
+                Connect personal services like GPS tracking, health data, and notes.
+              </p>
+              <div className="connector-cards">
+                {personal.map((connector) => (
+                  <ConnectorCard
+                    key={connector.type}
+                    connector={connector}
+                    onConfigure={() => openConfigModal(connector)}
+                    onTest={() => handleTest(connector)}
+                    onDelete={() => handleDelete(connector)}
+                    isTesting={testConnector.isPending}
                   />
                 ))}
               </div>
