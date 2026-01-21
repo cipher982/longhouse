@@ -43,6 +43,14 @@ class CronTrigger:  # noqa: D101 – simple stub
         return f"<CronTrigger {self.expr}>"
 
 
+class IntervalTrigger:  # noqa: D101 – simple stub
+    def __init__(self, seconds: int = 60, minutes: int = 0, hours: int = 0):
+        self.seconds = seconds + minutes * 60 + hours * 3600
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<IntervalTrigger {self.seconds}s>"
+
+
 # ---------------------------------------------------------------------------
 # AsyncIOScheduler tiny in-memory helper
 # ---------------------------------------------------------------------------
@@ -118,18 +126,25 @@ _asyncio_mod.AsyncIOScheduler = AsyncIOScheduler
 _cron_mod = types.ModuleType("apscheduler.triggers.cron")
 _cron_mod.CronTrigger = CronTrigger
 
+# Expose IntervalTrigger under apscheduler.triggers.interval
+_interval_mod = types.ModuleType("apscheduler.triggers.interval")
+_interval_mod.IntervalTrigger = IntervalTrigger
+
 # Attach modules so attribute access works
 _schedulers_pkg.asyncio = _asyncio_mod  # type: ignore[attr-defined]
 _triggers_pkg.cron = _cron_mod  # type: ignore[attr-defined]
+_triggers_pkg.interval = _interval_mod  # type: ignore[attr-defined]
 
 # Register in sys.modules
 _register_module("apscheduler.schedulers", _schedulers_pkg)
 _register_module("apscheduler.schedulers.asyncio", _asyncio_mod)
 _register_module("apscheduler.triggers", _triggers_pkg)
 _register_module("apscheduler.triggers.cron", _cron_mod)
+_register_module("apscheduler.triggers.interval", _interval_mod)
 
 # Public re-exports
 __all__ = [
     "CronTrigger",
+    "IntervalTrigger",
     "AsyncIOScheduler",
 ]
