@@ -8,6 +8,7 @@ Seeding sources (checked in order):
 2. ~/.config/zerg/*.json (prod/personal)
 """
 
+import copy
 import json
 import logging
 import os
@@ -87,8 +88,8 @@ def _seed_user_context() -> bool:
                 logger.debug(f"User {user.email} already has context - skipping")
                 continue
 
-            # Seed the context
-            user.context = context
+            # Seed the context (deep copy to avoid shared reference between users)
+            user.context = copy.deepcopy(context)
             seeded_count += 1
             logger.info(f"Seeded user context for {user.email}")
 
@@ -109,6 +110,8 @@ def _seed_user_context() -> bool:
 
 def _seed_personal_credentials() -> bool:
     """Seed personal tool credentials from local config file.
+
+    Seeds for all admin users (consistent with _seed_user_context).
 
     Returns:
         True if seeding succeeded or was skipped (idempotent), False on error.
@@ -133,23 +136,29 @@ def _seed_personal_credentials() -> bool:
 
         db = default_session_factory()
         try:
-            result = db.execute(select(User).order_by(User.id).limit(1))
-            user = result.scalar_one_or_none()
+            # Seed for all admin users (consistent with _seed_user_context)
+            admin_users = db.query(User).filter(User.role == "ADMIN").all()
 
-            if not user:
-                logger.debug("No users in database yet - skipping credentials seed")
+            if not admin_users:
+                logger.debug("No admin users in database yet - skipping credentials seed")
                 return True
 
             # Load credentials
             with open(config_path) as f:
                 creds = json.load(f)
 
-            # Seed (idempotent - won't overwrite existing)
-            seeded = seed_credentials_for_user(db, user.id, creds, force=False)
-            if seeded:
-                logger.info(f"Seeded personal credentials for {user.email}")
-            else:
-                logger.debug(f"Personal credentials already exist for {user.email}")
+            seeded_count = 0
+            for user in admin_users:
+                # Seed (idempotent - won't overwrite existing)
+                seeded = seed_credentials_for_user(db, user.id, creds, force=False)
+                if seeded:
+                    logger.info(f"Seeded personal credentials for {user.email}")
+                    seeded_count += 1
+                else:
+                    logger.debug(f"Personal credentials already exist for {user.email}")
+
+            if seeded_count > 0:
+                logger.info(f"Seeded credentials for {seeded_count} admin user(s)")
             return True
 
         except Exception as e:
@@ -208,12 +217,11 @@ def _seed_runners() -> bool:
 
     db = default_session_factory()
     try:
-        # Find first user
-        result = db.execute(select(User).order_by(User.id).limit(1))
-        user = result.scalar_one_or_none()
+        # Find first admin user (runners have single owner, but should be admin not dev@local)
+        user = db.query(User).filter(User.role == "ADMIN").order_by(User.id).first()
 
         if not user:
-            logger.debug("No users in database yet - skipping runners seed")
+            logger.debug("No admin users in database yet - skipping runners seed")
             return True
 
         seeded_count = 0
