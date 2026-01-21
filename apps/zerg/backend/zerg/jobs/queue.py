@@ -1,4 +1,4 @@
-"""Durable job queue backed by Life Hub DB.
+"""Durable job queue backed by Postgres (ops.job_queue).
 
 This module provides a lease-based job queue for reliable job execution:
 - Jobs are enqueued with dedupe keys to prevent duplicates
@@ -19,7 +19,7 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
-from zerg.jobs.lifehub_db import get_lifehub_db_url
+from zerg.jobs.lifehub_db import get_job_queue_db_url
 from zerg.jobs.lifehub_db import get_pool
 
 logger = logging.getLogger(__name__)
@@ -60,9 +60,15 @@ def default_owner() -> QueueOwner:
 
 
 def _ensure_db() -> bool:
-    """Check if Life Hub DB is configured."""
-    if not get_lifehub_db_url():
-        logger.error("LIFE_HUB_DB_URL not configured; job queue disabled")
+    """Check if job queue is enabled and DB is configured."""
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    if not settings.job_queue_enabled:
+        logger.info("Job queue disabled (JOB_QUEUE_ENABLED=0)")
+        return False
+    if not get_job_queue_db_url():
+        logger.error("DATABASE_URL not configured; job queue disabled")
         return False
     return True
 

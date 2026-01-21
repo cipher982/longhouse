@@ -1,12 +1,9 @@
-"""Life Hub direct database client for job queue operations.
+"""Direct database client for job queue operations.
 
 Fire-and-forget pattern: jobs continue even if DB is unreachable.
-Writes directly to Life Hub's ops.runs table for run history.
+Writes directly to the ops.* tables for run history.
 
-This module provides direct Postgres access to Life Hub DB, distinct from
-the HTTP-based LIFE_HUB_URL integration. Both may coexist:
-- LIFE_HUB_URL -> HTTP shipping of agent events (existing)
-- LIFE_HUB_DB_URL -> Direct DB for job queue operations (this module)
+Uses the main DATABASE_URL (single Postgres source of truth).
 """
 
 from __future__ import annotations
@@ -26,14 +23,19 @@ _pool: Any = None
 _runs_columns: list[str] | None = None
 
 
-def get_lifehub_db_url() -> str | None:
-    """Get the Life Hub DB URL from environment."""
-    return os.getenv("LIFE_HUB_DB_URL")  # postgresql://user:pass@host:port/db
+def get_job_queue_db_url() -> str | None:
+    """Get the database URL for the job queue (uses DATABASE_URL)."""
+    from zerg.config import get_settings
+
+    return get_settings().database_url or None
 
 
-def is_lifehub_db_enabled() -> bool:
-    """Feature flag: enabled only if DB URL is configured."""
-    return bool(get_lifehub_db_url())
+def is_job_queue_db_enabled() -> bool:
+    """Feature flag: enabled only if job queue is on and DB URL is configured."""
+    from zerg.config import get_settings
+
+    settings = get_settings()
+    return settings.job_queue_enabled and bool(settings.database_url)
 
 
 def _get_emit_timeout_seconds() -> int:
@@ -82,9 +84,9 @@ async def get_pool():
     if _pool is None:
         import asyncpg
 
-        db_url = get_lifehub_db_url()
+        db_url = get_job_queue_db_url()
         if not db_url:
-            raise RuntimeError("LIFE_HUB_DB_URL not configured")
+            raise RuntimeError("DATABASE_URL not configured")
         _pool = await asyncpg.create_pool(
             db_url,
             min_size=1,
@@ -137,8 +139,8 @@ async def emit_job_run(
 
     Natural key is (job_key, started_at) - idempotent for retries.
     """
-    if not is_lifehub_db_enabled():
-        raise RuntimeError("emit_job_run called but LIFE_HUB_DB_URL not configured. " "Check is_lifehub_db_enabled() before calling.")
+    if not is_job_queue_db_enabled():
+        raise RuntimeError("emit_job_run called but job queue is disabled or DATABASE_URL is missing.")
 
     try:
         pool = await get_pool()
@@ -201,11 +203,11 @@ async def emit_job_run(
                 else:
                     raise
 
-        logger.info(f"Emitted job run to Life Hub DB: {resolved_job_key} ({status})")
+        logger.info(f"Emitted job run: {resolved_job_key} ({status})")
         return True
 
     except Exception as e:
-        logger.error(f"Failed to emit job run to Life Hub DB: {e}")
+        logger.error(f"Failed to emit job run: {e}")
         return False
 
 
@@ -242,9 +244,9 @@ async def _emit_with_timeout(job_id: str, status: str, **kwargs: Any) -> None:
             timeout=timeout_seconds,
         )
     except TimeoutError:
-        logger.error(f"Life Hub DB emit timed out after {timeout_seconds}s: {job_id}")
+        logger.error(f"Job run emit timed out after {timeout_seconds}s: {job_id}")
     except Exception as e:
-        logger.exception(f"Life Hub DB emit failed: {e}")
+        logger.exception(f"Job run emit failed: {e}")
 
 
 async def close_pool() -> None:

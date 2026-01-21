@@ -41,9 +41,8 @@ services:
       # Life Hub integration
       LIFE_HUB_SHIPPING_ENABLED: ${LIFE_HUB_SHIPPING_ENABLED:-0}
       LIFE_HUB_API_KEY: ${LIFE_HUB_API_KEY:-}
-      # Job queue (durable job execution via Life Hub DB)
+      # Job queue (durable job execution via ops schema)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
-      LIFE_HUB_DB_URL: ${LIFE_HUB_DB_URL:-}
     volumes:
       - backend_static:/app/static
       - backend_data:/data

@@ -252,11 +252,9 @@ async def get_queue_state(
     Returns recent entries from the job queue for debugging.
     Queue must be enabled (JOB_QUEUE_ENABLED=1) for entries to exist.
     """
-    from zerg.config import get_settings
-    from zerg.jobs.lifehub_db import is_lifehub_db_enabled
+    from zerg.jobs.lifehub_db import is_job_queue_db_enabled
 
-    settings = get_settings()
-    queue_enabled = settings.job_queue_enabled and is_lifehub_db_enabled()
+    queue_enabled = is_job_queue_db_enabled()
 
     if not queue_enabled:
         return QueueStateResponse(
