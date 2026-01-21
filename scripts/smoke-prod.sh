@@ -7,6 +7,10 @@
 #   ./scripts/smoke-prod.sh              # Full test
 #   ./scripts/smoke-prod.sh --wait       # Wait 90s then test (for post-deploy)
 #   ./scripts/smoke-prod.sh --quick      # Quick health check only
+#
+# Environment:
+#   SMOKE_TEST_SECRET  - Service account secret for authenticated tests
+#   SMOKE_TEST_CHAT    - Set to 1 to enable chat test (costs LLM tokens)
 
 set -e
 
@@ -73,6 +77,61 @@ test_http_auth() {
         fail "$name (expected $expected, got $status)"
         return 1
     fi
+}
+
+# Test chat sends message and gets AI response
+test_chat() {
+    local name="$1"
+    local cookie_jar="$2"
+    local message="${3:-Say hello in exactly 3 words}"
+    local timeout_secs="${4:-30}"
+
+    local msg_id
+    msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "smoke-$(date +%s)")
+
+    # Send chat request, capture SSE stream with timeout
+    local response
+    response=$(timeout "$timeout_secs" curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+        -b "$cookie_jar" \
+        -H "Content-Type: application/json" \
+        -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
+
+    # Check for supervisor_complete event
+    if ! echo "$response" | grep -q "event: supervisor_complete"; then
+        fail "$name (no supervisor_complete event)"
+        return 1
+    fi
+
+    # Extract the data line after supervisor_complete
+    local complete_data
+    complete_data=$(echo "$response" | grep -A1 "event: supervisor_complete" | grep "^data:" | head -1 | sed 's/^data: //')
+
+    if [[ -z "$complete_data" ]]; then
+        fail "$name (no data in supervisor_complete)"
+        return 1
+    fi
+
+    # Check status is success
+    local status
+    status=$(echo "$complete_data" | jq -r '.payload.status // "unknown"' 2>/dev/null)
+    if [[ "$status" != "success" ]]; then
+        fail "$name (status: $status)"
+        return 1
+    fi
+
+    # Check result is non-empty
+    local result
+    result=$(echo "$complete_data" | jq -r '.payload.result // ""' 2>/dev/null)
+    if [[ -z "$result" ]]; then
+        fail "$name (empty result)"
+        return 1
+    fi
+
+    # Show truncated response
+    local preview="${result:0:50}"
+    [[ ${#result} -gt 50 ]] && preview="${preview}..."
+    pass "$name (\"$preview\")"
+    return 0
 }
 
 # Test JSON field
@@ -242,6 +301,13 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
         test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
         test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+
+        # Chat test (requires LLM - costs money but validates full flow)
+        if [[ -n "$SMOKE_TEST_CHAT" ]]; then
+            test_chat "Chat sends/receives" "$COOKIE_JAR" "Say hello in exactly 3 words" 30
+        else
+            warn "SMOKE_TEST_CHAT not set - skipping chat test (costs money)"
+        fi
     else
         fail "Service login (got $LOGIN_STATUS)"
     fi
