@@ -60,14 +60,17 @@ services:
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
       # Runner seeding (opt-in for production)
       SEED_RUNNERS: ${SEED_RUNNERS:-0}
+      # Bootstrap API settings (replaces file-based config seeding)
+      SKIP_FILE_SEED: ${SKIP_FILE_SEED:-1}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN}
     volumes:
       - backend_static:/app/static
       # Writable data directory (container root is read-only)
       - backend_data:/data
       # SSH key access for worker infrastructure tools (ssh_exec)
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
-      # User context and credentials for auto-seed
-      - ${HOME}/.config/zerg:/home/zerg/.config/zerg:ro
+      # Note: ~/.config/zerg volume removed - use bootstrap API instead
+      # (volume mounts are brittle in Coolify; API seeding is more reliable)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s

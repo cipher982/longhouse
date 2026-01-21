@@ -84,11 +84,24 @@ async def system_health(
     )
 
     # Determine overall status
+    # Logic:
+    # - unhealthy: Many errors (>10) in both run and worker categories
+    # - degraded: Some errors (>5), or all registered runners are offline
+    # - healthy: Low errors and at least some runners online (or no runners registered)
     status = "healthy"
-    if error_count > 10 or worker_error_count > 10:
-        status = "degraded"
-    if worker_pool.get("online", 0) == 0 and worker_pool.get("offline", 0) > 0:
+
+    total_runners = sum(worker_pool.values())
+    online_runners = worker_pool.get("online", 0)
+    has_high_errors = error_count > 10 or worker_error_count > 10
+    has_some_errors = error_count > 5 or worker_error_count > 5
+    all_runners_offline = total_runners > 0 and online_runners == 0
+
+    if has_high_errors and all_runners_offline:
         status = "unhealthy"
+    elif has_high_errors or all_runners_offline:
+        status = "degraded"
+    elif has_some_errors:
+        status = "degraded"
 
     return {
         "workers": worker_pool,
