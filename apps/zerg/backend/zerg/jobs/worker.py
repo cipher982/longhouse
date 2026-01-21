@@ -17,7 +17,7 @@ from datetime import datetime
 from datetime import timedelta
 
 from zerg.jobs.lifehub_db import emit_job_run
-from zerg.jobs.lifehub_db import is_lifehub_db_enabled
+from zerg.jobs.lifehub_db import is_job_queue_db_enabled
 from zerg.jobs.queue import DEFAULT_POLL_SECONDS
 from zerg.jobs.queue import QueueJob
 from zerg.jobs.queue import QueueOwner
@@ -63,8 +63,8 @@ async def enqueue_missed_runs(now: datetime | None = None) -> None:
     Only enqueues the MOST RECENT missed run per job to avoid flooding
     the queue with stale runs.
     """
-    if not is_lifehub_db_enabled():
-        logger.info("Job queue disabled (LIFE_HUB_DB_URL not configured)")
+    if not is_job_queue_db_enabled():
+        logger.info("Job queue disabled (JOB_QUEUE_ENABLED=0)")
         return
 
     # Also clean up any zombie jobs from previous crashes
