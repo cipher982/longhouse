@@ -90,49 +90,8 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         if connection.dialect.name == "postgresql":
-            # Ensure schema exists and migrate alembic_version if needed.
+            # Create zerg schema - completely isolated from other projects
             connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {DB_SCHEMA}"))
-
-            version_in_schema = connection.execute(
-                text(
-                    """
-                    SELECT 1
-                    FROM information_schema.tables
-                    WHERE table_schema = :schema AND table_name = 'alembic_version'
-                    """
-                ),
-                {"schema": DB_SCHEMA},
-            ).scalar()
-
-            version_in_public = connection.execute(
-                text(
-                    """
-                    SELECT 1
-                    FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name = 'alembic_version'
-                    """
-                )
-            ).scalar()
-
-            if version_in_public and not version_in_schema:
-                connection.execute(
-                    text(
-                        f"""
-                        CREATE TABLE {DB_SCHEMA}.alembic_version (
-                            version_num VARCHAR(32) NOT NULL PRIMARY KEY
-                        )
-                        """
-                    )
-                )
-                connection.execute(
-                    text(
-                        f"""
-                        INSERT INTO {DB_SCHEMA}.alembic_version (version_num)
-                        SELECT version_num FROM public.alembic_version
-                        """
-                    )
-                )
-
             connection.execute(text(f"SET search_path TO {DB_SCHEMA}, public"))
             connection.commit()
 
