@@ -6,8 +6,6 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import prettier from "eslint-config-prettier";
 import globals from "globals";
 
-const isProduction = process.env.NODE_ENV === "production";
-
 export default [
   {
     ignores: ["dist/**", "node_modules/**", "public/**", "src/generated/**"],
@@ -55,7 +53,8 @@ export default [
         },
       ],
       "no-undef": "off",
-      "react-refresh/only-export-components": isProduction ? "error" : "warn",
+      // Disabled: too noisy for co-located hooks/contexts, doesn't affect prod
+      "react-refresh/only-export-components": "off",
       "@typescript-eslint/no-explicit-any": "warn",
     },
   },
