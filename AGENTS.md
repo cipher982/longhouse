@@ -894,6 +894,61 @@ Example:
 # RIGHT: /deploy?uuid=mosksc0ogk0cssokckw0c8sc&force=true (rebuilds with new vars)
 ```
 
+## Database: Life Hub Integration
+
+**Zerg uses Life Hub's Postgres as its database.** In production, Zerg is a schema-tenant in the shared `life_hub` database.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  CLIFFORD:5433 - PostgreSQL + TimescaleDB                          │
+│  Database: life_hub                                                 │
+│                                                                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐    │
+│  │  zerg.*         │  │  agents.*       │  │  health.*       │    │
+│  │  (THIS REPO)    │  │  (Life Hub)     │  │  (Life Hub)     │    │
+│  │                 │  │                 │  │                 │    │
+│  │  agent_runs     │  │  sessions       │  │  metrics        │    │
+│  │  worker_jobs    │  │  events         │  │  workouts       │    │
+│  │  llm_audit_log  │  │                 │  │  sleep          │    │
+│  │  threads        │  └─────────────────┘  └─────────────────┘    │
+│  │  workflows      │                                               │
+│  │  users          │  ┌─────────────────┐  ┌─────────────────┐    │
+│  │  ...37 tables   │  │  infra.*        │  │  work.*         │    │
+│  └─────────────────┘  │  (Life Hub)     │  │  (Life Hub)     │    │
+│         ▲             └─────────────────┘  └─────────────────┘    │
+│         │                                                          │
+│    Zerg owns this                                                  │
+│    schema only                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Connection string (prod):**
+```
+postgresql://life_hub:***@clifford:5433/life_hub?options=-csearch_path=zerg,public
+```
+
+**Key points:**
+- **Zerg owns `zerg.*` schema only** - 37 tables including `agent_runs`, `worker_jobs`, `llm_audit_log`, `threads`, `workflows`, `users`
+- **Life Hub owns other schemas** - `agents.*`, `health.*`, `infra.*`, `work.*`, `location.*`
+- **Independent migrations** - This repo runs alembic for `zerg.*`, Life Hub repo runs alembic for its schemas
+- **Schema created by migration** - `x1y2z3a4b5c6_move_tables_to_zerg_schema.py` moved all tables to `zerg` schema
+
+**Don't confuse:**
+- `zerg.agent_runs` / `zerg.worker_jobs` = Swarmlet's internal supervisor/worker execution (this repo)
+- `agents.sessions` / `agents.events` = Claude Code/Codex/Gemini CLI sessions shipped via life-hub shipper (different data!)
+
+**Admin dashboards (new):**
+- `/traces` - Debug supervisor runs, workers, LLM calls with unified timeline
+- `/reliability` - System health, error analysis, performance metrics, stuck workers
+
+**Cross-schema access**: Life Hub MCP can query `zerg.*` tables since it's the same database:
+```sql
+-- From Claude Code via life-hub MCP
+SELECT * FROM zerg.agent_runs WHERE created_at > NOW() - interval '1 day';
+```
+
+**See also:** `~/git/life-hub/AGENTS.md` for Life Hub documentation
+
 ## Documentation
 
 | Doc | Purpose |
