@@ -15,6 +15,8 @@ import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
+import TraceExplorerPage from "../pages/TraceExplorerPage";
+import ReliabilityPage from "../pages/ReliabilityPage";
 import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
@@ -219,6 +221,30 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <RunnerDetailPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/traces",
+          element: (
+            <ErrorBoundary>
+              <TraceExplorerPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/traces/:traceId",
+          element: (
+            <ErrorBoundary>
+              <TraceExplorerPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/reliability",
+          element: (
+            <ErrorBoundary>
+              <ReliabilityPage />
             </ErrorBoundary>
           )
         },

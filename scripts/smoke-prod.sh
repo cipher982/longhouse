@@ -31,6 +31,16 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Detect timeout command (GNU timeout not available on macOS)
+if command -v timeout &> /dev/null; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout &> /dev/null; then
+    TIMEOUT_CMD="gtimeout"
+else
+    # Fallback: no timeout (warn user)
+    TIMEOUT_CMD=""
+fi
+
 pass() { echo -e "  ${GREEN}✓${NC} $1"; PASSED=$((PASSED + 1)); }
 fail() { echo -e "  ${RED}✗${NC} $1"; FAILED=$((FAILED + 1)); }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; WARNINGS=$((WARNINGS + 1)); }
@@ -91,10 +101,18 @@ test_chat() {
 
     # Send chat request, capture SSE stream with timeout
     local response
-    response=$(timeout "$timeout_secs" curl -s -N -X POST "$API_URL/api/jarvis/chat" \
-        -b "$cookie_jar" \
-        -H "Content-Type: application/json" \
-        -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
+    else
+        warn "timeout command not found - chat test may hang (install: brew install coreutils)"
+        response=$(curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+            -b "$cookie_jar" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
+    fi
 
     # Check for supervisor_complete event
     if ! echo "$response" | grep -q "event: supervisor_complete"; then
