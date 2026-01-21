@@ -1,4 +1,4 @@
-"""Queue worker that executes jobs from Life Hub queue.
+"""Queue worker that executes jobs from durable queue.
 
 This module provides a background worker loop that:
 - Claims jobs from the queue with lease-based locking
@@ -16,8 +16,8 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
-from zerg.jobs.lifehub_db import emit_job_run
-from zerg.jobs.lifehub_db import is_job_queue_db_enabled
+from zerg.jobs.ops_db import emit_job_run
+from zerg.jobs.ops_db import is_job_queue_db_enabled
 from zerg.jobs.queue import DEFAULT_POLL_SECONDS
 from zerg.jobs.queue import QueueJob
 from zerg.jobs.queue import QueueOwner
@@ -246,7 +246,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
     ended_at = datetime.now(UTC)
     duration_ms = int((ended_at - started_at).total_seconds() * 1000)
 
-    # Emit to Life Hub ops.runs
+    # Emit to ops.runs
     try:
         await emit_job_run(
             job_id=queue_job.job_id,
@@ -260,7 +260,7 @@ async def _run_job(queue_job: QueueJob, owner: QueueOwner) -> None:
             scheduler="zerg",
         )
     except Exception as e:
-        logger.error("Failed to emit job run to Life Hub: %s", e)
+        logger.error("Failed to emit job run: %s", e)
 
     # Update queue status
     if status == "success":

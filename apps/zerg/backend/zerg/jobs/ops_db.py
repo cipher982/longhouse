@@ -40,11 +40,11 @@ def is_job_queue_db_enabled() -> bool:
 
 def _get_emit_timeout_seconds() -> int:
     """Get overall emit timeout from environment."""
-    return int(os.getenv("LIFE_HUB_EMIT_TIMEOUT_SECONDS", "30"))
+    return int(os.getenv("JOB_EMIT_TIMEOUT_SECONDS", "30"))
 
 
 def _job_key(job_id: str, scheduler: str = "zerg") -> str:
-    """Generate a stable job key for Life Hub queries."""
+    """Generate a stable job key for ops.runs queries."""
     return f"{scheduler}:{job_id}"
 
 
@@ -133,7 +133,7 @@ async def emit_job_run(
     job_key: str | None = None,
     scheduler: str = "zerg",
 ) -> bool:
-    """Emit job run status directly to Life Hub's TimescaleDB.
+    """Emit job run status to ops.runs table.
 
     Fire-and-forget: logs on failure, never raises.
 

@@ -155,12 +155,4 @@ async def execute_thread_run_with_history(
         trace_id=str(run_row.trace_id) if hasattr(run_row, "trace_id") and run_row.trace_id else None,
     )
 
-    # Ship to Life Hub (async, best-effort)
-    from zerg.services.lifehub_shipper import schedule_lifehub_shipping
-
-    schedule_lifehub_shipping(
-        run_row.id,
-        str(run_row.trace_id) if hasattr(run_row, "trace_id") and run_row.trace_id else None,
-    )
-
     return created_rows

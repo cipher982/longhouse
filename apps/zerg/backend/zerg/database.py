@@ -83,7 +83,7 @@ _settings = get_settings()
 dotenv.load_dotenv(override=True)
 
 
-# Default schema for all Zerg tables (Life Hub-compatible)
+# Default schema for all Zerg tables
 DB_SCHEMA = "zerg"
 _metadata = MetaData(schema=DB_SCHEMA)
 
