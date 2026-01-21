@@ -16,6 +16,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
     if (isOpen && !createTokenMutation.data && !createTokenMutation.isPending) {
       createTokenMutation.mutate();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only trigger on open, mutation identity changes each render
   }, [isOpen]);
 
   const handleCopy = () => {
