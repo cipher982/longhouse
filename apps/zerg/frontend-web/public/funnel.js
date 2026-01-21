@@ -13,8 +13,12 @@
     'use strict';
 
     // Configuration
+    // Use API_BASE_URL for split deployment (e.g., api.swarmlet.com)
+    const apiBase = (window.API_BASE_URL && typeof window.API_BASE_URL === 'string')
+        ? window.API_BASE_URL.replace(/\/api\/?$/, '')  // Remove /api suffix if present
+        : '';
     const CONFIG = {
-        batchEndpoint: '/api/funnel/batch',
+        batchEndpoint: apiBase + '/api/funnel/batch',
         batchSize: 10,
         batchInterval: 5000, // 5 seconds
         debug: false, // Set to true for console logging
