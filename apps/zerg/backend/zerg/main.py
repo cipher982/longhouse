@@ -503,13 +503,18 @@ app.openapi = custom_openapi
 
 # Add CORS middleware with all necessary headers
 # ------------------------------------------------------------------
-# CORS – open wildcard in dev/tests, restricted in production unless env
-# overrides it.  `ALLOWED_CORS_ORIGINS` can contain a comma-separated list.
+# CORS – if ALLOWED_CORS_ORIGINS is explicitly set, use it (supports testing
+# with auth disabled on production domains). Otherwise fall back to defaults.
 # ------------------------------------------------------------------
 
-if _settings.auth_disabled:
-    # Dev mode: Allow localhost and 127.0.0.1 origins for development/e2e tests
-    # Include both http and https variants for flexibility
+cors_origins_env = _settings.allowed_cors_origins.strip()
+
+if cors_origins_env:
+    # Explicit CORS origins set - use them (works with auth enabled or disabled)
+    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    logger.info(f"CORS configured with explicit origins: {cors_origins}")
+elif _settings.auth_disabled:
+    # Dev mode with no explicit origins: Allow localhost variants for local development
     cors_origins = [
         # localhost variants
         "http://localhost:30080",
@@ -522,17 +527,13 @@ if _settings.auth_disabled:
         "http://127.0.0.1:5173",
     ]
 else:
-    cors_origins_env = _settings.allowed_cors_origins
-    if cors_origins_env.strip():
-        cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-    else:
-        # Prod with no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
-        logger.warning(
-            "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
-            "CORS will only allow http://localhost:30080. "
-            "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
-        )
-        cors_origins = ["http://localhost:30080"]
+    # Prod with auth enabled but no explicit ALLOWED_CORS_ORIGINS - warn and use restrictive default
+    logger.warning(
+        "ALLOWED_CORS_ORIGINS is not set with auth enabled. "
+        "CORS will only allow http://localhost:30080. "
+        "Set ALLOWED_CORS_ORIGINS=https://your-domain.com for production."
+    )
+    cors_origins = ["http://localhost:30080"]
 
 app.add_middleware(
     CORSMiddleware,
