@@ -40,11 +40,15 @@ services:
       DEV_ADMIN: ${DEV_ADMIN:-0}
       # Job queue (durable job execution via ops schema)
       JOB_QUEUE_ENABLED: ${JOB_QUEUE_ENABLED:-0}
+      # Runner seeding (opt-in for production)
+      SEED_RUNNERS: ${SEED_RUNNERS:-0}
     volumes:
       - backend_static:/app/static
       - backend_data:/data
       # SSH key access for worker infrastructure tools (ssh_exec)
       - ${HOME}/.ssh:/home/zerg/.ssh:ro
+      # User context and credentials for auto-seed
+      - ${HOME}/.config/zerg:/home/zerg/.config/zerg:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
