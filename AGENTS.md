@@ -635,7 +635,7 @@ If you edit these, your changes will be overwritten by `make regen-ws`, `make re
 
 1. **Auth in dev vs prod**: unified compose sets `AUTH_DISABLED=1` backend and `VITE_AUTH_ENABLED=false` frontend for local. Re-enable auth in prod.
 
-2. **CORS/SSE**: same-origin via nginx at 30080; keep run_id on worker tool events for Jarvis ticker.
+2. **CORS**: In prod, `ALLOWED_CORS_ORIGINS` takes priority if set (regardless of `AUTH_DISABLED`). In dev with no explicit origins, defaults to localhost only.
 
 3. **WebSocket code must stay in sync**: run `make regen-ws` after touching `schemas/ws-protocol.schema.json`.
 
@@ -834,6 +834,14 @@ make seed-credentials ARGS="--force"
 | Frontend (Dashboard + Landing) | https://swarmlet.com | zerg (Hetzner VPS) |
 | Backend API | https://api.swarmlet.com | zerg (Hetzner VPS) |
 | Jarvis Chat | https://swarmlet.com/chat | zerg (Hetzner VPS) |
+
+### Coolify Apps
+| App | UUID | Coolify ID |
+|-----|------|------------|
+| zerg-api | `a08o0s4k0s4kwswswg0008o0` | 48 |
+| zerg-web | `awkk0k084ssgw00sg44k4so4` | 51 |
+
+**Deploy branch**: `onboard-sauron` (not `main` yet). Push triggers auto-deploy.
 
 ### Infrastructure Architecture
 ```
