@@ -586,28 +586,35 @@ export default function DashboardPage() {
     subscribedAgentIdsRef.current.clear();
   }, [isAuthenticated, generateMessageId]);
 
+  // Cleanup effect - runs only on unmount to unsubscribe from all agents
+  /* eslint-disable react-hooks/exhaustive-deps -- Intentional: cleanup reads current values at unmount time */
   useEffect(() => {
+    // Capture refs for cleanup (ESLint wants this pattern)
+    const pendingSubscriptions = pendingSubscriptionsRef.current;
+    const subscribedAgentIds = subscribedAgentIdsRef.current;
+    const sendMessage = sendMessageRef.current;
+    const msgId = generateMessageId; // Capture for cleanup
+
     return () => {
       // Clear pending subscription timeouts
-      pendingSubscriptionsRef.current.forEach((pending) => {
+      pendingSubscriptions.forEach((pending) => {
         clearTimeout(pending.timeoutId);
       });
-      pendingSubscriptionsRef.current.clear();
+      pendingSubscriptions.clear();
 
-      if (subscribedAgentIdsRef.current.size === 0) {
+      if (subscribedAgentIds.size === 0) {
         return;
       }
-      const topics = Array.from(subscribedAgentIdsRef.current).map((id) => `agent:${id}`);
-      // Use ref to avoid cleanup re-registration on every render
-      sendMessageRef.current?.({
+      const topics = Array.from(subscribedAgentIds).map((id) => `agent:${id}`);
+      sendMessage?.({
         type: "unsubscribe",
         topics,
-        message_id: generateMessageId(),
+        message_id: msgId(),
       });
-      subscribedAgentIdsRef.current.clear();
+      subscribedAgentIds.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Intentionally empty - cleanup runs only on unmount, uses refs for stable access // Empty deps - cleanup only runs on unmount
+  }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   // Generate idempotency key per mutation to prevent double-creates
   const idempotencyKeyRef = useRef<string | null>(null);

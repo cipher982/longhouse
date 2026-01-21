@@ -26,6 +26,26 @@ export interface ToolLogEntry {
   data?: Record<string, unknown>;
 }
 
+// Nested tool from worker execution
+export interface NestedToolCall {
+  toolCallId: string;
+  toolName: string;
+  status: ToolStatus;
+  argsPreview?: string;
+  startedAt: number;
+  durationMs?: number;
+  resultPreview?: string;
+  error?: string;
+}
+
+// Result structure for spawn_worker tools
+export interface SpawnWorkerResult {
+  workerStatus: 'spawned' | 'running' | 'complete' | 'failed';
+  workerSummary?: string;
+  nestedTools: NestedToolCall[];
+  rawResult?: unknown;
+}
+
 export interface SupervisorToolCall {
   toolCallId: string;
   toolName: string;
@@ -84,6 +104,14 @@ class SupervisorToolStore {
 
   constructor() {
     this.subscribeToEvents();
+  }
+
+  /**
+   * Safely get spawn_worker result with proper typing
+   */
+  private getSpawnWorkerResult(tool: SupervisorToolCall): SpawnWorkerResult {
+    const result = tool.result as SpawnWorkerResult | undefined;
+    return result ?? { workerStatus: 'spawned', nestedTools: [] };
   }
 
   /**
@@ -257,11 +285,17 @@ class SupervisorToolStore {
       if (tool) {
         // For spawn_worker, merge result with existing worker metadata (workerStatus, nestedTools)
         // For other tools, just set result directly
-        const mergedResult = tool.toolName === 'spawn_worker' && typeof data.result === 'object' && data.result !== null
-          ? { ...(tool.result as any), ...data.result }
-          : tool.toolName === 'spawn_worker'
-          ? { ...(tool.result as any), rawResult: data.result }
-          : data.result;
+        let mergedResult: Record<string, unknown> | undefined;
+        if (tool.toolName === 'spawn_worker') {
+          const existingResult = this.getSpawnWorkerResult(tool);
+          if (typeof data.result === 'object' && data.result !== null) {
+            mergedResult = { ...existingResult, ...(data.result as Record<string, unknown>) };
+          } else {
+            mergedResult = { ...existingResult, rawResult: data.result };
+          }
+        } else {
+          mergedResult = data.result;
+        }
 
         const updatedTool: SupervisorToolCall = {
           ...tool,
@@ -454,14 +488,14 @@ class SupervisorToolStore {
 
       // spawn_worker with active worker or nested tools
       if (tool.toolName === 'spawn_worker') {
-        const workerStatus = (tool.result as any)?.workerStatus;
-        const nestedTools = (tool.result as any)?.nestedTools || [];
+        const spawnResult = this.getSpawnWorkerResult(tool);
+        const { workerStatus, nestedTools } = spawnResult;
 
         // Worker is spawned or running
         if (workerStatus === 'spawned' || workerStatus === 'running') return true;
 
         // Has running nested tools
-        if (nestedTools.some((nt: any) => nt.status === 'running')) return true;
+        if (nestedTools.some(nt => nt.status === 'running')) return true;
       }
 
       return false;
@@ -521,7 +555,7 @@ class SupervisorToolStore {
    * Extract job_id from spawn_worker tool result
    * Result format: "Worker job {jobId} queued successfully..."
    */
-  private extractJobIdFromResult(result: any): number | null {
+  private extractJobIdFromResult(result: unknown): number | null {
     if (typeof result === 'string') {
       // Parse "Worker job 123 queued successfully..."
       const match = result.match(/Worker job (\d+)/);
@@ -530,7 +564,7 @@ class SupervisorToolStore {
       }
     } else if (result && typeof result === 'object' && 'job_id' in result) {
       // Handle structured result (if backend changes format)
-      return result.job_id;
+      return (result as { job_id: number }).job_id;
     }
     return null;
   }
@@ -538,15 +572,16 @@ class SupervisorToolStore {
   /**
    * Update worker metadata for a spawn_worker tool
    */
-  private updateWorkerMetadata(toolCallId: string, metadata: Record<string, any>): void {
+  private updateWorkerMetadata(toolCallId: string, metadata: Partial<SpawnWorkerResult>): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
     if (tool && tool.toolName === 'spawn_worker') {
+      const existingResult = this.getSpawnWorkerResult(tool);
       const updatedTool: SupervisorToolCall = {
         ...tool,
         result: {
-          ...(tool.result as any),
+          ...existingResult,
           ...metadata,
         },
       };
@@ -558,17 +593,17 @@ class SupervisorToolStore {
   /**
    * Add a nested tool to a spawn_worker tool
    */
-  private addNestedTool(toolCallId: string, nestedTool: any): void {
+  private addNestedTool(toolCallId: string, nestedTool: NestedToolCall): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
     if (tool && tool.toolName === 'spawn_worker') {
-      const currentNested = ((tool.result as any)?.nestedTools || []) as any[];
+      const existingResult = this.getSpawnWorkerResult(tool);
       const updatedTool: SupervisorToolCall = {
         ...tool,
         result: {
-          ...(tool.result as any),
-          nestedTools: [...currentNested, nestedTool],
+          ...existingResult,
+          nestedTools: [...existingResult.nestedTools, nestedTool],
         },
       };
       newTools.set(toolCallId, updatedTool);
@@ -579,19 +614,19 @@ class SupervisorToolStore {
   /**
    * Update a nested tool within a spawn_worker tool
    */
-  private updateNestedTool(toolCallId: string, nestedToolCallId: string, updates: Record<string, any>): void {
+  private updateNestedTool(toolCallId: string, nestedToolCallId: string, updates: Partial<NestedToolCall>): void {
     const newTools = new Map(this.state.tools);
     const tool = newTools.get(toolCallId);
 
     if (tool && tool.toolName === 'spawn_worker') {
-      const nestedTools = ((tool.result as any)?.nestedTools || []) as any[];
-      const updatedNested = nestedTools.map(nt =>
+      const existingResult = this.getSpawnWorkerResult(tool);
+      const updatedNested = existingResult.nestedTools.map(nt =>
         nt.toolCallId === nestedToolCallId ? { ...nt, ...updates } : nt
       );
       const updatedTool: SupervisorToolCall = {
         ...tool,
         result: {
-          ...(tool.result as any),
+          ...existingResult,
           nestedTools: updatedNested,
         },
       };

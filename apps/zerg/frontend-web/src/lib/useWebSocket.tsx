@@ -188,6 +188,7 @@ export function useWebSocket(
         queryClient.invalidateQueries({ queryKey });
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendMessage is stable (defined via useCallback below)
   }, [queryClient]);
 
   const handleConnect = useCallback(() => {
