@@ -60,7 +60,7 @@ describe('ChatContainer timeline ordering', () => {
       logs: [],
     });
 
-    const { container } = render(<ChatContainer messages={messages} />);
+    render(<ChatContainer messages={messages} />);
 
     // Get the transcript container
     const transcript = screen.getByTestId('messages-container');
@@ -129,7 +129,7 @@ describe('ChatContainer timeline ordering', () => {
       logs: [],
     });
 
-    const { container } = render(<ChatContainer messages={messages} />);
+    render(<ChatContainer messages={messages} />);
     const transcript = screen.getByTestId('messages-container');
     const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="worker-tool-card"]');
 
