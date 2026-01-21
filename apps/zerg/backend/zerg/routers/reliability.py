@@ -28,6 +28,7 @@ SECRET_PATTERNS = [
     r"(secret[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
     r"(token[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
     r"(bearer\s+)([A-Za-z0-9\-_]+\.?[A-Za-z0-9\-_]*\.?[A-Za-z0-9\-_]*)",
+    r"(authorization[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
 ]
 
 
@@ -39,6 +40,7 @@ def _redact_string(s: str | None) -> str | None:
     for pattern in SECRET_PATTERNS:
         result = re.sub(pattern, r"\1[REDACTED]", result, flags=re.IGNORECASE)
     return result
+
 
 router = APIRouter(prefix="/reliability", tags=["reliability"])
 
@@ -169,16 +171,19 @@ async def performance_metrics(
     """P50/P95 latency metrics (admin only).
 
     Returns latency percentiles for supervisor runs.
+    Limited to 10000 samples to prevent memory issues.
     """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # Get durations for completed runs
+    # Get durations for completed runs, limited and ordered for consistent sampling
     runs = (
         db.query(AgentRun.duration_ms)
         .filter(
             AgentRun.created_at >= since,
             AgentRun.duration_ms.isnot(None),
         )
+        .order_by(AgentRun.created_at.desc())
+        .limit(10000)  # Cap to prevent memory issues
         .all()
     )
 

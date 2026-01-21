@@ -27,6 +27,21 @@ if [ -n "$API_BASE_URL" ] || [ -n "$WS_BASE_URL" ]; then
   # Normalize WS: strip trailing slashes
   WS="${WS%/}"
 
+  # Validate URL format - reject if contains control characters or newlines
+  # This prevents JS injection via malformed env vars
+  case "$API" in
+    *[[:cntrl:]]*)
+      echo "ERROR: API_BASE_URL contains control characters, rejecting"
+      API="/api"
+      ;;
+  esac
+  case "$WS" in
+    *[[:cntrl:]]*)
+      echo "ERROR: WS_BASE_URL contains control characters, rejecting"
+      WS=""
+      ;;
+  esac
+
   # Escape special characters for JS string (quotes, backslashes)
   # This prevents XSS if env vars contain malicious content
   API_ESCAPED=$(printf '%s' "$API" | sed 's/\\/\\\\/g; s/"/\\"/g')

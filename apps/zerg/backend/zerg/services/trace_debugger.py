@@ -7,14 +7,12 @@ for API exposure.
 
 import re
 import uuid
-from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
-
 
 # Secret patterns to redact
 SECRET_PATTERNS = [
@@ -62,14 +60,32 @@ class TraceDebugger:
         from zerg.models.models import AgentRun
         from zerg.models.models import WorkerJob
 
-        # Get runs with this trace (limit to prevent memory issues)
-        runs = self.db.query(AgentRun).filter(AgentRun.trace_id == trace_id).limit(max_items).all()
+        # Get runs with this trace, ordered by created_at desc to get most recent on long traces
+        runs = (
+            self.db.query(AgentRun)
+            .filter(AgentRun.trace_id == trace_id)
+            .order_by(AgentRun.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
 
-        # Get worker jobs with this trace
-        workers = self.db.query(WorkerJob).filter(WorkerJob.trace_id == trace_id).limit(max_items).all()
+        # Get worker jobs with this trace, ordered by created_at desc
+        workers = (
+            self.db.query(WorkerJob)
+            .filter(WorkerJob.trace_id == trace_id)
+            .order_by(WorkerJob.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
 
-        # Get LLM audit logs with this trace
-        llm_logs = self.db.query(LLMAuditLog).filter(LLMAuditLog.trace_id == trace_id).limit(max_items).all()
+        # Get LLM audit logs with this trace, ordered by created_at desc
+        llm_logs = (
+            self.db.query(LLMAuditLog)
+            .filter(LLMAuditLog.trace_id == trace_id)
+            .order_by(LLMAuditLog.created_at.desc())
+            .limit(max_items)
+            .all()
+        )
 
         return {
             "runs": runs,
@@ -159,10 +175,12 @@ class TraceDebugger:
             if worker.finished_at:
                 ts = worker.finished_at.replace(tzinfo=timezone.utc) if worker.finished_at.tzinfo is None else worker.finished_at
                 is_error = worker.status in ("failed", "error")
-                # Compute duration from timestamps
+                # Compute duration from timestamps (normalize both to UTC to avoid mixed tz issues)
                 duration_ms = None
                 if worker.started_at and worker.finished_at:
-                    delta = worker.finished_at - worker.started_at
+                    started = worker.started_at.replace(tzinfo=timezone.utc) if worker.started_at.tzinfo is None else worker.started_at
+                    finished = worker.finished_at.replace(tzinfo=timezone.utc) if worker.finished_at.tzinfo is None else worker.finished_at
+                    delta = finished - started
                     duration_ms = int(delta.total_seconds() * 1000)
                 events.append(
                     TimelineEvent(
@@ -264,7 +282,7 @@ class TraceDebugger:
 
         return redact_value(data)
 
-    def get_trace(self, trace_id: str, level: str = "summary", max_events: int = 100) -> dict[str, Any] | None:
+    def get_trace(self, trace_id: str, level: str = "summary", max_events: int = 100, max_items: int = 100) -> dict[str, Any] | None:
         """Get unified trace timeline.
 
         Args:
@@ -280,7 +298,9 @@ class TraceDebugger:
         except ValueError:
             return None
 
-        data = self._get_trace_data(trace_uuid)
+        # Use max of max_events and max_items for DB query to ensure we can return requested events
+        query_limit = max(max_events, max_items)
+        data = self._get_trace_data(trace_uuid, max_items=query_limit)
 
         if not data["runs"] and not data["workers"] and not data["llm_logs"]:
             return None
