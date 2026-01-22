@@ -1,0 +1,251 @@
+<think>Let's explore the codebase to understand its structure and how the UI is currently implemented in Rust/WASM. This will help us suggest a more targeted approach to refactoring and extending it.</think>Let me explore the current implementation to understand what we're working with before suggesting next steps.
+
+Ran tool
+Let's look specifically at the frontend directory structure:
+
+Ran tool
+Now let's look at the source directory structure:
+
+Ran tool
+Let's look at the canvas directory structure:
+
+Ran tool
+Now let's examine the ui.rs file to understand the structure of this large component:
+
+Read file: frontend/src/ui.rs
+Let's also look at the lib.rs file to understand the entry point:
+
+Read file: frontend/src/lib.rs
+Let's also check the state.rs file to understand how the application's state is structured:
+
+Read file: frontend/src/state.rs
+Let's check the Canvas module:
+
+Read file: frontend/src/canvas/mod.rs
+Now let's check the models.rs file to understand the data structures:
+
+Read file: frontend/src/models.rs
+Based on my exploration of the codebase, I now have a better understanding of how to approach refactoring and implementing new features. Here's my recommendation:
+
+## Refactoring the Codebase for Better Modularity
+
+### 1. Breaking Down ui.rs into Modules
+
+The current `ui.rs` file (1300+ lines) needs to be divided into logical components:
+
+```
+frontend/src/
+├── components/
+│   ├── mod.rs             # Module exports
+│   ├── dashboard.rs       # Dashboard view
+│   ├── agent_card.rs      # Individual agent card
+│   ├── canvas_editor.rs   # Canvas editing modal
+│   ├── model_selector.rs  # Model selection components
+│   └── common/            # Shared UI components
+│       ├── mod.rs
+│       ├── button.rs
+│       └── modal.rs
+├── ui/
+│   ├── mod.rs             # UI module exports
+│   ├── setup.rs           # Base UI setup functions
+│   ├── events.rs          # Event handlers
+│   └── animation.rs       # Animation-related code
+└── pages/
+    ├── mod.rs             # Page exports
+    ├── dashboard_page.rs  # Main dashboard page
+    └── canvas_page.rs     # Canvas editing page
+```
+
+### 2. Incremental Approach to Implementation
+
+Given the verbosity of Rust/WASM, here's an incremental approach:
+
+1. **Phase 1: Low-Risk Refactoring**
+   - Extract `ui.rs` into logical modules without changing functionality
+   - Create a simple component structure for reuse
+
+2. **Phase 2: Add Dashboard View**
+   - Implement a basic dashboard container
+   - Create a toggle between dashboard and canvas views
+   - Create a simple agent card component
+
+3. **Phase 3: Enhance Canvas as a Modal**
+   - Refactor canvas to work as a modal when editing agents
+   - Add functionality to create/edit agents from dashboard
+
+### 3. Implementation Details
+
+Here's how we could start with the first phase:
+
+1. **Create the Directory Structure**
+   ```
+   mkdir -p frontend/src/components
+   mkdir -p frontend/src/ui
+   touch frontend/src/components/mod.rs
+   touch frontend/src/ui/mod.rs
+   ```
+
+2. **Extract Dashboard Component First**
+
+   Create a simple dashboard.rs that renders a container with buttons to switch between views.
+
+3. **Refactor Modularly**
+
+   Extract functions from ui.rs into appropriate modules. For example:
+   - Move `setup_canvas` and related functions to canvas_editor.rs
+   - Move model selection functions to model_selector.rs
+   - Move modal-related code to common/modal.rs
+
+4. **Update State Management**
+
+   Modify AppState to include:
+   ```rust
+   pub enum ViewMode {
+       Dashboard,
+       Canvas,
+   }
+
+   pub struct AppState {
+       // Existing fields...
+       pub current_view: ViewMode,
+       // New fields for dashboard
+       pub selected_agent_id: Option<String>,
+   }
+   ```
+
+5. **Create Simple Toggle Functionality**
+
+   Add a simple button in the UI that toggles between dashboard and canvas views as a first step.
+
+### 4. Specific First Steps
+
+Here's what I'd recommend for your first implementation steps:
+
+1. **Create a components/mod.rs file:**
+   ```rust
+   // Export components
+   pub mod dashboard;
+   ```
+
+2. **Create a components/dashboard.rs file with minimal functionality:**
+   ```rust
+   use wasm_bindgen::prelude::*;
+   use web_sys::{Document, HtmlElement};
+   use crate::state::{APP_STATE, AppState, ViewMode};
+
+   pub fn render_dashboard(document: &Document) -> Result<(), JsValue> {
+       // Create dashboard container
+       let dashboard = document.create_element("div")?;
+       dashboard.set_attribute("id", "dashboard-container")?;
+
+       // Add a button to create new agent
+       let new_agent_btn = document.create_element("button")?;
+       new_agent_btn.set_inner_html("New Agent");
+       new_agent_btn.set_attribute("id", "new-agent-button")?;
+       new_agent_btn.set_attribute("class", "dashboard-button")?;
+
+       // Add button to dashboard
+       dashboard.append_child(&new_agent_btn)?;
+
+       // Add dashboard to document
+       let app_container = document
+           .get_element_by_id("app-container")
+           .ok_or(JsValue::from_str("Could not find app-container"))?;
+
+       app_container.append_child(&dashboard)?;
+
+       // Set up event handlers
+       setup_new_agent_button(document)?;
+
+       Ok(())
+   }
+
+   fn setup_new_agent_button(document: &Document) -> Result<(), JsValue> {
+       let button = document
+           .get_element_by_id("new-agent-button")
+           .ok_or(JsValue::from_str("Could not find new-agent-button"))?;
+
+       let click_closure = Closure::wrap(Box::new(move |_event: web_sys::MouseEvent| {
+           // Switch to canvas view for creating a new agent
+           APP_STATE.with(|state| {
+               let mut state = state.borrow_mut();
+               state.current_view = ViewMode::Canvas;
+               state.selected_agent_id = None; // Creating a new agent
+
+               // Here we'd also need to update the UI to show the canvas
+               // and hide the dashboard, or redraw the entire UI
+           });
+       }) as Box<dyn FnMut(_)>);
+
+       button
+           .dyn_ref::<HtmlElement>()
+           .ok_or(JsValue::from_str("Element is not an HtmlElement"))?
+           .add_event_listener_with_callback("click", click_closure.as_ref().unchecked_ref())?;
+
+       click_closure.forget();
+
+       Ok(())
+   }
+   ```
+
+3. **Modify state.rs to add the ViewMode enum:**
+   ```rust
+   // Add to the top with other imports
+   #[derive(Clone, Copy, PartialEq)]
+   pub enum ViewMode {
+       Dashboard,
+       Canvas,
+   }
+
+   // Add to AppState struct
+   pub struct AppState {
+       // Existing fields...
+       pub current_view: ViewMode,
+       pub selected_agent_id: Option<String>,
+   }
+
+   // Update the new() function
+   impl AppState {
+       pub fn new() -> Self {
+           Self {
+               // Existing initialization...
+               current_view: ViewMode::Dashboard, // Start with dashboard view
+               selected_agent_id: None,
+           }
+       }
+
+       // Add a method to toggle views
+       pub fn toggle_view(&mut self) {
+           self.current_view = match self.current_view {
+               ViewMode::Dashboard => ViewMode::Canvas,
+               ViewMode::Canvas => ViewMode::Dashboard,
+           };
+       }
+   }
+   ```
+
+4. **Modify lib.rs to initialize either the dashboard or canvas based on the current view:**
+   ```rust
+   // Inside start() function
+   if let Err(e) = ui::create_base_ui(&document) {
+       web_sys::console::error_1(&format!("Failed to create base UI: {:?}", e).into());
+   }
+
+   // Initialize dashboard as the default view
+   if let Err(e) = components::dashboard::render_dashboard(&document) {
+       web_sys::console::error_1(&format!("Failed to render dashboard: {:?}", e).into());
+   }
+
+   // Still initialize canvas for later use
+   if let Err(e) = ui::setup_canvas(&document) {
+       web_sys::console::error_1(&format!("Failed to setup canvas: {:?}", e).into());
+   }
+   ```
+
+This approach allows you to:
+1. Create a modular structure
+2. Make incremental changes without breaking functionality
+3. Gradually introduce the dashboard/canvas toggle
+4. Keep most of the existing canvas code intact until you're ready to refactor it
+
+Would you like me to elaborate on any specific part of this implementation plan?

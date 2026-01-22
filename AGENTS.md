@@ -92,6 +92,7 @@ git push origin onboard-sauron    # Triggers auto-deploy
 |-------|-------|
 | Debugging | `docs/DEBUG.md` |
 | Testing | `docs/TESTING.md` |
+| E2E Testing | `docs/TESTING_E2E.md` |
 | Credentials | `docs/CREDENTIALS.md` |
 | Database | `docs/DATABASE.md` |
 | Coolify | `docs/COOLIFY_DEBUGGING.md` |
@@ -133,3 +134,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 
 - (2026-01-21) [meta] Initial self-improvement section setup
 - (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
+- (2026-01-22) [gotcha] Life Hub triggers hindsight via /api/hindsight/session-ended but Zerg repo currently has no handler; integration gap to resolve.
