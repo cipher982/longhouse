@@ -132,3 +132,4 @@ Categories: `gotcha`, `pattern`, `tool`, `test`, `deploy`, `perf`
 <!-- Agents: append below this line. Human compacts weekly. -->
 
 - (2026-01-21) [meta] Initial self-improvement section setup
+- (2026-01-22) [gotcha] Runner name+secret auth can collide across owners. If two owners seed runners with same name and secret, the first-created runner wins. Use unique secrets per environment.
