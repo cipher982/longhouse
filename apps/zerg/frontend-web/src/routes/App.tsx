@@ -11,6 +11,7 @@ import DashboardPage from "../pages/DashboardPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
+import ContactsPage from "../pages/ContactsPage";
 import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
 import RunnersPage from "../pages/RunnersPage";
@@ -197,6 +198,14 @@ export default function App() {
           element: (
             <ErrorBoundary>
               <KnowledgeSourcesPage />
+            </ErrorBoundary>
+          )
+        },
+        {
+          path: "/settings/contacts",
+          element: (
+            <ErrorBoundary>
+              <ContactsPage />
             </ErrorBoundary>
           )
         },

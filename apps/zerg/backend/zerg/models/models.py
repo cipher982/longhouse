@@ -4,6 +4,7 @@ from sqlalchemy import JSON
 from sqlalchemy import Boolean
 from sqlalchemy import CheckConstraint
 from sqlalchemy import Column
+from sqlalchemy import Date
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy import Index
@@ -766,3 +767,175 @@ class MemoryEmbedding(Base):
     memory_file = relationship("MemoryFile", backref=backref("embeddings", passive_deletes=True))
 
     __table_args__ = (UniqueConstraint("owner_id", "memory_file_id", "model", name="uq_memory_embedding"),)
+
+
+# ---------------------------------------------------------------------------
+# User Contacts – Approved contacts for external action tools (email, SMS)
+# ---------------------------------------------------------------------------
+
+
+class UserEmailContact(Base):
+    """Approved email contact for a user.
+
+    Users maintain a list of approved contacts that agents can send emails to.
+    This prevents abuse (spam, phishing) while keeping the platform usable.
+    """
+
+    __tablename__ = "user_email_contacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Owner – the user who owns this contact
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Contact details
+    name = Column(String(100), nullable=False)
+    email = Column(String(255), nullable=False)  # Original for display
+    email_normalized = Column(String(255), nullable=False)  # Lowercase, no display name
+    notes = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    owner = relationship("User", backref="email_contacts")
+
+    __table_args__ = (
+        # One contact per normalized email per owner
+        UniqueConstraint("owner_id", "email_normalized", name="uq_email_contact_owner_email"),
+    )
+
+
+class UserPhoneContact(Base):
+    """Approved phone contact for a user.
+
+    Users maintain a list of approved contacts that agents can send SMS to.
+    Phone numbers are stored in E.164 format (+1234567890) for matching.
+    """
+
+    __tablename__ = "user_phone_contacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Owner – the user who owns this contact
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Contact details
+    name = Column(String(100), nullable=False)
+    phone = Column(String(20), nullable=False)  # Original for display
+    phone_normalized = Column(String(20), nullable=False)  # E.164: +1234567890
+    notes = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    owner = relationship("User", backref="phone_contacts")
+
+    __table_args__ = (
+        # One contact per normalized phone per owner
+        UniqueConstraint("owner_id", "phone_normalized", name="uq_phone_contact_owner_phone"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rate Limiting – Atomic daily counters for external action tools
+# ---------------------------------------------------------------------------
+
+
+class UserDailyEmailCounter(Base):
+    """Atomic daily email counter for rate limiting.
+
+    Uses SELECT FOR UPDATE to prevent race conditions in concurrent sends.
+    Count is incremented BEFORE sending to reserve slots atomically.
+    """
+
+    __tablename__ = "user_daily_email_counter"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    date = Column(Date, nullable=False)  # UTC date
+    count = Column(Integer, nullable=False, server_default="0")
+
+    # Relationships
+    user = relationship("User", backref="daily_email_counters")
+
+    __table_args__ = (
+        # One counter per user per date
+        UniqueConstraint("user_id", "date", name="uq_email_counter_user_date"),
+    )
+
+
+class UserDailySmsCounter(Base):
+    """Atomic daily SMS counter for rate limiting.
+
+    Uses SELECT FOR UPDATE to prevent race conditions in concurrent sends.
+    Count is incremented BEFORE sending to reserve slots atomically.
+    """
+
+    __tablename__ = "user_daily_sms_counter"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    date = Column(Date, nullable=False)  # UTC date
+    count = Column(Integer, nullable=False, server_default="0")
+
+    # Relationships
+    user = relationship("User", backref="daily_sms_counters")
+
+    __table_args__ = (
+        # One counter per user per date
+        UniqueConstraint("user_id", "date", name="uq_sms_counter_user_date"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Audit Logging – Track external actions for debugging/compliance
+# ---------------------------------------------------------------------------
+
+
+class EmailSendLog(Base):
+    """Audit log for sent emails.
+
+    Records each email send for debugging and compliance purposes.
+    Not used for rate limiting (counters handle that).
+    """
+
+    __tablename__ = "email_send_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    to_email = Column(String(255), nullable=False)
+    sent_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User", backref="email_send_logs")
+
+    __table_args__ = (
+        # Index for querying user's sent emails by time
+        Index("ix_email_send_log_user_sent", "user_id", "sent_at"),
+    )
