@@ -7,6 +7,9 @@ and optional metadata (e.g., username, scopes discovered during test).
 
 from __future__ import annotations
 
+# Pytest collects modules matching "test*.py"; prevent accidental test discovery here.
+__test__ = False
+
 import logging
 from typing import Any
 
@@ -69,6 +72,10 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
     except Exception as e:
         logger.exception("Connector test failed for %s", connector_type.value)
         return {"success": False, "message": f"Test failed: {str(e)}"}
+
+
+# Prevent pytest from collecting this helper as a test function.
+test_connector.__test__ = False
 
 
 def _test_slack(creds: dict[str, Any]) -> dict[str, Any]:
