@@ -90,9 +90,9 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
     },
     ConnectorType.EMAIL: {
         "type": ConnectorType.EMAIL,
-        "name": "Email (AWS SES)",
-        "description": "Send emails via AWS Simple Email Service",
-        "category": "notifications",
+        "name": "Email (Custom Sender)",
+        "description": "Use your own email service instead of the default. Optional for power users.",
+        "category": "advanced",
         "icon": "mail",
         "docs_url": "https://docs.aws.amazon.com/ses/latest/dg/setting-up.html",
         "fields": [

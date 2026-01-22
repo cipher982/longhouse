@@ -14,7 +14,7 @@ export interface ConnectorStatus {
   type: string;
   name: string;
   description: string;
-  category: "notifications" | "project_management" | "personal";
+  category: "notifications" | "project_management" | "personal" | "advanced";
   icon: string;
   docs_url: string;
   fields: CredentialField[];
@@ -52,7 +52,7 @@ export interface ConnectorSuccessResponse {
  */
 export type AccountConnectorStatus = ConnectorStatus;
 
-export type ConnectorCategory = "notifications" | "project_management" | "personal";
+export type ConnectorCategory = "notifications" | "project_management" | "personal" | "advanced";
 
 // Connector type identifiers
 export type ConnectorType =
