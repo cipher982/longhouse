@@ -56,7 +56,7 @@ def _send_discord_alert_sync(email: str, source: str, count: int) -> None:
     webhook_url = settings.discord_webhook_url
     alerts_enabled = settings.discord_enable_alerts
 
-    if not alerts_enabled or not webhook_url:
+    if settings.testing or not alerts_enabled or not webhook_url:
         return
 
     content = f"📋 **Waitlist Signup!** {email} joined the {source} waitlist (#{count} on waitlist)"
