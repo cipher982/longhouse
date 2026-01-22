@@ -381,6 +381,36 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         # Chat test (requires LLM - costs money but validates full flow)
         if [[ -n "$SMOKE_TEST_CHAT" ]]; then
             test_chat "Chat sends/receives" "$COOKIE_JAR" "Say hello in exactly 3 words" 30
+
+            # Email tool test (tests full email flow via Jarvis)
+            echo ""
+            echo "--- Email Tool Test (via Jarvis) ---"
+
+            # Ensure david010@gmail.com is an approved contact
+            curl -s -X POST "$API_URL/api/user/contacts/email" \
+                -b "$COOKIE_JAR" \
+                -H "Content-Type: application/json" \
+                -d '{"name": "Smoke Test Email", "email": "david010@gmail.com"}' > /dev/null 2>&1 || true
+
+            # Send email via Jarvis and check for success
+            EMAIL_RESPONSE=$(timeout 60 curl -s -N -X POST "$API_URL/api/jarvis/chat" \
+                -b "$COOKIE_JAR" \
+                -H "Content-Type: application/json" \
+                -d "{\"message\": \"send_email to david010@gmail.com subject SmokeTest-$(date +%s) text Automated smoke test\", \"message_id\": \"smoke-email-$(date +%s)\"}" 2>/dev/null) || true
+
+            if echo "$EMAIL_RESPONSE" | grep -q "supervisor_tool_completed"; then
+                # Check if it contains a message_id (SES success)
+                if echo "$EMAIL_RESPONSE" | grep -q "Message ID:"; then
+                    pass "Email tool sent successfully"
+                else
+                    fail "Email tool completed but no message ID"
+                fi
+            elif echo "$EMAIL_RESPONSE" | grep -q "supervisor_tool_failed"; then
+                ERROR=$(echo "$EMAIL_RESPONSE" | grep -o '"error": "[^"]*"' | head -1)
+                fail "Email tool failed: $ERROR"
+            else
+                warn "Email tool test inconclusive"
+            fi
         else
             warn "SMOKE_TEST_CHAT not set - skipping chat test (costs money)"
         fi
