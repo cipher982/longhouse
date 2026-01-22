@@ -7,10 +7,10 @@
 #   ./scripts/smoke-prod.sh              # Full test
 #   ./scripts/smoke-prod.sh --wait       # Wait 90s then test (for post-deploy)
 #   ./scripts/smoke-prod.sh --quick      # Quick health check only
+#   ./scripts/smoke-prod.sh --chat       # Include chat + email tool tests (costs money)
 #
 # Environment:
 #   SMOKE_TEST_SECRET  - Service account secret for authenticated tests
-#   SMOKE_TEST_CHAT    - Set to 1 to enable chat test (costs LLM tokens)
 
 set -e
 
@@ -232,10 +232,12 @@ test_caddy() {
 # Parse args
 QUICK=0
 WAIT=0
+CHAT=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --quick) QUICK=1; shift ;;
         --wait) WAIT=1; shift ;;
+        --chat) CHAT=1; shift ;;
         *) shift ;;
     esac
 done
@@ -379,7 +381,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         fi
 
         # Chat test (requires LLM - costs money but validates full flow)
-        if [[ -n "$SMOKE_TEST_CHAT" ]]; then
+        if [[ $CHAT -eq 1 ]]; then
             test_chat "Chat sends/receives" "$COOKIE_JAR" "Say hello in exactly 3 words" 30
 
             # Email tool test (tests full email flow via Jarvis)
@@ -412,7 +414,7 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
                 warn "Email tool test inconclusive"
             fi
         else
-            warn "SMOKE_TEST_CHAT not set - skipping chat test (costs money)"
+            warn "Chat tests disabled (pass --chat to enable; costs money)"
         fi
     else
         fail "Service login (got $LOGIN_STATUS)"
