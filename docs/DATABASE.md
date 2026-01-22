@@ -1,6 +1,6 @@
-# Database: Life Hub Integration
+# Database
 
-Zerg uses Life Hub's Postgres as its database. In production, Zerg is a schema-tenant in the shared `life_hub` database on clifford.
+Zerg uses PostgreSQL for persistent storage. In production, Zerg runs as a schema-tenant on the shared Postgres instance on clifford.
 
 ## Schema Ownership
 
@@ -9,16 +9,18 @@ Zerg uses Life Hub's Postgres as its database. In production, Zerg is a schema-t
 │  CLIFFORD:5433 - PostgreSQL + TimescaleDB                  │
 │  Database: life_hub                                         │
 │                                                             │
-│  zerg.*         │  agents.*      │  health.*   │  infra.*  │
-│  (THIS REPO)    │  (Life Hub)    │  (Life Hub) │           │
-│                 │                │             │           │
-│  agent_runs     │  sessions      │  metrics    │           │
-│  worker_jobs    │  events        │  workouts   │           │
-│  llm_audit_log  │                │  sleep      │           │
-│  threads        │                │             │           │
-│  workflows      │                │             │           │
-│  users          │                │             │           │
-│  ...37 tables   │                │             │           │
+│  zerg.*         │  ops.*                                    │
+│  (THIS REPO)    │  (Job queue)                              │
+│                 │                                           │
+│  agent_runs     │  job_queue                                │
+│  worker_jobs    │                                           │
+│  llm_audit_log  │                                           │
+│  threads        │                                           │
+│  workflows      │                                           │
+│  users          │                                           │
+│  runners        │                                           │
+│  connectors     │                                           │
+│  ...37 tables   │                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -29,29 +31,26 @@ Zerg uses Life Hub's Postgres as its database. In production, Zerg is a schema-t
 postgresql://life_hub:***@clifford:5433/life_hub?options=-csearch_path=zerg,public
 ```
 
+**Dev (Docker Compose):**
+```
+postgresql://zerg:zerg@postgres:5432/zerg
+```
+
 ## Key Points
 
-- **Zerg owns `zerg.*` schema only** — 37 tables
-- **Life Hub owns other schemas** — `agents.*`, `health.*`, `infra.*`, `work.*`, `location.*`
-- **Independent migrations** — This repo runs alembic for `zerg.*`, Life Hub for its schemas
-
-## Don't Confuse
-
-| Table | What |
-|-------|------|
-| `zerg.agent_runs` / `zerg.worker_jobs` | Swarmlet's supervisor/worker execution (this repo) |
-| `agents.sessions` / `agents.events` | Claude Code/Codex/Gemini sessions via life-hub shipper |
+- **Zerg owns `zerg.*` schema** — ~37 tables for agent runs, workers, users, connectors, etc.
+- **Ops schema for job queue** — `ops.job_queue` for durable background jobs
+- **Independent migrations** — This repo runs alembic for `zerg.*` schema only
 
 ## Admin Dashboards
 
 - `/traces` — Debug supervisor runs, workers, LLM calls
 - `/reliability` — System health, error analysis, stuck workers
 
-## Cross-Schema Access
+## Local Development
 
-Life Hub MCP can query `zerg.*` tables (same database):
-```sql
-SELECT * FROM zerg.agent_runs WHERE created_at > NOW() - interval '1 day';
-```
+Use `make dev` which starts a local Postgres container. Schema is auto-created via alembic migrations in `start-dev.sh`.
 
-**See also:** `~/git/life-hub/AGENTS.md`
+## Production
+
+DATABASE_URL is set via Coolify environment variables. Migrations run automatically on container startup.
