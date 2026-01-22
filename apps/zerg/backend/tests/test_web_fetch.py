@@ -1,6 +1,9 @@
 """Tests for web_fetch tool."""
 
+from unittest.mock import MagicMock
 from unittest.mock import patch
+
+import httpx
 
 from zerg.tools.builtin.web_fetch import web_fetch
 
@@ -8,12 +11,17 @@ from zerg.tools.builtin.web_fetch import web_fetch
 class TestWebFetch:
     """Test suite for web_fetch tool."""
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_successful_fetch(self, mock_extract, mock_fetch):
+    def test_successful_fetch(self, mock_extract, mock_client_cls):
         """Test successful webpage fetch and extraction."""
         # Arrange
-        mock_fetch.return_value = "<html>test content</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>test content</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = "# Test Page\n\nThis is test content."
 
         # Act
@@ -27,14 +35,19 @@ class TestWebFetch:
         assert "error" not in result
 
         # Verify calls
-        mock_fetch.assert_called_once_with("https://example.com/page")
+        mock_client.get.assert_called_once()
         mock_extract.assert_called_once()
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
-    def test_fetch_returns_none(self, mock_fetch):
-        """Test when fetch_url returns None (failed request)."""
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
+    def test_fetch_returns_none(self, mock_client_cls):
+        """Test when response body is empty."""
         # Arrange
-        mock_fetch.return_value = None
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = ""
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
 
         # Act
         result = web_fetch(url="https://nonexistent-domain.com")
@@ -42,14 +55,19 @@ class TestWebFetch:
         # Assert
         assert result["ok"] is False
         assert "error" in result
-        assert "Failed to fetch" in result["error"]
+        assert "empty response" in result["error"]
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_extract_returns_none(self, mock_extract, mock_fetch):
+    def test_extract_returns_none(self, mock_extract, mock_client_cls):
         """Test when extract returns None (failed extraction)."""
         # Arrange
-        mock_fetch.return_value = "<html>content</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>content</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = None
 
         # Act
@@ -60,12 +78,17 @@ class TestWebFetch:
         assert "error" in result
         assert "Failed to extract content" in result["error"]
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_with_all_options(self, mock_extract, mock_fetch):
+    def test_with_all_options(self, mock_extract, mock_client_cls):
         """Test with all optional parameters."""
         # Arrange
-        mock_fetch.return_value = "<html>test</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>test</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = "Test content with [link](https://example.com) and ![image](img.jpg)"
 
         # Act
@@ -79,18 +102,23 @@ class TestWebFetch:
         # Assert
         assert result["ok"] is True
         mock_extract.assert_called_once_with(
-            mock_fetch.return_value,
+            mock_response.text,
             include_links=True,
             include_images=True,
             output_format="markdown",
         )
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_word_count_calculation(self, mock_extract, mock_fetch):
+    def test_word_count_calculation(self, mock_extract, mock_client_cls):
         """Test word count is calculated correctly."""
         # Arrange
-        mock_fetch.return_value = "<html>test</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>test</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = "One two three four five"
 
         # Act
@@ -100,11 +128,13 @@ class TestWebFetch:
         assert result["ok"] is True
         assert result["word_count"] == 5
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
-    def test_fetch_exception(self, mock_fetch):
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
+    def test_fetch_exception(self, mock_client_cls):
         """Test handling of exceptions during fetch."""
         # Arrange
-        mock_fetch.side_effect = Exception("Network error")
+        mock_client = MagicMock()
+        mock_client.get.side_effect = httpx.RequestError("Network error", request=httpx.Request("GET", "https://example.com"))
+        mock_client_cls.return_value.__enter__.return_value = mock_client
 
         # Act
         result = web_fetch(url="https://example.com")
@@ -168,12 +198,17 @@ class TestWebFetch:
         assert result["ok"] is False
         assert "error" in result
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_empty_content_extraction(self, mock_extract, mock_fetch):
+    def test_empty_content_extraction(self, mock_extract, mock_client_cls):
         """Test handling of empty content after extraction."""
         # Arrange
-        mock_fetch.return_value = "<html>test</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>test</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = ""
 
         # Act
@@ -184,12 +219,17 @@ class TestWebFetch:
         assert result["content"] == ""
         assert result["word_count"] == 0
 
-    @patch("zerg.tools.builtin.web_fetch.trafilatura.fetch_url")
+    @patch("zerg.tools.builtin.web_fetch.httpx.Client")
     @patch("zerg.tools.builtin.web_fetch.trafilatura.extract")
-    def test_whitespace_only_content(self, mock_extract, mock_fetch):
+    def test_whitespace_only_content(self, mock_extract, mock_client_cls):
         """Test handling of whitespace-only content."""
         # Arrange
-        mock_fetch.return_value = "<html>test</html>"
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>test</html>"
+        mock_client.get.return_value = mock_response
+        mock_client_cls.return_value.__enter__.return_value = mock_client
         mock_extract.return_value = "   \n\n   "
 
         # Act

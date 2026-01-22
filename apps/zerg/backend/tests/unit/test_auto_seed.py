@@ -102,9 +102,9 @@ class TestSeedUserContext:
         config_file.write_text(json.dumps(sample_context))
 
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_db.execute.return_value = mock_result
+        mock_query = MagicMock()
+        mock_query.filter.return_value.all.return_value = []
+        mock_db.query.return_value = mock_query
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
@@ -124,9 +124,9 @@ class TestSeedUserContext:
         mock_user.context = {"display_name": "Existing User"}
 
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
+        mock_query = MagicMock()
+        mock_query.filter.return_value.all.return_value = [mock_user]
+        mock_db.query.return_value = mock_query
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
@@ -148,9 +148,9 @@ class TestSeedUserContext:
         mock_user.context = {}
 
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
+        mock_query = MagicMock()
+        mock_query.filter.return_value.all.return_value = [mock_user]
+        mock_db.query.return_value = mock_query
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
@@ -172,9 +172,9 @@ class TestSeedUserContext:
         mock_user.context = None
 
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
+        mock_query = MagicMock()
+        mock_query.filter.return_value.all.return_value = [mock_user]
+        mock_db.query.return_value = mock_query
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
@@ -202,7 +202,7 @@ class TestSeedUserContext:
         config_file.write_text(json.dumps(sample_context))
 
         mock_db = MagicMock()
-        mock_db.execute.side_effect = Exception("DB connection failed")
+        mock_db.query.side_effect = Exception("DB connection failed")
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
@@ -299,9 +299,9 @@ class TestIdempotency:
         mock_user.context = {}
 
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_user
-        mock_db.execute.return_value = mock_result
+        mock_query = MagicMock()
+        mock_query.filter.return_value.all.return_value = [mock_user]
+        mock_db.query.return_value = mock_query
 
         with patch(
             "zerg.services.auto_seed._find_config_file", return_value=config_file
