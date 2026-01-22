@@ -53,6 +53,7 @@ from zerg.routers.agent_connectors import router as agent_connectors_router
 from zerg.routers.agents import router as agents_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.connectors import router as connectors_router
+from zerg.routers.contacts import router as contacts_router
 from zerg.routers.email_webhooks import router as email_webhook_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.funnel import router as funnel_router
@@ -601,6 +602,7 @@ app.include_router(workflow_executions_router, prefix=f"{API_PREFIX}")
 app.include_router(auth_router, prefix=f"{API_PREFIX}")
 app.include_router(oauth_router, prefix=f"{API_PREFIX}")  # OAuth for third-party connectors
 app.include_router(users_router, prefix=f"{API_PREFIX}")
+app.include_router(contacts_router, prefix=f"{API_PREFIX}")  # User approved contacts for email/SMS
 app.include_router(templates_router, prefix=f"{API_PREFIX}")
 app.include_router(graph_router, prefix=f"{API_PREFIX}")
 app.include_router(jarvis_router)  # Jarvis integration - includes /api/jarvis prefix

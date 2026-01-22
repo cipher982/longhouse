@@ -115,6 +115,7 @@ export default function IntegrationsPage() {
   const notifications = connectors?.filter((c) => c.category === "notifications") ?? [];
   const projectManagement = connectors?.filter((c) => c.category === "project_management") ?? [];
   const personal = connectors?.filter((c) => c.category === "personal") ?? [];
+  const advanced = connectors?.filter((c) => c.category === "advanced") ?? [];
 
   // Ready signal - indicates page is interactive (even if empty)
   useEffect(() => {
@@ -155,7 +156,7 @@ export default function IntegrationsPage() {
             <div className="connector-group">
               <h3>Notifications</h3>
               <p className="section-description">
-                Configure webhooks and API keys for notification tools (Slack, Discord, Email, SMS).
+                Configure webhooks and API keys for notification tools (Slack, Discord, SMS).
               </p>
               <div className="connector-cards">
                 {notifications.map((connector) => (
@@ -212,6 +213,27 @@ export default function IntegrationsPage() {
                 ))}
               </div>
             </div>
+
+            {advanced.length > 0 && (
+              <div className="connector-group">
+                <h3>Advanced</h3>
+                <p className="section-description">
+                  Optional integrations for power users. Configure your own credentials to use custom senders.
+                </p>
+                <div className="connector-cards">
+                  {advanced.map((connector) => (
+                    <ConnectorCard
+                      key={connector.type}
+                      connector={connector}
+                      onConfigure={() => openConfigModal(connector)}
+                      onTest={() => handleTest(connector)}
+                      onDelete={() => handleDelete(connector)}
+                      isTesting={testConnector.isPending}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

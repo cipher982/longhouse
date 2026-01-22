@@ -94,6 +94,7 @@ function WelcomeHeader() {
     { label: 'Dashboard', href: '/dashboard' },
     { label: 'Canvas', href: '/canvas' },
     { label: 'Integrations', href: '/settings/integrations' },
+    { label: 'Contacts', href: '/settings/contacts' },
     { label: 'Runners', href: '/runners' },
   ];
 
