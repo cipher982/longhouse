@@ -9,10 +9,12 @@ The status builder:
 - Enriches with metadata from the connector registry
 - Returns structured status for all connectors (connected, not_configured, invalid_credentials)
 - Builds XML-formatted context strings for agent prompts
+- Checks platform-level credentials for email/SMS as fallback
 """
 
 import json
 import logging
+import os
 from datetime import datetime
 from datetime import timezone
 from typing import TYPE_CHECKING
@@ -161,6 +163,26 @@ def get_tools_for_connector(connector_type: ConnectorType) -> list[str]:
     return CONNECTOR_TOOL_MAPPING.get(connector_type, [])
 
 
+def _has_platform_email_credentials() -> bool:
+    """Check if platform-level email credentials are configured via env vars.
+
+    Returns:
+        True if AWS SES credentials and FROM_EMAIL are set.
+    """
+    return bool(os.getenv("AWS_SES_ACCESS_KEY_ID") and os.getenv("AWS_SES_SECRET_ACCESS_KEY") and os.getenv("FROM_EMAIL"))
+
+
+def _has_platform_sms_credentials() -> bool:
+    """Check if platform-level SMS credentials are configured via env vars.
+
+    Returns:
+        True if Twilio credentials are set (placeholder for future use).
+    """
+    # Currently SMS requires user-configured credentials only
+    # This can be expanded if platform-level SMS is added
+    return False
+
+
 def get_capabilities_for_connector(connector_type: ConnectorType) -> list[str]:
     """Return human-readable capability descriptions for this connector.
 
@@ -292,12 +314,28 @@ def build_connector_status(
 
         # Determine status based on credential row
         if cred_row is None:
-            # No credential configured
-            status_dict[connector_type_str] = {
-                "status": "not_configured",
-                "setup_url": f"/settings/integrations/{connector_type_str}",
-                "would_enable": get_capabilities_for_connector(connector_type),
-            }
+            # No user credential - check for platform-level credentials
+            has_platform_creds = False
+            if connector_type == ConnectorType.EMAIL:
+                has_platform_creds = _has_platform_email_credentials()
+            elif connector_type == ConnectorType.SMS:
+                has_platform_creds = _has_platform_sms_credentials()
+
+            if has_platform_creds:
+                # Platform credentials available - treat as connected
+                status_dict[connector_type_str] = {
+                    "status": "connected",
+                    "source": "platform",
+                    "tools": get_tools_for_connector(connector_type),
+                    "would_enable": get_capabilities_for_connector(connector_type),
+                }
+            else:
+                # No credential configured at any level
+                status_dict[connector_type_str] = {
+                    "status": "not_configured",
+                    "setup_url": f"/settings/integrations/{connector_type_str}",
+                    "would_enable": get_capabilities_for_connector(connector_type),
+                }
         else:
             # Credential exists - check test_status
             test_status = cred_row.test_status
