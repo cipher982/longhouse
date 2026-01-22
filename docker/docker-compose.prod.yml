@@ -62,6 +62,8 @@ services:
       SEED_RUNNERS: ${SEED_RUNNERS:-0}
       # Bootstrap API token for CLI-based config seeding
       BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN}
+      # Internal API secret for backend-to-backend calls
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
     volumes:
       - backend_static:/app/static
       # Writable data directory (container root is read-only)

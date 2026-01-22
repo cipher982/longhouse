@@ -2,10 +2,12 @@
 
 import ipaddress
 import logging
+import socket
 from typing import Any
 from typing import Dict
 from urllib.parse import urlparse
 
+import httpx
 import trafilatura
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
@@ -19,7 +21,8 @@ BLOCKED_RANGES = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),  # AWS metadata endpoint
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / AWS metadata
+    ipaddress.ip_network("127.0.0.0/8"),  # Loopback
 ]
 
 
@@ -43,8 +46,29 @@ class WebFetchInput(BaseModel):
     )
 
 
+def _is_ip_blocked(ip_str: str) -> tuple[bool, str]:
+    """Check if an IP address is in a blocked range.
+
+    Args:
+        ip_str: IP address string
+
+    Returns:
+        Tuple of (is_blocked, error_message)
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        for network in BLOCKED_RANGES:
+            if ip in network:
+                return True, f"Security: Access to private IP range {network} is blocked"
+        return False, ""
+    except ValueError:
+        return False, ""
+
+
 def _is_safe_url(url: str) -> tuple[bool, str]:
     """Check if URL is safe (not targeting private networks).
+
+    Performs DNS resolution to detect hostname-to-private-IP SSRF bypasses.
 
     Args:
         url: URL to check
@@ -55,21 +79,35 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
+        scheme = parsed.scheme
+
         if not hostname:
             return False, "URL has no hostname"
 
+        # Only allow http/https
+        if scheme not in ("http", "https"):
+            return False, f"Security: Scheme '{scheme}' is not allowed (only http/https)"
+
         # Check blocked hostnames
-        if hostname in BLOCKED_HOSTS:
+        if hostname.lower() in BLOCKED_HOSTS:
             return False, f"Security: Access to {hostname} is blocked"
 
-        # Check if hostname is an IP in a blocked range
+        # Check if hostname is already an IP in a blocked range
+        is_blocked, err = _is_ip_blocked(hostname)
+        if is_blocked:
+            return False, err
+
+        # DNS resolution check: resolve hostname and verify IPs aren't private
         try:
-            ip = ipaddress.ip_address(hostname)
-            for network in BLOCKED_RANGES:
-                if ip in network:
-                    return False, f"Security: Access to private IP range {network} is blocked"
-        except ValueError:
-            # Not an IP address, it's a hostname - this is OK
+            # Resolve all IPs for the hostname
+            addr_infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for addr_info in addr_infos:
+                resolved_ip = addr_info[4][0]
+                is_blocked, err = _is_ip_blocked(resolved_ip)
+                if is_blocked:
+                    return False, f"Security: {hostname} resolves to blocked IP ({resolved_ip})"
+        except socket.gaierror:
+            # DNS resolution failed - let the actual fetch handle this error
             pass
 
         return True, ""
@@ -131,16 +169,41 @@ def web_fetch(
                 "error": error_msg,
             }
 
-        # Fetch the webpage
-        logger.info(f"Fetching URL: {url}")
-        downloaded = trafilatura.fetch_url(url)
-
-        if not downloaded:
-            logger.warning(f"Failed to fetch URL: {url}")
+        # Fetch the webpage with timeout
+        logger.info(f"Fetching URL: {url} (timeout={timeout_secs}s)")
+        try:
+            with httpx.Client(timeout=timeout_secs, follow_redirects=True) as client:
+                response = client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Swarmlet/1.0)"})
+                response.raise_for_status()
+                downloaded = response.text
+        except httpx.TimeoutException:
+            logger.warning(f"Timeout fetching URL: {url}")
             return {
                 "ok": False,
                 "url": url,
-                "error": "Failed to fetch URL. The site may be unavailable or blocking requests.",
+                "error": f"Request timed out after {timeout_secs} seconds.",
+            }
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"HTTP error fetching URL: {url} - {e.response.status_code}")
+            return {
+                "ok": False,
+                "url": url,
+                "error": f"HTTP {e.response.status_code}: {e.response.reason_phrase}",
+            }
+        except httpx.RequestError as e:
+            logger.warning(f"Request error fetching URL: {url} - {e}")
+            return {
+                "ok": False,
+                "url": url,
+                "error": f"Failed to fetch URL: {str(e)}",
+            }
+
+        if not downloaded:
+            logger.warning(f"Empty response from URL: {url}")
+            return {
+                "ok": False,
+                "url": url,
+                "error": "Failed to fetch URL. The site returned an empty response.",
             }
 
         # Extract content as markdown
