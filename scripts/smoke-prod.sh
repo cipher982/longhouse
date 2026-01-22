@@ -293,6 +293,11 @@ test_http "Jarvis agents" "$API_URL/api/jarvis/agents" "401"
 test_http "Jarvis history" "$API_URL/api/jarvis/history" "401"
 
 echo ""
+echo "--- Contacts API (should require auth) ---"
+test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
+test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
+
+echo ""
 echo "--- Frontend ($FRONTEND_URL) ---"
 test_http "Landing page" "$FRONTEND_URL" "200"
 test_http "Chat page" "$FRONTEND_URL/chat" "200"
@@ -319,6 +324,59 @@ if [[ -n "$SMOKE_TEST_SECRET" ]]; then
         test_http_auth "Jarvis bootstrap (authed)" "$API_URL/api/jarvis/bootstrap" "200" "$COOKIE_JAR"
         test_http_auth "Jarvis history (authed)" "$API_URL/api/jarvis/history" "200" "$COOKIE_JAR"
         test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+
+        # Contacts CRUD test
+        echo ""
+        echo "--- Contacts API (authed) ---"
+
+        # List contacts (should be empty or existing)
+        test_http_auth "List email contacts" "$API_URL/api/user/contacts/email" "200" "$COOKIE_JAR"
+        test_http_auth "List phone contacts" "$API_URL/api/user/contacts/phone" "200" "$COOKIE_JAR"
+
+        # Create email contact
+        EMAIL_CONTACT_RESPONSE=$(curl -s -X POST "$API_URL/api/user/contacts/email" \
+            -b "$COOKIE_JAR" \
+            -H "Content-Type: application/json" \
+            -d '{"name": "Smoke Test", "email": "smoke-test@example.com", "notes": "Created by smoke test"}' 2>/dev/null)
+        EMAIL_CONTACT_ID=$(echo "$EMAIL_CONTACT_RESPONSE" | jq -r '.id // empty' 2>/dev/null)
+        if [[ -n "$EMAIL_CONTACT_ID" && "$EMAIL_CONTACT_ID" != "null" ]]; then
+            pass "Create email contact (id: $EMAIL_CONTACT_ID)"
+        else
+            fail "Create email contact (no id returned)"
+        fi
+
+        # Create phone contact
+        PHONE_CONTACT_RESPONSE=$(curl -s -X POST "$API_URL/api/user/contacts/phone" \
+            -b "$COOKIE_JAR" \
+            -H "Content-Type: application/json" \
+            -d '{"name": "Smoke Test Phone", "phone": "+15551234567", "notes": "Created by smoke test"}' 2>/dev/null)
+        PHONE_CONTACT_ID=$(echo "$PHONE_CONTACT_RESPONSE" | jq -r '.id // empty' 2>/dev/null)
+        if [[ -n "$PHONE_CONTACT_ID" && "$PHONE_CONTACT_ID" != "null" ]]; then
+            pass "Create phone contact (id: $PHONE_CONTACT_ID)"
+        else
+            fail "Create phone contact (no id returned)"
+        fi
+
+        # Cleanup - delete created contacts
+        if [[ -n "$EMAIL_CONTACT_ID" && "$EMAIL_CONTACT_ID" != "null" ]]; then
+            DELETE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                "$API_URL/api/user/contacts/email/$EMAIL_CONTACT_ID" -b "$COOKIE_JAR" 2>/dev/null)
+            if [[ "$DELETE_STATUS" == "204" ]]; then
+                pass "Delete email contact (204)"
+            else
+                fail "Delete email contact (expected 204, got $DELETE_STATUS)"
+            fi
+        fi
+
+        if [[ -n "$PHONE_CONTACT_ID" && "$PHONE_CONTACT_ID" != "null" ]]; then
+            DELETE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                "$API_URL/api/user/contacts/phone/$PHONE_CONTACT_ID" -b "$COOKIE_JAR" 2>/dev/null)
+            if [[ "$DELETE_STATUS" == "204" ]]; then
+                pass "Delete phone contact (204)"
+            else
+                fail "Delete phone contact (expected 204, got $DELETE_STATUS)"
+            fi
+        fi
 
         # Chat test (requires LLM - costs money but validates full flow)
         if [[ -n "$SMOKE_TEST_CHAT" ]]; then
