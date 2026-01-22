@@ -29,7 +29,8 @@ interface ChatContainerProps {
 }
 
 export function ChatContainer({ messages, userTranscriptPreview }: ChatContainerProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
+  // Ref on wrapper (scroll container) - scrolling now happens on outer element
+  const wrapperRef = useRef<HTMLDivElement>(null)
 
   // Subscribe to supervisor tool store
   const toolState = useSyncExternalStore(
@@ -77,16 +78,16 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   // Note: Don't include toolState here - it updates frequently (ticker, status changes)
   // and would cause scroll jumps when user is trying to interact with tool cards
   useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    if (wrapperRef.current) {
+      wrapperRef.current.scrollTop = wrapperRef.current.scrollHeight
     }
   }, [messages, userTranscriptPreview])
 
   // Scroll when new tools are added (but not on every status update)
   const toolCount = toolState.tools.size
   useEffect(() => {
-    if (containerRef.current && toolCount > 0) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    if (wrapperRef.current && toolCount > 0) {
+      wrapperRef.current.scrollTop = wrapperRef.current.scrollHeight
     }
   }, [toolCount])
 
@@ -220,8 +221,8 @@ export function ChatContainer({ messages, userTranscriptPreview }: ChatContainer
   }
 
   return (
-    <div className="chat-wrapper">
-      <div className="transcript" ref={containerRef} data-testid="messages-container">
+    <div className="chat-wrapper" ref={wrapperRef}>
+      <div className="transcript" data-testid="messages-container">
         {!hasContent ? (
           <div className="status-message">
             <div className="status-text">System Ready</div>
