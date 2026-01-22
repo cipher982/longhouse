@@ -5,6 +5,8 @@
 | File                               | Purpose                                                       |
 | ---------------------------------- | ------------------------------------------------------------- |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Local dev setup, commands, troubleshooting                    |
+| [TESTING.md](./TESTING.md)         | Unit & integration testing guide                              |
+| [TESTING_E2E.md](./TESTING_E2E.md) | E2E testing principles and architecture                       |
 | [DEPLOYMENT.md](./DEPLOYMENT.md)   | Production deployment guide                                   |
 | [../AGENTS.md](../AGENTS.md)       | **Start here** - Project overview, architecture, key commands |
 
