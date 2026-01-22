@@ -64,7 +64,7 @@ def create_user(
 
     def _send_signup_alert():
         settings = get_settings()
-        if not settings.discord_enable_alerts or not settings.discord_webhook_url:
+        if settings.testing or not settings.discord_enable_alerts or not settings.discord_webhook_url:
             return
         count_info = f" (#{total_users} total)" if total_users else ""
         content = f"@here 🎉 **New User Signup!** {email} just joined Swarmlet{count_info}"
