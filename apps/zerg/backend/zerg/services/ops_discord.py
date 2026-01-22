@@ -36,7 +36,10 @@ def _webhook_url() -> Optional[str]:
 
 
 def _alerts_enabled() -> bool:
-    return bool(getattr(get_settings(), "discord_enable_alerts", False))
+    settings = get_settings()
+    if settings.testing:
+        return False
+    return bool(getattr(settings, "discord_enable_alerts", False))
 
 
 async def send_budget_alert(scope: str, percent: float, used_usd: float, limit_cents: int, user_email: Optional[str] = None) -> None:
@@ -63,7 +66,13 @@ async def send_budget_alert(scope: str, percent: float, used_usd: float, limit_c
     content = f"[Budget {level}] {scope} at {percent:.1f}% ({used_usd:.2f}/${budget_usd:.2f}){who}."
 
     # Fire-and-forget
-    asyncio.create_task(_post_discord(url, content))
+    try:
+        asyncio.create_task(_post_discord(url, content))
+    except RuntimeError:
+        # Fallback for sync contexts where no event loop is running
+        import threading
+
+        threading.Thread(target=lambda: httpx.post(url, json={"content": content}), daemon=True).start()
 
     _last_alert_key = key
     _last_alert_ts = now_ts
@@ -71,6 +80,8 @@ async def send_budget_alert(scope: str, percent: float, used_usd: float, limit_c
 
 async def send_daily_digest(content: str) -> None:
     """Send a daily digest string to Discord (optional)."""
+    if not _alerts_enabled():
+        return
     url = _webhook_url()
     if not url:
         return
@@ -91,10 +102,16 @@ async def send_user_signup_alert(user_email: str, user_count: Optional[int] = No
     # Format user count info if provided
     count_info = f" (#{user_count} total)" if user_count else ""
 
-    content = f"@here 🎉 **New User Signup!** {user_email} just joined Zerg{count_info}"
+    content = f"@here 🎉 **New User Signup!** {user_email} just joined Swarmlet{count_info}"
 
     # Fire-and-forget
-    asyncio.create_task(_post_discord(url, content))
+    try:
+        asyncio.create_task(_post_discord(url, content))
+    except RuntimeError:
+        # Fallback for sync contexts where no event loop is running
+        import threading
+
+        threading.Thread(target=lambda: httpx.post(url, json={"content": content}), daemon=True).start()
 
 
 async def send_waitlist_signup_alert(email: str, source: str, waitlist_count: Optional[int] = None) -> None:
@@ -112,4 +129,10 @@ async def send_waitlist_signup_alert(email: str, source: str, waitlist_count: Op
     content = f"📋 **Waitlist Signup!** {email} joined the {source} waitlist{count_info}"
 
     # Fire-and-forget
-    asyncio.create_task(_post_discord(url, content))
+    try:
+        asyncio.create_task(_post_discord(url, content))
+    except RuntimeError:
+        # Fallback for sync contexts where no event loop is running
+        import threading
+
+        threading.Thread(target=lambda: httpx.post(url, json={"content": content}), daemon=True).start()
