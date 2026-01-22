@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import select
 from zerg.database import default_session_factory
 from zerg.models.models import User, AccountConnectorCredential
+from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
 
@@ -85,7 +86,28 @@ def find_user(db, email: str | None = None) -> User | None:
         return result.scalar_one_or_none()
 
 
-def seed_credential(db, user: User, connector_type: str, creds: dict, force: bool = False) -> bool:
+def _merge_credentials(existing: dict, incoming: dict, *, force: bool) -> dict:
+    """Merge credential dicts, preferring existing values unless forced.
+
+    Only fills missing/empty keys unless force=True.
+    """
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if value is None or value == "":
+            continue
+        if force or key not in merged or merged[key] in (None, ""):
+            merged[key] = value
+    return merged
+
+
+def seed_credential(
+    db,
+    user: User,
+    connector_type: str,
+    creds: dict,
+    force: bool = False,
+    merge: bool = False,
+) -> bool:
     """Seed a single connector credential.
 
     Args:
@@ -104,12 +126,20 @@ def seed_credential(db, user: User, connector_type: str, creds: dict, force: boo
         AccountConnectorCredential.connector_type == connector_type,
     ).first()
 
-    if existing and not force:
+    if existing and not (force or merge):
         print(f"  SKIP: {connector_type} (already configured, use --force to overwrite)")
         return False
 
-    # Encrypt the credential payload
-    encrypted_value = encrypt(json.dumps(creds))
+    # Encrypt the credential payload (merge with existing when requested)
+    if existing and merge and not force:
+        existing_creds = json.loads(decrypt(existing.encrypted_value))
+        merged_creds = _merge_credentials(existing_creds, creds, force=False)
+        if merged_creds == existing_creds:
+            print(f"  SKIP: {connector_type} (already configured, nothing new to merge)")
+            return False
+        encrypted_value = encrypt(json.dumps(merged_creds))
+    else:
+        encrypted_value = encrypt(json.dumps(creds))
 
     if existing:
         # Update existing
@@ -129,6 +159,20 @@ def seed_credential(db, user: User, connector_type: str, creds: dict, force: boo
         print(f"  CREATE: {connector_type}")
 
     return True
+
+
+def seed_credentials_for_user(db, user_id: int, creds: dict, *, force: bool = False, merge: bool = False) -> bool:
+    """Seed all personal connector credentials for a specific user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False
+
+    updated = False
+    for connector_type in PERSONAL_CONNECTORS:
+        if connector_type in creds:
+            if seed_credential(db, user, connector_type, creds[connector_type], force=force, merge=merge):
+                updated = True
+    return updated
 
 
 def main():

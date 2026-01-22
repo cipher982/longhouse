@@ -150,7 +150,7 @@ def _seed_personal_credentials() -> bool:
             seeded_count = 0
             for user in admin_users:
                 # Seed (idempotent - won't overwrite existing)
-                seeded = seed_credentials_for_user(db, user.id, creds, force=False)
+                seeded = seed_credentials_for_user(db, user.id, creds, force=False, merge=True)
                 if seeded:
                     logger.info(f"Seeded personal credentials for {user.email}")
                     seeded_count += 1
