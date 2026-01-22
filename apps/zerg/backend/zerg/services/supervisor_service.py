@@ -67,7 +67,7 @@ class SupervisorService:
     """Service for managing supervisor agent execution."""
 
     # Bump this whenever BASE_SUPERVISOR_PROMPT meaningfully changes.
-    SUPERVISOR_PROMPT_VERSION = 1
+    SUPERVISOR_PROMPT_VERSION = 2
 
     def __init__(self, db: Session):
         """Initialize the supervisor service.
