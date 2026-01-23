@@ -460,4 +460,18 @@
     color: var(--color-text-primary);
     margin: 0;
   }
+
+  @media (width <= 768px) {
+    .ui-section-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
+
+    .ui-section-header__actions {
+      width: 100%;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
+  }
 }
