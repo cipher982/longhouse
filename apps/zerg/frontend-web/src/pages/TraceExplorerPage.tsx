@@ -128,112 +128,45 @@ function TimelineEventRow({ event, isLast }: { event: TimelineEvent; isLast: boo
     .map(([k, v]) => ({ key: k, value: String(v).substring(0, 40) }));
 
   return (
-    <div style={{ display: "flex", gap: "var(--space-4)", minHeight: "60px" }}>
+    <div
+      className={`trace-timeline-row${event.is_error ? " is-error" : ""}`}
+      style={{ "--trace-color": style.color, "--trace-bg": style.bg } as React.CSSProperties}
+    >
       {/* Timestamp column */}
-      <div style={{
-        width: "110px",
-        flexShrink: 0,
-        paddingTop: "2px",
-        fontSize: "0.8rem",
-        fontFamily: "var(--font-mono, monospace)",
-        color: "var(--color-text-muted)",
-        letterSpacing: "-0.02em"
-      }}>
-        {formatTime(event.timestamp)}
-      </div>
+      <div className="trace-time-col">{formatTime(event.timestamp)}</div>
 
       {/* Timeline indicator */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: "20px", flexShrink: 0 }}>
-        <div
-          style={{
-            width: "12px",
-            height: "12px",
-            borderRadius: "50%",
-            backgroundColor: event.is_error ? "#ef4444" : style.color,
-            boxShadow: event.is_error
-              ? "0 0 0 3px rgba(239, 68, 68, 0.2)"
-              : `0 0 0 3px ${style.bg}`,
-            flexShrink: 0,
-          }}
-        />
-        {!isLast && (
-          <div style={{
-            width: "2px",
-            flex: 1,
-            backgroundColor: "var(--color-border)",
-            marginTop: "4px"
-          }} />
-        )}
+      <div className="trace-indicator">
+        <div className="trace-dot" />
+        {!isLast && <div className="trace-line" />}
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, paddingBottom: "var(--space-4)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+      <div className="trace-content">
+        <div className="trace-header">
           {/* Event name */}
-          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>{event.event_type}</span>
+          <span className="trace-event-type">{event.event_type}</span>
 
           {/* Source badge */}
-          <span style={{
-            fontSize: "0.65rem",
-            fontWeight: 600,
-            padding: "2px 8px",
-            borderRadius: "4px",
-            backgroundColor: style.bg,
-            color: style.color,
-            letterSpacing: "0.03em",
-          }}>
-            {style.label}
-          </span>
+          <span className="trace-source-badge">{style.label}</span>
 
           {/* Duration */}
           {event.duration_ms != null && event.duration_ms > 0 && (
-            <span style={{
-              fontSize: "0.8rem",
-              color: "var(--color-text-muted)",
-              fontFamily: "var(--font-mono, monospace)"
-            }}>
-              {formatDuration(event.duration_ms)}
-            </span>
+            <span className="trace-duration">{formatDuration(event.duration_ms)}</span>
           )}
 
           {/* Error badge */}
-          {event.is_error && (
-            <span style={{
-              fontSize: "0.65rem",
-              fontWeight: 600,
-              padding: "2px 8px",
-              borderRadius: "4px",
-              backgroundColor: "rgba(239, 68, 68, 0.15)",
-              color: "#ef4444",
-            }}>
-              ERROR
-            </span>
-          )}
+          {event.is_error && <span className="trace-error-badge">ERROR</span>}
         </div>
 
         {/* Detail pills */}
         {detailPills.length > 0 && (
-          <div style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "6px",
-            marginTop: "var(--space-2)"
-          }}>
+          <div className="trace-detail-pills">
             {detailPills.map(({ key, value }) => (
-              <span
-                key={key}
-                style={{
-                  fontSize: "0.75rem",
-                  padding: "3px 8px",
-                  borderRadius: "6px",
-                  backgroundColor: "rgba(255, 255, 255, 0.05)",
-                  border: "1px solid var(--color-border)",
-                  color: "var(--color-text-muted)",
-                }}
-              >
-                <span style={{ color: "var(--color-text-secondary)" }}>{key}</span>
-                <span style={{ opacity: 0.5, margin: "0 4px" }}>=</span>
-                <span style={{ color: "var(--color-text)" }}>{value}</span>
+              <span key={key} className="trace-detail-pill">
+                <span className="trace-detail-pill-key">{key}</span>
+                <span className="trace-detail-pill-sep">=</span>
+                <span className="trace-detail-pill-value">{value}</span>
               </span>
             ))}
           </div>
@@ -263,7 +196,7 @@ function TraceDetailView({
     return (
       <Card>
         <Card.Body>
-          <div style={{ textAlign: "center", padding: "var(--space-8)" }}>Loading trace...</div>
+          <div className="trace-explorer-loading">Loading trace...</div>
         </Card.Body>
       </Card>
     );
@@ -291,51 +224,33 @@ function TraceDetailView({
   return (
     <Card>
       <Card.Body>
-        <div style={{ margin: "calc(-1 * var(--space-4))" }}>
+        <div className="trace-detail-frame">
         {/* Header section */}
-        <div style={{
-          padding: "var(--space-5) var(--space-6)",
-          borderBottom: "1px solid var(--color-border)",
-          background: "linear-gradient(to bottom, rgba(255,255,255,0.02), transparent)"
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div className="trace-detail-header">
+          <div className="trace-detail-header-top">
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-2)" }}>
-                <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
-                  Trace: <code style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "0.95rem" }}>{traceId.substring(0, 8)}</code>
+              <div className="trace-detail-title-row">
+                <h3 className="trace-detail-title">
+                  Trace: <code className="trace-detail-id">{traceId.substring(0, 8)}</code>
                 </h3>
-                <span style={{
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                  padding: "3px 10px",
-                  borderRadius: "12px",
-                  backgroundColor: statusStyle.bg,
-                  color: statusStyle.color,
-                  letterSpacing: "0.03em",
-                }}>
+                <span
+                  className="trace-detail-status"
+                  style={{ "--status-color": statusStyle.color, "--status-bg": statusStyle.bg } as React.CSSProperties}
+                >
                   {detail.status}
                 </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)", fontSize: "0.8rem", color: "var(--color-text-muted)" }}>
+              <div className="trace-detail-meta">
                 <span>{detail.started_at ? new Date(detail.started_at).toLocaleString() : "N/A"}</span>
-                <span style={{ opacity: 0.3 }}>•</span>
-                <span style={{ fontFamily: "var(--font-mono, monospace)" }}>{detail.duration_seconds.toFixed(2)}s</span>
+                <span className="trace-detail-meta-dot">•</span>
+                <span className="trace-detail-duration">{detail.duration_seconds.toFixed(2)}s</span>
               </div>
             </div>
-            <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+            <div className="trace-detail-controls">
               <select
-                className="ui-input"
+                className="ui-input trace-detail-select"
                 value={level}
                 onChange={(e) => setLevel(e.target.value as "summary" | "full" | "errors")}
-                style={{
-                  width: "auto",
-                  height: "32px",
-                  fontSize: "0.8rem",
-                  backgroundColor: "rgba(255,255,255,0.05)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "6px",
-                  padding: "0 var(--space-3)",
-                }}
               >
                 <option value="summary">Summary</option>
                 <option value="full">Full Details</option>
@@ -349,13 +264,7 @@ function TraceDetailView({
         </div>
 
         {/* Stats cards */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "1px",
-          backgroundColor: "var(--color-border)",
-          borderBottom: "1px solid var(--color-border)"
-        }}>
+        <div className="trace-detail-stats">
           {[
             { label: "Runs", value: detail.counts.runs, color: sourceStyles.run.color },
             { label: "Workers", value: detail.counts.workers, color: sourceStyles.worker.color },
@@ -363,28 +272,15 @@ function TraceDetailView({
           ].map((stat) => (
             <div
               key={stat.label}
-              style={{
-                padding: "var(--space-4) var(--space-5)",
-                backgroundColor: "var(--color-bg-secondary)",
-                textAlign: "center",
-              }}
+              className="trace-detail-stat"
             >
-              <div style={{
-                fontSize: "0.7rem",
-                fontWeight: 500,
-                color: "var(--color-text-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-                marginBottom: "var(--space-1)"
-              }}>
+              <div className="trace-detail-stat-label">
                 {stat.label}
               </div>
-              <div style={{
-                fontSize: "1.75rem",
-                fontWeight: 700,
-                color: stat.value > 0 ? stat.color : "var(--color-text-muted)",
-                fontFamily: "var(--font-mono, monospace)",
-              }}>
+              <div
+                className="trace-detail-stat-value"
+                style={{ "--stat-color": stat.value > 0 ? stat.color : "var(--color-text-muted)" } as React.CSSProperties}
+              >
                 {stat.value}
               </div>
             </div>
@@ -393,24 +289,13 @@ function TraceDetailView({
 
         {/* Anomalies */}
         {detail.anomalies.length > 0 && (
-          <div style={{
-            padding: "var(--space-4) var(--space-6)",
-            borderBottom: "1px solid var(--color-border)",
-            backgroundColor: "rgba(239, 68, 68, 0.05)"
-          }}>
-            <div style={{
-              fontSize: "0.7rem",
-              fontWeight: 600,
-              color: "#ef4444",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              marginBottom: "var(--space-2)"
-            }}>
+          <div className="trace-detail-anomalies">
+            <div className="trace-detail-anomalies-title">
               Anomalies Detected
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+            <div className="trace-detail-anomalies-list">
               {detail.anomalies.map((a, i) => (
-                <div key={i} style={{ fontSize: "0.85rem", color: "var(--color-text)" }}>
+                <div key={i} className="trace-detail-anomaly">
                   • {a}
                 </div>
               ))}
@@ -419,20 +304,13 @@ function TraceDetailView({
         )}
 
         {/* Timeline */}
-        <div style={{ padding: "var(--space-5) var(--space-6)" }}>
-          <div style={{
-            fontSize: "0.7rem",
-            fontWeight: 600,
-            color: "var(--color-text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            marginBottom: "var(--space-4)"
-          }}>
+        <div className="trace-detail-timeline">
+          <div className="trace-detail-timeline-title">
             Timeline ({detail.timeline.length} events)
           </div>
-          <div style={{ maxHeight: "450px", overflowY: "auto", paddingRight: "var(--space-2)" }}>
+          <div className="trace-detail-timeline-scroll">
             {detail.timeline.length === 0 ? (
-              <div style={{ textAlign: "center", color: "var(--color-text-muted)", padding: "var(--space-8)" }}>
+              <div className="trace-detail-empty">
                 No events to display
               </div>
             ) : (
@@ -490,7 +368,7 @@ export default function TraceExplorerPage() {
   };
 
   return (
-    <div className="trace-explorer-container" style={{ padding: "var(--space-6)" }}>
+    <div className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
         description="Debug supervisor runs, workers, and LLM calls with unified trace timelines."
@@ -501,11 +379,11 @@ export default function TraceExplorerPage() {
       ) : (
         <Card>
           <Card.Header>
-            <h3 style={{ margin: 0 }}>Recent Traces</h3>
+            <h3 className="trace-explorer-section-title">Recent Traces</h3>
           </Card.Header>
           <Card.Body>
             {isLoading ? (
-              <div style={{ textAlign: "center", padding: "var(--space-8)" }}>Loading traces...</div>
+              <div className="trace-explorer-loading">Loading traces...</div>
             ) : error ? (
               <EmptyState variant="error" title="Error" description={String(error)} />
             ) : !data || data.traces.length === 0 ? (
@@ -525,10 +403,10 @@ export default function TraceExplorerPage() {
                       <Table.Row
                         key={trace.trace_id}
                         onClick={() => handleSelectTrace(trace.trace_id)}
-                        style={{ cursor: "pointer" }}
+                        className="trace-explorer-trace-row"
                       >
                         <Table.Cell>
-                          <code style={{ fontSize: "0.75rem" }}>{trace.trace_id.substring(0, 8)}...</code>
+                          <code className="trace-explorer-trace-id">{trace.trace_id.substring(0, 8)}...</code>
                         </Table.Cell>
                         <Table.Cell>
                           <Badge
@@ -554,11 +432,11 @@ export default function TraceExplorerPage() {
                 </Table>
 
                 {/* Pagination */}
-                <div style={{ display: "flex", justifyContent: "center", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
+                <div className="trace-explorer-pagination">
                   <Button variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
                     Previous
                   </Button>
-                  <span style={{ padding: "var(--space-2)", color: "var(--color-text-muted)" }}>
+                  <span className="trace-explorer-pagination-label">
                     Showing {offset + 1}-{offset + data.count}
                   </span>
                   <Button
