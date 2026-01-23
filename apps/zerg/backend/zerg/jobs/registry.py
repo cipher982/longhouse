@@ -251,6 +251,11 @@ def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue: bool
     except ImportError as e:
         logger.warning("Could not import monitoring jobs: %s", e)
 
+    try:
+        from zerg.jobs import qa  # noqa: F401
+    except ImportError as e:
+        logger.warning("Could not import qa jobs: %s", e)
+
     if scheduler:
         return job_registry.schedule_all(scheduler, use_queue=use_queue)
 
