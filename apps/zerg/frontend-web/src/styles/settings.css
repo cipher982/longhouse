@@ -181,11 +181,11 @@
 
   /* Error message */
   .error-message {
-    color: #ef4444;
+    color: var(--color-intent-error);
     font-size: 14px;
     padding: 16px;
-    background: rgb(239 68 68 / 10%);
-    border: 1px solid rgb(239 68 68 / 30%);
+    background: var(--color-intent-error-muted);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
     border-radius: var(--radius-sm, 4px);
   }
 
@@ -205,8 +205,8 @@
   }
 
   .tool-toggle:hover {
-    border-color: var(--accent-primary, #3b82f6);
-    background: rgb(59 130 246 / 5%);
+    border-color: var(--color-brand-primary);
+    background: color-mix(in srgb, var(--color-brand-primary) 6%, transparent);
   }
 
   .tool-label {
@@ -222,7 +222,7 @@
     height: 20px;
     margin-top: 2px;
     cursor: pointer;
-    accent-color: var(--accent-primary, #3b82f6);
+    accent-color: var(--color-brand-primary);
     flex-shrink: 0;
   }
 

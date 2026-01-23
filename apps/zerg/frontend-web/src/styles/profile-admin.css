@@ -519,18 +519,18 @@
   }
 
   .rate--good {
-    background: rgb(16 185 129 / 20%);
-    color: #10b981;
+    background: color-mix(in srgb, var(--color-intent-success) 20%, transparent);
+    color: var(--color-intent-success);
   }
 
   .rate--ok {
-    background: rgb(245 158 11 / 20%);
-    color: #f59e0b;
+    background: color-mix(in srgb, var(--color-intent-warning) 20%, transparent);
+    color: var(--color-intent-warning);
   }
 
   .rate--poor {
-    background: rgb(239 68 68 / 20%);
-    color: #ef4444;
+    background: color-mix(in srgb, var(--color-intent-error) 20%, transparent);
+    color: var(--color-intent-error);
   }
 
   .avg-cost {
@@ -558,7 +558,7 @@
   }
 
   .error-state p {
-    color: #ef4444;
+    color: var(--color-intent-error);
     font-size: 16px;
     margin-bottom: 16px;
   }
@@ -816,13 +816,13 @@
   }
 
   .role-badge.role-admin {
-    background: rgb(139 92 246 / 20%);
-    color: #a78bfa;
+    background: color-mix(in srgb, var(--color-brand-secondary) 20%, transparent);
+    color: var(--color-brand-secondary);
   }
 
   .role-badge.role-user {
-    background: rgb(59 130 246 / 20%);
-    color: #60a5fa;
+    background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+    color: var(--color-brand-primary);
   }
 
   /* User Detail Modal */
