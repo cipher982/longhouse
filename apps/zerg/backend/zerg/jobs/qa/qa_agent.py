@@ -281,12 +281,14 @@ async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
 
         # Set up environment for Claude Code CLI with z.ai backend
         # Key: use AUTH_TOKEN not API_KEY, and unset Bedrock flags
+        # Also set HOME=/tmp for read-only container filesystems (.claude.json needs write access)
         env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY")}
         env.update(
             {
                 "ANTHROPIC_BASE_URL": config.ZAI_BASE_URL,
                 "ANTHROPIC_AUTH_TOKEN": config.ZAI_API_KEY,
                 "ANTHROPIC_MODEL": config.ZAI_MODEL,
+                "HOME": "/tmp",  # Claude CLI needs writable HOME for config files
             }
         )
 
