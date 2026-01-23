@@ -389,20 +389,20 @@
     justify-content: space-between;
     gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: var(--color-intent-error-muted);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
     border-radius: var(--radius-md);
-    color: #fca5a5;
+    color: var(--color-intent-error);
     font-size: 0.875rem;
     margin-bottom: var(--space-4);
   }
 
   .ui-action-error-dismiss {
     background: transparent;
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    border: 1px solid color-mix(in srgb, var(--color-intent-error) 30%, transparent);
     border-radius: var(--radius-sm);
     padding: var(--space-1) var(--space-2);
-    color: #fca5a5;
+    color: var(--color-intent-error);
     font-size: 0.75rem;
     cursor: pointer;
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
@@ -410,8 +410,8 @@
   }
 
   .ui-action-error-dismiss:hover {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: rgba(239, 68, 68, 0.5);
+    background: color-mix(in srgb, var(--color-intent-error) 20%, transparent);
+    border-color: color-mix(in srgb, var(--color-intent-error) 50%, transparent);
   }
 
   /* --- Section Header --- */
