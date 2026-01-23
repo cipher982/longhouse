@@ -259,13 +259,13 @@
   .trace-detail-anomalies {
     padding: var(--space-4) var(--space-6);
     border-bottom: 1px solid var(--color-border);
-    background-color: rgba(239, 68, 68, 0.05);
+    background-color: color-mix(in srgb, var(--color-intent-error) 6%, transparent);
   }
 
   .trace-detail-anomalies-title {
     font-size: 0.7rem;
     font-weight: 600;
-    color: #ef4444;
+    color: var(--color-intent-error);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: var(--space-2);
@@ -279,7 +279,7 @@
 
   .trace-detail-anomaly {
     font-size: 0.85rem;
-    color: var(--color-text);
+    color: var(--color-text-primary);
   }
 
   .trace-detail-timeline {

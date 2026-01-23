@@ -187,8 +187,8 @@
   overflow-x: auto;
 
   &.running {
-    background: color-mix(in srgb, #3b82f6 10%, var(--surface-secondary));
-    border-color: color-mix(in srgb, #3b82f6 30%, var(--border-subtle));
+    background: color-mix(in srgb, var(--color-brand-primary) 10%, var(--surface-secondary));
+    border-color: color-mix(in srgb, var(--color-brand-primary) 30%, var(--border-subtle));
     color: var(--text-secondary);
     font-style: italic;
     text-align: center;
