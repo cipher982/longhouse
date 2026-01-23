@@ -1,0 +1,40 @@
+# UI Audit + Refactor Task List (Swarmlet Web)
+
+Last updated: 2026-01-23
+Owner: David Rose
+
+Principle: this doc is the source of truth for UI work. Update after every meaningful change.
+
+## Status Key
+- [ ] pending
+- [~] in progress
+- [x] done
+- [!] blocked
+
+## Phase 0 — Setup & QA
+- [x] Create this task doc.
+- [x] Add quick UI QA targets (`make qa-ui`, `make qa-ui-visual`).
+- [x] Document UI QA workflow in `docs/TESTING.md`.
+
+## Phase 1 — Structure & Consistency (Desktop Lock)
+- [x] Centralize navigation items (single source shared by header + mobile drawer).
+- [ ] Introduce page shell/layout primitives (max width, padding, title/description).
+- [ ] Remove inline layout styles in Settings/Profile/Admin/TraceExplorer.
+- [ ] Replace legacy button usage in active pages with `components/ui/Button`.
+- [ ] Consolidate header/section patterns (SectionHeader everywhere).
+
+## Phase 2 — Styling & Tokens
+- [ ] Audit token usage (replace raw colors/spacing with tokens).
+- [ ] Reduce legacy CSS overrides; move to layered, scoped styles.
+- [ ] Normalize type scale and heading rhythm across pages.
+
+## Phase 3 — Automated UI QA
+- [ ] Add baseline visual snapshots for key pages (dashboard/chat/canvas/settings).
+- [ ] Add a focused mobile viewport test project in Playwright (after design lock).
+- [ ] Add a11y regression gate (axe + color contrast) to CI.
+
+## Phase 4 — Mobile Responsiveness (after desktop is locked)
+- [ ] Define breakpoints and layout rules per page.
+- [ ] Mobile nav: refine drawer + header behavior.
+- [ ] Chat layout: sidebar behavior + composer sizing.
+- [ ] Canvas: layout rules + minimal mode.
