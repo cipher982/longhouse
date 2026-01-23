@@ -18,17 +18,17 @@
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--color-text-primary);
 }
 
 .tool-config-modal .close {
   cursor: pointer;
   font-size: 24px;
-  color: #64748b;
+  color: var(--color-text-muted);
 }
 
 .tool-config-modal .close:hover {
-  color: #1e293b;
+  color: var(--color-text-primary);
 }
 
 .tool-config-modal .description-section {
@@ -36,13 +36,13 @@
 }
 
 .tool-config-modal .description-section p {
-  color: #64748b;
+  color: var(--color-text-secondary);
   font-size: 14px;
   margin: 0 0 16px;
 }
 
 .tool-config-modal .description-section .divider {
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--color-border-subtle);
   margin-bottom: 20px;
 }
 
@@ -54,52 +54,55 @@
   margin: 0 0 16px;
   font-size: 16px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--color-text-primary);
 }
 
 .tool-config-modal .input-row {
   margin-bottom: 16px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--color-surface-secondary);
 }
 
 .tool-config-modal .input-row label {
   display: block;
   margin-bottom: 8px;
   font-weight: 500;
-  color: #374151;
+  color: var(--color-text-secondary);
 }
 
 .tool-config-modal .input-row .required {
-  color: #ef4444;
+  color: var(--color-intent-error);
 }
 
 .tool-config-modal .mapping-type-selector {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border-primary);
   border-radius: 6px;
   margin-bottom: 8px;
-  background: white;
+  background: var(--color-surface-primary);
+  color: var(--color-text-primary);
 }
 
 .tool-config-modal .static-value-input,
 .tool-config-modal .node-output-selector {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--color-border-primary);
   border-radius: 6px;
   font-family: inherit;
+  background: var(--color-surface-primary);
+  color: var(--color-text-primary);
 }
 
 .tool-config-modal .auto-execute-section {
   margin-bottom: 24px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
-  background: #f8fafc;
+  background: var(--color-surface-secondary);
 }
 
 .tool-config-modal .auto-execute-section label {
@@ -114,7 +117,7 @@
 
 .tool-config-modal .auto-execute-section span {
   font-weight: 500;
-  color: #374151;
+  color: var(--color-text-secondary);
 }
 
 .tool-config-modal .modal-buttons {
@@ -122,5 +125,5 @@
   justify-content: flex-end;
   gap: 12px;
   padding: 20px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--color-border-subtle);
 }
