@@ -339,10 +339,21 @@ async def lifespan(app: FastAPI):
             # Job queue worker (durable job execution)
             if _settings.job_queue_enabled:
                 try:
+                    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+                    from zerg.jobs.registry import register_all_jobs
                     from zerg.jobs.worker import enqueue_missed_runs
                     from zerg.jobs.worker import run_queue_worker
 
+                    # Create scheduler for job cron triggers
+                    job_scheduler = AsyncIOScheduler()
+
+                    # Register and schedule job modules (use_queue=True enqueues to durable queue)
+                    scheduled_count = register_all_jobs(scheduler=job_scheduler, use_queue=True)
+                    logger.info("Scheduled %d jobs with APScheduler", scheduled_count)
+
                     await enqueue_missed_runs()  # Backfill missed runs
+                    job_scheduler.start()  # Start cron triggers
                     asyncio.create_task(run_queue_worker())  # Background worker loop
                     started.append("job_queue_worker")
                     logger.info("Job queue worker started (queue mode)")
