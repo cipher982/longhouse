@@ -39,6 +39,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [x] Modal actions: migrate Add Runner / Add Context / Add Knowledge Source buttons to `Button` + `Spinner`.
 - [x] Integrations + Knowledge Sources: adopt PageShell for consistent width/padding.
 - [x] Consolidate header/section patterns (SectionHeader everywhere).
+- [x] Info pages: remove inline styles from Docs/Changelog.
 
 ## Phase 2 — Styling & Tokens
 - [ ] Audit token usage (replace raw colors/spacing with tokens).

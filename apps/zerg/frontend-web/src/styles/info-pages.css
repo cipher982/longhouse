@@ -282,6 +282,11 @@
     color: var(--color-text-secondary);
   }
 
+  .docs-inline-icon {
+    vertical-align: middle;
+    margin-right: var(--space-2);
+  }
+
   .docs-code {
     background: var(--color-surface-section);
     border: 1px solid var(--color-border-subtle);
@@ -300,6 +305,20 @@
   /* --------------------------------------------------------
    Changelog Page Specific
    -------------------------------------------------------- */
+
+  .changelog-empty-state {
+    text-align: center;
+    padding: var(--space-16) 0;
+  }
+
+  .changelog-empty-text {
+    font-size: var(--font-size-lg);
+    color: var(--color-text-secondary);
+  }
+
+  .changelog-empty-links {
+    margin-top: var(--space-6);
+  }
 
   .changelog-list {
     max-width: 700px;
