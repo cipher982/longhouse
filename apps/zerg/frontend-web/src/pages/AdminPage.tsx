@@ -634,6 +634,19 @@ function AdminPage() {
     refetchInterval: 60000, // Refresh every minute
   });
 
+  useEffect(() => {
+    if (summaryLoading || usersLoading) {
+      document.body.removeAttribute("data-ready");
+      return;
+    }
+
+    document.body.setAttribute("data-ready", "true");
+
+    return () => {
+      document.body.removeAttribute("data-ready");
+    };
+  }, [summaryLoading, usersLoading]);
+
   // Database reset mutation
   const resetMutation = useMutation({
     mutationFn: resetDatabase,
