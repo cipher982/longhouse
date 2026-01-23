@@ -227,16 +227,23 @@ async def _run_collect_script(job_dir: Path, run_dir: Path) -> dict[str, Any]:
 
 
 async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
-    """Run Claude CLI for AI-powered analysis.
+    """Run AI analysis via z.ai API (Anthropic SDK compatible).
 
     Builds a complete prompt with all collected data files embedded,
-    since the CLI can't read files from the working directory.
+    then calls GLM-4.7 via z.ai's Anthropic-compatible API.
     """
+    import anthropic
+
     prompt_file = job_dir / "prompt.md"
 
     if not prompt_file.exists():
         logger.error("prompt.md not found at %s", prompt_file)
         return {"success": False, "status": "missing_prompt", "error": "prompt.md not found"}
+
+    # Check for API key
+    if not config.ZAI_API_KEY:
+        logger.error("ZAI_API_KEY not set - cannot run agent analysis")
+        return {"success": False, "status": "missing_api_key", "error": "ZAI_API_KEY environment variable not set"}
 
     try:
         base_prompt = prompt_file.read_text()
@@ -268,39 +275,41 @@ async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
         # Combine base prompt with data
         full_prompt = f"{base_prompt}\n\n---\n\n# Collected Data\n\n" + "\n\n".join(file_contents)
 
-        # Run Claude CLI
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["claude", "-p", full_prompt, "--output-format", "text"],
-            cwd=str(run_dir),
-            capture_output=True,
-            timeout=config.AGENT_TIMEOUT_SECONDS,
-            env={**os.environ, "RUN_DIR": str(run_dir)},
+        # Create Anthropic client configured for z.ai
+        client = anthropic.Anthropic(
+            base_url=config.ZAI_BASE_URL,
+            api_key=config.ZAI_API_KEY,
         )
 
-        stdout = result.stdout.decode("utf-8", errors="replace")
-        stderr = result.stderr.decode("utf-8", errors="replace")
+        # Run the analysis (in a thread to avoid blocking)
+        def call_api():
+            return client.messages.create(
+                model=config.ZAI_MODEL,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
 
-        if result.returncode == 0:
-            return {"success": True, "status": "ok", "stdout": stdout, "stderr": stderr}
-        else:
-            logger.warning("Claude CLI returned %d: %s", result.returncode, stderr[:500])
-            return {
-                "success": False,
-                "status": "agent_error",
-                "stdout": stdout,
-                "stderr": stderr,
-                "returncode": result.returncode,
-            }
+        response = await asyncio.wait_for(
+            asyncio.to_thread(call_api),
+            timeout=config.AGENT_TIMEOUT_SECONDS,
+        )
 
-    except subprocess.TimeoutExpired:
-        logger.error("Claude CLI timed out after %ds", config.AGENT_TIMEOUT_SECONDS)
+        # Extract text from response
+        stdout = response.content[0].text if response.content else ""
+
+        return {"success": True, "status": "ok", "stdout": stdout, "stderr": ""}
+
+    except asyncio.TimeoutError:
+        logger.error("z.ai API timed out after %ds", config.AGENT_TIMEOUT_SECONDS)
         return {"success": False, "status": "timeout", "error": "Agent timed out"}
-    except FileNotFoundError:
-        logger.error("Claude CLI not found - is it installed?")
-        return {"success": False, "status": "cli_not_found", "error": "claude command not found"}
+    except anthropic.AuthenticationError as e:
+        logger.error("z.ai API authentication failed: %s", e)
+        return {"success": False, "status": "auth_error", "error": f"Authentication failed: {e}"}
+    except anthropic.APIError as e:
+        logger.error("z.ai API error: %s", e)
+        return {"success": False, "status": "api_error", "error": str(e)}
     except Exception as e:
-        logger.exception("Claude CLI failed: %s", e)
+        logger.exception("z.ai API call failed: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
 
 
