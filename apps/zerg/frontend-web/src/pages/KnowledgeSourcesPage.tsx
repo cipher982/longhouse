@@ -13,7 +13,8 @@ import {
   Button,
   SectionHeader,
   EmptyState,
-  Spinner
+  Spinner,
+  PageShell
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
@@ -74,30 +75,30 @@ export default function KnowledgeSourcesPage() {
 
   if (isLoading) {
     return (
-      <div className="knowledge-sources-page-container">
+      <PageShell size="normal" className="knowledge-sources-page-container">
         <EmptyState
           icon={<Spinner size="lg" />}
           title="Loading knowledge sources..."
           description="Fetching your connected documentation and codebases."
         />
-      </div>
+      </PageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="knowledge-sources-page-container">
+      <PageShell size="normal" className="knowledge-sources-page-container">
         <EmptyState
           variant="error"
           title="Error loading knowledge sources"
           description={String(error)}
         />
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="knowledge-sources-page-container">
+    <PageShell size="normal" className="knowledge-sources-page-container">
       <SectionHeader
         title="Knowledge Sources"
         description="Connect knowledge sources to give your agents context about your codebase, documentation, and more."
@@ -154,6 +155,6 @@ export default function KnowledgeSourcesPage() {
         onSubmit={handleContextSubmit}
         existingDocsCount={sources?.length ?? 0}
       />
-    </div>
+    </PageShell>
   );
 }
