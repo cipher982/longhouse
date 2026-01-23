@@ -72,6 +72,8 @@ On failure:
 | `make qa-ui-visual` | Visual analysis screenshots + AI notes | Before merging UI work |
 | `make test-e2e-ui` | Interactive Playwright UI runner | Debugging layout/flows |
 | `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
+| `make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Public page visual baselines | Smoke visual diffs |
+| `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Update public page baselines | When UI changes |
 
 **Tips**
 - Run `make qa-ui-visual ARGS="--pages=dashboard,chat --headed"` to watch captures live.
