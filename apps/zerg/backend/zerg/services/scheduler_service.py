@@ -63,7 +63,6 @@ class SchedulerService:
             self._run_barrier_reaper,
             trigger=IntervalTrigger(seconds=60),
             id="barrier_reaper",
-            name="Barrier Reaper",
             replace_existing=True,
         )
         logger.info("Barrier reaper job scheduled (every 60s)")
