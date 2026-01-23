@@ -1,0 +1,84 @@
+@layer pages {
+  .reliability-page-container {
+    padding: var(--space-6);
+  }
+
+  .reliability-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-8);
+  }
+
+  .reliability-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .reliability-section-title {
+    margin: 0;
+  }
+
+  .reliability-warning-title {
+    margin: 0;
+    color: #f59e0b;
+  }
+
+  .reliability-section-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .reliability-subsection-title {
+    margin: 0 0 var(--space-3) 0;
+    font-size: 0.875rem;
+  }
+
+  .reliability-subsection-title--spaced {
+    margin: var(--space-4) 0 var(--space-3) 0;
+  }
+
+  .reliability-small-text {
+    font-size: 0.75rem;
+  }
+
+  .reliability-code {
+    font-size: 0.65rem;
+  }
+
+  .reliability-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .reliability-status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background-color: var(--status-color);
+  }
+
+  .reliability-status-dot--pulse {
+    animation: reliability-pulse 2s infinite;
+  }
+
+  .reliability-status-label {
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--status-color);
+  }
+
+  @keyframes reliability-pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    }
+    70% {
+      box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    }
+  }
+}

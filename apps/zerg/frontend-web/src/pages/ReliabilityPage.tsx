@@ -128,24 +128,13 @@ function MetricCard({
   color?: string;
 }) {
   return (
-    <Card className="metric-card">
+    <Card className="metric-card" style={{ "--metric-accent": color } as React.CSSProperties}>
       <Card.Header>
-        <h4 style={{ color, margin: 0, fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-          {title}
-        </h4>
+        <h4 className="metric-title">{title}</h4>
       </Card.Header>
       <Card.Body>
-        <div className="metric-value" style={{ fontSize: "1.8rem", fontWeight: 700 }}>
-          {value}
-        </div>
-        {subtitle && (
-          <div
-            className="metric-subtitle"
-            style={{ fontSize: "0.8rem", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}
-          >
-            {subtitle}
-          </div>
-        )}
+        <div className="metric-value">{value}</div>
+        {subtitle && <div className="metric-subtitle">{subtitle}</div>}
       </Card.Body>
     </Card>
   );
@@ -160,17 +149,11 @@ function StatusIndicator({ status }: { status: "healthy" | "degraded" | "unhealt
   };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+    <div className="reliability-status" style={{ "--status-color": colors[status] } as React.CSSProperties}>
       <div
-        style={{
-          width: "12px",
-          height: "12px",
-          borderRadius: "50%",
-          backgroundColor: colors[status],
-          animation: status !== "healthy" ? "pulse 2s infinite" : undefined,
-        }}
+        className={`reliability-status-dot${status !== "healthy" ? " reliability-status-dot--pulse" : ""}`}
       />
-      <span style={{ fontWeight: 600, textTransform: "uppercase", color: colors[status] }}>{status}</span>
+      <span className="reliability-status-label">{status}</span>
     </div>
   );
 }
@@ -220,7 +203,7 @@ export default function ReliabilityPage() {
 
   if (healthLoading) {
     return (
-      <div className="reliability-page-container" style={{ padding: "var(--space-6)" }}>
+      <div className="reliability-page-container">
         <SectionHeader title="Reliability Dashboard" description="Monitor system health and performance." />
         <EmptyState
           icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
@@ -233,7 +216,7 @@ export default function ReliabilityPage() {
 
   if (healthError) {
     return (
-      <div className="reliability-page-container" style={{ padding: "var(--space-6)" }}>
+      <div className="reliability-page-container">
         <SectionHeader title="Reliability Dashboard" description="Monitor system health and performance." />
         <EmptyState
           variant="error"
@@ -246,16 +229,16 @@ export default function ReliabilityPage() {
   }
 
   return (
-    <div className="reliability-page-container" style={{ padding: "var(--space-6)" }}>
+    <div className="reliability-page-container">
       <SectionHeader
         title="Reliability Dashboard"
         description="Monitor system health, errors, and performance metrics."
         actions={health && <StatusIndicator status={health.status} />}
       />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-8)" }}>
+      <div className="reliability-stack">
         {/* Key Metrics */}
-        <div className="metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)" }}>
+        <div className="metrics-grid reliability-metrics-grid">
           <MetricCard
             title="Run Errors (1h)"
             value={health?.recent_run_errors ?? 0}
@@ -294,14 +277,14 @@ export default function ReliabilityPage() {
         {/* Recent Errors */}
         <Card>
           <Card.Header>
-            <h3 style={{ margin: 0 }}>Recent Errors (24h)</h3>
+            <h3 className="reliability-section-title">Recent Errors (24h)</h3>
           </Card.Header>
           <Card.Body>
             {errors && (errors.total_run_errors > 0 || errors.total_worker_errors > 0) ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+              <div className="reliability-section-stack">
                 {errors.run_errors.length > 0 && (
                   <div>
-                    <h4 style={{ margin: "0 0 var(--space-3) 0", fontSize: "0.875rem" }}>
+                    <h4 className="reliability-subsection-title">
                       Run Errors ({errors.total_run_errors})
                     </h4>
                     <Table>
@@ -316,14 +299,14 @@ export default function ReliabilityPage() {
                           <Table.Row key={err.id}>
                             <Table.Cell>{err.id}</Table.Cell>
                             <Table.Cell>
-                              <span style={{ fontSize: "0.75rem" }}>{err.error || "Unknown error"}</span>
+                              <span className="reliability-small-text">{err.error || "Unknown error"}</span>
                             </Table.Cell>
                             <Table.Cell>
                               {err.created_at ? new Date(err.created_at).toLocaleString() : "-"}
                             </Table.Cell>
                             <Table.Cell>
                               {err.trace_id ? (
-                                <code style={{ fontSize: "0.65rem" }}>{err.trace_id.substring(0, 8)}...</code>
+                                <code className="reliability-code">{err.trace_id.substring(0, 8)}...</code>
                               ) : (
                                 "-"
                               )}
@@ -337,7 +320,7 @@ export default function ReliabilityPage() {
 
                 {errors.worker_errors.length > 0 && (
                   <div>
-                    <h4 style={{ margin: "var(--space-4) 0 var(--space-3) 0", fontSize: "0.875rem" }}>
+                    <h4 className="reliability-subsection-title reliability-subsection-title--spaced">
                       Worker Errors ({errors.total_worker_errors})
                     </h4>
                     <Table>
@@ -352,10 +335,10 @@ export default function ReliabilityPage() {
                           <Table.Row key={err.id}>
                             <Table.Cell>{err.id}</Table.Cell>
                             <Table.Cell>
-                              <span style={{ fontSize: "0.75rem" }}>{err.task_preview || "-"}</span>
+                              <span className="reliability-small-text">{err.task_preview || "-"}</span>
                             </Table.Cell>
                             <Table.Cell>
-                              <span style={{ fontSize: "0.75rem" }}>{err.error || "Unknown error"}</span>
+                              <span className="reliability-small-text">{err.error || "Unknown error"}</span>
                             </Table.Cell>
                             <Table.Cell>
                               {err.created_at ? new Date(err.created_at).toLocaleString() : "-"}
@@ -377,7 +360,7 @@ export default function ReliabilityPage() {
         {stuckWorkers && stuckWorkers.stuck_count > 0 && (
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0, color: "#f59e0b" }}>Stuck Workers ({stuckWorkers.stuck_count})</h3>
+              <h3 className="reliability-warning-title">Stuck Workers ({stuckWorkers.stuck_count})</h3>
             </Card.Header>
             <Card.Body>
               <Table>
@@ -392,13 +375,13 @@ export default function ReliabilityPage() {
                     <Table.Row key={worker.id}>
                       <Table.Cell>{worker.id}</Table.Cell>
                       <Table.Cell>
-                        <span style={{ fontSize: "0.75rem" }}>{worker.task || "-"}</span>
+                        <span className="reliability-small-text">{worker.task || "-"}</span>
                       </Table.Cell>
                       <Table.Cell>
                         {worker.started_at ? new Date(worker.started_at).toLocaleString() : "-"}
                       </Table.Cell>
                       <Table.Cell>
-                        <code style={{ fontSize: "0.65rem" }}>{worker.worker_id || "-"}</code>
+                        <code className="reliability-code">{worker.worker_id || "-"}</code>
                       </Table.Cell>
                     </Table.Row>
                   ))}
@@ -411,7 +394,7 @@ export default function ReliabilityPage() {
         {/* Runners */}
         <Card>
           <Card.Header>
-            <h3 style={{ margin: 0 }}>Runners ({runners?.total ?? 0})</h3>
+            <h3 className="reliability-section-title">Runners ({runners?.total ?? 0})</h3>
           </Card.Header>
           <Card.Body>
             {runners && runners.runners.length > 0 ? (
@@ -443,7 +426,7 @@ export default function ReliabilityPage() {
                         {runner.last_seen_at ? new Date(runner.last_seen_at).toLocaleString() : "Never"}
                       </Table.Cell>
                       <Table.Cell>
-                        <span style={{ fontSize: "0.75rem" }}>
+                        <span className="reliability-small-text">
                           {runner.capabilities?.join(", ") || "-"}
                         </span>
                       </Table.Cell>
