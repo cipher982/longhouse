@@ -65,6 +65,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:noexec,nosuid,size=100m
+      - /home/zerg/.claude:size=10m
+      - /home/zerg/.npm:size=10m
     deploy:
       resources:
         limits:
