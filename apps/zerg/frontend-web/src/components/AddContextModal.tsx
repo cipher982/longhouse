@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback } from "react";
+import { Button } from "./ui";
 import "./AddContextModal.css";
 
 interface AddContextModalProps {
@@ -251,19 +252,16 @@ export function AddContextModal({
         </div>
 
         <div className="modal-actions">
-          <button
-            className="modal-button modal-button-secondary"
-            onClick={handleClose}
-          >
+          <Button variant="secondary" onClick={handleClose}>
             Cancel
-          </button>
-          <button
-            className="modal-button modal-button-primary"
+          </Button>
+          <Button
+            variant="primary"
             onClick={handleSubmit}
             disabled={isSubmitting || !title.trim() || !content.trim()}
           >
             {isSubmitting ? "Saving..." : "Save Document"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

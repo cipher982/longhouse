@@ -5,6 +5,7 @@ import {
   useCreateKnowledgeSource,
 } from "../hooks/useKnowledgeSources";
 import type { GitHubRepo } from "../services/api";
+import { Button } from "./ui";
 
 interface AddKnowledgeSourceModalProps {
   isOpen: boolean;
@@ -368,31 +369,31 @@ export function AddKnowledgeSourceModal({
 
         <div className="modal-actions">
           {step !== "type" && (
-            <button className="modal-button modal-button-secondary" onClick={handleBack}>
+            <Button variant="secondary" onClick={handleBack}>
               Back
-            </button>
+            </Button>
           )}
-          <button className="modal-button modal-button-secondary" onClick={handleClose}>
+          <Button variant="secondary" onClick={handleClose}>
             Cancel
-          </button>
+          </Button>
           {step === "github_config" && (
-            <button
-              className="modal-button modal-button-primary"
+            <Button
+              variant="primary"
               onClick={handleSubmitGitHub}
               disabled={createMutation.isPending}
             >
               {createMutation.isPending ? "Adding..." : "Add Source"}
-            </button>
+            </Button>
           )}
           {step === "url_config" && (
-            <button
-              className="modal-button modal-button-primary"
+            <Button
+              variant="primary"
               onClick={handleSubmitUrl}
               disabled={createMutation.isPending || !url}
               data-testid="submit-url-source"
             >
               {createMutation.isPending ? "Adding..." : "Add Source"}
-            </button>
+            </Button>
           )}
         </div>
       </div>

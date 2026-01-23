@@ -87,20 +87,10 @@
     text-align: center;
   }
 
-  .modal-loading .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid var(--color-border-primary);
+  .modal-loading .ui-spinner {
+    border-color: var(--color-border-primary);
     border-top-color: var(--color-intent-success);
-    border-radius: 50%;
-    animation: modal-spin 0.8s linear infinite;
     margin-bottom: var(--space-4);
-  }
-
-  @keyframes modal-spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   .modal-loading p {
@@ -111,20 +101,6 @@
   .modal-error p {
     color: var(--color-intent-error);
     margin-bottom: var(--space-4);
-  }
-
-  .retry-button {
-    padding: var(--space-2) var(--space-6);
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-    border: none;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition: all var(--motion-duration-fast);
-  }
-
-  .retry-button:hover {
-    background: var(--color-surface-tertiary);
   }
 
   /* Enrollment Info */
@@ -170,23 +146,10 @@
     word-wrap: normal;
   }
 
-  .copy-button {
+  .modal-copy-button {
     position: absolute;
     top: var(--space-3);
     right: var(--space-3);
-    padding: var(--space-2) var(--space-4);
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-    border: none;
-    border-radius: var(--radius-md);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-    transition: all var(--motion-duration-fast);
-  }
-
-  .copy-button:hover {
-    background: var(--color-surface-tertiary);
   }
 
   /* Instructions */
@@ -229,38 +192,6 @@
     gap: var(--space-3);
   }
 
-  .modal-button {
-    padding: var(--space-3) var(--space-6);
-    border: none;
-    border-radius: var(--radius-md);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-    transition: all var(--motion-duration-fast);
-  }
-
-  .modal-button-primary {
-    background: linear-gradient(
-      135deg,
-      var(--color-intent-success) 0%,
-      #059669 100%
-    );
-    color: white;
-  }
-
-  .modal-button-primary:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-  }
-
-  .modal-button-secondary {
-    background: var(--color-surface-elevated);
-    color: var(--color-text-primary);
-  }
-
-  .modal-button-secondary:hover {
-    background: var(--color-surface-tertiary);
-  }
-
   /* Responsive */
 
   @media (max-width: 768px) {
@@ -279,7 +210,7 @@
       padding: var(--space-3);
     }
 
-    .copy-button {
+    .modal-copy-button {
       position: static;
       width: 100%;
       margin-top: var(--space-3);
