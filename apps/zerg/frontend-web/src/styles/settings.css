@@ -42,24 +42,6 @@
     line-height: 1.4;
   }
 
-  .btn-add {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    border: none;
-    color: white;
-    padding: 8px 16px;
-    border-radius: var(--radius-sm, 4px);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-    .btn-add:hover {
-      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 8px rgb(59 130 246 / 30%);
-    }
-
     /* Servers */
   .servers-list {
     display: flex;
@@ -109,24 +91,6 @@
     font-size: 14px;
   }
 
-  .btn-remove {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-    border: none;
-    color: white;
-    padding: 6px 12px;
-    border-radius: var(--radius-sm, 4px);
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .btn-remove:hover {
-    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgb(239 68 68 / 30%);
-  }
-
   .server-fields {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -172,24 +136,6 @@
   .integration-value {
     color: var(--text-secondary, #e0e0e0);
     font-size: 14px;
-  }
-
-  .btn-remove-small {
-    background: transparent;
-    border: 1px solid var(--border-color, #3d3d5c);
-    color: var(--text-secondary, #e0e0e0);
-    padding: 4px 10px;
-    border-radius: var(--radius-sm, 4px);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .btn-remove-small:hover {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-    color: white;
-    border-color: transparent;
   }
 
   .add-integration {

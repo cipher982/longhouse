@@ -46,6 +46,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [ ] Audit token usage (replace raw colors/spacing with tokens).
 - [~] Reduce legacy CSS overrides; move to layered, scoped styles.
   - [x] Removed unused legacy `.btn-*` overrides from `profile-admin.css`.
+  - [x] Removed unused legacy `.btn-*` styles from `settings.css`.
 - [ ] Normalize type scale and heading rhythm across pages.
 
 ## Phase 3 — Automated UI QA
