@@ -22,6 +22,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
 - [~] Remove inline layout styles in Settings/Profile/Admin/TraceExplorer.
   - [x] Settings page: replace inline layout styles with scoped classes.
   - [x] Profile page: replace inline layout styles with scoped classes.
+  - [x] Runners page: replace inline layout styles with scoped classes.
 - [ ] Replace legacy button usage in active pages with `components/ui/Button`.
 - [ ] Consolidate header/section patterns (SectionHeader everywhere).
 
