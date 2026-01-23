@@ -25,6 +25,7 @@ import "./styles/settings.css";
 import "./styles/css/agent-settings.css";
 import "./styles/marketing-mode.css";
 import "./styles/reliability.css";
+import "./styles/trace-explorer.css";
 import App from "./routes/App";
 
 // Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)
