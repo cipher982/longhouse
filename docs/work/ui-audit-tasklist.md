@@ -28,6 +28,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Trace Explorer page: replace inline layout styles with scoped classes.
 - [~] Replace legacy button usage in active pages with `components/ui/Button`.
   - [x] Contacts page: swapped legacy `.btn-*` usage to `Button` component.
+  - [x] Pricing page: swapped legacy CTA button to `Button` component.
 - [ ] Consolidate header/section patterns (SectionHeader everywhere).
 
 ## Phase 2 — Styling & Tokens
