@@ -999,7 +999,7 @@ export default function DashboardPage() {
               <Table.Row>
                 <Table.Cell isHeader colSpan={emptyColspan}>
                   <EmptyState
-                    icon={<img src={appLogo} alt="Swarmlet Logo" style={{ width: 160, height: 160, opacity: 0.8 }} />}
+                    icon={<img src={appLogo} alt="Swarmlet Logo" className="dashboard-empty-logo" />}
                     title="No agents found"
                     description="Click 'Create Agent' to get started."
                   />

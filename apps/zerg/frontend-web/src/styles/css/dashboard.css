@@ -159,6 +159,12 @@
     white-space: nowrap;
   }
 
+  .dashboard-empty-logo {
+    width: 160px;
+    height: 160px;
+    opacity: 0.8;
+  }
+
   /* Search bar */
   .search-container {
     display: flex;
