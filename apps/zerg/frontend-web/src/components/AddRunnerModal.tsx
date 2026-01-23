@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useCreateEnrollToken } from "../hooks/useRunners";
+import { Button, Spinner } from "./ui";
 
 interface AddRunnerModalProps {
   isOpen: boolean;
@@ -58,7 +59,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
         <div className="modal-content">
           {createTokenMutation.isPending && (
             <div className="modal-loading">
-              <div className="spinner" />
+              <Spinner size="lg" />
               <p>Generating enrollment token...</p>
             </div>
           )}
@@ -66,13 +67,9 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
           {createTokenMutation.error && (
             <div className="modal-error">
               <p>Failed to create enrollment token</p>
-              <button
-                type="button"
-                className="retry-button"
-                onClick={() => createTokenMutation.mutate()}
-              >
+              <Button variant="secondary" size="sm" onClick={() => createTokenMutation.mutate()}>
                 Retry
-              </button>
+              </Button>
             </div>
           )}
 
@@ -91,14 +88,15 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
                 <pre ref={codeRef} className="code-block">
                   <code>{createTokenMutation.data.docker_command}</code>
                 </pre>
-                <button
-                  type="button"
-                  className="copy-button"
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="modal-copy-button"
                   onClick={handleCopy}
                   title="Copy to clipboard"
                 >
                   {copied ? "Copied!" : "Copy"}
-                </button>
+                </Button>
               </div>
 
               <div className="enrollment-instructions">
@@ -111,13 +109,9 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
               </div>
 
               <div className="modal-actions">
-                <button
-                  type="button"
-                  className="modal-button modal-button-primary"
-                  onClick={onClose}
-                >
+                <Button variant="primary" onClick={onClose}>
                   Done
-                </button>
+                </Button>
               </div>
             </>
           )}
