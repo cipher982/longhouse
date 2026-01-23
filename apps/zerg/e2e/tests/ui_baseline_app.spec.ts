@@ -17,7 +17,7 @@ async function waitForAppReady(page: Page, mode: string) {
   }
 
   if (mode === 'settings') {
-    await page.waitForLoadState('networkidle');
+    await waitForPageReady(page, { timeout: 20000 });
     await expect(page.locator('.settings-page-container')).toBeVisible();
     await expect(page.locator('form.profile-form')).toBeVisible();
   }

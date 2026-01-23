@@ -30,6 +30,19 @@ export default function SettingsPage() {
     queryFn: getUserContext,
   });
 
+  useEffect(() => {
+    if (isLoading) {
+      document.body.removeAttribute("data-ready");
+      return;
+    }
+
+    document.body.setAttribute("data-ready", "true");
+
+    return () => {
+      document.body.removeAttribute("data-ready");
+    };
+  }, [isLoading]);
+
   // Form state
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState("");
