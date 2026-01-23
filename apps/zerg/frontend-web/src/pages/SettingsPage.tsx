@@ -191,14 +191,14 @@ export default function SettingsPage() {
       />
 
       <form onSubmit={handleSubmit} className="profile-form">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+        <div className="settings-stack settings-stack--lg">
           {/* Basic Information */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Basic Information</h3>
+              <h3 className="settings-section-title">Basic Information</h3>
             </Card.Header>
             <Card.Body>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+              <div className="settings-stack settings-stack--md">
                 <div className="form-group">
                   <label htmlFor="display-name" className="form-label">Display Name</label>
                   <Input
@@ -239,8 +239,7 @@ export default function SettingsPage() {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Brief description of what you do and what you want AI to help with"
-                    className="ui-input"
-                    style={{ height: 'auto', minHeight: '80px', padding: 'var(--space-2) var(--space-3)' }}
+                    className="ui-input settings-textarea"
                     rows={3}
                   />
                   <small>What you do and how AI agents can help you</small>
@@ -252,24 +251,24 @@ export default function SettingsPage() {
           {/* Servers */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Servers</h3>
+              <h3 className="settings-section-title">Servers</h3>
               <Button type="button" onClick={addServer}>
                 <PlusIcon /> Add Server
               </Button>
             </Card.Header>
             <Card.Body>
-              <p className="section-description" style={{ marginTop: 0 }}>
+              <p className="section-description">
                 Configure servers that AI agents can reference or SSH into
               </p>
 
               {servers.length === 0 ? (
-                <div style={{ padding: 'var(--space-8)', textAlign: 'center', border: '1px dashed var(--border-glass-1)', borderRadius: 'var(--radius-md)' }}>
-                  <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>No servers configured</p>
+                <div className="settings-empty-state">
+                  <p>No servers configured</p>
                 </div>
               ) : (
                 <div className="servers-list">
                   {servers.map((server, index) => (
-                    <Card key={index} variant="default" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <Card key={index} variant="default" className="settings-card-muted">
                       <Card.Header>
                         <span className="server-index">Server {index + 1}</span>
                         <Button
@@ -321,14 +320,13 @@ export default function SettingsPage() {
                             />
                           </div>
 
-                          <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                          <div className="form-group form-group--full">
                             <label className="form-label">Notes</label>
                             <textarea
                               value={server.notes || ""}
                               onChange={(e) => updateServer(index, "notes", e.target.value)}
                               placeholder="Additional notes about this server"
-                              className="ui-input"
-                              style={{ height: 'auto', minHeight: '60px', padding: 'var(--space-2) var(--space-3)' }}
+                              className="ui-input settings-textarea settings-textarea--compact"
                               rows={2}
                             />
                           </div>
@@ -344,16 +342,16 @@ export default function SettingsPage() {
           {/* Integrations */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Integrations</h3>
+              <h3 className="settings-section-title">Integrations</h3>
             </Card.Header>
             <Card.Body>
-              <p className="section-description" style={{ marginTop: 0 }}>
+              <p className="section-description">
                 Tools and services you use (e.g., health_tracker: WHOOP, notes: Obsidian)
               </p>
 
               {Object.keys(integrations).length === 0 ? (
-                <div style={{ padding: 'var(--space-8)', textAlign: 'center', border: '1px dashed var(--border-glass-1)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-4)' }}>
-                  <p style={{ color: 'var(--color-text-muted)', margin: 0 }}>No integrations configured</p>
+                <div className="settings-empty-state settings-empty-state--spaced">
+                  <p>No integrations configured</p>
                 </div>
               ) : (
                 <div className="integrations-list">
@@ -375,7 +373,7 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              <div className="add-integration" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass-1)' }}>
+              <div className="add-integration">
                 <div className="form-group">
                   <label className="form-label">Key</label>
                   <Input
@@ -402,10 +400,10 @@ export default function SettingsPage() {
           {/* Jarvis Tools */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Jarvis Tools</h3>
+              <h3 className="settings-section-title">Jarvis Tools</h3>
             </Card.Header>
             <Card.Body>
-              <p className="section-description" style={{ marginTop: 0 }}>
+              <p className="section-description">
                 Enable or disable tools that Jarvis can use to help you
               </p>
 
@@ -416,7 +414,7 @@ export default function SettingsPage() {
                   { id: 'obsidian', name: 'Obsidian Notes', desc: 'Search and read notes from your Obsidian vault' },
                   { id: 'supervisor', name: 'Supervisor Agent', desc: 'Delegate complex multi-step tasks to supervisor' }
                 ].map(tool => (
-                  <div key={tool.id} className="tool-toggle" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-glass-1)' }}>
+                  <div key={tool.id} className="tool-toggle">
                     <label className="tool-label">
                       <input
                         type="checkbox"
@@ -438,10 +436,10 @@ export default function SettingsPage() {
           {/* Custom Instructions */}
           <Card>
             <Card.Header>
-              <h3 style={{ margin: 0 }}>Custom Instructions</h3>
+              <h3 className="settings-section-title">Custom Instructions</h3>
             </Card.Header>
             <Card.Body>
-              <p className="section-description" style={{ marginTop: 0 }}>
+              <p className="section-description">
                 Specific preferences for how AI agents should respond to you
               </p>
 
@@ -451,8 +449,7 @@ export default function SettingsPage() {
                   value={customInstructions}
                   onChange={(e) => setCustomInstructions(e.target.value)}
                   placeholder="e.g., Always explain technical concepts in detail, prefer Python over JavaScript, etc."
-                  className="ui-input"
-                  style={{ height: 'auto', minHeight: '120px', padding: 'var(--space-2) var(--space-3)' }}
+                  className="ui-input settings-textarea settings-textarea--lg"
                   rows={4}
                 />
               </div>
@@ -460,7 +457,7 @@ export default function SettingsPage() {
           </Card>
 
           {/* Form Actions */}
-          <div className="form-actions" style={{ display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end', padding: 'var(--space-6) 0' }}>
+          <div className="form-actions settings-form-actions">
             <Button
               type="button"
               variant="ghost"
