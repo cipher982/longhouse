@@ -769,7 +769,7 @@ export default function DashboardPage() {
               data-testid="create-agent-btn"
             >
               {createAgentMutation.isPending ? (
-                <span className="spinner" />
+                <Spinner size="sm" />
               ) : (
                 <>
                   <PlusIcon />
