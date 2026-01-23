@@ -2,12 +2,10 @@
 
 @layer pages {
   .settings-page-container {
-    padding: var(--space-6);
-    max-width: 1000px;
-    margin: 0 auto;
+    width: 100%;
 
-  .settings-description {
-    color: var(--text-secondary, #e0e0e0);
+    .settings-description {
+      color: var(--text-secondary, #e0e0e0);
     font-size: 14px;
     margin-bottom: 24px;
     line-height: 1.5;

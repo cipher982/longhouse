@@ -11,7 +11,8 @@ import {
   SectionHeader,
   EmptyState,
   Table,
-  Badge
+  Badge,
+  PageShell
 } from "../components/ui";
 
 // Types for admin user usage data
@@ -702,7 +703,7 @@ function AdminPage() {
   };
 
   return (
-    <div className="admin-page-container">
+    <PageShell size="wide" className="admin-page-container">
       <SectionHeader
         title="Operations Dashboard"
         description="Monitor system-wide activity, budgets, and user usage."
@@ -983,7 +984,7 @@ function AdminPage() {
           setSelectedUserId(null);
         }}
       />
-    </div>
+    </PageShell>
   );
 }
 

@@ -7,7 +7,8 @@ import {
   Card,
   SectionHeader,
   EmptyState,
-  Input
+  Input,
+  PageShell
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 
@@ -184,7 +185,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="settings-page-container">
+    <PageShell size="narrow" className="settings-page-container">
       <SectionHeader
         title="User Context Settings"
         description="Configure your personal context that AI agents will use to better understand and assist you."
@@ -477,6 +478,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </form>
-    </div>
+    </PageShell>
   );
 }

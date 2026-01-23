@@ -9,7 +9,8 @@ import {
   SectionHeader,
   EmptyState,
   Table,
-  Badge
+  Badge,
+  PageShell
 } from "../components/ui";
 
 // Types for trace data
@@ -368,7 +369,7 @@ export default function TraceExplorerPage() {
   };
 
   return (
-    <div className="trace-explorer-container">
+    <PageShell size="wide" className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
         description="Debug supervisor runs, workers, and LLM calls with unified trace timelines."
@@ -452,6 +453,6 @@ export default function TraceExplorerPage() {
           </Card.Body>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }

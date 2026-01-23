@@ -8,7 +8,8 @@ import {
   SectionHeader,
   EmptyState,
   Table,
-  Badge
+  Badge,
+  PageShell
 } from "../components/ui";
 
 // Types for reliability data
@@ -203,20 +204,20 @@ export default function ReliabilityPage() {
 
   if (healthLoading) {
     return (
-      <div className="reliability-page-container">
+      <PageShell size="wide" className="reliability-page-container">
         <SectionHeader title="Reliability Dashboard" description="Monitor system health and performance." />
         <EmptyState
           icon={<div className="spinner" style={{ width: 40, height: 40 }} />}
           title="Loading..."
           description="Fetching reliability metrics."
         />
-      </div>
+      </PageShell>
     );
   }
 
   if (healthError) {
     return (
-      <div className="reliability-page-container">
+      <PageShell size="wide" className="reliability-page-container">
         <SectionHeader title="Reliability Dashboard" description="Monitor system health and performance." />
         <EmptyState
           variant="error"
@@ -224,12 +225,12 @@ export default function ReliabilityPage() {
           description={String(healthError)}
           action={<Button onClick={() => window.location.reload()}>Retry</Button>}
         />
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="reliability-page-container">
+    <PageShell size="wide" className="reliability-page-container">
       <SectionHeader
         title="Reliability Dashboard"
         description="Monitor system health, errors, and performance metrics."
@@ -440,6 +441,6 @@ export default function ReliabilityPage() {
           </Card.Body>
         </Card>
       </div>
-    </div>
+    </PageShell>
   );
 }

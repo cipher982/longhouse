@@ -7,7 +7,8 @@ import {
   Card,
   SectionHeader,
   EmptyState,
-  Input
+  Input,
+  PageShell
 } from "../components/ui";
 
 interface UserUpdatePayload {
@@ -150,7 +151,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="profile-page-container">
+    <PageShell size="wide" className="profile-page-container">
       <SectionHeader
         title="User Profile"
         description="Manage your account settings and preferences."
@@ -294,6 +295,6 @@ export default function ProfilePage() {
           </div>
         </div>
       </form>
-    </div>
+    </PageShell>
   );
 }
