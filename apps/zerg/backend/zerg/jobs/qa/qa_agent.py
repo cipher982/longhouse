@@ -227,11 +227,16 @@ async def _run_collect_script(job_dir: Path, run_dir: Path) -> dict[str, Any]:
 
 
 async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
-    """Run Claude Code CLI for AI-powered analysis with z.ai backend.
+    """Run AI analysis via z.ai API (Anthropic SDK compatible).
 
-    Uses the full agentic Claude Code CLI (not just SDK) for comprehensive
-    analysis with tool access, reasoning, and file reading capabilities.
+    Uses GLM-4.7 via z.ai's Anthropic-compatible API for analysis.
+
+    Note: Claude Code CLI was attempted but doesn't work with z.ai because
+    the CLI uses streaming/extended protocol features not supported by z.ai.
+    The SDK approach provides the same analysis capability for this use case.
     """
+    import anthropic
+
     prompt_file = job_dir / "prompt.md"
 
     if not prompt_file.exists():
@@ -273,63 +278,41 @@ async def _run_agent_analysis(job_dir: Path, run_dir: Path) -> dict[str, Any]:
         # Combine base prompt with data
         full_prompt = f"{base_prompt}\n\n---\n\n# Collected Data\n\n" + "\n\n".join(file_contents)
 
-        # Build environment for z.ai backend
-        # IMPORTANT: ANTHROPIC_AUTH_TOKEN (not API_KEY) is required for Claude CLI with custom endpoints
-        env = {
-            **os.environ,
-            "ANTHROPIC_BASE_URL": config.ZAI_BASE_URL,
-            "ANTHROPIC_AUTH_TOKEN": config.ZAI_API_KEY,  # Note: AUTH_TOKEN for Claude CLI
-            "ANTHROPIC_MODEL": config.ZAI_MODEL,
-            "RUN_DIR": str(run_dir),
-        }
-        # Unset conflicting variables
-        env.pop("CLAUDE_CODE_USE_BEDROCK", None)
-        env.pop("ANTHROPIC_API_KEY", None)
+        # Create Anthropic client configured for z.ai
+        client = anthropic.Anthropic(
+            base_url=config.ZAI_BASE_URL,
+            api_key=config.ZAI_API_KEY,
+        )
 
-        # Run Claude Code CLI in print mode with full agentic capabilities
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                subprocess.run,
-                [
-                    "claude",
-                    "-p",
-                    full_prompt,
-                    "--model",
-                    config.ZAI_MODEL,
-                    "--output-format",
-                    "text",
-                    "--dangerously-skip-permissions",  # Headless mode needs this
-                ],
-                cwd=str(run_dir),
-                capture_output=True,
-                env=env,
-            ),
+        # Run the analysis (in a thread to avoid blocking)
+        def call_api():
+            return client.messages.create(
+                model=config.ZAI_MODEL,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+
+        response = await asyncio.wait_for(
+            asyncio.to_thread(call_api),
             timeout=config.AGENT_TIMEOUT_SECONDS,
         )
 
-        stdout = result.stdout.decode("utf-8", errors="replace")
-        stderr = result.stderr.decode("utf-8", errors="replace")
+        # Extract text from response
+        stdout = response.content[0].text if response.content else ""
 
-        if result.returncode == 0:
-            return {"success": True, "status": "ok", "stdout": stdout, "stderr": stderr}
-        else:
-            logger.error("Claude CLI failed (exit %d): %s", result.returncode, stderr[:500])
-            return {
-                "success": False,
-                "status": "cli_error",
-                "error": f"Exit code {result.returncode}: {stderr[:500]}",
-                "stdout": stdout,
-                "stderr": stderr,
-            }
+        return {"success": True, "status": "ok", "stdout": stdout, "stderr": ""}
 
     except asyncio.TimeoutError:
-        logger.error("Claude CLI timed out after %ds", config.AGENT_TIMEOUT_SECONDS)
+        logger.error("z.ai API timed out after %ds", config.AGENT_TIMEOUT_SECONDS)
         return {"success": False, "status": "timeout", "error": "Agent timed out"}
-    except FileNotFoundError:
-        logger.error("Claude CLI not found - is @anthropic-ai/claude-code installed?")
-        return {"success": False, "status": "cli_not_found", "error": "claude CLI not installed"}
+    except anthropic.AuthenticationError as e:
+        logger.error("z.ai API authentication failed: %s", e)
+        return {"success": False, "status": "auth_error", "error": f"Authentication failed: {e}"}
+    except anthropic.APIError as e:
+        logger.error("z.ai API error: %s", e)
+        return {"success": False, "status": "api_error", "error": str(e)}
     except Exception as e:
-        logger.exception("Claude CLI failed: %s", e)
+        logger.exception("z.ai API call failed: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
 
 
