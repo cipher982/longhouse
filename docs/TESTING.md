@@ -76,7 +76,7 @@ On failure:
 | `make test-e2e-single TEST=tests/<spec>.ts` | Targeted flow check | Focused iteration |
 | `make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Public page visual baselines | Smoke visual diffs |
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_public.spec.ts` | Update public page baselines | When UI changes |
-| `make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | App page visual baselines (dashboard/chat/canvas/settings) | Desktop UI lock |
+| `make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | App page visual baselines (dashboard/chat/canvas/settings/profile/etc) | Desktop UI lock |
 | `PWUPDATE=1 make test-e2e-single TEST=tests/ui_baseline_app.spec.ts` | Update app baselines | When app UI changes |
 
 **Tips**
