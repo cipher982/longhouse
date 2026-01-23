@@ -112,8 +112,8 @@
 }
 
 #center-button:disabled {
-  background-color: #bbb;
-  color: #fff;
+  background-color: var(--color-surface-tertiary);
+  color: var(--color-text-muted);
   opacity: 0.7;
   cursor: not-allowed;
 }
@@ -344,7 +344,7 @@ body.space-pan #node-canvas {
 }
 
 .dropdown-item.danger:hover {
-  background: rgb(239 68 68 / 10%);
+  background: color-mix(in srgb, var(--color-intent-error) 10%, transparent);
   color: var(--error);
 }
 
@@ -367,7 +367,7 @@ body.space-pan #node-canvas {
   content: "Auto-Fit";
   margin-right: 8px;
   font-size: 14px;
-  color: #ccc;
+  color: var(--color-text-muted);
 }
 
 .toggle-checkbox {
@@ -382,7 +382,7 @@ body.space-pan #node-canvas {
   display: inline-block;
   width: 40px;
   height: 20px;
-  background-color: #ccc;
+  background-color: var(--color-border-muted);
   border-radius: 20px;
   transition: all var(--motion-duration-instant) var(--motion-easing-standard);
 }
@@ -394,7 +394,7 @@ body.space-pan #node-canvas {
   width: 16px;
   left: 2px;
   bottom: 2px;
-  background-color: white;
+  background-color: var(--color-text-primary);
   border-radius: 50%;
   transition: all var(--motion-duration-instant) var(--motion-easing-standard);
 }
