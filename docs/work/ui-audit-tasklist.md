@@ -35,6 +35,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Landing hero/HowItWorks/Pricing/Footer: swapped CTA buttons to `Button` component.
 - [x] Add `Spinner` UI primitive; replace inline spinner sizing in EmptyState loaders.
 - [x] Knowledge Sources: replace inline header actions styling with CSS class.
+- [x] Runner detail page: adopt PageShell + SectionHeader + standardized Button usage.
 - [ ] Consolidate header/section patterns (SectionHeader everywhere).
 
 ## Phase 2 — Styling & Tokens

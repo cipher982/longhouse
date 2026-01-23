@@ -2,6 +2,14 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useRunner, useUpdateRunner, useRevokeRunner, useRotateRunnerSecret } from "../hooks/useRunners";
 import { useConfirm } from "../components/confirm";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  PageShell,
+  SectionHeader,
+  Spinner
+} from "../components/ui";
 import "../styles/runner-detail.css";
 
 export default function RunnerDetailPage() {
@@ -114,14 +122,14 @@ export default function RunnerDetailPage() {
     );
   };
 
-  const getStatusBadgeClass = (status: string) => {
+  const getStatusVariant = (status: string): "success" | "error" | "neutral" => {
     switch (status) {
       case "online":
-        return "status-badge status-online";
+        return "success";
       case "revoked":
-        return "status-badge status-revoked";
+        return "error";
       default:
-        return "status-badge status-offline";
+        return "neutral";
     }
   };
 
@@ -134,41 +142,48 @@ export default function RunnerDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="runner-detail-container">
-        <div>Loading runner...</div>
-      </div>
+      <PageShell size="wide" className="runner-detail-container">
+        <EmptyState
+          icon={<Spinner size="lg" />}
+          title="Loading runner..."
+          description="Fetching runner details."
+        />
+      </PageShell>
     );
   }
 
   if (error || !runner) {
     return (
-      <div className="runner-detail-container">
-        <div>Runner not found</div>
-        <button type="button" onClick={() => navigate("/runners")}>
-          Back to Runners
-        </button>
-      </div>
+      <PageShell size="wide" className="runner-detail-container">
+        <EmptyState
+          variant="error"
+          title="Runner not found"
+          description="This runner might have been revoked or removed."
+          action={
+            <Button variant="secondary" onClick={() => navigate("/runners")}>
+              Back to Runners
+            </Button>
+          }
+        />
+      </PageShell>
     );
   }
 
   return (
-    <div className="runner-detail-container">
+    <PageShell size="wide" className="runner-detail-container">
       <div className="runner-detail-page">
-        <div className="runner-detail-header">
-          <button
-            type="button"
-            className="back-button"
-            onClick={() => navigate("/runners")}
-          >
-            ← Back
-          </button>
-          <div className="runner-title-row">
-            <h1>{runner.name}</h1>
-            <span className={getStatusBadgeClass(runner.status)}>
-              {runner.status}
-            </span>
-          </div>
-        </div>
+        <SectionHeader
+          title={runner.name}
+          description="Manage runner capabilities, secrets, and status."
+          actions={
+            <div className="runner-detail-header-actions">
+              <Badge variant={getStatusVariant(runner.status)}>{runner.status}</Badge>
+              <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>
+                ← Back
+              </Button>
+            </div>
+          }
+        />
 
         {actionError && (
           <div className="ui-action-error-banner" role="alert">
@@ -224,13 +239,9 @@ export default function RunnerDetailPage() {
             <div className="section-header">
               <h2>Capabilities</h2>
               {!isEditingCapabilities && runner.status !== "revoked" && (
-                <button
-                  type="button"
-                  className="edit-button"
-                  onClick={handleEditCapabilities}
-                >
+                <Button variant="secondary" size="sm" onClick={handleEditCapabilities}>
                   Edit
-                </button>
+                </Button>
               )}
             </div>
 
@@ -251,21 +262,16 @@ export default function RunnerDetailPage() {
                 ))}
 
                 <div className="capabilities-actions">
-                  <button
-                    type="button"
-                    className="save-button"
+                  <Button
+                    variant="success"
                     onClick={handleSaveCapabilities}
                     disabled={updateRunnerMutation.isPending}
                   >
                     {updateRunnerMutation.isPending ? "Saving..." : "Save"}
-                  </button>
-                  <button
-                    type="button"
-                    className="cancel-button"
-                    onClick={() => setIsEditingCapabilities(false)}
-                  >
+                  </Button>
+                  <Button variant="ghost" onClick={() => setIsEditingCapabilities(false)}>
                     Cancel
-                  </button>
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -298,15 +304,15 @@ export default function RunnerDetailPage() {
                       Generate a new secret, invalidating the old one. The runner will be disconnected.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="rotate-secret-button"
+                  <Button
+                    variant="tertiary"
+                    className="runner-warning-button"
                     onClick={handleRotateSecret}
                     disabled={rotateSecretMutation.isPending || !!rotatedSecret}
                     title={rotatedSecret ? "Acknowledge the current secret first" : undefined}
                   >
                     {rotateSecretMutation.isPending ? "Rotating..." : "Rotate Secret"}
-                  </button>
+                  </Button>
                 </div>
 
                 {rotatedSecret && (
@@ -316,21 +322,13 @@ export default function RunnerDetailPage() {
                     </p>
                     <div className="secret-value-container">
                       <code className="secret-value">{rotatedSecret}</code>
-                      <button
-                        type="button"
-                        className="copy-secret-button"
-                        onClick={handleCopySecret}
-                      >
+                      <Button variant="success" size="sm" onClick={handleCopySecret}>
                         {secretCopied ? "Copied!" : "Copy"}
-                      </button>
+                      </Button>
                     </div>
-                    <button
-                      type="button"
-                      className="dismiss-secret-button"
-                      onClick={() => setRotatedSecret(null)}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => setRotatedSecret(null)}>
                       I've saved the secret
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -344,20 +342,19 @@ export default function RunnerDetailPage() {
                       Revoked runners cannot reconnect. This action cannot be undone.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="revoke-button-large"
+                  <Button
+                    variant="danger"
                     onClick={handleRevoke}
                     disabled={revokeRunnerMutation.isPending}
                   >
                     {revokeRunnerMutation.isPending ? "Revoking..." : "Revoke Runner"}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </section>
           )}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

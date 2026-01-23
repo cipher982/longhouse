@@ -3,9 +3,6 @@
 @layer pages {
   .runner-detail-container {
     width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem;
 
     .runner-detail-page {
       display: flex;
@@ -13,43 +10,10 @@
       gap: 2rem;
     }
 
-    .runner-detail-header {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-
-    .back-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.5rem 1rem;
-      background: transparent;
-      border: 1px solid #3f3f46;
-      border-radius: 6px;
-      color: #a1a1aa;
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-      width: fit-content;
-    }
-
-    .back-button:hover {
-      background: #3f3f46;
-      color: #fafafa;
-    }
-
-    .runner-title-row {
+    .runner-detail-header-actions {
       display: flex;
       align-items: center;
-      gap: 1rem;
-    }
-
-    .runner-title-row h1 {
-      font-size: 2rem;
-      font-weight: 600;
-      margin: 0;
-      color: #fafafa;
+      gap: var(--space-3);
     }
 
     /* Detail Sections */
@@ -83,22 +47,6 @@
 
     .section-header h2 {
       margin: 0;
-    }
-
-    .edit-button {
-      padding: 0.5rem 1rem;
-      background: transparent;
-      border: 1px solid #3f3f46;
-      border-radius: 6px;
-      color: #fafafa;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-    }
-
-    .edit-button:hover {
-      background: #3f3f46;
     }
 
     /* Detail Grid */
@@ -195,42 +143,6 @@
       margin-top: 0.5rem;
     }
 
-    .save-button {
-      padding: 0.75rem 1.5rem;
-      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-    }
-
-    .save-button:hover:not(:disabled) {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-    }
-
-    .save-button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .cancel-button {
-      padding: 0.75rem 1.5rem;
-      background: transparent;
-      border: 1px solid #3f3f46;
-      border-radius: 6px;
-      color: #fafafa;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-    }
-
-    .cancel-button:hover {
-      background: #3f3f46;
-    }
-
     /* Danger Zone */
 
     .danger-section {
@@ -245,28 +157,6 @@
       display: flex;
       flex-direction: column;
       gap: 1rem;
-    }
-
-    .revoke-button-large {
-      padding: 0.75rem 1.5rem;
-      background: rgba(239, 68, 68, 0.1);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      border-radius: 6px;
-      color: #ef4444;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-      width: fit-content;
-    }
-
-    .revoke-button-large:hover:not(:disabled) {
-      background: rgba(239, 68, 68, 0.2);
-      border-color: rgba(239, 68, 68, 0.5);
-    }
-
-    .revoke-button-large:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
     }
 
     .danger-description {
@@ -310,26 +200,17 @@
 
     /* Rotate Secret Button */
 
-    .rotate-secret-button {
-      padding: 0.75rem 1.5rem;
-      background: rgba(234, 179, 8, 0.1);
-      border: 1px solid rgba(234, 179, 8, 0.3);
-      border-radius: 6px;
+    .runner-warning-button {
+      background: rgba(234, 179, 8, 0.12);
+      border-color: rgba(234, 179, 8, 0.35);
       color: #facc15;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
       white-space: nowrap;
     }
 
-    .rotate-secret-button:hover:not(:disabled) {
+    .runner-warning-button:hover:not(:disabled) {
       background: rgba(234, 179, 8, 0.2);
       border-color: rgba(234, 179, 8, 0.5);
-    }
-
-    .rotate-secret-button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+      color: #fef08a;
     }
 
     /* Rotated Secret Display */
@@ -369,38 +250,6 @@
       text-overflow: ellipsis;
     }
 
-    .copy-secret-button {
-      padding: 0.75rem 1rem;
-      background: #10b981;
-      border: none;
-      border-radius: 6px;
-      color: white;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-      white-space: nowrap;
-    }
-
-    .copy-secret-button:hover {
-      background: #059669;
-    }
-
-    .dismiss-secret-button {
-      padding: 0.5rem 1rem;
-      background: transparent;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      border-radius: 6px;
-      color: #10b981;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all var(--motion-duration-fast) var(--motion-easing-standard);
-    }
-
-    .dismiss-secret-button:hover {
-      background: rgba(16, 185, 129, 0.1);
-    }
-
     /* Responsive */
 
     @media (max-width: 768px) {
@@ -421,8 +270,7 @@
         flex-direction: column;
       }
 
-      .save-button,
-      .cancel-button {
+      .capabilities-actions .ui-button {
         width: 100%;
       }
 
@@ -430,8 +278,8 @@
         flex-direction: column;
       }
 
-      .rotate-secret-button,
-      .revoke-button-large {
+      .runner-warning-button,
+      .danger-item-header .ui-button {
         width: 100%;
       }
 
@@ -439,7 +287,7 @@
         flex-direction: column;
       }
 
-      .copy-secret-button {
+      .secret-value-container .ui-button {
         width: 100%;
       }
     }
