@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { SwarmLogo } from "../SwarmLogo";
+import { Button } from "../ui";
 import config from "../../lib/config";
 
 export function FooterCTA() {
@@ -25,9 +26,9 @@ export function FooterCTA() {
           <blockquote className="landing-footer-quote">
             Life is noisy. You deserve a brain that pays attention for you.
           </blockquote>
-          <button className="btn-primary btn-lg landing-cta-main" onClick={handleStartFree}>
+          <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
             Get Started Now
-          </button>
+          </Button>
         </div>
 
         {/* Footer links */}
