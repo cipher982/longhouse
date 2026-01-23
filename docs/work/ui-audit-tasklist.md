@@ -75,6 +75,7 @@ Principle: this doc is the source of truth for UI work. Update after every meani
   - [x] Added public-page baseline spec (`ui_baseline_public.spec.ts`).
   - [x] Added app-page baseline spec (`ui_baseline_app.spec.ts`).
 - [x] Settings page: add `data-ready` signal to align readiness contract for QA.
+- [x] Profile/Admin pages: add `data-ready` signals to align readiness contract for QA.
 - [ ] Add a focused mobile viewport test project in Playwright (after design lock).
 - [ ] Add a11y regression gate (axe + color contrast) to CI.
 
