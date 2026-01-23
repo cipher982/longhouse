@@ -67,8 +67,8 @@
   }
 
   .trace-timeline-row.is-error .trace-dot {
-    background-color: #ef4444;
-    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
+    background-color: var(--color-intent-error);
+    box-shadow: 0 0 0 3px var(--color-intent-error-muted);
   }
 
   .trace-line {
@@ -116,8 +116,8 @@
     font-weight: 600;
     padding: 2px 8px;
     border-radius: 4px;
-    background-color: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
+    background-color: var(--color-intent-error-muted);
+    color: var(--color-intent-error);
   }
 
   .trace-detail-pills {
